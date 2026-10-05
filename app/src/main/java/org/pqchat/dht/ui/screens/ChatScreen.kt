@@ -139,7 +139,7 @@ fun ChatScreen(
                     OutlinedTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
-                        placeholder = { Text("Message (exact 1000B AEAD frame)...", color = appColors.textSecondary) },
+                        placeholder = { Text("Wiadomość (szyfrowana ramka DHT)...", color = appColors.textSecondary) },
                         modifier = Modifier
                             .weight(1f)
                             .padding(end = 8.dp),

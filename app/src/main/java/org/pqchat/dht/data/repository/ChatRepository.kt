@@ -1,6 +1,7 @@
 package org.pqchat.dht.data.repository
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import org.pqchat.dht.crypto.BinaryFrameCodec
@@ -49,6 +50,8 @@ class ChatRepository(
                     rekeyEpoch = 0
                 )
             )
+        } else {
+            messageDao.normalizeConfirmedSelfNotes(SELF_CONTACT_ID)
         }
     }
 
@@ -92,13 +95,16 @@ class ChatRepository(
             )
         )
 
+        val isSelf = contactId == SELF_CONTACT_ID
+
         // Put to DHT under Target_i
         val success = dhtLeafNode.putMutable(
             target = slot.target,
             v = frame1000,
             seq = (contact.counterOut + 1).toLong(),
             salt = null,
-            sk = slot.edPrivateKeySeed
+            sk = slot.edPrivateKeySeed,
+            skipLocalStore = isSelf
         )
 
         if (success) {
@@ -114,8 +120,14 @@ class ChatRepository(
             chainKeyOut = slot.nextChainKey
         )
 
-        if (contactId == SELF_CONTACT_ID && success) {
+        if (isSelf && success) {
+            delay(2000L)
             pollContactIncoming(contactId)
+            val c = contactDao.getContactById(contactId)
+            if (c != null && c.counterIn <= contact.counterIn) {
+                delay(3000L)
+                pollContactIncoming(contactId)
+            }
         }
 
         success
@@ -124,7 +136,7 @@ class ChatRepository(
     private suspend fun sendRekeyOffer(contact: ContactEntity) {
         val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
         val newEpoch = contact.rekeyEpoch + 1
-        val (pendingOffer, offerFrame) = RekeyCoordinator.createRekeyOffer(
+        val (_, offerFrame) = RekeyCoordinator.createRekeyOffer(
             epoch = newEpoch,
             seqNum = contact.counterOut,
             ackNum = contact.counterIn,
@@ -145,6 +157,7 @@ class ChatRepository(
      */
     suspend fun pollContactIncoming(contactId: String) = withContext(Dispatchers.IO) {
         val contact = contactDao.getContactById(contactId) ?: return@withContext
+        val isSelf = contactId == SELF_CONTACT_ID
         val lookaheadSlots = RatchetChain.computeLookaheadSlots(
             startChainKey = contact.chainKeyIn,
             startCounter = contact.counterIn,
@@ -152,7 +165,7 @@ class ChatRepository(
         )
 
         for (slot in lookaheadSlots) {
-            val item = dhtLeafNode.getMutable(slot.target) ?: continue
+            val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
 
             try {
                 val frameMsg = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, item.v)
@@ -160,8 +173,13 @@ class ChatRepository(
                 when (frameMsg.msgType) {
                     BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
                         val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
-                        if (contactId == SELF_CONTACT_ID) {
-                            messageDao.updateStatusForSeq(contactId, frameMsg.seqNum, true, "CONFIRMED_DHT")
+                        if (isSelf) {
+                            messageDao.updateMessageStatusAndDirection(
+                                contactId = contactId,
+                                seqNum = frameMsg.seqNum,
+                                isOutgoing = false,
+                                status = "CONFIRMED_DHT"
+                            )
                             contactDao.updateIncomingState(
                                 id = contactId,
                                 counterIn = slot.counter + 1,
@@ -235,7 +253,7 @@ class ChatRepository(
                             val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
                             val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
 
-                            val subItem = dhtLeafNode.getMutable(subTarget)
+                            val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
                             if (subItem != null) {
                                 try {
                                     val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
@@ -267,8 +285,13 @@ class ChatRepository(
                             val fullData = ChunkingEngine.assembleChunks(decodedList)
                             chunkDao.deleteChunks(transferIdHex)
 
-                            if (contactId == SELF_CONTACT_ID) {
-                                messageDao.updateStatusForSeq(contactId, frameMsg.seqNum, true, "CONFIRMED_DHT")
+                            if (isSelf) {
+                                messageDao.updateMessageStatusAndDirection(
+                                    contactId = contactId,
+                                    seqNum = frameMsg.seqNum,
+                                    isOutgoing = false,
+                                    status = "CONFIRMED_DHT"
+                                )
                                 contactDao.updateIncomingState(
                                     id = contactId,
                                     counterIn = slot.counter + 1,

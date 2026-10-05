@@ -11,7 +11,7 @@ import java.nio.ByteOrder
  */
 object ChunkingEngine {
 
-    const val CHUNK_SIZE = 900 // bytes per segment
+    const val CHUNK_SIZE = 800 // bytes per segment
     val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte())
 
     data class ChunkItem(

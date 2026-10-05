@@ -35,7 +35,8 @@ class DhtLeafNode(
             Pair("router.bittorrent.com", 6881),
             Pair("dht.transmissionbt.com", 6881),
             Pair("router.utorrent.com", 6881),
-            Pair("dht.aelitis.com", 6881)
+            Pair("dht.aelitis.com", 6881),
+            Pair("dht.libtorrent.org", 25401)
         )
     }
 
@@ -67,6 +68,7 @@ class DhtLeafNode(
     private val pendingTransactions = ConcurrentHashMap<String, CompletableDeferred<KrpcMessage.Response>>()
     private val routingTable = CopyOnWriteArrayList<DhtPeer>()
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
+    val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
 
     @Volatile
     private var isRunning = false
@@ -230,11 +232,23 @@ class DhtLeafNode(
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
         val bootstrapNodes = resolveBootstrapNodes()
         val randomTarget = CryptoUtils.secureRandomBytes(20)
-        for (bootstrapNode in bootstrapNodes) {
+        val initialJobs = bootstrapNodes.map { bootstrapNode ->
             launch {
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
                     sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
+                } catch (_: Exception) {}
+            }
+        }
+        initialJobs.joinAll()
+
+        // Iteratively query first wave of discovered peers to populate closest nodes
+        val peers = routingTable.take(16)
+        peers.forEach { peer ->
+            launch {
+                try {
+                    val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
+                    sendQuery(peer.address, query, TIMEOUT_MS)
                 } catch (_: Exception) {}
             }
         }
@@ -292,29 +306,33 @@ class DhtLeafNode(
      * BEP 44 get query to retrieve mutable item for target.
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
-    suspend fun getMutable(target: ByteArray, salt: ByteArray? = null): MutableItem? = withContext(Dispatchers.IO) {
+    suspend fun getMutable(
+        target: ByteArray,
+        salt: ByteArray? = null,
+        skipLocalStore: Boolean = false
+    ): MutableItem? = withContext(Dispatchers.IO) {
         val targetHex = CryptoUtils.toHex(target)
-        val localItem = localMutableStore[targetHex]
-        if (localItem != null) {
-            return@withContext localItem
+        if (!skipLocalStore) {
+            val localItem = localMutableStore[targetHex]
+            if (localItem != null) {
+                return@withContext localItem
+            }
         }
 
         var bestItem: MutableItem? = null
 
-        val candidates = findClosestNodes(target, count = 12)
-        val nodesToQuery = if (candidates.isNotEmpty()) {
-            candidates
-        } else {
-            resolveBootstrapNodes().map {
-                DhtPeer(CryptoUtils.secureRandomBytes(20), it)
-            }
+        val storedPeers = remoteStoredPeers[targetHex]?.map { DhtPeer(ByteArray(20), it) } ?: emptyList()
+        val candidates = findClosestNodes(target, count = 24)
+        val bootstrapNodes = resolveBootstrapNodes().map {
+            DhtPeer(CryptoUtils.secureRandomBytes(20), it)
         }
+        val nodesToQuery = (storedPeers + candidates + bootstrapNodes).distinctBy { it.address }
 
         if (nodesToQuery.isNotEmpty()) {
             val deferreds = nodesToQuery.map { peer ->
                 async {
                     val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                    val resp = sendQuery(peer.address, query) ?: return@async null
+                    val resp = sendQuery(peer.address, query, timeoutMs = 3500L) ?: return@async null
 
                     val v = resp.responseData["v"] as? ByteArray ?: return@async null
                     val k = resp.responseData["k"] as? ByteArray ?: return@async null
@@ -345,12 +363,16 @@ class DhtLeafNode(
 
             val remoteResults = deferreds.awaitAll().filterNotNull()
             val remoteBest = remoteResults.maxByOrNull { it.seq }
-            if (remoteBest != null && (bestItem == null || remoteBest.seq > bestItem!!.seq)) {
+            val currentBest = bestItem
+            if (remoteBest != null && (currentBest == null || remoteBest.seq > currentBest.seq)) {
                 bestItem = remoteBest
-                localMutableStore[targetHex] = remoteBest
+                if (!skipLocalStore) {
+                    localMutableStore[targetHex] = remoteBest
+                }
             }
         }
 
+        println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, querying=${nodesToQuery.size}, found=${bestItem != null}")
         bestItem
     }
 
@@ -363,7 +385,8 @@ class DhtLeafNode(
         v: ByteArray,
         seq: Long,
         salt: ByteArray? = null,
-        sk: ByteArray
+        sk: ByteArray,
+        skipLocalStore: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
         require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
 
@@ -373,40 +396,41 @@ class DhtLeafNode(
         val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
         val targetHex = CryptoUtils.toHex(target)
 
-        // Store in our node's BEP 44 mutable store
-        val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
-        val existing = localMutableStore[targetHex]
-        if (existing == null || seq >= existing.seq) {
-            localMutableStore[targetHex] = localItem
-        }
-
-        // Step 2: Push asynchronously to external DHT swarm peers
-        val candidates = findClosestNodes(target, count = 12)
-        val nodesToQuery = if (candidates.isNotEmpty()) {
-            candidates
-        } else {
-            resolveBootstrapNodes().map {
-                DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+        // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
+        if (!skipLocalStore) {
+            val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
+            val existing = localMutableStore[targetHex]
+            if (existing == null || seq >= existing.seq) {
+                localMutableStore[targetHex] = localItem
             }
         }
 
-        scope.launch {
-            try {
-                val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
-                val getJobs = nodesToQuery.map { peer ->
-                    launch {
-                        val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                        val resp = sendQuery(peer.address, getQuery)
-                        val token = resp?.responseData?.get("token") as? ByteArray
-                        if (token != null) {
-                            tokenMap[peer.address] = token
-                        }
+        // Step 2: Push to external DHT swarm peers
+        val candidates = findClosestNodes(target, count = 24)
+        val bootstrapNodes = resolveBootstrapNodes().map {
+            DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+        }
+        val nodesToQuery = (candidates + bootstrapNodes).distinctBy { it.address }
+
+        var putSuccess = !skipLocalStore
+
+        try {
+            val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
+            val getJobs = nodesToQuery.map { peer ->
+                async {
+                    val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                    val resp = sendQuery(peer.address, getQuery, timeoutMs = 3500L)
+                    val token = resp?.responseData?.get("token") as? ByteArray
+                    if (token != null) {
+                        tokenMap[peer.address] = token
                     }
                 }
-                getJobs.joinAll()
+            }
+            getJobs.awaitAll()
 
-                for ((address, token) in tokenMap) {
-                    launch {
+            if (tokenMap.isNotEmpty()) {
+                val putJobs = tokenMap.map { (address, token) ->
+                    async {
                         val putQuery = KrpcMessage.createBep44PutQuery(
                             myNodeId = myNodeId,
                             token = token,
@@ -416,13 +440,24 @@ class DhtLeafNode(
                             seq = seq,
                             salt = salt
                         )
-                        sendQuery(address, putQuery)
+                        val resp = sendQuery(address, putQuery, timeoutMs = 3500L)
+                        if (resp != null) {
+                            remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(address)
+                            true
+                        } else {
+                            false
+                        }
                     }
                 }
-            } catch (_: Exception) {}
-        }
+                val putResults = putJobs.awaitAll()
+                if (putResults.any { it } || tokenMap.isNotEmpty()) {
+                    putSuccess = true
+                }
+            }
+        } catch (_: Exception) {}
 
-        true
+        println("[PQChat] putMutable target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")
+        putSuccess
     }
 
     /**

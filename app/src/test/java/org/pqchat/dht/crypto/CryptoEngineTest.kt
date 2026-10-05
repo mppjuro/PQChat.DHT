@@ -109,12 +109,12 @@ class CryptoEngineTest {
             timestampUTC = System.currentTimeMillis(),
             text = testText
         )
-        assertEquals(972, encodedPlaintext.size)
+        assertEquals(BinaryFrameCodec.CIPHERTEXT_SIZE, encodedPlaintext.size)
 
-        val frame1000 = BinaryFrameCodec.packAeadFrame(key, encodedPlaintext)
-        assertEquals("Total frame must be EXACTLY 1000 bytes", 1000, frame1000.size)
+        val frame = BinaryFrameCodec.packAeadFrame(key, encodedPlaintext)
+        assertEquals("Total frame must be EXACTLY ${BinaryFrameCodec.TOTAL_FRAME_SIZE} bytes", BinaryFrameCodec.TOTAL_FRAME_SIZE, frame.size)
 
-        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame1000)
+        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame)
         assertEquals(BinaryFrameCodec.TYPE_TEXT_MESSAGE, decoded.msgType)
         assertEquals(1, decoded.seqNum)
         assertEquals(0, decoded.ackNum)
@@ -124,7 +124,7 @@ class CryptoEngineTest {
     }
 
     @Test
-    fun testBinaryFrameCodecHandshakeFinalizeExact1000Bytes() {
+    fun testBinaryFrameCodecHandshakeFinalizeExactSize() {
         val key = CryptoUtils.secureRandomBytes(32)
         val ct = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_CIPHERTEXT_SIZE)
         val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
@@ -136,12 +136,12 @@ class CryptoEngineTest {
             mlKemCiphertext = ct,
             saltParameter = salt
         )
-        assertEquals(972, encoded.size)
+        assertEquals(BinaryFrameCodec.CIPHERTEXT_SIZE, encoded.size)
 
-        val frame1000 = BinaryFrameCodec.packAeadFrame(key, encoded)
-        assertEquals(1000, frame1000.size)
+        val frame = BinaryFrameCodec.packAeadFrame(key, encoded)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, frame.size)
 
-        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame1000)
+        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame)
         assertEquals(BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE, decoded.msgType)
         val payload = decoded.payload as BinaryFrameCodec.DecodedPayload.HandshakeFinalize
         assertArrayEquals(ct, payload.mlKemCiphertext)
@@ -156,7 +156,7 @@ class CryptoEngineTest {
         // Type 0x03: Offer
         val encodedOffer = BinaryFrameCodec.encodeRekeyOffer(50, 49, 123456789L, 1L, pk)
         val frameOffer = BinaryFrameCodec.packAeadFrame(key, encodedOffer)
-        assertEquals(1000, frameOffer.size)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, frameOffer.size)
 
         val decodedOffer = BinaryFrameCodec.unpackAeadFrame(key, frameOffer)
         assertEquals(BinaryFrameCodec.TYPE_REKEY_OFFER, decodedOffer.msgType)
@@ -168,7 +168,7 @@ class CryptoEngineTest {
         val ct = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T4_CIPHERTEXT_SIZE)
         val encodedResp = BinaryFrameCodec.encodeRekeyResponse(25, 50, 123456799L, 1L, ct)
         val frameResp = BinaryFrameCodec.packAeadFrame(key, encodedResp)
-        assertEquals(1000, frameResp.size)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, frameResp.size)
 
         val decodedResp = BinaryFrameCodec.unpackAeadFrame(key, frameResp)
         assertEquals(BinaryFrameCodec.TYPE_REKEY_RESPONSE, decodedResp.msgType)
@@ -181,7 +181,7 @@ class CryptoEngineTest {
     fun testBinaryFrameCodecChunkData() {
         val key = CryptoUtils.secureRandomBytes(32)
         val transferId = CryptoUtils.secureRandomBytes(16)
-        val fakePngChunk = ByteArray(900) { (it % 256).toByte() }
+        val fakePngChunk = ByteArray(800) { (it % 256).toByte() }
 
         val encoded = BinaryFrameCodec.encodeChunkData(
             seqNum = 5,
@@ -192,10 +192,10 @@ class CryptoEngineTest {
             totalChunks = 10,
             chunkData = fakePngChunk
         )
-        val frame1000 = BinaryFrameCodec.packAeadFrame(key, encoded)
-        assertEquals(1000, frame1000.size)
+        val frame = BinaryFrameCodec.packAeadFrame(key, encoded)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, frame.size)
 
-        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame1000)
+        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame)
         assertEquals(BinaryFrameCodec.TYPE_CHUNK_DATA, decoded.msgType)
         val payload = decoded.payload as BinaryFrameCodec.DecodedPayload.ChunkData
         assertArrayEquals(transferId, payload.transferId)
