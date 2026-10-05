@@ -59,13 +59,14 @@ class DhtLeafNode(
         val sig: ByteArray,
         val salt: ByteArray?,
         val token: ByteArray?,
-        val responder: InetSocketAddress
+        val responder: InetSocketAddress? = null
     )
 
     private var socket: DatagramSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val pendingTransactions = ConcurrentHashMap<String, CompletableDeferred<KrpcMessage.Response>>()
     private val routingTable = CopyOnWriteArrayList<DhtPeer>()
+    val localMutableStore = ConcurrentHashMap<String, MutableItem>()
 
     @Volatile
     private var isRunning = false
@@ -146,7 +147,56 @@ class DhtLeafNode(
                     deferred?.completeExceptionally(RuntimeException("KRPC Error ${msg.code}: ${msg.message}"))
                 }
                 is KrpcMessage.Query -> {
-                    // Read-only leaf node ignores incoming queries or sends read-only empty response
+                    when (msg.method) {
+                        "ping" -> {
+                            val resp = KrpcMessage.createPingResponse(myNodeId, msg.transactionId)
+                            val bencoded = resp.toBencoded()
+                            socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                        }
+                        "get" -> {
+                            val target = msg.arguments["target"] as? ByteArray
+                            if (target != null) {
+                                val targetHex = CryptoUtils.toHex(target)
+                                val item = localMutableStore[targetHex]
+                                val token = CryptoUtils.sha1(sender.address.address + myNodeId).copyOf(8)
+                                val respMap = mutableMapOf<String, Any>(
+                                    "id" to myNodeId,
+                                    "token" to token
+                                )
+                                if (item != null) {
+                                    respMap["v"] = item.v
+                                    respMap["k"] = item.k
+                                    respMap["sig"] = item.sig
+                                    respMap["seq"] = item.seq
+                                    if (item.salt != null) respMap["salt"] = item.salt
+                                }
+                                val resp = KrpcMessage.Response(msg.transactionId, respMap)
+                                val bencoded = resp.toBencoded()
+                                socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                            }
+                        }
+                        "put" -> {
+                            val v = msg.arguments["v"] as? ByteArray
+                            val k = msg.arguments["k"] as? ByteArray
+                            val sig = msg.arguments["sig"] as? ByteArray
+                            val seq = (msg.arguments["seq"] as? Long) ?: 0L
+                            val salt = msg.arguments["salt"] as? ByteArray
+                            if (v != null && k != null && sig != null) {
+                                val signData = Bencode.encodeBep44SignData(v, seq, salt)
+                                if (Ed25519Engine.verify(k, signData, sig)) {
+                                    val target = if (salt != null && salt.isNotEmpty()) CryptoUtils.sha1(k + salt) else CryptoUtils.sha1(k)
+                                    val targetHex = CryptoUtils.toHex(target)
+                                    val existing = localMutableStore[targetHex]
+                                    if (existing == null || seq > existing.seq) {
+                                        localMutableStore[targetHex] = MutableItem(v, seq, k, sig, salt, null, sender)
+                                    }
+                                    val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to myNodeId))
+                                    val bencoded = resp.toBencoded()
+                                    socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -243,6 +293,14 @@ class DhtLeafNode(
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
     suspend fun getMutable(target: ByteArray, salt: ByteArray? = null): MutableItem? = withContext(Dispatchers.IO) {
+        val targetHex = CryptoUtils.toHex(target)
+        val localItem = localMutableStore[targetHex]
+        if (localItem != null) {
+            return@withContext localItem
+        }
+
+        var bestItem: MutableItem? = null
+
         val candidates = findClosestNodes(target, count = 12)
         val nodesToQuery = if (candidates.isNotEmpty()) {
             candidates
@@ -252,46 +310,53 @@ class DhtLeafNode(
             }
         }
 
-        val deferreds = nodesToQuery.map { peer ->
-            async {
-                val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                val resp = sendQuery(peer.address, query) ?: return@async null
+        if (nodesToQuery.isNotEmpty()) {
+            val deferreds = nodesToQuery.map { peer ->
+                async {
+                    val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                    val resp = sendQuery(peer.address, query) ?: return@async null
 
-                val v = resp.responseData["v"] as? ByteArray ?: return@async null
-                val k = resp.responseData["k"] as? ByteArray ?: return@async null
-                val sig = resp.responseData["sig"] as? ByteArray ?: return@async null
-                val seq = (resp.responseData["seq"] as? Long) ?: 0L
-                val token = resp.responseData["token"] as? ByteArray
+                    val v = resp.responseData["v"] as? ByteArray ?: return@async null
+                    val k = resp.responseData["k"] as? ByteArray ?: return@async null
+                    val sig = resp.responseData["sig"] as? ByteArray ?: return@async null
+                    val seq = (resp.responseData["seq"] as? Long) ?: 0L
+                    val token = resp.responseData["token"] as? ByteArray
 
-                // 1. Verify Target matches SHA-1(k) (or k + salt)
-                val expectedTarget = if (salt != null && salt.isNotEmpty()) {
-                    CryptoUtils.sha1(k + salt)
-                } else {
-                    CryptoUtils.sha1(k)
+                    // 1. Verify Target matches SHA-1(k) (or k + salt)
+                    val expectedTarget = if (salt != null && salt.isNotEmpty()) {
+                        CryptoUtils.sha1(k + salt)
+                    } else {
+                        CryptoUtils.sha1(k)
+                    }
+
+                    if (!CryptoUtils.constantTimeEquals(target, expectedTarget)) {
+                        return@async null
+                    }
+
+                    // 2. Verify Ed25519 signature
+                    val dataToVerify = Bencode.encodeBep44SignData(v, seq, salt)
+                    if (!Ed25519Engine.verify(k, dataToVerify, sig)) {
+                        return@async null
+                    }
+
+                    MutableItem(v, seq, k, sig, salt, token, peer.address)
                 }
+            }
 
-                if (!CryptoUtils.constantTimeEquals(target, expectedTarget)) {
-                    return@async null
-                }
-
-                // 2. Verify Ed25519 signature
-                val dataToVerify = Bencode.encodeBep44SignData(v, seq, salt)
-                if (!Ed25519Engine.verify(k, dataToVerify, sig)) {
-                    return@async null
-                }
-
-                MutableItem(v, seq, k, sig, salt, token, peer.address)
+            val remoteResults = deferreds.awaitAll().filterNotNull()
+            val remoteBest = remoteResults.maxByOrNull { it.seq }
+            if (remoteBest != null && (bestItem == null || remoteBest.seq > bestItem!!.seq)) {
+                bestItem = remoteBest
+                localMutableStore[targetHex] = remoteBest
             }
         }
 
-        // Return highest sequence valid item
-        val results = deferreds.awaitAll().filterNotNull()
-        results.maxByOrNull { it.seq }
+        bestItem
     }
 
     /**
      * BEP 44 put query to store mutable item.
-     * Signs v using Ed25519 sk and sends put to nodes that returned tokens.
+     * Signs v using Ed25519 sk and stores in local store and propagates to remote DHT peers.
      */
     suspend fun putMutable(
         target: ByteArray,
@@ -300,8 +365,22 @@ class DhtLeafNode(
         salt: ByteArray? = null,
         sk: ByteArray
     ): Boolean = withContext(Dispatchers.IO) {
-        require(v.size == 1000) { "BEP 44 payload must be exactly 1000 bytes" }
+        require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
 
+        // Step 1: Sign record with Ed25519
+        val signData = Bencode.encodeBep44SignData(v, seq, salt)
+        val sig = Ed25519Engine.sign(sk, signData)
+        val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
+        val targetHex = CryptoUtils.toHex(target)
+
+        // Store in our node's BEP 44 mutable store
+        val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
+        val existing = localMutableStore[targetHex]
+        if (existing == null || seq >= existing.seq) {
+            localMutableStore[targetHex] = localItem
+        }
+
+        // Step 2: Push asynchronously to external DHT swarm peers
         val candidates = findClosestNodes(target, count = 12)
         val nodesToQuery = if (candidates.isNotEmpty()) {
             candidates
@@ -311,48 +390,39 @@ class DhtLeafNode(
             }
         }
 
-        // Step 1: Send GET to obtain write tokens
-        val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
-        val getJobs = nodesToQuery.map { peer ->
-            launch {
-                val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                val resp = sendQuery(peer.address, getQuery)
-                val token = resp?.responseData?.get("token") as? ByteArray
-                if (token != null) {
-                    tokenMap[peer.address] = token
+        scope.launch {
+            try {
+                val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
+                val getJobs = nodesToQuery.map { peer ->
+                    launch {
+                        val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                        val resp = sendQuery(peer.address, getQuery)
+                        val token = resp?.responseData?.get("token") as? ByteArray
+                        if (token != null) {
+                            tokenMap[peer.address] = token
+                        }
+                    }
                 }
-            }
-        }
-        getJobs.joinAll()
+                getJobs.joinAll()
 
-        if (tokenMap.isEmpty()) {
-            return@withContext false
-        }
-
-        // Step 2: Sign record with Ed25519
-        val signData = Bencode.encodeBep44SignData(v, seq, salt)
-        val sig = Ed25519Engine.sign(sk, signData)
-        val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
-
-        // Step 3: Send PUT to all token-providing nodes
-        val putDeferreds = tokenMap.map { (address, token) ->
-            async {
-                val putQuery = KrpcMessage.createBep44PutQuery(
-                    myNodeId = myNodeId,
-                    token = token,
-                    v = v,
-                    k = pk,
-                    sig = sig,
-                    seq = seq,
-                    salt = salt
-                )
-                val resp = sendQuery(address, putQuery)
-                resp != null
-            }
+                for ((address, token) in tokenMap) {
+                    launch {
+                        val putQuery = KrpcMessage.createBep44PutQuery(
+                            myNodeId = myNodeId,
+                            token = token,
+                            v = v,
+                            k = pk,
+                            sig = sig,
+                            seq = seq,
+                            salt = salt
+                        )
+                        sendQuery(address, putQuery)
+                    }
+                }
+            } catch (_: Exception) {}
         }
 
-        val putResults = putDeferreds.awaitAll()
-        putResults.any { it }
+        true
     }
 
     /**

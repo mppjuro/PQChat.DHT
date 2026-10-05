@@ -30,13 +30,29 @@ sealed class KrpcMessage {
     data class Response(
         override val transactionId: ByteArray,
         val responseData: Map<String, Any>
-    ) : KrpcMessage()
+    ) : KrpcMessage() {
+        fun toBencoded(): ByteArray {
+            val map = LinkedHashMap<String, Any>()
+            map["t"] = transactionId
+            map["y"] = "r"
+            map["r"] = responseData
+            return Bencode.encode(map)
+        }
+    }
 
     data class Error(
         override val transactionId: ByteArray,
         val code: Int,
         val message: String
-    ) : KrpcMessage()
+    ) : KrpcMessage() {
+        fun toBencoded(): ByteArray {
+            val map = LinkedHashMap<String, Any>()
+            map["t"] = transactionId
+            map["y"] = "e"
+            map["e"] = listOf(code.toLong(), message.toByteArray(StandardCharsets.UTF_8))
+            return Bencode.encode(map)
+        }
+    }
 
     companion object {
         fun parse(bytes: ByteArray): KrpcMessage {
@@ -83,6 +99,10 @@ sealed class KrpcMessage {
         fun createPingQuery(myNodeId: ByteArray, txId: ByteArray = CryptoUtils.secureRandomBytes(2)): Query {
             val args = mapOf("id" to myNodeId)
             return Query(txId, "ping", args)
+        }
+
+        fun createPingResponse(myNodeId: ByteArray, txId: ByteArray): Response {
+            return Response(txId, mapOf("id" to myNodeId))
         }
 
         fun createFindNodeQuery(
