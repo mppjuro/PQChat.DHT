@@ -4,12 +4,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 object BinaryFrameCodec {
-    const val TOTAL_FRAME_SIZE = 1000
+    const val TOTAL_FRAME_SIZE = 900
     const val IV_SIZE = 12
     const val TAG_SIZE = 16
-    const val CIPHERTEXT_SIZE = 972
+    const val CIPHERTEXT_SIZE = 872 // 900 - 12 - 16
     const val INNER_HEADER_SIZE = 13
-    const val INNER_PAYLOAD_SIZE = 959 // 972 - 13
+    const val INNER_PAYLOAD_SIZE = 859 // 872 - 13
 
     const val TYPE_HANDSHAKE_FINALIZE: Byte = 0x01
     const val TYPE_TEXT_MESSAGE: Byte = 0x02
@@ -17,25 +17,25 @@ object BinaryFrameCodec {
     const val TYPE_REKEY_RESPONSE: Byte = 0x04
     const val TYPE_CHUNK_DATA: Byte = 0x05
 
-    // Type 0x01 limits
+    // Type 0x01 limits (768 + 32 = 800 <= 859)
     const val T1_CIPHERTEXT_SIZE = 768
     const val T1_SALT_SIZE = 32
-    const val T1_PADDING_SIZE = 159
+    const val T1_PADDING_SIZE = 59 // 859 - 800
 
     // Type 0x02 limits
-    const val T2_MAX_TEXT_SIZE = 957
+    const val T2_MAX_TEXT_SIZE = 857 // 859 - 2
 
-    // Type 0x03 limits
+    // Type 0x03 limits (800 + 4 = 804 <= 859)
     const val T3_PUBLIC_KEY_SIZE = 800
-    const val T3_PADDING_SIZE = 155
+    const val T3_PADDING_SIZE = 55 // 859 - 804
 
-    // Type 0x04 limits
+    // Type 0x04 limits (768 + 4 = 772 <= 859)
     const val T4_CIPHERTEXT_SIZE = 768
-    const val T4_PADDING_SIZE = 187
+    const val T4_PADDING_SIZE = 87 // 859 - 772
 
     // Type 0x05 limits
     const val T5_TRANSFER_ID_SIZE = 16
-    const val T5_MAX_CHUNK_SIZE = 937
+    const val T5_MAX_CHUNK_SIZE = 837 // 859 - 22
 
     sealed class DecodedPayload {
         data class HandshakeFinalize(

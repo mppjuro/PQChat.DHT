@@ -113,4 +113,36 @@ class DhtEngineTest {
         assertArrayEquals(keyPair.publicKey, retrieved.k)
         node.stop()
     }
+
+    @Test
+    fun testRealBep44RemotePutAndGet() = kotlinx.coroutines.runBlocking {
+        val node = org.pqchat.dht.dht.leaf.DhtLeafNode()
+        node.start()
+        val bootstrapNodes = node.resolveBootstrapNodes()
+        println("Bootstrap nodes: $bootstrapNodes")
+        node.bootstrap()
+        kotlinx.coroutines.delay(3000)
+        println("Active peer count: ${node.getActivePeerCount()}")
+
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+        val payload = ByteArray(900) { 0x42.toByte() }
+
+        println("Target hex: ${CryptoUtils.toHex(target)}")
+        val putResult = node.putMutable(target, payload, 1L, null, seed)
+        println("putMutable returned: $putResult")
+
+        // Wait a few seconds for propagation
+        kotlinx.coroutines.delay(4000)
+
+        // Clear local store to force fetching exclusively from remote peers
+        node.localMutableStore.clear()
+
+        println("Attempting remote getMutable (local store cleared)...")
+        val retrieved = node.getMutable(target)
+        println("Remote getMutable result: ${retrieved?.let { String(it.v, Charsets.UTF_8) }}")
+
+        node.stop()
+    }
 }

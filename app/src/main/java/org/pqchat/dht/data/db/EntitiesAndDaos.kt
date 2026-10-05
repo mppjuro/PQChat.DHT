@@ -96,6 +96,12 @@ interface MessageDao {
     @Query("UPDATE messages SET status = :status WHERE contactId = :contactId AND seqNum = :seqNum AND isOutgoing = :isOutgoing")
     suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String)
 
+    @Query("UPDATE messages SET status = :status, isOutgoing = :isOutgoing WHERE contactId = :contactId AND seqNum = :seqNum")
+    suspend fun updateMessageStatusAndDirection(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String)
+
+    @Query("UPDATE messages SET isOutgoing = 0 WHERE contactId = :contactId AND status = 'CONFIRMED_DHT'")
+    suspend fun normalizeConfirmedSelfNotes(contactId: String)
+
     @Query("DELETE FROM messages WHERE contactId = :contactId")
     suspend fun deleteMessagesForContact(contactId: String)
 

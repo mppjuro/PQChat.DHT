@@ -156,7 +156,7 @@ sealed class KrpcMessage {
             if (cas != null) {
                 args["cas"] = cas
             }
-            return Query(txId, "put", args)
+            return Query(txId, "put", args, readOnly = false)
         }
     }
 }

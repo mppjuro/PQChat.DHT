@@ -27,7 +27,7 @@ class ProtocolEngineTest {
 
         // 2. Bob scans QR and creates Type 0x01 frame for DHT
         val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
-        assertEquals(1000, bobHandshake.frame1000.size)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, bobHandshake.frame1000.size)
         assertArrayEquals(aliceInit.target0, bobHandshake.target0)
 
         // 3. Alice receives frame from DHT Target_0 and finalizes
@@ -96,7 +96,7 @@ class ProtocolEngineTest {
             ackNum = 0,
             msgKey = slot50.msgKey
         )
-        assertEquals(1000, offerFrame.size)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, offerFrame.size)
 
         // 2. Bob receives Offer, decodes, and creates Response (Type 0x04) in his reverse channel
         val bobDecodedOfferMsg = BinaryFrameCodec.unpackAeadFrame(slot50.msgKey, offerFrame)
@@ -110,7 +110,7 @@ class ProtocolEngineTest {
             reverseMsgKey = bobReverseSlot.msgKey
         )
         assertEquals(32, bobRekeySecret.size)
-        assertEquals(1000, responseFrame.size)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, responseFrame.size)
 
         // 3. Alice receives Response in reverse channel, extracts SS_rekey
         val aliceDecodedRespMsg = BinaryFrameCodec.unpackAeadFrame(bobReverseSlot.msgKey, responseFrame)
@@ -139,7 +139,7 @@ class ProtocolEngineTest {
         val edSeed = CryptoUtils.secureRandomBytes(32)
         val msgKey = CryptoUtils.secureRandomBytes(32)
 
-        // Split into chunks of 900 bytes
+        // Split into chunks of 800 bytes
         val chunks = ChunkingEngine.splitData(
             data = fakePng,
             currentEdSeed = edSeed,
@@ -147,12 +147,12 @@ class ProtocolEngineTest {
             seqNum = 5,
             ackNum = 1
         )
-        assertEquals(40, chunks.size) // 36000 / 900 = 40 chunks
+        assertEquals(45, chunks.size) // 36000 / 800 = 45 chunks
 
         // Decrypt each chunk and verify
         val decodedChunks = ArrayList<BinaryFrameCodec.DecodedPayload.ChunkData>()
         for (chunkItem in chunks) {
-            assertEquals(1000, chunkItem.frame1000.size)
+            assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, chunkItem.frame1000.size)
             val subKey = ChunkingEngine.deriveChunkMsgKey(msgKey, chunkItem.chunkIndex)
             val decodedMsg = BinaryFrameCodec.unpackAeadFrame(subKey, chunkItem.frame1000)
             assertEquals(BinaryFrameCodec.TYPE_CHUNK_DATA, decodedMsg.msgType)

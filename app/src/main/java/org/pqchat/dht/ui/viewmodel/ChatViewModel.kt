@@ -183,13 +183,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ackNum = contact.counterIn
             )
 
+            val isSelf = contactId == ChatRepository.SELF_CONTACT_ID
+
             // Put chunks to DHT
             for (c in chunks) {
                 dhtLeafNode.putMutable(
                     target = c.target,
                     v = c.frame1000,
                     seq = (c.chunkIndex + 1).toLong(),
-                    sk = c.edPrivateKeySeed
+                    sk = c.edPrivateKeySeed,
+                    skipLocalStore = isSelf
                 )
             }
 
@@ -278,19 +281,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 chainKeyOut = slot.nextChainKey
             )
 
+            val isSelf = contactId == ChatRepository.SELF_CONTACT_ID
+
             // Publish chunks to DHT
             for (c in chunks) {
                 dhtLeafNode.putMutable(
                     target = c.target,
                     v = c.frame1000,
                     seq = (c.chunkIndex + 1).toLong(),
-                    sk = c.edPrivateKeySeed
+                    sk = c.edPrivateKeySeed,
+                    skipLocalStore = isSelf
                 )
             }
 
             repository.messageDao.updateStatus(msgId, "SENT_DHT")
 
-            if (contactId == ChatRepository.SELF_CONTACT_ID) {
+            if (isSelf) {
+                delay(1500L)
                 repository.pollContactIncoming(contactId)
             }
         }
@@ -359,7 +366,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val bobResult = HandshakeManager.bobProcessQr(qrBytes)
 
                 // PUT to DHT Target_0
-                val putSuccess = dhtLeafNode.putMutable(
+                dhtLeafNode.putMutable(
                     target = bobResult.target0,
                     v = bobResult.frame1000,
                     seq = 1L,
