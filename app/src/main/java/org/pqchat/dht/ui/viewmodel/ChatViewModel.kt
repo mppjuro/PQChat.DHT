@@ -157,17 +157,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val contactId = _selectedContactId.value ?: return
 
         viewModelScope.launch {
-            val fakePng = ByteArray(18000) // 18 KB test image
-            System.arraycopy(ChunkingEngine.PNG_MAGIC, 0, fakePng, 0, 4)
-            for (i in 4 until fakePng.size) {
-                fakePng[i] = (i % 256).toByte()
+            val validPng: ByteArray = run {
+                val bitmap = android.graphics.Bitmap.createBitmap(240, 240, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                val paint = android.graphics.Paint()
+                paint.color = android.graphics.Color.rgb(0x00, 0xF5, 0xD4)
+                canvas.drawRect(0f, 0f, 240f, 240f, paint)
+                paint.color = android.graphics.Color.rgb(0x7B, 0x2C, 0xBF)
+                canvas.drawCircle(120f, 120f, 80f, paint)
+                paint.color = android.graphics.Color.rgb(0x00, 0xBB, 0xF9)
+                canvas.drawCircle(120f, 120f, 40f, paint)
+                val baos = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                baos.toByteArray()
             }
 
             val contact = repository.getContact(contactId) ?: return@launch
             val slot = org.pqchat.dht.protocol.RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
             val chunks = ChunkingEngine.splitData(
-                data = fakePng,
+                data = validPng,
                 currentEdSeed = slot.edPrivateKeySeed,
                 currentMsgKey = slot.msgKey,
                 seqNum = contact.counterOut,
@@ -192,8 +201,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     seqNum = contact.counterOut,
                     ackNum = contact.counterIn,
                     timestamp = System.currentTimeMillis(),
-                    textContent = "[Image Attached: 18 KB PNG (${chunks.size} chunks)]",
-                    imageBytes = fakePng,
+                    textContent = "[PNG Image: ${validPng.size} bytes (${chunks.size} chunks)]",
+                    imageBytes = validPng,
                     status = "SENT_DHT"
                 )
             )
@@ -203,6 +212,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 counterOut = contact.counterOut + 1,
                 chainKeyOut = slot.nextChainKey
             )
+
+            if (contactId == ChatRepository.SELF_CONTACT_ID) {
+                repository.pollContactIncoming(contactId)
+            }
         }
     }
 
@@ -246,7 +259,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             // Save outgoing message to DB immediately
-            repository.messageDao.insertMessage(
+            val msgId = repository.messageDao.insertMessage(
                 MessageEntity(
                     contactId = contactId,
                     isOutgoing = true,
@@ -273,6 +286,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     seq = (c.chunkIndex + 1).toLong(),
                     sk = c.edPrivateKeySeed
                 )
+            }
+
+            repository.messageDao.updateStatus(msgId, "SENT_DHT")
+
+            if (contactId == ChatRepository.SELF_CONTACT_ID) {
+                repository.pollContactIncoming(contactId)
             }
         }
     }

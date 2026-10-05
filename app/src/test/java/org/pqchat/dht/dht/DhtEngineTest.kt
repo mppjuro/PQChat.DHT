@@ -89,4 +89,28 @@ class DhtEngineTest {
         assertEquals(20, target.size)
         assertArrayEquals(CryptoUtils.sha1(keyPair.publicKey), target)
     }
+
+    @Test
+    fun testDhtLeafNodeLocalMutableStore() = kotlinx.coroutines.runBlocking {
+        val node = org.pqchat.dht.dht.leaf.DhtLeafNode()
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+        val payload = "Hello BEP 44 DHT Mutable".toByteArray(Charsets.UTF_8)
+
+        val putSuccess = node.putMutable(
+            target = target,
+            v = payload,
+            seq = 1L,
+            sk = seed
+        )
+        assertTrue(putSuccess)
+
+        val retrieved = node.getMutable(target)
+        assertNotNull(retrieved)
+        assertArrayEquals(payload, retrieved!!.v)
+        assertEquals(1L, retrieved.seq)
+        assertArrayEquals(keyPair.publicKey, retrieved.k)
+        node.stop()
+    }
 }

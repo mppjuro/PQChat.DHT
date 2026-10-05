@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
+import org.pqchat.dht.crypto.Ed25519Engine
 import org.pqchat.dht.data.db.*
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.ChunkingEngine
@@ -34,8 +35,9 @@ class ChatRepository(
 
     suspend fun ensureSelfNotesContactExists() = withContext(Dispatchers.IO) {
         val existing = contactDao.getContactById(SELF_CONTACT_ID)
-        if (existing == null || existing.chainKeyOut.size != 64) {
+        if (existing == null || existing.chainKeyOut.size != 64 || (existing.counterIn == 0 && existing.counterOut > 0)) {
             val symmetricSeed = CryptoUtils.secureRandomBytes(64)
+            messageDao.deleteMessagesForContact(SELF_CONTACT_ID)
             contactDao.insertOrUpdate(
                 ContactEntity(
                     id = SELF_CONTACT_ID,
@@ -99,15 +101,10 @@ class ChatRepository(
             sk = slot.edPrivateKeySeed
         )
 
-        if (contactId == SELF_CONTACT_ID && success) {
-            val retrieved = dhtLeafNode.getMutable(slot.target)
-            if (retrieved != null) {
-                messageDao.updateStatus(msgId, "CONFIRMED_DHT")
-            } else {
-                messageDao.updateStatus(msgId, "SENT_DHT")
-            }
+        if (success) {
+            messageDao.updateStatus(msgId, "SENT_DHT")
         } else {
-            messageDao.updateStatus(msgId, if (success) "SENT_DHT" else "QUEUED")
+            messageDao.updateStatus(msgId, "QUEUED")
         }
 
         // Advance outgoing chain state
@@ -116,6 +113,10 @@ class ChatRepository(
             counterOut = contact.counterOut + 1,
             chainKeyOut = slot.nextChainKey
         )
+
+        if (contactId == SELF_CONTACT_ID && success) {
+            pollContactIncoming(contactId)
+        }
 
         success
     }
@@ -159,26 +160,35 @@ class ChatRepository(
                 when (frameMsg.msgType) {
                     BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
                         val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
-                        val alreadyExists = messageDao.existsMessage(contactId, frameMsg.seqNum, false)
-                        if (!alreadyExists) {
-                            messageDao.insertMessage(
-                                MessageEntity(
-                                    contactId = contactId,
-                                    isOutgoing = false,
-                                    seqNum = frameMsg.seqNum,
-                                    ackNum = frameMsg.ackNum,
-                                    timestamp = frameMsg.timestampUTC,
-                                    textContent = textPayload.text,
-                                    status = "DELIVERED"
-                                )
-                            )
-
-                            // Advance incoming ratchet chain
+                        if (contactId == SELF_CONTACT_ID) {
+                            messageDao.updateStatusForSeq(contactId, frameMsg.seqNum, true, "CONFIRMED_DHT")
                             contactDao.updateIncomingState(
                                 id = contactId,
                                 counterIn = slot.counter + 1,
                                 chainKeyIn = slot.nextChainKey
                             )
+                        } else {
+                            val alreadyExists = messageDao.existsMessage(contactId, frameMsg.seqNum, false)
+                            if (!alreadyExists) {
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = contactId,
+                                        isOutgoing = false,
+                                        seqNum = frameMsg.seqNum,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = textPayload.text,
+                                        status = "DELIVERED"
+                                    )
+                                )
+
+                                // Advance incoming ratchet chain
+                                contactDao.updateIncomingState(
+                                    id = contactId,
+                                    counterIn = slot.counter + 1,
+                                    chainKeyIn = slot.nextChainKey
+                                )
+                            }
                         }
                     }
 
@@ -218,6 +228,30 @@ class ChatRepository(
                             )
                         )
 
+                        // If multi-chunk payload, fetch remaining chunks from their derived DHT targets
+                        for (j in 1 until chunkPayload.totalChunks) {
+                            val subEdSeed = ChunkingEngine.deriveChunkEdSeed(slot.edPrivateKeySeed, chunkPayload.transferId, j)
+                            val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
+                            val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
+                            val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
+
+                            val subItem = dhtLeafNode.getMutable(subTarget)
+                            if (subItem != null) {
+                                try {
+                                    val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
+                                    val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                                    chunkDao.insertChunk(
+                                        ChunkEntity(
+                                            transferId = transferIdHex,
+                                            chunkIndex = subChunk.chunkIndex,
+                                            totalChunks = subChunk.totalChunks,
+                                            data = subChunk.data
+                                        )
+                                    )
+                                } catch (_: Exception) {}
+                            }
+                        }
+
                         // Check if complete
                         val count = chunkDao.countChunks(transferIdHex)
                         if (count == chunkPayload.totalChunks) {
@@ -233,24 +267,33 @@ class ChatRepository(
                             val fullData = ChunkingEngine.assembleChunks(decodedList)
                             chunkDao.deleteChunks(transferIdHex)
 
-                            messageDao.insertMessage(
-                                MessageEntity(
-                                    contactId = contactId,
-                                    isOutgoing = false,
-                                    seqNum = frameMsg.seqNum,
-                                    ackNum = frameMsg.ackNum,
-                                    timestamp = frameMsg.timestampUTC,
-                                    textContent = "[Image File - ${fullData.size} bytes]",
-                                    imageBytes = fullData,
-                                    status = "DELIVERED"
+                            if (contactId == SELF_CONTACT_ID) {
+                                messageDao.updateStatusForSeq(contactId, frameMsg.seqNum, true, "CONFIRMED_DHT")
+                                contactDao.updateIncomingState(
+                                    id = contactId,
+                                    counterIn = slot.counter + 1,
+                                    chainKeyIn = slot.nextChainKey
                                 )
-                            )
+                            } else {
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = contactId,
+                                        isOutgoing = false,
+                                        seqNum = frameMsg.seqNum,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = "[Image File - ${fullData.size} bytes]",
+                                        imageBytes = fullData,
+                                        status = "DELIVERED"
+                                    )
+                                )
 
-                            contactDao.updateIncomingState(
-                                id = contactId,
-                                counterIn = slot.counter + 1,
-                                chainKeyIn = slot.nextChainKey
-                            )
+                                contactDao.updateIncomingState(
+                                    id = contactId,
+                                    counterIn = slot.counter + 1,
+                                    chainKeyIn = slot.nextChainKey
+                                )
+                            }
                         }
                     }
                 }

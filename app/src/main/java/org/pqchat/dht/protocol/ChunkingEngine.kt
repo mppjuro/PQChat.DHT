@@ -42,13 +42,10 @@ object ChunkingEngine {
             val len = minOf(CHUNK_SIZE, data.size - offset)
             val chunkBytes = data.copyOfRange(offset, offset + len)
 
-            // Derive sub-keys for chunk j:
-            // EdSeed_{i,j} = HMAC-SHA512(EdSeed_i, "chunk" || Transfer_ID || j)
             val subEdSeed = deriveChunkEdSeed(currentEdSeed, transferId, j)
             val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
             val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
 
-            // MsgKey_{i,j} = HKDF-Expand(MsgKey_i, "chunk_key" || j, 32)
             val subMsgKey = deriveChunkMsgKey(currentMsgKey, j)
 
             // Encode into 1000-byte AEAD frame
@@ -109,6 +106,7 @@ object ChunkingEngine {
     }
 
     fun deriveChunkEdSeed(baseEdSeed: ByteArray, transferId: ByteArray, chunkIndex: Int): ByteArray {
+        if (chunkIndex == 0) return baseEdSeed
         val buffer = ByteBuffer.allocate(5 + 16 + 4).order(ByteOrder.BIG_ENDIAN)
         buffer.put("chunk".toByteArray(Charsets.UTF_8))
         buffer.put(transferId)
@@ -119,6 +117,7 @@ object ChunkingEngine {
     }
 
     fun deriveChunkMsgKey(baseMsgKey: ByteArray, chunkIndex: Int): ByteArray {
+        if (chunkIndex == 0) return baseMsgKey
         val buffer = ByteBuffer.allocate(9 + 4).order(ByteOrder.BIG_ENDIAN)
         buffer.put("chunk_key".toByteArray(Charsets.UTF_8))
         buffer.putInt(chunkIndex)
