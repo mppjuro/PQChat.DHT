@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 1. Wypełnienie i neonowy kontur dymka czatu -->
+    <path
+        android:fillColor="#0F1F2E"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 38,28 H 70 A 12,12 0 0 1 82,40 V 58 A 12,12 0 0 1 70,70 H 48 L 34,80 L 38,70 A 12,12 0 0 1 26,58 V 40 A 12,12 0 0 1 38,28 Z" />
+
+    <!-- 2. Krawędzie izometrycznej siatki kryptograficznej (Lattice Edges) -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeAlpha="0.55"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 34,49 L 43,43 L 54,37 L 65,43 L 74,49 L 65,55 L 54,61 L 43,55 Z
+                          M 43,43 L 43,55
+                          M 54,37 L 54,61
+                          M 65,43 L 65,55
+                          M 34,49 L 74,49
+                          M 43,43 L 65,55
+                          M 43,55 L 65,43" />
+
+    <!-- 3. Węzły sieci DHT (Vertices) - neonowy cyjan -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 32.2,49 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 41.2,43 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 41.2,55 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 52.2,37 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 52.2,61 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 63.2,43 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 63.2,55 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z
+                          M 72.2,49 a 1.8,1.8 0 1,0 3.6,0 a 1.8,1.8 0 1,0 -3.6,0 Z" />
+
+    <!-- 4. Centralny węzeł koordynujący (kryształ/rdzeń) - powiększony, jasny akcent -->
+    <path
+        android:fillColor="#E0F7FA"
+        android:pathData="M 51.6,49 a 2.4,2.4 0 1,0 4.8,0 a 2.4,2.4 0 1,0 -4.8,0 Z" />
+</vector>

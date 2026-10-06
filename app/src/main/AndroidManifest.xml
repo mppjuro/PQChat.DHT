@@ -12,9 +12,9 @@
     <application
         android:name=".PQChatApplication"
         android:allowBackup="false"
-        android:icon="@android:drawable/ic_lock_lock"
+        android:icon="@mipmap/ic_launcher"
         android:label="PQChat.DHT"
-        android:roundIcon="@android:drawable/ic_lock_lock"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
