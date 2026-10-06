@@ -3,6 +3,7 @@ package org.pqchat.dht.ui.screens
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -138,42 +139,57 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    // ── DHT Sync Timer Button ──────────────────────────────────────
-                    IconButton(
+                    // ── DHT Sync Timer Chip ────────────────────────────────────────
+                    Surface(
                         onClick = {
                             isSyncing = true
                             viewModel.triggerImmediatePoll()
-                        }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        color = appColors.surfaceVariant,
+                        border = BorderStroke(1.dp, appColors.primary.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .height(32.dp)
                     ) {
-                        if (isSyncing) {
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Synchronizowanie…",
-                                tint = appColors.primary,
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .rotate(syncRotation)
-                            )
-                        } else {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
-                                    .background(appColors.surfaceVariant)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            if (isSyncing) {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = "Synchronizowanie…",
+                                    tint = appColors.primary,
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .rotate(syncRotation)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "Sync",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = appColors.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            } else {
                                 Icon(
                                     imageVector = Icons.Default.Timer,
                                     contentDescription = "Następny polling DHT",
                                     tint = appColors.primary,
-                                    modifier = Modifier.size(14.dp)
+                                    modifier = Modifier.size(15.dp)
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = timerLabel,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = appColors.primary,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }

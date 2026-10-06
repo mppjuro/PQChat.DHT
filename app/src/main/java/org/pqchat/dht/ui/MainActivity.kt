@@ -93,6 +93,7 @@ fun MainAppNavigation(viewModel: ChatViewModel) {
             ContactListScreen(
                 viewModel = viewModel,
                 onContactClick = { contactId ->
+                    viewModel.selectContact(contactId)
                     currentScreen = Screen.Chat(contactId)
                 },
                 onNewChatClick = {
