@@ -56,6 +56,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val pollingState = pollingManager.currentState
     val nextPollInMs = pollingManager.nextPollInMs
+    val isSyncing = pollingManager.isSyncing
 
     private val _aliceHandshakeState = MutableStateFlow<HandshakeManager.AliceInitResult?>(null)
     val aliceHandshakeState: StateFlow<HandshakeManager.AliceInitResult?> = _aliceHandshakeState.asStateFlow()

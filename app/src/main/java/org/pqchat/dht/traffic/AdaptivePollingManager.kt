@@ -39,8 +39,14 @@ class AdaptivePollingManager(
     private val _nextPollInMs = MutableStateFlow(0L)
     val nextPollInMs: StateFlow<Long> = _nextPollInMs.asStateFlow()
 
+    /** Indicates whether a DHT poll is currently running. */
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
     fun triggerImmediatePoll() {
+        if (_isSyncing.value) return
+        _isSyncing.value = true
         immediateSignal?.complete(Unit)
     }
 
@@ -109,16 +115,23 @@ class AdaptivePollingManager(
 
         // In DOZE_SLEEP, polling is primarily driven by WorkManager / AlarmManager
         if (state == PollingState.DOZE_SLEEP) {
+            _isSyncing.value = false
             _nextPollInMs.value = -1L
             return
         }
 
         pollingJob = scope.launch {
             while (isActive) {
-                // Fire the poll
+                // Fire the poll with active syncing state
+                _isSyncing.value = true
                 try {
                     onPollRequested(activeChatContactId)
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                } finally {
+                    val interval = getCurrentIntervalMs()
+                    _nextPollInMs.value = interval
+                    _isSyncing.value = false
+                }
 
                 // Countdown with 250 ms ticks; can be short-circuited by triggerImmediatePoll()
                 val interval = getCurrentIntervalMs()
@@ -136,13 +149,13 @@ class AdaptivePollingManager(
                     }
                 } finally {
                     immediateSignal = null
-                    _nextPollInMs.value = 0L
                 }
             }
         }
     }
 
     fun stop() {
+        _isSyncing.value = false
         pollingJob?.cancel()
         scope.cancel()
     }
