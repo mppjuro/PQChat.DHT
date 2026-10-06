@@ -46,28 +46,18 @@ fun ContactListScreen(
     val notification by viewModel.statusNotification.collectAsState()
     val nextPollInMs by viewModel.nextPollInMs.collectAsState()
 
-    // Local sync animation state
-    var isSyncing by remember { mutableStateOf(false) }
-    val syncRotation by animateFloatAsState(
-        targetValue = if (isSyncing) 360f else 0f,
-        animationSpec = if (isSyncing) {
-            infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            )
-        } else {
-            tween(0)
-        },
+    val isSyncing by viewModel.isSyncing.collectAsState()
+
+    val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
+    val syncRotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "syncRotation"
     )
-
-    // Reset syncing after 2 seconds
-    LaunchedEffect(isSyncing) {
-        if (isSyncing) {
-            delay(2000L)
-            isSyncing = false
-        }
-    }
 
     // Format countdown label: e.g. "12s", "1:04"
     val timerLabel = remember(nextPollInMs) {
@@ -113,7 +103,6 @@ fun ContactListScreen(
                     // ── DHT Sync Timer Chip ────────────────────────────────────────
                     Surface(
                         onClick = {
-                            isSyncing = true
                             viewModel.triggerImmediatePoll()
                         },
                         shape = RoundedCornerShape(8.dp),
