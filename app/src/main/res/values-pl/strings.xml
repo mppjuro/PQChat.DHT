@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">PQChat.DHT</string>
+    <string name="sync_button">Sync</string>
+    <string name="syncing_description">Synchronizowanie…</string>
+    <string name="next_poll_description">Następny polling DHT</string>
+</resources>
