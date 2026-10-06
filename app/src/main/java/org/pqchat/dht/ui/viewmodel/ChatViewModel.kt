@@ -193,6 +193,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // Put chunks to DHT
             for (c in chunks) {
+                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingChunkData(
+                    contactId = contactId,
+                    transferId = c.transferId,
+                    chunkIndex = c.chunkIndex,
+                    totalChunks = c.totalChunks,
+                    target = c.target,
+                    seq = (c.chunkIndex + 1).toLong(),
+                    slotMsgKey = slot.msgKey,
+                    frame900 = c.frame1000
+                )
                 dhtLeafNode.putMutable(
                     target = c.target,
                     v = c.frame1000,
@@ -291,6 +301,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // Publish chunks to DHT
             for (c in chunks) {
+                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingChunkData(
+                    contactId = contactId,
+                    transferId = c.transferId,
+                    chunkIndex = c.chunkIndex,
+                    totalChunks = c.totalChunks,
+                    target = c.target,
+                    seq = (c.chunkIndex + 1).toLong(),
+                    slotMsgKey = slot.msgKey,
+                    frame900 = c.frame1000
+                )
                 dhtLeafNode.putMutable(
                     target = c.target,
                     v = c.frame1000,
@@ -333,6 +353,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             frame1000 = item.v
                         )
 
+                        org.pqchat.dht.debug.MessageDebugLogger.logIncomingAliceHandshakeFinalize(
+                            target = aliceInit.target0,
+                            seq = item.seq,
+                            senderEdPublicKey = item.k,
+                            senderSignature = item.sig,
+                            frame900 = item.v,
+                            seedInit = aliceInit.seedInit,
+                            decapsulationSuccess = true
+                        )
+
                         val newContactId = UUID.randomUUID().toString()
                         val newContact = ContactEntity(
                             id = newContactId,
@@ -370,6 +400,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 val bobResult = HandshakeManager.bobProcessQr(qrBytes)
+
+                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
+                    target = bobResult.target0,
+                    seq = 1L,
+                    edPrivateKeySeed = bobResult.edPrivateKeySeed,
+                    frame900 = bobResult.frame1000
+                )
 
                 // PUT to DHT Target_0
                 dhtLeafNode.putMutable(

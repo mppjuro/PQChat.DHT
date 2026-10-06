@@ -82,6 +82,17 @@ class ChatRepository(
         )
         val frame1000 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
 
+        // Debug logging: Outgoing message before and after encryption with PQC & AES breakdown
+        org.pqchat.dht.debug.MessageDebugLogger.logOutgoingTextMessage(
+            contactId = contactId,
+            text = text,
+            slot = slot,
+            seqNum = contact.counterOut,
+            ackNum = contact.counterIn,
+            plaintext972 = plaintext972,
+            frame900 = frame1000
+        )
+
         // Store message in database
         val msgId = messageDao.insertMessage(
             MessageEntity(
@@ -136,11 +147,21 @@ class ChatRepository(
     private suspend fun sendRekeyOffer(contact: ContactEntity) {
         val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
         val newEpoch = contact.rekeyEpoch + 1
-        val (_, offerFrame) = RekeyCoordinator.createRekeyOffer(
+        val (pendingOffer, offerFrame) = RekeyCoordinator.createRekeyOffer(
             epoch = newEpoch,
             seqNum = contact.counterOut,
             ackNum = contact.counterIn,
             msgKey = slot.msgKey
+        )
+
+        org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyOffer(
+            contactId = contact.id,
+            epoch = newEpoch,
+            slot = slot,
+            seqNum = contact.counterOut,
+            ackNum = contact.counterIn,
+            mlKemPublicKey = pendingOffer.pkNew,
+            frame900 = offerFrame
         )
 
         dhtLeafNode.putMutable(
@@ -169,6 +190,18 @@ class ChatRepository(
 
             try {
                 val frameMsg = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, item.v)
+
+                // Debug logging: Incoming message before and after decryption
+                org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                    contactId = contactId,
+                    target = slot.target,
+                    seq = item.seq,
+                    senderEdPublicKey = item.k,
+                    senderSignature = item.sig,
+                    frame900 = item.v,
+                    frameMsg = frameMsg,
+                    slotMsgKey = slot.msgKey
+                )
 
                 when (frameMsg.msgType) {
                     BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
@@ -221,6 +254,15 @@ class ChatRepository(
                             reverseMsgKey = outSlot.msgKey
                         )
 
+                        org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
+                            contactId = contactId,
+                            epoch = offerPayload.rekeyEpoch,
+                            slot = outSlot,
+                            seqNum = contact.counterOut,
+                            ackNum = frameMsg.seqNum,
+                            frame900 = respFrame
+                        )
+
                         dhtLeafNode.putMutable(
                             target = outSlot.target,
                             v = respFrame,
@@ -257,6 +299,16 @@ class ChatRepository(
                             if (subItem != null) {
                                 try {
                                     val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
+                                    org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                                        contactId = contactId,
+                                        target = subTarget,
+                                        seq = subItem.seq,
+                                        senderEdPublicKey = subItem.k,
+                                        senderSignature = subItem.sig,
+                                        frame900 = subItem.v,
+                                        frameMsg = subFrame,
+                                        slotMsgKey = subMsgKey
+                                    )
                                     val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
                                     chunkDao.insertChunk(
                                         ChunkEntity(
