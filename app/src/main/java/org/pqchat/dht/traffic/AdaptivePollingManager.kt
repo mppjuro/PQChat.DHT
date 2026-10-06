@@ -30,9 +30,19 @@ class AdaptivePollingManager(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var pollingJob: Job? = null
+    private var immediateSignal: CompletableDeferred<Unit>? = null
 
     private val _currentState = MutableStateFlow(PollingState.APP_ACTIVE_OTHER)
     val currentState: StateFlow<PollingState> = _currentState.asStateFlow()
+
+    /** Milliseconds remaining until the next DHT poll. Updated every 250 ms. */
+    private val _nextPollInMs = MutableStateFlow(0L)
+    val nextPollInMs: StateFlow<Long> = _nextPollInMs.asStateFlow()
+
+    /** Signal the polling loop to fire a poll immediately (resets the countdown). */
+    fun triggerImmediatePoll() {
+        immediateSignal?.complete(Unit)
+    }
 
     @Volatile
     var activeChatContactId: String? = null
@@ -98,14 +108,36 @@ class AdaptivePollingManager(
         val state = _currentState.value
 
         // In DOZE_SLEEP, polling is primarily driven by WorkManager / AlarmManager
-        if (state == PollingState.DOZE_SLEEP) return
+        if (state == PollingState.DOZE_SLEEP) {
+            _nextPollInMs.value = -1L
+            return
+        }
 
         pollingJob = scope.launch {
             while (isActive) {
+                // Fire the poll
                 try {
                     onPollRequested(activeChatContactId)
                 } catch (_: Exception) {}
-                delay(getCurrentIntervalMs())
+
+                // Countdown with 250 ms ticks; can be short-circuited by triggerImmediatePoll()
+                val interval = getCurrentIntervalMs()
+                val deadline = System.currentTimeMillis() + interval
+                val signal = CompletableDeferred<Unit>()
+                immediateSignal = signal
+                try {
+                    while (isActive) {
+                        val remaining = deadline - System.currentTimeMillis()
+                        if (remaining <= 0L) break
+                        _nextPollInMs.value = remaining
+                        // Wait 250 ms or until immediate signal fires
+                        withTimeoutOrNull(minOf(remaining, 250L)) { signal.await() }
+                        if (signal.isCompleted) break
+                    }
+                } finally {
+                    immediateSignal = null
+                    _nextPollInMs.value = 0L
+                }
             }
         }
     }

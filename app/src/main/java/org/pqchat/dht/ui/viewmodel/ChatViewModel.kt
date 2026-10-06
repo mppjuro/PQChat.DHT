@@ -55,6 +55,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val dhtPeerCount: StateFlow<Int> = _dhtPeerCount.asStateFlow()
 
     val pollingState = pollingManager.currentState
+    val nextPollInMs = pollingManager.nextPollInMs
 
     private val _aliceHandshakeState = MutableStateFlow<HandshakeManager.AliceInitResult?>(null)
     val aliceHandshakeState: StateFlow<HandshakeManager.AliceInitResult?> = _aliceHandshakeState.asStateFlow()
@@ -142,6 +143,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun unselectContact() {
         _selectedContactId.value = null
         pollingManager.onChatClosed()
+    }
+
+    /** Trigger an immediate DHT poll (ignores current countdown). */
+    fun triggerImmediatePoll() {
+        pollingManager.triggerImmediatePoll()
     }
 
     fun sendMessage(text: String) {

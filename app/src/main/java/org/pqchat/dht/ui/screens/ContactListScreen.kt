@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -23,6 +24,8 @@ import org.pqchat.dht.data.db.ContactEntity
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
+import androidx.compose.animation.core.*
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +43,44 @@ fun ContactListScreen(
     val dhtPeers by viewModel.dhtPeerCount.collectAsState()
     val pollingState by viewModel.pollingState.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
+    val nextPollInMs by viewModel.nextPollInMs.collectAsState()
+
+    // Local sync animation state
+    var isSyncing by remember { mutableStateOf(false) }
+    val syncRotation by animateFloatAsState(
+        targetValue = if (isSyncing) 360f else 0f,
+        animationSpec = if (isSyncing) {
+            infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            )
+        } else {
+            tween(0)
+        },
+        label = "syncRotation"
+    )
+
+    // Reset syncing after 2 seconds
+    LaunchedEffect(isSyncing) {
+        if (isSyncing) {
+            delay(2000L)
+            isSyncing = false
+        }
+    }
+
+    // Format countdown label: e.g. "12s", "1:04"
+    val timerLabel = remember(nextPollInMs) {
+        when {
+            nextPollInMs < 0L -> "Doze"
+            nextPollInMs == 0L -> "…"
+            nextPollInMs < 60_000L -> "${nextPollInMs / 1000}s"
+            else -> {
+                val m = nextPollInMs / 60_000
+                val s = (nextPollInMs % 60_000) / 1000
+                "$m:${s.toString().padStart(2, '0')}"
+            }
+        }
+    }
 
     val selfContact = remember(contacts) {
         contacts.firstOrNull { it.id == ChatRepository.SELF_CONTACT_ID }
@@ -68,6 +109,48 @@ fun ContactListScreen(
                     }
                 },
                 actions = {
+                    // ── DHT Sync Timer Button ──────────────────────────────────────
+                    IconButton(
+                        onClick = {
+                            isSyncing = true
+                            viewModel.triggerImmediatePoll()
+                        }
+                    ) {
+                        if (isSyncing) {
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = "Synchronizowanie…",
+                                tint = appColors.primary,
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .rotate(syncRotation)
+                            )
+                        } else {
+                            // Timer chip: clock icon + countdown text
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(appColors.surfaceVariant)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timer,
+                                    contentDescription = "Następny polling DHT",
+                                    tint = appColors.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = timerLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    // ───────────────────────────────────────────────────────────────
                     IconButton(onClick = onDiagnosticsClick) {
                         Icon(
                             imageVector = Icons.Default.BarChart,
