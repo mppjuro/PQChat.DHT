@@ -16,9 +16,9 @@ class ChatRepository(
     val contactDao: ContactDao,
     val messageDao: MessageDao,
     val chunkDao: ChunkDao,
-    val dhtLeafNode: DhtLeafNode
+    val dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient
 ) {
-    constructor(database: AppDatabase, dhtLeafNode: DhtLeafNode) : this(
+    constructor(database: AppDatabase, dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient) : this(
         database.contactDao(),
         database.messageDao(),
         database.chunkDao(),

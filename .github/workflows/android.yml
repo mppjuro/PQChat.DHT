@@ -1,0 +1,79 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  unit-tests-and-lint:
+    name: Unit Tests & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Lint
+        run: ./gradlew lintDebug
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: app/build/reports/tests/testDebugUnitTest/
+
+      - name: Upload Lint Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-results
+          path: app/build/reports/lint-results-debug.html
+
+  instrumented-tests:
+    name: Instrumented Tests (Android Emulator)
+    runs-on: macos-13
+    needs: unit-tests-and-lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Instrumented Tests via AVD
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          script: ./gradlew connectedDebugAndroidTest
+
+      - name: Upload Instrumented Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-test-results
+          path: app/build/reports/androidTests/connected/

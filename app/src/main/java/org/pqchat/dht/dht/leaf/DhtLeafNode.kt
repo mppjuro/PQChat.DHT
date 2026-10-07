@@ -26,10 +26,10 @@ typealias PeerContact = DhtLeafNode.DhtPeer
  * - Stores & retrieves 1000-byte encrypted messages via BEP 44 mutable items.
  */
 class DhtLeafNode(
-    val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
+    override val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
     private val port: Int = 0, // 0 means ephemeral port
     private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null
-) {
+) : DhtClient {
     companion object {
         const val MAX_CACHED_NODES = 40
         const val K = 8 // Replication / closest nodes factor
@@ -173,7 +173,7 @@ class DhtLeafNode(
         return s
     }
 
-    fun start() {
+    override fun start() {
         if (isRunning) return
         isRunning = true
         initSocket()
@@ -188,7 +188,7 @@ class DhtLeafNode(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         isRunning = false
         try {
             socket?.close()
@@ -200,7 +200,7 @@ class DhtLeafNode(
         fastestNodesCache.clear()
     }
 
-    fun getActivePeerCount(): Int = routingTable.size
+    override fun getActivePeerCount(): Int = routingTable.size
 
     fun getCachedFastestNodes(): List<DhtPeer> {
         return fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
@@ -527,7 +527,7 @@ class DhtLeafNode(
      * to populate targetRouteCache with 8 closest nodes to the target hash,
      * avoiding multi-hop Kademlia lookups when get(target) is called later.
      */
-    suspend fun preWarmTarget(target: ByteArray): List<PeerContact> = withContext(Dispatchers.IO) {
+    override suspend fun preWarmTarget(target: ByteArray): List<PeerContact> = withContext(Dispatchers.IO) {
         val targetHex = CryptoUtils.toHex(target)
         val existing = targetRouteCache[target]
         if (!existing.isNullOrEmpty()) {
@@ -581,7 +581,7 @@ class DhtLeafNode(
         closest8
     }
 
-    fun preWarmTargetAsync(target: ByteArray): Job {
+    override fun preWarmTargetAsync(target: ByteArray): Job {
         return scope.launch {
             try {
                 preWarmTarget(target)
@@ -628,11 +628,11 @@ class DhtLeafNode(
      * immediately aborts search and returns null (verifying empty slots in < 600 ms).
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
-    suspend fun getMutable(
+    override suspend fun getMutable(
         target: ByteArray,
-        salt: ByteArray? = null,
-        skipLocalStore: Boolean = false,
-        timeoutMs: Long = FAST_GET_TIMEOUT_MS
+        salt: ByteArray?,
+        skipLocalStore: Boolean,
+        timeoutMs: Long
     ): MutableItem? = withContext(Dispatchers.IO) {
         val targetHex = CryptoUtils.toHex(target)
         if (!skipLocalStore) {
@@ -752,13 +752,13 @@ class DhtLeafNode(
      * BEP 44 put query to store mutable item.
      * Signs v using Ed25519 sk and stores in local store and propagates to remote DHT peers.
      */
-    suspend fun putMutable(
+    override suspend fun putMutable(
         target: ByteArray,
         v: ByteArray,
         seq: Long,
-        salt: ByteArray? = null,
+        salt: ByteArray?,
         sk: ByteArray,
-        skipLocalStore: Boolean = false
+        skipLocalStore: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
         require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
 
@@ -839,7 +839,7 @@ class DhtLeafNode(
     /**
      * Send dummy cover traffic (chaffing) to random target.
      */
-    suspend fun sendCoverTrafficDummy(): Boolean {
+    override suspend fun sendCoverTrafficDummy(): Boolean {
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
         val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
