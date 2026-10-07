@@ -58,6 +58,27 @@ android {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
+
+    sourceSets {
+        getByName("test") {
+            java.srcDirs("src/test/java")
+        }
+    }
+
+    testOptions {
+        unitTests.all {
+            it.exclude("**/integration/**")
+        }
+    }
+}
+
+tasks.register<Test>("integrationTest") {
+    description = "Runs the integration tests against real network / DHT."
+    group = "verification"
+    testClassesDirs = files(project.buildDir.resolve("intermediates/javac/debugUnitTest/classes"), project.buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), project.buildDir.resolve("intermediates/javac/debugUnitTest/classes"), project.buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    include("**/integration/**")
+    shouldRunAfter("testDebugUnitTest")
 }
 
 dependencies {

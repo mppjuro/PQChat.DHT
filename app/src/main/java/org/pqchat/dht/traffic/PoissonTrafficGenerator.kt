@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import org.pqchat.dht.crypto.CryptoUtils
-import org.pqchat.dht.dht.leaf.DhtLeafNode
+import org.pqchat.dht.dht.leaf.DhtClient
 import kotlin.math.ln
 
 /**
@@ -18,7 +18,7 @@ import kotlin.math.ln
  * between real conversations and background noise.
  */
 class PoissonTrafficGenerator(
-    private val dhtLeafNode: DhtLeafNode,
+    private val dhtLeafNode: DhtClient,
     private val lambda: Double = 1.0 / 480.0 // average once every 8 minutes (480s)
 ) {
     data class CoverEvent(
