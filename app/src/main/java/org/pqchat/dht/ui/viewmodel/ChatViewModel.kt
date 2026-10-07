@@ -31,10 +31,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (contactId != null) {
                 repository.pollContactIncoming(contactId)
             } else {
-                val contacts = repository.contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
-                for (c in contacts) {
-                    repository.pollContactIncoming(c.id)
-                }
+                repository.pollAllContactsIncoming()
             }
         },
         onIdlePreWarm = { contactId ->
