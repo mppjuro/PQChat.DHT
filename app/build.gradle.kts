@@ -75,8 +75,9 @@ android {
 tasks.register<Test>("integrationTest") {
     description = "Runs the integration tests against real network / DHT."
     group = "verification"
-    testClassesDirs = files(project.buildDir.resolve("intermediates/javac/debugUnitTest/classes"), project.buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
-    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), project.buildDir.resolve("intermediates/javac/debugUnitTest/classes"), project.buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    val buildDir = layout.buildDirectory.asFile.get()
+    testClassesDirs = files(buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
     include("**/integration/**")
     shouldRunAfter("testDebugUnitTest")
 }

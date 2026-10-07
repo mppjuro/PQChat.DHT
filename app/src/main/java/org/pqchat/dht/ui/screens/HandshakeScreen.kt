@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -69,6 +70,13 @@ fun HandshakeScreen(
     val isHandshaking by viewModel.isHandshaking.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
 
+    // Trigger onSuccess navigation when handshake succeeds
+    LaunchedEffect(notification) {
+        if (notification?.contains("Connected! Post-quantum ratcheting active.") == true) {
+            onSuccess()
+        }
+    }
+
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(aliceInitState) {
@@ -86,7 +94,7 @@ fun HandshakeScreen(
                 title = { Text("Secure Rendezvous Handshake") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = TextPrimary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface)

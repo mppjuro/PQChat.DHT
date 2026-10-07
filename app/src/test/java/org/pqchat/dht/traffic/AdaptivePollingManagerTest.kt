@@ -126,4 +126,45 @@ class AdaptivePollingManagerTest {
         assertFalse(manager!!.isSyncing.value)
         assertEquals(2, pollCallCount)
     }
+
+    @Test
+    fun testScreenChangeRecalculatesIntervalWithoutImmediateSync() = runBlocking {
+        var pollCallCount = 0
+        val gate1 = CompletableDeferred<Unit>()
+
+        manager = AdaptivePollingManager {
+            pollCallCount++
+            if (pollCallCount == 1) {
+                gate1.await()
+            }
+        }
+        manager!!.intervalForegroundChatMs = 10_000L
+        manager!!.intervalAppActiveMs = 60_000L
+
+        manager!!.onAppForegrounded()
+        var waited = 0
+        while (pollCallCount == 0 && waited < 2000) {
+            delay(20)
+            waited += 20
+        }
+        assertEquals(1, pollCallCount)
+
+        // Complete the first poll (in App Active, interval 60s)
+        gate1.complete(Unit)
+        waited = 0
+        while (manager!!.isSyncing.value && waited < 2000) {
+            delay(50)
+            waited += 50
+        }
+        assertFalse(manager!!.isSyncing.value)
+
+        // User opens chat right after poll finished (time elapsed < 10s foreground interval)
+        manager!!.onChatOpened("contact_bob")
+
+        delay(100)
+        // Should NOT trigger immediate poll because elapsed time is well below 10s!
+        assertEquals("Changing screen should NOT immediately sync if time hasn't elapsed", 1, pollCallCount)
+        assertFalse("isSyncing should remain false", manager!!.isSyncing.value)
+        assertTrue("Countdown should be adjusted to new interval (<= 10s)", manager!!.nextPollInMs.value in 1L..10_000L)
+    }
 }
