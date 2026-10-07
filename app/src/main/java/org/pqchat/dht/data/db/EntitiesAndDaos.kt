@@ -8,8 +8,8 @@ data class ContactEntity(
     @PrimaryKey
     val id: String,
     val name: String,
-    val chainKeyOut: ByteArray, // 64 bytes
-    val chainKeyIn: ByteArray,  // 64 bytes
+    val chainKeyOut: EncryptedBlob, // 64 bytes
+    val chainKeyIn: EncryptedBlob,  // 64 bytes
     val counterOut: Int,
     val counterIn: Int,
     val rekeyEpoch: Long = 0L,
@@ -17,12 +17,37 @@ data class ContactEntity(
     val receivedBitmap: ByteArray = ByteArray(128), // 1024-bit sliding window
     val lastActive: Long = System.currentTimeMillis()
 ) {
+    @Ignore
+    constructor(
+        id: String,
+        name: String,
+        chainKeyOut: ByteArray,
+        chainKeyIn: ByteArray,
+        counterOut: Int,
+        counterIn: Int,
+        rekeyEpoch: Long = 0L,
+        receivedBitmapBase: Int = 0,
+        receivedBitmap: ByteArray = ByteArray(128),
+        lastActive: Long = System.currentTimeMillis()
+    ) : this(
+        id = id,
+        name = name,
+        chainKeyOut = EncryptedBlob(chainKeyOut),
+        chainKeyIn = EncryptedBlob(chainKeyIn),
+        counterOut = counterOut,
+        counterIn = counterIn,
+        rekeyEpoch = rekeyEpoch,
+        receivedBitmapBase = receivedBitmapBase,
+        receivedBitmap = receivedBitmap,
+        lastActive = lastActive
+    )
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ContactEntity) return false
         return id == other.id && name == other.name &&
-                chainKeyOut.contentEquals(other.chainKeyOut) &&
-                chainKeyIn.contentEquals(other.chainKeyIn) &&
+                chainKeyOut == other.chainKeyOut &&
+                chainKeyIn == other.chainKeyIn &&
                 counterOut == other.counterOut &&
                 counterIn == other.counterIn &&
                 rekeyEpoch == other.rekeyEpoch &&
@@ -50,12 +75,44 @@ data class MessageEntity(
     val seqNum: Int,
     val ackNum: Int = 0,
     val timestamp: Long,
-    val textContent: String?,
-    val imageBytes: ByteArray? = null,
+    val textContent: EncryptedText? = null,
+    val imageBytes: EncryptedBlob? = null,
     val status: String, // QUEUED, SENDING, SENT_DHT, DELIVERED, CONFIRMED_DHT
     val retryCount: Int = 0,
     val lastAttemptTimestamp: Long = 0L
-)
+) {
+    @Ignore
+    constructor(
+        id: Long = 0,
+        contactId: String,
+        isOutgoing: Boolean,
+        seqEpoch: Int = 0,
+        seqNum: Int,
+        ackNum: Int = 0,
+        timestamp: Long,
+        textContent: String?,
+        imageBytes: ByteArray? = null,
+        status: String,
+        retryCount: Int = 0,
+        lastAttemptTimestamp: Long = 0L
+    ) : this(
+        id = id,
+        contactId = contactId,
+        isOutgoing = isOutgoing,
+        seqEpoch = seqEpoch,
+        seqNum = seqNum,
+        ackNum = ackNum,
+        timestamp = timestamp,
+        textContent = textContent?.let { EncryptedText(it) },
+        imageBytes = imageBytes?.let { EncryptedBlob(it) },
+        status = status,
+        retryCount = retryCount,
+        lastAttemptTimestamp = lastAttemptTimestamp
+    )
+
+    val rawTextContent: String? get() = textContent?.raw
+    val rawImageBytes: ByteArray? get() = imageBytes?.raw
+}
 
 @Entity(
     tableName = "skipped_keys",
@@ -174,22 +231,46 @@ interface ContactDao {
     suspend fun insertOrUpdate(contact: ContactEntity)
 
     @Query("UPDATE contacts SET counterOut = :counterOut, chainKeyOut = :chainKeyOut WHERE id = :id")
-    suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray)
+    suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: EncryptedBlob)
 
     @Query("UPDATE contacts SET counterOut = :counterOut, chainKeyOut = :chainKeyOut, rekeyEpoch = :rekeyEpoch WHERE id = :id")
-    suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long)
+    suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long)
 
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn WHERE id = :id")
-    suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray)
+    suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: EncryptedBlob)
 
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, receivedBitmapBase = :bitmapBase, receivedBitmap = :bitmap WHERE id = :id")
-    suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray)
+    suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray)
 
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, rekeyEpoch = :rekeyEpoch WHERE id = :id")
-    suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long)
+    suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long)
 
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, rekeyEpoch = :rekeyEpoch, receivedBitmapBase = :bitmapBase, receivedBitmap = :bitmap WHERE id = :id")
-    suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray)
+    suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray)
+
+    suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
+        updateOutgoingState(id, counterOut, EncryptedBlob(chainKeyOut))
+    }
+
+    suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+        updateOutgoingStateAndEpoch(id, counterOut, EncryptedBlob(chainKeyOut), rekeyEpoch)
+    }
+
+    suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
+        updateIncomingState(id, counterIn, EncryptedBlob(chainKeyIn))
+    }
+
+    suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+        updateIncomingStateWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn), bitmapBase, bitmap)
+    }
+
+    suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+        updateIncomingStateAndEpoch(id, counterIn, EncryptedBlob(chainKeyIn), rekeyEpoch)
+    }
+
+    suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        updateIncomingStateAndEpochWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn), rekeyEpoch, bitmapBase, bitmap)
+    }
 
     @Query("UPDATE contacts SET rekeyEpoch = :rekeyEpoch WHERE id = :id")
     suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long)

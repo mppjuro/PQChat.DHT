@@ -38,42 +38,42 @@ class ChatRepositoryConcurrencyTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
+        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
+        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
@@ -308,7 +308,7 @@ class ChatRepositoryConcurrencyTest {
 
         val deliveredToBob = bobMessageDao.messages.filter { it.contactId == "alice" && !it.isOutgoing && it.status == "DELIVERED" }
         assertEquals(5, deliveredToBob.size)
-        val deliveredTexts = deliveredToBob.map { it.textContent }.toSet()
+        val deliveredTexts = deliveredToBob.map { it.rawTextContent }.toSet()
         for (i in 0 until 5) {
             assertTrue(deliveredTexts.contains("Hello $i"))
         }
