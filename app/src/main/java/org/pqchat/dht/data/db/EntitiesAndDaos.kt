@@ -13,6 +13,8 @@ data class ContactEntity(
     val counterOut: Int,
     val counterIn: Int,
     val rekeyEpoch: Long = 0L,
+    val receivedBitmapBase: Int = 0,
+    val receivedBitmap: ByteArray = ByteArray(128), // 1024-bit sliding window
     val lastActive: Long = System.currentTimeMillis()
 ) {
     override fun equals(other: Any?): Boolean {
@@ -24,6 +26,8 @@ data class ContactEntity(
                 counterOut == other.counterOut &&
                 counterIn == other.counterIn &&
                 rekeyEpoch == other.rekeyEpoch &&
+                receivedBitmapBase == other.receivedBitmapBase &&
+                receivedBitmap.contentEquals(other.receivedBitmap) &&
                 lastActive == other.lastActive
     }
 
@@ -33,7 +37,7 @@ data class ContactEntity(
 @Entity(
     tableName = "messages",
     indices = [
-        Index(value = ["contactId", "seqNum"]),
+        Index(value = ["contactId", "seqEpoch", "seqNum"]),
         Index(value = ["timestamp"])
     ]
 )
@@ -42,6 +46,7 @@ data class MessageEntity(
     val id: Long = 0,
     val contactId: String,
     val isOutgoing: Boolean,
+    val seqEpoch: Int = 0,
     val seqNum: Int,
     val ackNum: Int = 0,
     val timestamp: Long,
@@ -51,6 +56,63 @@ data class MessageEntity(
     val retryCount: Int = 0,
     val lastAttemptTimestamp: Long = 0L
 )
+
+@Entity(
+    tableName = "skipped_keys",
+    primaryKeys = ["contactId", "slotIndex"],
+    indices = [
+        Index(value = ["expiresAt"])
+    ]
+)
+data class SkippedKeyEntity(
+    val contactId: String,
+    val slotIndex: Int,
+    val msgKey: ByteArray, // 32 bytes AES key
+    val target: ByteArray, // 20 bytes DHT target
+    val edPrivateKeySeed: ByteArray, // 32 bytes
+    val createdAt: Long = System.currentTimeMillis(),
+    val expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L // 72h TTL per BEP 44 buffer
+) {
+    fun destroy() {
+        java.util.Arrays.fill(msgKey, 0.toByte())
+        java.util.Arrays.fill(edPrivateKeySeed, 0.toByte())
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SkippedKeyEntity) return false
+        return contactId == other.contactId && slotIndex == other.slotIndex &&
+                msgKey.contentEquals(other.msgKey) && target.contentEquals(other.target) &&
+                edPrivateKeySeed.contentEquals(other.edPrivateKeySeed) &&
+                createdAt == other.createdAt && expiresAt == other.expiresAt
+    }
+
+    override fun hashCode(): Int = 31 * contactId.hashCode() + slotIndex
+}
+
+@Dao
+interface SkippedKeyDao {
+    @Query("SELECT * FROM skipped_keys WHERE contactId = :contactId ORDER BY slotIndex ASC")
+    suspend fun getSkippedKeysForContact(contactId: String): List<SkippedKeyEntity>
+
+    @Query("SELECT * FROM skipped_keys WHERE contactId = :contactId AND slotIndex = :slotIndex LIMIT 1")
+    suspend fun getSkippedKey(contactId: String, slotIndex: Int): SkippedKeyEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(skippedKey: SkippedKeyEntity)
+
+    @Query("DELETE FROM skipped_keys WHERE contactId = :contactId AND slotIndex = :slotIndex")
+    suspend fun deleteSkippedKey(contactId: String, slotIndex: Int)
+
+    @Query("DELETE FROM skipped_keys WHERE expiresAt < :now")
+    suspend fun deleteExpiredKeys(now: Long = System.currentTimeMillis())
+
+    @Query("SELECT COUNT(*) FROM skipped_keys WHERE contactId = :contactId")
+    suspend fun countSkippedKeys(contactId: String): Int
+
+    @Query("DELETE FROM skipped_keys WHERE contactId = :contactId AND slotIndex IN (SELECT slotIndex FROM skipped_keys WHERE contactId = :contactId ORDER BY createdAt ASC LIMIT :count)")
+    suspend fun deleteOldestSkippedKeys(contactId: String, count: Int)
+}
 
 @Entity(tableName = "pending_rekey_offers")
 data class PendingRekeyOfferEntity(
@@ -120,8 +182,14 @@ interface ContactDao {
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn WHERE id = :id")
     suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray)
 
+    @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, receivedBitmapBase = :bitmapBase, receivedBitmap = :bitmap WHERE id = :id")
+    suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray)
+
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, rekeyEpoch = :rekeyEpoch WHERE id = :id")
     suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long)
+
+    @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, rekeyEpoch = :rekeyEpoch, receivedBitmapBase = :bitmapBase, receivedBitmap = :bitmap WHERE id = :id")
+    suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray)
 
     @Query("UPDATE contacts SET rekeyEpoch = :rekeyEpoch WHERE id = :id")
     suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long)
@@ -164,6 +232,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE contactId = :contactId")
     suspend fun deleteMessagesForContact(contactId: String)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum AND isOutgoing = :isOutgoing)")
+    suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean
 
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE contactId = :contactId AND seqNum = :seqNum AND isOutgoing = :isOutgoing)")
     suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean

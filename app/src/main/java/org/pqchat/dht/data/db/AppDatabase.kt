@@ -11,9 +11,10 @@ import androidx.room.RoomDatabase
         MessageEntity::class,
         ChunkEntity::class,
         DhtNodeCacheEntity::class,
-        PendingRekeyOfferEntity::class
+        PendingRekeyOfferEntity::class,
+        SkippedKeyEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -22,6 +23,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
     abstract fun dhtNodeCacheDao(): DhtNodeCacheDao
     abstract fun pendingRekeyOfferDao(): PendingRekeyOfferDao
+    abstract fun skippedKeyDao(): SkippedKeyDao
 
     companion object {
         @Volatile

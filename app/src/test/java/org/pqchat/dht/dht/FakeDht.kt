@@ -36,7 +36,7 @@ class FakeDht(
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val storage = ConcurrentHashMap<String, StoredEntry>()
+    val storage = ConcurrentHashMap<String, StoredEntry>()
     val preWarmedTargets = ConcurrentHashMap.newKeySet<String>()
 
     val putCalls = AtomicInteger(0)
