@@ -1,10 +1,8 @@
 package org.pqchat.dht.data.repository
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.withContext
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.Ed25519Engine
@@ -15,12 +13,19 @@ import org.pqchat.dht.protocol.RatchetChain
 import org.pqchat.dht.protocol.RekeyCoordinator
 
 class ChatRepository(
-    private val database: AppDatabase,
+    val contactDao: ContactDao,
+    val messageDao: MessageDao,
+    val chunkDao: ChunkDao,
     val dhtLeafNode: DhtLeafNode
 ) {
-    val contactDao = database.contactDao()
-    val messageDao = database.messageDao()
-    val chunkDao = database.chunkDao()
+    constructor(database: AppDatabase, dhtLeafNode: DhtLeafNode) : this(
+        database.contactDao(),
+        database.messageDao(),
+        database.chunkDao(),
+        dhtLeafNode
+    )
+
+    private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun getAllContactsFlow(): Flow<List<ContactEntity>> = contactDao.getAllContactsFlow()
 
@@ -175,38 +180,234 @@ class ChatRepository(
     }
 
     /**
-     * Polls DHT for incoming messages in lookahead window [Counter_in, Counter_in + 4].
+     * Polls DHT for incoming message for contact.
+     * Routine check queries ONLY the current slot counterIn.
+     * If empty, returns immediately without polling lookahead window (n+1..n+4).
+     * If message received and decrypted, launches asynchronous check of subsequent lookahead window slots.
      */
-    suspend fun pollContactIncoming(contactId: String) = withContext(Dispatchers.IO) {
-        val contact = contactDao.getContactById(contactId) ?: return@withContext
+    suspend fun pollContactIncoming(contactId: String): Boolean = withContext(Dispatchers.IO) {
+        val contact = contactDao.getContactById(contactId) ?: return@withContext false
         val isSelf = contactId == SELF_CONTACT_ID
-        val lookaheadSlots = RatchetChain.computeLookaheadSlots(
-            startChainKey = contact.chainKeyIn,
-            startCounter = contact.counterIn,
-            windowSize = 4
-        )
 
-        for (slot in lookaheadSlots) {
-            val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
+        // 1. Routine check: query ONLY the current slot counterIn
+        val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+        val item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf)
+            ?: return@withContext false
 
-            try {
-                val frameMsg = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, item.v)
+        // 2. Process incoming item
+        val processed = processIncomingItem(contactId, currentSlot, item, isSelf)
+        if (processed) {
+            // Trigger asynchronous check of subsequent slots in the lookahead window
+            triggerLookaheadWindowAsync(contactId)
+        }
+        processed
+    }
 
-                // Debug logging: Incoming message before and after decryption
-                org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
-                    contactId = contactId,
-                    target = slot.target,
-                    seq = item.seq,
-                    senderEdPublicKey = item.k,
-                    senderSignature = item.sig,
-                    frame900 = item.v,
-                    frameMsg = frameMsg,
-                    slotMsgKey = slot.msgKey
-                )
+    /**
+     * Asynchronously checks subsequent slots in the lookahead window.
+     * Launched only after successfully receiving and decrypting a message at counterIn.
+     */
+    fun triggerLookaheadWindowAsync(contactId: String): Job {
+        return repositoryScope.launch {
+            checkLookaheadWindow(contactId)
+        }
+    }
 
-                when (frameMsg.msgType) {
-                    BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
-                        val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+    /**
+     * Checks subsequent slots in lookahead window [counterIn .. counterIn + 4].
+     */
+    suspend fun checkLookaheadWindow(contactId: String) = withContext(Dispatchers.IO) {
+        val isSelf = contactId == SELF_CONTACT_ID
+        var currentContact = contactDao.getContactById(contactId) ?: return@withContext
+        var hasMore = true
+
+        while (hasMore) {
+            hasMore = false
+            val lookaheadSlots = RatchetChain.computeLookaheadSlots(
+                startChainKey = currentContact.chainKeyIn,
+                startCounter = currentContact.counterIn,
+                windowSize = 4
+            )
+
+            for (slot in lookaheadSlots) {
+                val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
+                val success = processIncomingItem(contactId, slot, item, isSelf)
+                if (success) {
+                    val updated = contactDao.getContactById(contactId)
+                    if (updated != null && updated.counterIn > currentContact.counterIn) {
+                        currentContact = updated
+                        hasMore = true
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Processes and decrypts a received DHT BEP 44 mutable item for a specific slot.
+     */
+    suspend fun processIncomingItem(
+        contactId: String,
+        slot: RatchetChain.SlotParameters,
+        item: DhtLeafNode.MutableItem,
+        isSelf: Boolean
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val frameMsg = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, item.v)
+
+            // Debug logging: Incoming message before and after decryption
+            org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                contactId = contactId,
+                target = slot.target,
+                seq = item.seq,
+                senderEdPublicKey = item.k,
+                senderSignature = item.sig,
+                frame900 = item.v,
+                frameMsg = frameMsg,
+                slotMsgKey = slot.msgKey
+            )
+
+            val contact = contactDao.getContactById(contactId) ?: return@withContext false
+
+            when (frameMsg.msgType) {
+                BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
+                    val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                    if (isSelf) {
+                        messageDao.updateMessageStatusAndDirection(
+                            contactId = contactId,
+                            seqNum = frameMsg.seqNum,
+                            isOutgoing = false,
+                            status = "CONFIRMED_DHT"
+                        )
+                        contactDao.updateIncomingState(
+                            id = contactId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = slot.nextChainKey
+                        )
+                        preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                    } else {
+                        val alreadyExists = messageDao.existsMessage(contactId, frameMsg.seqNum, false)
+                        if (!alreadyExists) {
+                            messageDao.insertMessage(
+                                MessageEntity(
+                                    contactId = contactId,
+                                    isOutgoing = false,
+                                    seqNum = frameMsg.seqNum,
+                                    ackNum = frameMsg.ackNum,
+                                    timestamp = frameMsg.timestampUTC,
+                                    textContent = textPayload.text,
+                                    status = "DELIVERED"
+                                )
+                            )
+
+                            // Advance incoming ratchet chain
+                            contactDao.updateIncomingState(
+                                id = contactId,
+                                counterIn = slot.counter + 1,
+                                chainKeyIn = slot.nextChainKey
+                            )
+                            preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                        }
+                    }
+                    true
+                }
+
+                BinaryFrameCodec.TYPE_REKEY_OFFER -> {
+                    val offerPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
+                    // Process offer and reply in our outgoing channel
+                    val outSlot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+                    val (ssRekey, respFrame) = RekeyCoordinator.processOfferAndCreateResponse(
+                        offer = offerPayload,
+                        reverseSeqNum = contact.counterOut,
+                        reverseAckNum = frameMsg.seqNum,
+                        reverseMsgKey = outSlot.msgKey
+                    )
+
+                    org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
+                        contactId = contactId,
+                        epoch = offerPayload.rekeyEpoch,
+                        slot = outSlot,
+                        seqNum = contact.counterOut,
+                        ackNum = frameMsg.seqNum,
+                        frame900 = respFrame
+                    )
+
+                    dhtLeafNode.putMutable(
+                        target = outSlot.target,
+                        v = respFrame,
+                        seq = (contact.counterOut + 1).toLong(),
+                        sk = outSlot.edPrivateKeySeed
+                    )
+
+                    // Update our incoming chain with ssRekey
+                    val updatedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
+                    contactDao.updateIncomingState(contactId, slot.counter + 1, updatedChainIn)
+                    preWarmNextIncomingTarget(updatedChainIn, slot.counter + 1)
+                    true
+                }
+
+                BinaryFrameCodec.TYPE_CHUNK_DATA -> {
+                    val chunkPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                    val transferIdHex = CryptoUtils.toHex(chunkPayload.transferId)
+
+                    chunkDao.insertChunk(
+                        ChunkEntity(
+                            transferId = transferIdHex,
+                            chunkIndex = chunkPayload.chunkIndex,
+                            totalChunks = chunkPayload.totalChunks,
+                            data = chunkPayload.data
+                        )
+                    )
+
+                    // If multi-chunk payload, fetch remaining chunks from their derived DHT targets
+                    for (j in 1 until chunkPayload.totalChunks) {
+                        val subEdSeed = ChunkingEngine.deriveChunkEdSeed(slot.edPrivateKeySeed, chunkPayload.transferId, j)
+                        val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
+                        val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
+                        val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
+
+                        val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
+                        if (subItem != null) {
+                            try {
+                                val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
+                                org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                                    contactId = contactId,
+                                    target = subTarget,
+                                    seq = subItem.seq,
+                                    senderEdPublicKey = subItem.k,
+                                    senderSignature = subItem.sig,
+                                    frame900 = subItem.v,
+                                    frameMsg = subFrame,
+                                    slotMsgKey = subMsgKey
+                                )
+                                val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                                chunkDao.insertChunk(
+                                    ChunkEntity(
+                                        transferId = transferIdHex,
+                                        chunkIndex = subChunk.chunkIndex,
+                                        totalChunks = subChunk.totalChunks,
+                                        data = subChunk.data
+                                    )
+                                )
+                            } catch (_: Exception) {}
+                        }
+                    }
+
+                    // Check if complete
+                    val count = chunkDao.countChunks(transferIdHex)
+                    if (count == chunkPayload.totalChunks) {
+                        val allChunks = chunkDao.getChunksForTransfer(transferIdHex)
+                        val decodedList = allChunks.map {
+                            BinaryFrameCodec.DecodedPayload.ChunkData(
+                                transferId = chunkPayload.transferId,
+                                chunkIndex = it.chunkIndex,
+                                totalChunks = it.totalChunks,
+                                data = it.data
+                            )
+                        }
+                        val fullData = ChunkingEngine.assembleChunks(decodedList)
+                        chunkDao.deleteChunks(transferIdHex)
+
                         if (isSelf) {
                             messageDao.updateMessageStatusAndDirection(
                                 contactId = contactId,
@@ -221,166 +422,33 @@ class ChatRepository(
                             )
                             preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                         } else {
-                            val alreadyExists = messageDao.existsMessage(contactId, frameMsg.seqNum, false)
-                            if (!alreadyExists) {
-                                messageDao.insertMessage(
-                                    MessageEntity(
-                                        contactId = contactId,
-                                        isOutgoing = false,
-                                        seqNum = frameMsg.seqNum,
-                                        ackNum = frameMsg.ackNum,
-                                        timestamp = frameMsg.timestampUTC,
-                                        textContent = textPayload.text,
-                                        status = "DELIVERED"
-                                    )
-                                )
-
-                                // Advance incoming ratchet chain
-                                contactDao.updateIncomingState(
-                                    id = contactId,
-                                    counterIn = slot.counter + 1,
-                                    chainKeyIn = slot.nextChainKey
-                                )
-                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
-                            }
-                        }
-                    }
-
-                    BinaryFrameCodec.TYPE_REKEY_OFFER -> {
-                        val offerPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
-                        // Process offer and reply in our outgoing channel
-                        val outSlot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
-                        val (ssRekey, respFrame) = RekeyCoordinator.processOfferAndCreateResponse(
-                            offer = offerPayload,
-                            reverseSeqNum = contact.counterOut,
-                            reverseAckNum = frameMsg.seqNum,
-                            reverseMsgKey = outSlot.msgKey
-                        )
-
-                        org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
-                            contactId = contactId,
-                            epoch = offerPayload.rekeyEpoch,
-                            slot = outSlot,
-                            seqNum = contact.counterOut,
-                            ackNum = frameMsg.seqNum,
-                            frame900 = respFrame
-                        )
-
-                        dhtLeafNode.putMutable(
-                            target = outSlot.target,
-                            v = respFrame,
-                            seq = (contact.counterOut + 1).toLong(),
-                            sk = outSlot.edPrivateKeySeed
-                        )
-
-                        // Update our incoming chain with ssRekey
-                        val updatedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
-                        contactDao.updateIncomingState(contactId, slot.counter + 1, updatedChainIn)
-                        preWarmNextIncomingTarget(updatedChainIn, slot.counter + 1)
-                    }
-
-                    BinaryFrameCodec.TYPE_CHUNK_DATA -> {
-                        val chunkPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.ChunkData
-                        val transferIdHex = CryptoUtils.toHex(chunkPayload.transferId)
-
-                        chunkDao.insertChunk(
-                            ChunkEntity(
-                                transferId = transferIdHex,
-                                chunkIndex = chunkPayload.chunkIndex,
-                                totalChunks = chunkPayload.totalChunks,
-                                data = chunkPayload.data
-                            )
-                        )
-
-                        // If multi-chunk payload, fetch remaining chunks from their derived DHT targets
-                        for (j in 1 until chunkPayload.totalChunks) {
-                            val subEdSeed = ChunkingEngine.deriveChunkEdSeed(slot.edPrivateKeySeed, chunkPayload.transferId, j)
-                            val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
-                            val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
-                            val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
-
-                            val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
-                            if (subItem != null) {
-                                try {
-                                    val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
-                                    org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
-                                        contactId = contactId,
-                                        target = subTarget,
-                                        seq = subItem.seq,
-                                        senderEdPublicKey = subItem.k,
-                                        senderSignature = subItem.sig,
-                                        frame900 = subItem.v,
-                                        frameMsg = subFrame,
-                                        slotMsgKey = subMsgKey
-                                    )
-                                    val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
-                                    chunkDao.insertChunk(
-                                        ChunkEntity(
-                                            transferId = transferIdHex,
-                                            chunkIndex = subChunk.chunkIndex,
-                                            totalChunks = subChunk.totalChunks,
-                                            data = subChunk.data
-                                        )
-                                    )
-                                } catch (_: Exception) {}
-                            }
-                        }
-
-                        // Check if complete
-                        val count = chunkDao.countChunks(transferIdHex)
-                        if (count == chunkPayload.totalChunks) {
-                            val allChunks = chunkDao.getChunksForTransfer(transferIdHex)
-                            val decodedList = allChunks.map {
-                                BinaryFrameCodec.DecodedPayload.ChunkData(
-                                    transferId = chunkPayload.transferId,
-                                    chunkIndex = it.chunkIndex,
-                                    totalChunks = it.totalChunks,
-                                    data = it.data
-                                )
-                            }
-                            val fullData = ChunkingEngine.assembleChunks(decodedList)
-                            chunkDao.deleteChunks(transferIdHex)
-
-                            if (isSelf) {
-                                messageDao.updateMessageStatusAndDirection(
+                            messageDao.insertMessage(
+                                MessageEntity(
                                     contactId = contactId,
-                                    seqNum = frameMsg.seqNum,
                                     isOutgoing = false,
-                                    status = "CONFIRMED_DHT"
+                                    seqNum = frameMsg.seqNum,
+                                    ackNum = frameMsg.ackNum,
+                                    timestamp = frameMsg.timestampUTC,
+                                    textContent = "[Image File - ${fullData.size} bytes]",
+                                    imageBytes = fullData,
+                                    status = "DELIVERED"
                                 )
-                                contactDao.updateIncomingState(
-                                    id = contactId,
-                                    counterIn = slot.counter + 1,
-                                    chainKeyIn = slot.nextChainKey
-                                )
-                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
-                            } else {
-                                messageDao.insertMessage(
-                                    MessageEntity(
-                                        contactId = contactId,
-                                        isOutgoing = false,
-                                        seqNum = frameMsg.seqNum,
-                                        ackNum = frameMsg.ackNum,
-                                        timestamp = frameMsg.timestampUTC,
-                                        textContent = "[Image File - ${fullData.size} bytes]",
-                                        imageBytes = fullData,
-                                        status = "DELIVERED"
-                                    )
-                                )
+                            )
 
-                                contactDao.updateIncomingState(
-                                    id = contactId,
-                                    counterIn = slot.counter + 1,
-                                    chainKeyIn = slot.nextChainKey
-                                )
-                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
-                            }
+                            contactDao.updateIncomingState(
+                                id = contactId,
+                                counterIn = slot.counter + 1,
+                                chainKeyIn = slot.nextChainKey
+                            )
+                            preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                         }
                     }
+                    true
                 }
-            } catch (_: Exception) {
-                // If frame fails to decrypt with this slot key, safely skip
+                else -> false
             }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -390,14 +458,39 @@ class ChatRepository(
     }
 
     /**
-     * Pre-warms in the background the next expected incoming targets for all known contacts.
+     * Polls DHT concurrently for all known contacts using coroutineScope and async/awaitAll.
      */
-    suspend fun preWarmAllContactsNextTargets() = withContext(Dispatchers.IO) {
+    suspend fun pollAllContactsIncoming(): List<Boolean> = coroutineScope {
         val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
-        for (contact in contacts) {
-            val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
-            dhtLeafNode.preWarmTarget(nextTarget)
-        }
+        contacts.map { contact ->
+            async {
+                pollContactIncoming(contact.id)
+            }
+        }.awaitAll()
+    }
+
+    /**
+     * Polls DHT concurrently for specified contacts using coroutineScope and async/awaitAll.
+     */
+    suspend fun pollContactsIncoming(contactIds: List<String>): List<Boolean> = coroutineScope {
+        contactIds.map { contactId ->
+            async {
+                pollContactIncoming(contactId)
+            }
+        }.awaitAll()
+    }
+
+    /**
+     * Pre-warms in the background the next expected incoming targets for all known contacts concurrently.
+     */
+    suspend fun preWarmAllContactsNextTargets() = coroutineScope {
+        val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        contacts.map { contact ->
+            async {
+                val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
+                dhtLeafNode.preWarmTarget(nextTarget)
+            }
+        }.awaitAll()
     }
 
     /**

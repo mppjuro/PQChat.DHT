@@ -34,6 +34,7 @@ class DhtLeafNode(
         const val MAX_CACHED_NODES = 40
         const val K = 8 // Replication / closest nodes factor
         const val TIMEOUT_MS = 3000L
+        const val FAST_GET_TIMEOUT_MS = 600L
         const val BOOTSTRAP_TIMEOUT_MS = 6000L
 
         val BOOTSTRAP_HOSTS = listOf(
@@ -622,14 +623,16 @@ class DhtLeafNode(
 
     /**
      * BEP 44 get query to retrieve mutable item for target.
-     * In the first step, parallel get queries are sent directly to the 8 pre-warmed nodes
-     * from TargetRouteCache, bypassing multi-hop Kademlia walk and resolving in ~1 RTT.
+     * Implements Fast Termination: if the first 3 nodes with the smallest XOR distance
+     * return a response without field 'v' and do not indicate closer nodes to target,
+     * immediately aborts search and returns null (verifying empty slots in < 600 ms).
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
     suspend fun getMutable(
         target: ByteArray,
         salt: ByteArray? = null,
-        skipLocalStore: Boolean = false
+        skipLocalStore: Boolean = false,
+        timeoutMs: Long = FAST_GET_TIMEOUT_MS
     ): MutableItem? = withContext(Dispatchers.IO) {
         val targetHex = CryptoUtils.toHex(target)
         if (!skipLocalStore) {
@@ -639,72 +642,109 @@ class DhtLeafNode(
             }
         }
 
-        // STEP 1: FAST SINGLE-RTT PATH via TargetRouteCache
-        val prewarmed = targetRouteCache[target]
-        if (!prewarmed.isNullOrEmpty()) {
-            val prewarmedJobs = prewarmed.map { peer ->
-                async {
-                    val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                    val resp = sendQuery(peer.address, query, timeoutMs = 2500L) ?: return@async null
-                    parseAndVerifyGetResult(resp, target, salt, peer.address)
-                }
-            }
-            val prewarmedResults = prewarmedJobs.awaitAll().filterNotNull()
-            val prewarmedBest = prewarmedResults.maxByOrNull { it.seq }
-            if (prewarmedBest != null) {
-                if (!skipLocalStore) {
-                    localMutableStore[targetHex] = prewarmedBest
-                }
-                println("[PQChat] getMutable target=$targetHex hit in TargetRouteCache (${prewarmed.size} pre-warmed peers, single RTT)")
-                return@withContext prewarmedBest
-            }
-        }
-
-        // STEP 2: Fallback to wider DHT swarm query
-        var bestItem: MutableItem? = null
-
+        val prewarmed = targetRouteCache[target] ?: emptyList()
         val storedPeers = remoteStoredPeers[targetHex]?.map { DhtPeer(ByteArray(20), it) } ?: emptyList()
-        val candidates = findClosestNodes(target, count = 24)
+        val closestCandidates = findClosestNodes(target, count = 24)
         val cachedFastest = getCachedFastestNodes()
 
-        // Prioritize cached fastest nodes, closest candidates, and stored peers over bootstrap routers
-        val primaryCandidates = (storedPeers + candidates + cachedFastest).distinctBy { it.address }
-        val nodesToQuery = if (primaryCandidates.isNotEmpty()) {
-            primaryCandidates
+        val allCandidates = (prewarmed + storedPeers + closestCandidates + cachedFastest)
+            .distinctBy { it.address }
+
+        val nodesToQuery = if (allCandidates.isNotEmpty()) {
+            allCandidates.sortedWith { a, b ->
+                val distA = xorDistance(a.nodeId, target)
+                val distB = xorDistance(b.nodeId, target)
+                compareBytes(distA, distB)
+            }.take(16)
         } else {
-            // Cold start fallback: only resolve bootstrap routers if cache and routing table are empty
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }
 
-        if (nodesToQuery.isNotEmpty()) {
-            val deferreds = nodesToQuery.map { peer ->
-                async {
-                    val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                    val resp = sendQuery(peer.address, query, timeoutMs = 3500L) ?: return@async null
-                    parseAndVerifyGetResult(resp, target, salt, peer.address)
-                }
-            }
-
-            val remoteResults = deferreds.awaitAll().filterNotNull()
-            val remoteBest = remoteResults.maxByOrNull { it.seq }
-            val currentBest = bestItem
-            if (remoteBest != null && (currentBest == null || remoteBest.seq > currentBest.seq)) {
-                bestItem = remoteBest
-                if (!skipLocalStore) {
-                    localMutableStore[targetHex] = remoteBest
-                }
-            }
-
-            // Populate TargetRouteCache with closest responder nodes for next lookups
-            val discoveredClosest = (nodesToQuery + (remoteBest?.responder?.let { listOf(DhtPeer(ByteArray(20), it)) } ?: emptyList()))
-                .distinctBy { it.address }
-                .take(8)
-            if (discoveredClosest.isNotEmpty()) {
-                targetRouteCache[target] = discoveredClosest
-            }
+        if (nodesToQuery.isEmpty()) {
+            return@withContext null
         }
 
-        println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, querying=${nodesToQuery.size}, found=${bestItem != null}")
+        // Top 3 nodes with smallest XOR distance to target
+        val topClosest = nodesToQuery.sortedWith { a, b ->
+            val distA = xorDistance(a.nodeId, target)
+            val distB = xorDistance(b.nodeId, target)
+            compareBytes(distA, distB)
+        }.take(3)
+
+        val topClosestAddresses = topClosest.map { it.address }.toSet()
+        val closestKnownDistance = if (topClosest.isNotEmpty()) {
+            xorDistance(topClosest[0].nodeId, target)
+        } else null
+
+        val foundItem = java.util.concurrent.atomic.AtomicReference<MutableItem?>(null)
+        val emptyClosestResponses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
+        val closerNodeIndicated = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        coroutineScope {
+            var queryJobs: List<Job> = emptyList()
+            queryJobs = nodesToQuery.map { peer ->
+                launch {
+                    try {
+                        val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                        val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
+
+                        val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
+                        if (verified != null) {
+                            if (foundItem.compareAndSet(null, verified)) {
+                                queryJobs.forEach { job ->
+                                    if (job != coroutineContext.job) job.cancel()
+                                }
+                            }
+                            return@launch
+                        }
+
+                        // Response received without valid 'v'
+                        if (topClosestAddresses.contains(peer.address)) {
+                            val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                            var hasCloser = false
+                            if (nodesBytes != null) {
+                                val discovered = parseCompactNodesList(nodesBytes)
+                                if (closestKnownDistance != null && discovered.any { node ->
+                                    compareBytes(xorDistance(node.nodeId, target), closestKnownDistance) < 0
+                                }) {
+                                    hasCloser = true
+                                    closerNodeIndicated.set(true)
+                                }
+                            }
+
+                            if (!hasCloser) {
+                                emptyClosestResponses.add(peer.address)
+                                val requiredCount = minOf(3, topClosest.size)
+                                if (emptyClosestResponses.size >= requiredCount && !closerNodeIndicated.get()) {
+                                    // Aggressive Fast Termination:
+                                    // First 3 nodes with smallest XOR distance returned no 'v' and no closer nodes.
+                                    println("[PQChat] Fast Termination: $requiredCount closest nodes returned no 'v' and no closer nodes for target=$targetHex")
+                                    queryJobs.forEach { job ->
+                                        if (job != coroutineContext.job) job.cancel()
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+            queryJobs.joinAll()
+        }
+
+        val bestItem = foundItem.get()
+        if (bestItem != null) {
+            if (!skipLocalStore) {
+                localMutableStore[targetHex] = bestItem
+            }
+            bestItem.responder?.let { respAddr ->
+                val respPeer = DhtPeer(bestItem.k.copyOf(20), respAddr)
+                targetRouteCache.put(target, listOf(respPeer))
+            }
+        } else if (targetRouteCache[target].isNullOrEmpty() && topClosest.isNotEmpty()) {
+            targetRouteCache.put(target, topClosest)
+        }
+
+        println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=${nodesToQuery.size}, found=${bestItem != null}")
         bestItem
     }
 
