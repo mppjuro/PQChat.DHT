@@ -46,7 +46,7 @@ jobs:
 
   instrumented-tests:
     name: Instrumented Tests (Android Emulator)
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     needs: unit-tests-and-lint
     steps:
       - name: Checkout repository
@@ -61,6 +61,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Enable KVM permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - name: Run Instrumented Tests via AVD
         uses: reactivecircus/android-emulator-runner@v2
