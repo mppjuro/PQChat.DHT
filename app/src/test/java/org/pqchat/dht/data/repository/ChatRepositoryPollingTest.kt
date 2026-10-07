@@ -56,9 +56,21 @@ class ChatRepositoryPollingTest {
             flow.value = contacts.values.toList()
         }
 
+        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            flow.value = contacts.values.toList()
+        }
+
         override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             flow.value = contacts.values.toList()
         }
 
@@ -124,6 +136,10 @@ class ChatRepositoryPollingTest {
 
         override suspend fun deleteMessagesForContact(contactId: String) {
             messages.removeAll { it.contactId == contactId }
+        }
+
+        override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean {
+            return messages.any { it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
         }
 
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean {
