@@ -47,8 +47,47 @@ data class MessageEntity(
     val timestamp: Long,
     val textContent: String?,
     val imageBytes: ByteArray? = null,
-    val status: String // SENDING, SENT_DHT, RECEIVED, DELIVERED
+    val status: String, // QUEUED, SENDING, SENT_DHT, DELIVERED, CONFIRMED_DHT
+    val retryCount: Int = 0,
+    val lastAttemptTimestamp: Long = 0L
 )
+
+@Entity(tableName = "pending_rekey_offers")
+data class PendingRekeyOfferEntity(
+    @PrimaryKey
+    val contactId: String,
+    val epoch: Long,
+    val skNew: ByteArray, // ML-KEM private key
+    val pkNew: ByteArray, // ML-KEM public key
+    val offerSeqNum: Int,
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    fun destroy() {
+        java.util.Arrays.fill(skNew, 0.toByte())
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PendingRekeyOfferEntity) return false
+        return contactId == other.contactId && epoch == other.epoch &&
+                skNew.contentEquals(other.skNew) && pkNew.contentEquals(other.pkNew) &&
+                offerSeqNum == other.offerSeqNum
+    }
+
+    override fun hashCode(): Int = contactId.hashCode()
+}
+
+@Dao
+interface PendingRekeyOfferDao {
+    @Query("SELECT * FROM pending_rekey_offers WHERE contactId = :contactId LIMIT 1")
+    suspend fun getPendingOffer(contactId: String): PendingRekeyOfferEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(offer: PendingRekeyOfferEntity)
+
+    @Query("DELETE FROM pending_rekey_offers WHERE contactId = :contactId")
+    suspend fun deletePendingOffer(contactId: String)
+}
 
 @Entity(
     tableName = "chunks",
@@ -75,8 +114,17 @@ interface ContactDao {
     @Query("UPDATE contacts SET counterOut = :counterOut, chainKeyOut = :chainKeyOut WHERE id = :id")
     suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray)
 
+    @Query("UPDATE contacts SET counterOut = :counterOut, chainKeyOut = :chainKeyOut, rekeyEpoch = :rekeyEpoch WHERE id = :id")
+    suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long)
+
     @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn WHERE id = :id")
     suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray)
+
+    @Query("UPDATE contacts SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, rekeyEpoch = :rekeyEpoch WHERE id = :id")
+    suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long)
+
+    @Query("UPDATE contacts SET rekeyEpoch = :rekeyEpoch WHERE id = :id")
+    suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long)
 
     @Query("DELETE FROM contacts WHERE id = :id")
     suspend fun deleteContact(id: String)
@@ -92,6 +140,18 @@ interface MessageDao {
 
     @Query("UPDATE messages SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String)
+
+    @Query("UPDATE messages SET status = :status, seqNum = :seqNum WHERE id = :id")
+    suspend fun updateMessageStatusAndSeq(id: Long, status: String, seqNum: Int)
+
+    @Query("UPDATE messages SET status = :status, retryCount = :retryCount, lastAttemptTimestamp = :timestamp WHERE id = :id")
+    suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long)
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND isOutgoing = 1 AND status = 'QUEUED' ORDER BY id ASC")
+    suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE isOutgoing = 1 AND status = 'QUEUED' ORDER BY id ASC")
+    suspend fun getAllQueuedMessages(): List<MessageEntity>
 
     @Query("UPDATE messages SET status = :status WHERE contactId = :contactId AND seqNum = :seqNum AND isOutgoing = :isOutgoing")
     suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String)

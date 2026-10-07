@@ -186,63 +186,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 baos.toByteArray()
             }
 
-            val contact = repository.getContact(contactId) ?: return@launch
-            val slot = org.pqchat.dht.protocol.RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
-
-            val chunks = ChunkingEngine.splitData(
-                data = validPng,
-                currentEdSeed = slot.edPrivateKeySeed,
-                currentMsgKey = slot.msgKey,
-                seqNum = contact.counterOut,
-                ackNum = contact.counterIn
-            )
-
-            val isSelf = contactId == ChatRepository.SELF_CONTACT_ID
-
-            // Put chunks to DHT
-            for (c in chunks) {
-                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingChunkData(
-                    contactId = contactId,
-                    transferId = c.transferId,
-                    chunkIndex = c.chunkIndex,
-                    totalChunks = c.totalChunks,
-                    target = c.target,
-                    seq = (c.chunkIndex + 1).toLong(),
-                    slotMsgKey = slot.msgKey,
-                    frame900 = c.frame1000
-                )
-                dhtLeafNode.putMutable(
-                    target = c.target,
-                    v = c.frame1000,
-                    seq = (c.chunkIndex + 1).toLong(),
-                    sk = c.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            }
-
-            // Save outgoing message to DB
-            repository.messageDao.insertMessage(
-                MessageEntity(
-                    contactId = contactId,
-                    isOutgoing = true,
-                    seqNum = contact.counterOut,
-                    ackNum = contact.counterIn,
-                    timestamp = System.currentTimeMillis(),
-                    textContent = "[PNG Image: ${validPng.size} bytes (${chunks.size} chunks)]",
-                    imageBytes = validPng,
-                    status = "SENT_DHT"
-                )
-            )
-
-            repository.contactDao.updateOutgoingState(
-                id = contactId,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
-
-            if (contactId == ChatRepository.SELF_CONTACT_ID) {
-                repository.pollContactIncoming(contactId)
-            }
+            repository.sendImagePayload(contactId, validPng)
         }
     }
 
@@ -274,66 +218,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 rawBytes
             }
 
-            val contact = repository.getContact(contactId) ?: return@launch
-            val slot = org.pqchat.dht.protocol.RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
-
-            val chunks = ChunkingEngine.splitData(
-                data = finalBytes,
-                currentEdSeed = slot.edPrivateKeySeed,
-                currentMsgKey = slot.msgKey,
-                seqNum = contact.counterOut,
-                ackNum = contact.counterIn
-            )
-
-            // Save outgoing message to DB immediately
-            val msgId = repository.messageDao.insertMessage(
-                MessageEntity(
-                    contactId = contactId,
-                    isOutgoing = true,
-                    seqNum = contact.counterOut,
-                    ackNum = contact.counterIn,
-                    timestamp = System.currentTimeMillis(),
-                    textContent = "[Image: ${finalBytes.size / 1024} KB (${chunks.size} chunks)]",
-                    imageBytes = finalBytes,
-                    status = "SENDING"
-                )
-            )
-
-            repository.contactDao.updateOutgoingState(
-                id = contactId,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
-
-            val isSelf = contactId == ChatRepository.SELF_CONTACT_ID
-
-            // Publish chunks to DHT
-            for (c in chunks) {
-                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingChunkData(
-                    contactId = contactId,
-                    transferId = c.transferId,
-                    chunkIndex = c.chunkIndex,
-                    totalChunks = c.totalChunks,
-                    target = c.target,
-                    seq = (c.chunkIndex + 1).toLong(),
-                    slotMsgKey = slot.msgKey,
-                    frame900 = c.frame1000
-                )
-                dhtLeafNode.putMutable(
-                    target = c.target,
-                    v = c.frame1000,
-                    seq = (c.chunkIndex + 1).toLong(),
-                    sk = c.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            }
-
-            repository.messageDao.updateStatus(msgId, "SENT_DHT")
-
-            if (isSelf) {
-                delay(1500L)
-                repository.pollContactIncoming(contactId)
-            }
+            repository.sendImagePayload(contactId, finalBytes)
         }
     }
 
