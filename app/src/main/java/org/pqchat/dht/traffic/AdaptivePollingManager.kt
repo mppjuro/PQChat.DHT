@@ -16,6 +16,14 @@ import kotlinx.coroutines.flow.asStateFlow
 class AdaptivePollingManager(
     private val onPollRequested: suspend (contactId: String?) -> Unit
 ) {
+    private var onIdlePreWarm: (suspend (contactId: String?) -> Unit)? = null
+
+    constructor(
+        onPollRequested: suspend (contactId: String?) -> Unit,
+        onIdlePreWarm: (suspend (contactId: String?) -> Unit)?
+    ) : this(onPollRequested) {
+        this.onIdlePreWarm = onIdlePreWarm
+    }
     enum class PollingState(val label: String) {
         FOREGROUND_CHAT("Foreground Chat"),
         APP_ACTIVE_OTHER("App Active"),
@@ -142,6 +150,15 @@ class AdaptivePollingManager(
                         val interval = getCurrentIntervalMs()
                         _nextPollInMs.value = interval
                         _isSyncing.value = false
+                    }
+                }
+
+                // During idle period between polls, run pre-warming in background to warm routes before next poll
+                if (onIdlePreWarm != null && isActive) {
+                    scope.launch {
+                        try {
+                            onIdlePreWarm?.invoke(activeChatContactId)
+                        } catch (_: Exception) {}
                     }
                 }
 

@@ -26,16 +26,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val repository = ChatRepository(database, dhtLeafNode)
 
     val trafficGenerator = PoissonTrafficGenerator(dhtLeafNode)
-    val pollingManager = AdaptivePollingManager { contactId ->
-        if (contactId != null) {
-            repository.pollContactIncoming(contactId)
-        } else {
-            val contacts = repository.contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
-            for (c in contacts) {
-                repository.pollContactIncoming(c.id)
+    val pollingManager = AdaptivePollingManager(
+        onPollRequested = { contactId ->
+            if (contactId != null) {
+                repository.pollContactIncoming(contactId)
+            } else {
+                val contacts = repository.contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+                for (c in contacts) {
+                    repository.pollContactIncoming(c.id)
+                }
+            }
+        },
+        onIdlePreWarm = { contactId ->
+            if (contactId != null) {
+                repository.preWarmContactNextTarget(contactId)
+            } else {
+                repository.preWarmAllContactsNextTargets()
             }
         }
-    }
+    )
 
     val contacts: StateFlow<List<ContactEntity>> = repository.getAllContactsFlow()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -81,9 +90,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         syncPollingIntervals()
         pollingManager.onAppForegrounded()
 
-        // Ensure Self-Notes / DHT Loopback contact exists
+        // Ensure Self-Notes / DHT Loopback contact exists and pre-warm targets
         viewModelScope.launch {
             repository.ensureSelfNotesContactExists()
+            repository.preWarmAllContactsNextTargets()
         }
 
         // Monitor DHT peers count

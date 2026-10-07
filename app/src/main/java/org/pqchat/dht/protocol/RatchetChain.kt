@@ -124,4 +124,14 @@ object RatchetChain {
 
         return HkdfSha512.extract(currentChainKey, ssRekey)
     }
+
+    /**
+     * Computes in advance the next expected incoming DHT rendezvous address:
+     * nextExpectedTarget = SHA-1(pk_in)
+     * derived deterministically from the recipient's incoming chain key and counter.
+     */
+    fun getNextExpectedTarget(chainKeyIn: ByteArray, counterIn: Int): ByteArray {
+        val slot = deriveSlot(chainKeyIn, counterIn)
+        return slot.target
+    }
 }

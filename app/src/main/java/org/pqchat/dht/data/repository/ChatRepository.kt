@@ -3,6 +3,7 @@ package org.pqchat.dht.data.repository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
@@ -218,6 +219,7 @@ class ChatRepository(
                                 counterIn = slot.counter + 1,
                                 chainKeyIn = slot.nextChainKey
                             )
+                            preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                         } else {
                             val alreadyExists = messageDao.existsMessage(contactId, frameMsg.seqNum, false)
                             if (!alreadyExists) {
@@ -239,6 +241,7 @@ class ChatRepository(
                                     counterIn = slot.counter + 1,
                                     chainKeyIn = slot.nextChainKey
                                 )
+                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                             }
                         }
                     }
@@ -273,6 +276,7 @@ class ChatRepository(
                         // Update our incoming chain with ssRekey
                         val updatedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
                         contactDao.updateIncomingState(contactId, slot.counter + 1, updatedChainIn)
+                        preWarmNextIncomingTarget(updatedChainIn, slot.counter + 1)
                     }
 
                     BinaryFrameCodec.TYPE_CHUNK_DATA -> {
@@ -349,6 +353,7 @@ class ChatRepository(
                                     counterIn = slot.counter + 1,
                                     chainKeyIn = slot.nextChainKey
                                 )
+                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                             } else {
                                 messageDao.insertMessage(
                                     MessageEntity(
@@ -368,6 +373,7 @@ class ChatRepository(
                                     counterIn = slot.counter + 1,
                                     chainKeyIn = slot.nextChainKey
                                 )
+                                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                             }
                         }
                     }
@@ -376,5 +382,30 @@ class ChatRepository(
                 // If frame fails to decrypt with this slot key, safely skip
             }
         }
+    }
+
+    private fun preWarmNextIncomingTarget(chainKeyIn: ByteArray, counterIn: Int) {
+        val nextTarget = RatchetChain.getNextExpectedTarget(chainKeyIn, counterIn)
+        dhtLeafNode.preWarmTargetAsync(nextTarget)
+    }
+
+    /**
+     * Pre-warms in the background the next expected incoming targets for all known contacts.
+     */
+    suspend fun preWarmAllContactsNextTargets() = withContext(Dispatchers.IO) {
+        val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        for (contact in contacts) {
+            val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
+            dhtLeafNode.preWarmTarget(nextTarget)
+        }
+    }
+
+    /**
+     * Pre-warms in the background the next expected incoming target for a specific contact.
+     */
+    suspend fun preWarmContactNextTarget(contactId: String) = withContext(Dispatchers.IO) {
+        val contact = contactDao.getContactById(contactId) ?: return@withContext
+        val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
+        dhtLeafNode.preWarmTarget(nextTarget)
     }
 }
