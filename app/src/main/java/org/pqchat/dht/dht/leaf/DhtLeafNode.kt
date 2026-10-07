@@ -11,8 +11,11 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+
+typealias PeerContact = DhtLeafNode.DhtPeer
 
 /**
  * Client-Only / Read-Only BitTorrent Mainline DHT Node (BEP 43 / BEP 44).
@@ -40,6 +43,71 @@ class DhtLeafNode(
             Pair("dht.aelitis.com", 6881),
             Pair("dht.libtorrent.org", 25401)
         )
+    }
+
+    /**
+     * LRU-bounded route cache holding the 8 closest nodes to a DHT target hash.
+     * Keys are matched by byte content (via hex string) to guarantee seamless ByteArray lookups.
+     */
+    class TargetRouteCache(private val maxCapacity: Int = 64) : MutableMap<ByteArray, List<PeerContact>> {
+        private val lock = Any()
+        private val storage = object : LinkedHashMap<String, Pair<ByteArray, List<PeerContact>>>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ByteArray, List<PeerContact>>>?): Boolean {
+                return size > maxCapacity
+            }
+        }
+
+        override val size: Int get() = synchronized(lock) { storage.size }
+        override fun isEmpty(): Boolean = synchronized(lock) { storage.isEmpty() }
+        override fun containsKey(key: ByteArray): Boolean = synchronized(lock) { storage.containsKey(CryptoUtils.toHex(key)) }
+        override fun containsValue(value: List<PeerContact>): Boolean = synchronized(lock) { storage.values.any { it.second == value } }
+
+        override fun get(key: ByteArray): List<PeerContact>? = synchronized(lock) {
+            storage[CryptoUtils.toHex(key)]?.second
+        }
+
+        fun getRoute(target: ByteArray): List<PeerContact>? = get(target)
+
+        override fun put(key: ByteArray, value: List<PeerContact>): List<PeerContact>? = synchronized(lock) {
+            val hex = CryptoUtils.toHex(key)
+            val closest8 = value.distinctBy { it.address }.take(8)
+            val prev = storage.put(hex, Pair(key.copyOf(), closest8))
+            prev?.second
+        }
+
+        fun putRoute(target: ByteArray, value: List<PeerContact>) {
+            put(target, value)
+        }
+
+        override fun remove(key: ByteArray): List<PeerContact>? = synchronized(lock) {
+            storage.remove(CryptoUtils.toHex(key))?.second
+        }
+
+        override fun putAll(from: Map<out ByteArray, List<PeerContact>>) {
+            from.forEach { (k, v) -> put(k, v) }
+        }
+
+        override fun clear() = synchronized(lock) { storage.clear() }
+
+        override val keys: MutableSet<ByteArray>
+            get() = synchronized(lock) { storage.values.map { it.first.copyOf() }.toMutableSet() }
+
+        override val values: MutableCollection<List<PeerContact>>
+            get() = synchronized(lock) { storage.values.map { it.second }.toMutableList() }
+
+        override val entries: MutableSet<MutableMap.MutableEntry<ByteArray, List<PeerContact>>>
+            get() = synchronized(lock) {
+                storage.values.map { pair ->
+                    object : MutableMap.MutableEntry<ByteArray, List<PeerContact>> {
+                        override val key: ByteArray = pair.first.copyOf()
+                        override val value: List<PeerContact> = pair.second
+                        override fun setValue(newValue: List<PeerContact>): List<PeerContact> {
+                            put(key, newValue)
+                            return pair.second
+                        }
+                    }
+                }.toMutableSet()
+            }
     }
 
     data class DhtPeer(
@@ -78,6 +146,7 @@ class DhtLeafNode(
     private val fastestNodesCache = CopyOnWriteArrayList<DhtPeer>()
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
+    val targetRouteCache = TargetRouteCache()
 
     @Volatile
     private var isRunning = false
@@ -319,16 +388,24 @@ class DhtLeafNode(
         }
     }
 
-    private fun parseCompactNodes(bytes: ByteArray) {
+    fun parseCompactNodesList(bytes: ByteArray): List<DhtPeer> {
         val count = bytes.size / 26
+        val list = ArrayList<DhtPeer>(count)
         for (i in 0 until count) {
             val offset = i * 26
             val nodeId = bytes.copyOfRange(offset, offset + 20)
             val ipBytes = bytes.copyOfRange(offset + 20, offset + 24)
             val ip = InetAddress.getByAddress(ipBytes)
             val port = ((bytes[offset + 24].toInt() and 0xFF) shl 8) or (bytes[offset + 25].toInt() and 0xFF)
-            addPeer(nodeId, InetSocketAddress(ip, port))
+            val addr = InetSocketAddress(ip, port)
+            addPeer(nodeId, addr)
+            list.add(DhtPeer(nodeId, addr))
         }
+        return list
+    }
+
+    private fun parseCompactNodes(bytes: ByteArray) {
+        parseCompactNodesList(bytes)
     }
 
     suspend fun resolveBootstrapNodes(): List<InetSocketAddress> = withContext(Dispatchers.IO) {
@@ -444,7 +521,109 @@ class DhtLeafNode(
     }
 
     /**
+     * Target Pre-warming:
+     * In the background or during idle, issues KRPC find_node(nextExpectedTarget)
+     * to populate targetRouteCache with 8 closest nodes to the target hash,
+     * avoiding multi-hop Kademlia lookups when get(target) is called later.
+     */
+    suspend fun preWarmTarget(target: ByteArray): List<PeerContact> = withContext(Dispatchers.IO) {
+        val targetHex = CryptoUtils.toHex(target)
+        val existing = targetRouteCache[target]
+        if (!existing.isNullOrEmpty()) {
+            return@withContext existing
+        }
+
+        val candidates = (findClosestNodes(target, count = 16) + getCachedFastestNodes())
+            .distinctBy { it.address }
+            .take(16)
+
+        val queryPeers = if (candidates.isNotEmpty()) {
+            candidates
+        } else {
+            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+        }
+
+        if (queryPeers.isEmpty()) {
+            return@withContext emptyList()
+        }
+
+        val discovered = ConcurrentHashMap.newKeySet<DhtPeer>()
+        queryPeers.forEach { discovered.add(it) }
+
+        val jobs = queryPeers.map { peer ->
+            async {
+                try {
+                    val query = KrpcMessage.createFindNodeQuery(myNodeId, target)
+                    val resp = sendQuery(peer.address, query, timeoutMs = 2500L)
+                    val nodesBytes = resp?.responseData?.get("nodes") as? ByteArray
+                    if (nodesBytes != null) {
+                        val parsed = parseCompactNodesList(nodesBytes)
+                        parsed.forEach { discovered.add(it) }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        jobs.awaitAll()
+
+        // Select the 8 nodes closest to target using XOR distance
+        val closest8 = discovered.sortedWith { a, b ->
+            val distA = xorDistance(a.nodeId, target)
+            val distB = xorDistance(b.nodeId, target)
+            compareBytes(distA, distB)
+        }.take(8)
+
+        if (closest8.isNotEmpty()) {
+            targetRouteCache[target] = closest8
+            println("[PQChat] Pre-warmed target $targetHex with ${closest8.size} closest nodes in TargetRouteCache")
+        }
+
+        closest8
+    }
+
+    fun preWarmTargetAsync(target: ByteArray): Job {
+        return scope.launch {
+            try {
+                preWarmTarget(target)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun parseAndVerifyGetResult(
+        resp: KrpcMessage.Response,
+        target: ByteArray,
+        salt: ByteArray?,
+        responderAddress: InetSocketAddress
+    ): MutableItem? {
+        val v = resp.responseData["v"] as? ByteArray ?: return null
+        val k = resp.responseData["k"] as? ByteArray ?: return null
+        val sig = resp.responseData["sig"] as? ByteArray ?: return null
+        val seq = (resp.responseData["seq"] as? Long) ?: 0L
+        val token = resp.responseData["token"] as? ByteArray
+
+        // 1. Verify Target matches SHA-1(k) (or k + salt)
+        val expectedTarget = if (salt != null && salt.isNotEmpty()) {
+            CryptoUtils.sha1(k + salt)
+        } else {
+            CryptoUtils.sha1(k)
+        }
+
+        if (!CryptoUtils.constantTimeEquals(target, expectedTarget)) {
+            return null
+        }
+
+        // 2. Verify Ed25519 signature
+        val dataToVerify = Bencode.encodeBep44SignData(v, seq, salt)
+        if (!Ed25519Engine.verify(k, dataToVerify, sig)) {
+            return null
+        }
+
+        return MutableItem(v, seq, k, sig, salt, token, responderAddress)
+    }
+
+    /**
      * BEP 44 get query to retrieve mutable item for target.
+     * In the first step, parallel get queries are sent directly to the 8 pre-warmed nodes
+     * from TargetRouteCache, bypassing multi-hop Kademlia walk and resolving in ~1 RTT.
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
     suspend fun getMutable(
@@ -460,6 +639,28 @@ class DhtLeafNode(
             }
         }
 
+        // STEP 1: FAST SINGLE-RTT PATH via TargetRouteCache
+        val prewarmed = targetRouteCache[target]
+        if (!prewarmed.isNullOrEmpty()) {
+            val prewarmedJobs = prewarmed.map { peer ->
+                async {
+                    val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                    val resp = sendQuery(peer.address, query, timeoutMs = 2500L) ?: return@async null
+                    parseAndVerifyGetResult(resp, target, salt, peer.address)
+                }
+            }
+            val prewarmedResults = prewarmedJobs.awaitAll().filterNotNull()
+            val prewarmedBest = prewarmedResults.maxByOrNull { it.seq }
+            if (prewarmedBest != null) {
+                if (!skipLocalStore) {
+                    localMutableStore[targetHex] = prewarmedBest
+                }
+                println("[PQChat] getMutable target=$targetHex hit in TargetRouteCache (${prewarmed.size} pre-warmed peers, single RTT)")
+                return@withContext prewarmedBest
+            }
+        }
+
+        // STEP 2: Fallback to wider DHT swarm query
         var bestItem: MutableItem? = null
 
         val storedPeers = remoteStoredPeers[targetHex]?.map { DhtPeer(ByteArray(20), it) } ?: emptyList()
@@ -480,31 +681,7 @@ class DhtLeafNode(
                 async {
                     val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
                     val resp = sendQuery(peer.address, query, timeoutMs = 3500L) ?: return@async null
-
-                    val v = resp.responseData["v"] as? ByteArray ?: return@async null
-                    val k = resp.responseData["k"] as? ByteArray ?: return@async null
-                    val sig = resp.responseData["sig"] as? ByteArray ?: return@async null
-                    val seq = (resp.responseData["seq"] as? Long) ?: 0L
-                    val token = resp.responseData["token"] as? ByteArray
-
-                    // 1. Verify Target matches SHA-1(k) (or k + salt)
-                    val expectedTarget = if (salt != null && salt.isNotEmpty()) {
-                        CryptoUtils.sha1(k + salt)
-                    } else {
-                        CryptoUtils.sha1(k)
-                    }
-
-                    if (!CryptoUtils.constantTimeEquals(target, expectedTarget)) {
-                        return@async null
-                    }
-
-                    // 2. Verify Ed25519 signature
-                    val dataToVerify = Bencode.encodeBep44SignData(v, seq, salt)
-                    if (!Ed25519Engine.verify(k, dataToVerify, sig)) {
-                        return@async null
-                    }
-
-                    MutableItem(v, seq, k, sig, salt, token, peer.address)
+                    parseAndVerifyGetResult(resp, target, salt, peer.address)
                 }
             }
 
@@ -516,6 +693,14 @@ class DhtLeafNode(
                 if (!skipLocalStore) {
                     localMutableStore[targetHex] = remoteBest
                 }
+            }
+
+            // Populate TargetRouteCache with closest responder nodes for next lookups
+            val discoveredClosest = (nodesToQuery + (remoteBest?.responder?.let { listOf(DhtPeer(ByteArray(20), it)) } ?: emptyList()))
+                .distinctBy { it.address }
+                .take(8)
+            if (discoveredClosest.isNotEmpty()) {
+                targetRouteCache[target] = discoveredClosest
             }
         }
 
@@ -552,10 +737,11 @@ class DhtLeafNode(
             }
         }
 
-        // Step 2: Push to external DHT swarm peers (prioritizing cached fastest nodes)
+        // Step 2: Push to external DHT swarm peers (prioritizing pre-warmed route cache & cached fastest nodes)
+        val prewarmed = targetRouteCache[target] ?: emptyList()
         val candidates = findClosestNodes(target, count = 24)
         val cachedFastest = getCachedFastestNodes()
-        val primaryCandidates = (candidates + cachedFastest).distinctBy { it.address }
+        val primaryCandidates = (prewarmed + candidates + cachedFastest).distinctBy { it.address }
         val nodesToQuery = if (primaryCandidates.isNotEmpty()) {
             primaryCandidates
         } else {
