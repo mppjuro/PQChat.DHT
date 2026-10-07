@@ -134,4 +134,19 @@ object RatchetChain {
         val slot = deriveSlot(chainKeyIn, counterIn)
         return slot.target
     }
+
+    fun deriveSlot(chainKey: org.pqchat.dht.data.db.EncryptedBlob, counter: Int): SlotParameters =
+        deriveSlot(chainKey.raw, counter)
+
+    fun computeLookaheadSlots(
+        startChainKey: org.pqchat.dht.data.db.EncryptedBlob,
+        startCounter: Int,
+        windowSize: Int = 4
+    ): List<SlotParameters> = computeLookaheadSlots(startChainKey.raw, startCounter, windowSize)
+
+    fun injectRekeySecret(currentChainKey: org.pqchat.dht.data.db.EncryptedBlob, ssRekey: ByteArray): ByteArray =
+        injectRekeySecret(currentChainKey.raw, ssRekey)
+
+    fun getNextExpectedTarget(chainKeyIn: org.pqchat.dht.data.db.EncryptedBlob, counterIn: Int): ByteArray =
+        getNextExpectedTarget(chainKeyIn.raw, counterIn)
 }

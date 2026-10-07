@@ -313,7 +313,7 @@ fun MessageBubble(message: MessageEntity) {
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Image payload if present
-                message.imageBytes?.let { bytes ->
+                message.rawImageBytes?.let { bytes ->
                     val bitmap = remember(bytes) {
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     }
@@ -331,7 +331,7 @@ fun MessageBubble(message: MessageEntity) {
                 }
 
                 // Text Content
-                message.textContent?.let { text ->
+                message.rawTextContent?.let { text ->
                     Text(
                         text = text,
                         style = MaterialTheme.typography.bodyLarge,

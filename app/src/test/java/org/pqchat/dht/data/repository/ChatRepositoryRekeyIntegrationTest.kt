@@ -38,42 +38,42 @@ class ChatRepositoryRekeyIntegrationTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
+        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
+        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
@@ -272,7 +272,7 @@ class ChatRepositoryRekeyIntegrationTest {
         // Assert all 200 messages delivered from Alice to Bob
         val bobDelivered = bobMessageDao.messages.filter { it.contactId == "alice" && !it.isOutgoing && it.status == "DELIVERED" }
         assertEquals("Bob should receive all 200 messages from Alice", totalRounds, bobDelivered.size)
-        val bobReceivedTexts = bobDelivered.map { it.textContent }.toSet()
+        val bobReceivedTexts = bobDelivered.map { it.rawTextContent }.toSet()
         for (i in 0 until totalRounds) {
             assertTrue("Bob missing message #$i", bobReceivedTexts.contains("Alice to Bob #$i"))
         }
@@ -280,7 +280,7 @@ class ChatRepositoryRekeyIntegrationTest {
         // Assert all 200 messages delivered from Bob to Alice
         val aliceDelivered = aliceMessageDao.messages.filter { it.contactId == "bob" && !it.isOutgoing && it.status == "DELIVERED" }
         assertEquals("Alice should receive all 200 messages from Bob", totalRounds, aliceDelivered.size)
-        val aliceReceivedTexts = aliceDelivered.map { it.textContent }.toSet()
+        val aliceReceivedTexts = aliceDelivered.map { it.rawTextContent }.toSet()
         for (i in 0 until totalRounds) {
             assertTrue("Alice missing message #$i", aliceReceivedTexts.contains("Bob to Alice #$i"))
         }

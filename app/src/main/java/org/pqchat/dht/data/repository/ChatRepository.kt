@@ -419,7 +419,7 @@ class ChatRepository(
             if (msg.imageBytes != null) {
                 val slot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
                 val chunks = ChunkingEngine.splitData(
-                    data = msg.imageBytes,
+                    data = msg.imageBytes.raw,
                     currentEdSeed = slot.edPrivateKeySeed,
                     currentMsgKey = slot.msgKey,
                     seqNum = currentContact.counterOut and 0xFFFF,
@@ -457,7 +457,7 @@ class ChatRepository(
                     seqNum = currentContact.counterOut and 0xFFFF,
                     ackNum = currentContact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
-                    text = msg.textContent
+                    text = msg.textContent.raw
                 )
                 val frame1000 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
                 val ok = dhtLeafNode.putMutable(

@@ -39,42 +39,42 @@ class ChatRepositoryPropertyTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
+        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
+        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: EncryptedBlob) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             }
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             }
@@ -382,9 +382,9 @@ class ChatRepositoryPropertyTest {
         // Bob has received messages #3 and #4 (both in lookahead window)
         val bobMsgsAfterLookahead = bobMessageDao.messages.filter { !it.isOutgoing }.sortedBy { it.seqNum }
         assertEquals(2, bobMsgsAfterLookahead.size)
-        assertEquals("Message #3", bobMsgsAfterLookahead[0].textContent)
+        assertEquals("Message #3", bobMsgsAfterLookahead[0].rawTextContent)
         assertEquals(3, bobMsgsAfterLookahead[0].seqNum)
-        assertEquals("Message #4", bobMsgsAfterLookahead[1].textContent)
+        assertEquals("Message #4", bobMsgsAfterLookahead[1].rawTextContent)
         assertEquals(4, bobMsgsAfterLookahead[1].seqNum)
 
         // Now restore slot 0, 1, 2 into DHT
@@ -404,7 +404,7 @@ class ChatRepositoryPropertyTest {
         val allReceived = bobMessageDao.messages.filter { !it.isOutgoing }.sortedBy { it.seqNum }
         assertEquals(5, allReceived.size)
         for (i in 0 until 5) {
-            assertEquals("Message #$i", allReceived[i].textContent)
+            assertEquals("Message #$i", allReceived[i].rawTextContent)
             assertEquals(i, allReceived[i].seqNum)
         }
 
@@ -485,7 +485,7 @@ class ChatRepositoryPropertyTest {
         val received = bobMessageDao.messages.filter { !it.isOutgoing }.sortedBy { it.seqNum }
         assertEquals("All $totalMessages messages must be received", totalMessages, received.size)
         for (i in 0 until totalMessages) {
-            assertEquals("Randomized msg $i", received[i].textContent)
+            assertEquals("Randomized msg $i", received[i].rawTextContent)
             assertEquals(i, received[i].seqNum)
         }
 

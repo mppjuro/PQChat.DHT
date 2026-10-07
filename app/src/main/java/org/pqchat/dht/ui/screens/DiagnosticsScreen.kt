@@ -119,12 +119,12 @@ fun DiagnosticsScreen(
                                     color = appColors.textPrimary
                                 )
                                 Text(
-                                    text = "Outgoing ChainKey: ${CryptoUtils.toHex(c.chainKeyOut).take(16)}... (Counter: ${c.counterOut})",
+                                    text = "Outgoing Chain: active (Counter: ${c.counterOut})",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = appColors.primary
                                 )
                                 Text(
-                                    text = "Incoming ChainKey: ${CryptoUtils.toHex(c.chainKeyIn).take(16)}... (Counter: ${c.counterIn})",
+                                    text = "Incoming Chain: active (Counter: ${c.counterIn})",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ElectricGreen
                                 )

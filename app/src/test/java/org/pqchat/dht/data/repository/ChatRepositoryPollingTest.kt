@@ -38,37 +38,37 @@ class ChatRepositoryPollingTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
+        override suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: EncryptedBlob) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
+        override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: EncryptedBlob) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
             flow.value = contacts.values.toList()
@@ -249,8 +249,8 @@ class ChatRepositoryPollingTest {
 
         val msgs = fakeMessageDao.messages
         assertEquals(2, msgs.size)
-        assertEquals("Message 0", msgs[0].textContent)
-        assertEquals("Message 1", msgs[1].textContent)
+        assertEquals("Message 0", msgs[0].rawTextContent)
+        assertEquals("Message 1", msgs[1].rawTextContent)
 
         dhtNode.stop()
     }

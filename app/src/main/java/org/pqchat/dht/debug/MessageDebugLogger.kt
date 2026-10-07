@@ -1,5 +1,6 @@
 package org.pqchat.dht.debug
 
+import org.pqchat.dht.BuildConfig
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.protocol.RatchetChain
@@ -9,6 +10,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Diagnostic & Cryptographic Debug Logger for PQChat DHT.
@@ -20,10 +22,12 @@ import java.util.TimeZone
  * - DHT / BEP 44 Transport Metadata (Target, Ed25519 signature & keys)
  *
  * Prints to stdout (console) and logs to Android Logcat under tag "PQChat-Debug".
+ * STRICTLY DISABLED in release builds or when isEnabled is false (AGENTS.md §8).
  */
 object MessageDebugLogger {
 
-    var isEnabled: Boolean = true
+    var isEnabled: Boolean = BuildConfig.DEBUG
+    val emitCount = AtomicInteger(0)
 
     // ==========================================
     // OUTGOING MESSAGES (SENT TO SERVER / DHT)
@@ -646,6 +650,8 @@ object MessageDebugLogger {
     // ==========================================
 
     private fun emitLog(title: String, jsonMap: Map<String, Any?>) {
+        if (!BuildConfig.DEBUG || !isEnabled) return
+        emitCount.incrementAndGet()
         val jsonString = toJsonString(jsonMap, indentLevel = 0)
         val banner = buildString {
             appendLine("╔══════════════════════════════════════════════════════════════════════════════")
