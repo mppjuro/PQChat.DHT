@@ -47,7 +47,6 @@ fun CameraQrScanner(
     modifier: Modifier = Modifier,
     onQrScanned: (String) -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptic = LocalHapticFeedback.current
 
@@ -306,6 +305,7 @@ private fun rotateYuv90(data: ByteArray, width: Int, height: Int): ByteArray {
     return output
 }
 
+@Suppress("UNUSED_PARAMETER")
 private fun rotateYuv180(data: ByteArray, width: Int, height: Int): ByteArray {
     val output = ByteArray(data.size)
     for (i in data.indices) {

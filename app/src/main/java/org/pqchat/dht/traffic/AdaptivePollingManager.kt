@@ -51,10 +51,14 @@ class AdaptivePollingManager(
     private val _isSyncing = MutableStateFlow(true)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    @Volatile
+    private var forceImmediatePoll = false
+
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
     fun triggerImmediatePoll() {
         if (_isSyncing.value) return
         _isSyncing.value = true
+        forceImmediatePoll = true
         immediateSignal?.complete(Unit)
     }
 
@@ -116,11 +120,40 @@ class AdaptivePollingManager(
         transitionTo(PollingState.DOZE_SLEEP)
     }
 
+    @Volatile
+    private var lastPollFinishedTimestamp: Long = 0L
+
     @Synchronized
     fun transitionTo(newState: PollingState) {
-        if (_currentState.value == newState && pollingJob?.isActive == true) return
+        val stateChanged = _currentState.value != newState
         _currentState.value = newState
-        restartPollingLoop()
+
+        if (newState == PollingState.DOZE_SLEEP) {
+            pollingJob?.cancel()
+            _isSyncing.value = false
+            _nextPollInMs.value = -1L
+            return
+        }
+
+        if (pollingJob?.isActive == true) {
+            if (!stateChanged) return
+            // Screen or state changed while loop is active:
+            // Do NOT unconditionally sync immediately. Instead, recalculate time to next sync.
+            // If the time elapsed since last poll is already >= new interval, trigger immediate poll now.
+            val interval = getCurrentIntervalMs()
+            val timeSinceLastPoll = System.currentTimeMillis() - lastPollFinishedTimestamp
+            if (timeSinceLastPoll >= interval) {
+                // Necessary to sync immediately
+                triggerImmediatePoll()
+            } else {
+                // Recalculate remaining countdown without forcing immediate poll
+                val remaining = (interval - timeSinceLastPoll).coerceAtLeast(0L)
+                _nextPollInMs.value = remaining
+                immediateSignal?.complete(Unit)
+            }
+        } else {
+            restartPollingLoop()
+        }
     }
 
     private fun restartPollingLoop() {
@@ -146,6 +179,7 @@ class AdaptivePollingManager(
                     throw e
                 } catch (_: Exception) {
                 } finally {
+                    lastPollFinishedTimestamp = System.currentTimeMillis()
                     if (pollingJob == myJob) {
                         val interval = getCurrentIntervalMs()
                         _nextPollInMs.value = interval
@@ -162,22 +196,28 @@ class AdaptivePollingManager(
                     }
                 }
 
-                // Countdown with 250 ms ticks; can be short-circuited by triggerImmediatePoll()
-                val interval = getCurrentIntervalMs()
-                val deadline = System.currentTimeMillis() + interval
-                val signal = CompletableDeferred<Unit>()
-                immediateSignal = signal
-                try {
-                    while (isActive) {
-                        val remaining = deadline - System.currentTimeMillis()
-                        if (remaining <= 0L) break
-                        _nextPollInMs.value = remaining
-                        // Wait 250 ms or until immediate signal fires
-                        withTimeoutOrNull(minOf(remaining, 250L)) { signal.await() }
-                        if (signal.isCompleted) break
+                // Countdown loop; recalculates deadline whenever interval changes or state transitions occur
+                while (isActive) {
+                    if (forceImmediatePoll) {
+                        forceImmediatePoll = false
+                        break
                     }
-                } finally {
-                    immediateSignal = null
+                    val interval = getCurrentIntervalMs()
+                    val timeSinceLastPoll = System.currentTimeMillis() - lastPollFinishedTimestamp
+                    val remaining = (interval - timeSinceLastPoll).coerceAtLeast(0L)
+                    if (remaining <= 0L) {
+                        // Interval has elapsed, proceed to next poll
+                        break
+                    }
+                    _nextPollInMs.value = remaining
+
+                    val signal = CompletableDeferred<Unit>()
+                    immediateSignal = signal
+                    try {
+                        withTimeoutOrNull(minOf(remaining, 250L)) { signal.await() }
+                    } finally {
+                        immediateSignal = null
+                    }
                 }
             }
         }
