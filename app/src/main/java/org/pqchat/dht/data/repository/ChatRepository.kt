@@ -493,12 +493,14 @@ class ChatRepository(
             frame900 = offerFrame
         )
 
+        val isSelf = contact.id == SELF_CONTACT_ID
         val success = dhtLeafNode.putMutable(
             target = slot.target,
             v = offerFrame,
             seq = (contact.counterOut + 1).toLong(),
             salt = null,
-            sk = slot.edPrivateKeySeed
+            sk = slot.edPrivateKeySeed,
+            skipLocalStore = isSelf
         )
 
         if (success) {
@@ -675,9 +677,10 @@ class ChatRepository(
                     preWarmNextIncomingTarget(rekeyedChainIn, slot.counter + 1)
 
                     // 3. Send Type 0x04 Response on receiver's outgoing channel (reverse direction)
-                    val outSlot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+                    val currentContact = contactDao.getContactById(contactId) ?: contact
+                    val outSlot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
                     val plaintext972 = BinaryFrameCodec.encodeRekeyResponse(
-                        seqNum = contact.counterOut,
+                        seqNum = currentContact.counterOut,
                         ackNum = frameMsg.seqNum,
                         timestampUTC = System.currentTimeMillis(),
                         rekeyEpoch = offerPayload.rekeyEpoch,
@@ -689,7 +692,7 @@ class ChatRepository(
                         contactId = contactId,
                         epoch = offerPayload.rekeyEpoch,
                         slot = outSlot,
-                        seqNum = contact.counterOut,
+                        seqNum = currentContact.counterOut,
                         ackNum = frameMsg.seqNum,
                         frame900 = respFrame
                     )
@@ -697,12 +700,13 @@ class ChatRepository(
                     dhtLeafNode.putMutable(
                         target = outSlot.target,
                         v = respFrame,
-                        seq = (contact.counterOut + 1).toLong(),
-                        sk = outSlot.edPrivateKeySeed
+                        seq = (currentContact.counterOut + 1).toLong(),
+                        sk = outSlot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
                     )
 
                     // Advance reverse outgoing state
-                    contactDao.updateOutgoingState(contactId, contact.counterOut + 1, outSlot.nextChainKey)
+                    contactDao.updateOutgoingState(contactId, currentContact.counterOut + 1, outSlot.nextChainKey)
 
                     ssRekey.fill(0)
                     true
@@ -718,8 +722,9 @@ class ChatRepository(
                         pendingRekeyOfferDao?.deletePendingOffer(contactId)
 
                         // Inject SS_rekey into sender's outgoing chain
-                        val rekeyedChainOut = RatchetChain.injectRekeySecret(contact.chainKeyOut, ssRekey)
-                        contactDao.updateOutgoingStateAndEpoch(contactId, contact.counterOut, rekeyedChainOut, respPayload.rekeyEpoch)
+                        val latestContact = contactDao.getContactById(contactId) ?: contact
+                        val rekeyedChainOut = RatchetChain.injectRekeySecret(latestContact.chainKeyOut, ssRekey)
+                        contactDao.updateOutgoingStateAndEpoch(contactId, latestContact.counterOut, rekeyedChainOut, respPayload.rekeyEpoch)
                         ssRekey.fill(0)
                     }
 
