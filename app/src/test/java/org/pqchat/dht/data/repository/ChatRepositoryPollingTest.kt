@@ -44,9 +44,27 @@ class ChatRepositoryPollingTest {
             flow.value = contacts.values.toList()
         }
 
+        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
+            flow.value = contacts.values.toList()
+        }
+
         override suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn)
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
 
@@ -72,6 +90,24 @@ class ChatRepositoryPollingTest {
         override suspend fun updateStatus(id: Long, status: String) {
             val idx = messages.indexOfFirst { it.id == id }
             if (idx >= 0) messages[idx] = messages[idx].copy(status = status)
+        }
+
+        override suspend fun updateMessageStatusAndSeq(id: Long, status: String, seqNum: Int) {
+            val idx = messages.indexOfFirst { it.id == id }
+            if (idx >= 0) messages[idx] = messages[idx].copy(status = status, seqNum = seqNum)
+        }
+
+        override suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long) {
+            val idx = messages.indexOfFirst { it.id == id }
+            if (idx >= 0) messages[idx] = messages[idx].copy(status = status, retryCount = retryCount, lastAttemptTimestamp = timestamp)
+        }
+
+        override suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity> {
+            return messages.filter { it.contactId == contactId && it.isOutgoing && it.status == "QUEUED" }.sortedBy { it.id }
+        }
+
+        override suspend fun getAllQueuedMessages(): List<MessageEntity> {
+            return messages.filter { it.isOutgoing && it.status == "QUEUED" }.sortedBy { it.id }
         }
 
         override suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {
