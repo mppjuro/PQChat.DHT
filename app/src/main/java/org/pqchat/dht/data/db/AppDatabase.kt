@@ -9,15 +9,17 @@ import androidx.room.RoomDatabase
     entities = [
         ContactEntity::class,
         MessageEntity::class,
-        ChunkEntity::class
+        ChunkEntity::class,
+        DhtNodeCacheEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun contactDao(): ContactDao
     abstract fun messageDao(): MessageDao
     abstract fun chunkDao(): ChunkDao
+    abstract fun dhtNodeCacheDao(): DhtNodeCacheDao
 
     companion object {
         @Volatile

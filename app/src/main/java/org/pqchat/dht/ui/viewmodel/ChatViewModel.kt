@@ -22,7 +22,7 @@ import java.util.UUID
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getInstance(application)
-    val dhtLeafNode = DhtLeafNode()
+    val dhtLeafNode = DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
     val repository = ChatRepository(database, dhtLeafNode)
 
     val trafficGenerator = PoissonTrafficGenerator(dhtLeafNode)
