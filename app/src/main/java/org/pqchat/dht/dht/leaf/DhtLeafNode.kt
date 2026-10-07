@@ -24,9 +24,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class DhtLeafNode(
     val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
-    private val port: Int = 0 // 0 means ephemeral port
+    private val port: Int = 0, // 0 means ephemeral port
+    private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null
 ) {
     companion object {
+        const val MAX_CACHED_NODES = 40
         const val K = 8 // Replication / closest nodes factor
         const val TIMEOUT_MS = 3000L
         const val BOOTSTRAP_TIMEOUT_MS = 6000L
@@ -43,12 +45,13 @@ class DhtLeafNode(
     data class DhtPeer(
         val nodeId: ByteArray,
         val address: InetSocketAddress,
-        var lastSeen: Long = System.currentTimeMillis()
+        var lastSeen: Long = System.currentTimeMillis(),
+        var rttMs: Long = Long.MAX_VALUE
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is DhtPeer) return false
-            return nodeId.contentEquals(other.nodeId) || address == other.address
+            return address == other.address || (nodeId.size == 20 && other.nodeId.size == 20 && nodeId.contentEquals(other.nodeId))
         }
         override fun hashCode(): Int = address.hashCode()
     }
@@ -63,22 +66,50 @@ class DhtLeafNode(
         val responder: InetSocketAddress? = null
     )
 
+    @Volatile
+    var localPort: Int = port
+        private set
+
+    @Volatile
     private var socket: DatagramSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val pendingTransactions = ConcurrentHashMap<String, CompletableDeferred<KrpcMessage.Response>>()
     private val routingTable = CopyOnWriteArrayList<DhtPeer>()
+    private val fastestNodesCache = CopyOnWriteArrayList<DhtPeer>()
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
 
     @Volatile
     private var isRunning = false
 
+    @Synchronized
+    fun initSocket(): DatagramSocket {
+        val existing = socket
+        if (existing != null && !existing.isClosed && existing.isBound) {
+            return existing
+        }
+        val s = try {
+            if (localPort > 0) {
+                DatagramSocket(localPort).apply { reuseAddress = true }
+            } else {
+                DatagramSocket().apply { reuseAddress = true }
+            }
+        } catch (e: Exception) {
+            println("[PQChat] initSocket bind error for port $localPort: $e")
+            DatagramSocket().apply { reuseAddress = true }
+        }
+        localPort = s.localPort
+        socket = s
+        return s
+    }
+
     fun start() {
         if (isRunning) return
         isRunning = true
-        socket = DatagramSocket(port)
+        initSocket()
 
         scope.launch {
+            loadCachedNodesFromDb()
             listenLoop()
         }
 
@@ -92,12 +123,94 @@ class DhtLeafNode(
         try {
             socket?.close()
         } catch (_: Exception) {}
+        socket = null
         scope.cancel()
         pendingTransactions.clear()
         routingTable.clear()
+        fastestNodesCache.clear()
     }
 
     fun getActivePeerCount(): Int = routingTable.size
+
+    fun getCachedFastestNodes(): List<DhtPeer> {
+        return fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
+    }
+
+    suspend fun loadCachedNodesFromDb() = withContext(Dispatchers.IO) {
+        val dao = nodeCacheDao ?: return@withContext
+        try {
+            val cachedEntities = dao.getFastestNodes(MAX_CACHED_NODES)
+            for (entity in cachedEntities) {
+                val ip = try { InetAddress.getByName(entity.ip) } catch (_: Exception) { null } ?: continue
+                val addr = InetSocketAddress(ip, entity.port)
+                val nodeId = if (entity.nodeIdHex != null && entity.nodeIdHex.length == 40) {
+                    CryptoUtils.fromHex(entity.nodeIdHex)
+                } else {
+                    CryptoUtils.secureRandomBytes(20)
+                }
+                val peer = DhtPeer(
+                    nodeId = nodeId,
+                    address = addr,
+                    lastSeen = entity.lastSeen,
+                    rttMs = entity.rttMs
+                )
+                recordNodeSuccessInternal(peer, persistToDb = false)
+            }
+            println("[PQChat] Loaded ${fastestNodesCache.size} fastest DHT nodes from persistent cache")
+        } catch (_: Exception) {}
+    }
+
+    fun recordNodeSuccess(
+        address: InetSocketAddress,
+        rttMs: Long,
+        nodeId: ByteArray? = null
+    ) {
+        val nId = if (nodeId != null && nodeId.size == 20) nodeId else ByteArray(20)
+        val peer = DhtPeer(
+            nodeId = nId,
+            address = address,
+            lastSeen = System.currentTimeMillis(),
+            rttMs = rttMs
+        )
+        recordNodeSuccessInternal(peer, persistToDb = true)
+    }
+
+    @Synchronized
+    private fun recordNodeSuccessInternal(peer: DhtPeer, persistToDb: Boolean) {
+        addPeer(peer.nodeId, peer.address)
+
+        val existingIndex = fastestNodesCache.indexOfFirst { it.address == peer.address }
+        if (existingIndex >= 0) {
+            val existing = fastestNodesCache[existingIndex]
+            existing.lastSeen = peer.lastSeen
+            existing.rttMs = if (existing.rttMs == Long.MAX_VALUE) peer.rttMs else (existing.rttMs + peer.rttMs) / 2
+            if (peer.nodeId.any { it != 0.toByte() }) {
+                System.arraycopy(peer.nodeId, 0, existing.nodeId, 0, minOf(peer.nodeId.size, existing.nodeId.size))
+            }
+        } else {
+            fastestNodesCache.add(peer)
+        }
+
+        val sorted = fastestNodesCache.sortedBy { it.rttMs }
+        fastestNodesCache.clear()
+        fastestNodesCache.addAll(sorted.take(MAX_CACHED_NODES))
+
+        if (persistToDb && nodeCacheDao != null) {
+            val hostStr = peer.address.address?.hostAddress ?: peer.address.hostString
+            val entity = org.pqchat.dht.data.db.DhtNodeCacheEntity(
+                ip = hostStr,
+                port = peer.address.port,
+                lastSeen = peer.lastSeen,
+                rttMs = peer.rttMs,
+                nodeIdHex = if (peer.nodeId.any { it != 0.toByte() }) CryptoUtils.toHex(peer.nodeId) else null
+            )
+            scope.launch {
+                try {
+                    nodeCacheDao.upsertAndTrim(entity, MAX_CACHED_NODES)
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     fun addPeer(nodeId: ByteArray, address: InetSocketAddress) {
         val peer = DhtPeer(nodeId, address)
@@ -230,17 +343,35 @@ class DhtLeafNode(
     }
 
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
-        val bootstrapNodes = resolveBootstrapNodes()
+        val cached = getCachedFastestNodes()
         val randomTarget = CryptoUtils.secureRandomBytes(20)
-        val initialJobs = bootstrapNodes.map { bootstrapNode ->
-            launch {
-                try {
-                    val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                    sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
-                } catch (_: Exception) {}
+
+        if (cached.isNotEmpty()) {
+            println("[PQChat] Bootstrapping from ${cached.size} cached DHT nodes...")
+            val cachedJobs = cached.take(16).map { peer ->
+                launch {
+                    try {
+                        val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
+                        sendQuery(peer.address, query, TIMEOUT_MS)
+                    } catch (_: Exception) {}
+                }
             }
+            cachedJobs.joinAll()
         }
-        initialJobs.joinAll()
+
+        // If routing table is still sparse, fallback to public bootstrap servers
+        if (routingTable.size < 8) {
+            val bootstrapNodes = resolveBootstrapNodes()
+            val initialJobs = bootstrapNodes.map { bootstrapNode ->
+                launch {
+                    try {
+                        val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
+                        sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
+                    } catch (_: Exception) {}
+                }
+            }
+            initialJobs.joinAll()
+        }
 
         // Iteratively query first wave of discovered peers to populate closest nodes
         val peers = routingTable.take(16)
@@ -263,14 +394,24 @@ class DhtLeafNode(
         val txKey = CryptoUtils.toHex(query.transactionId)
         pendingTransactions[txKey] = deferred
 
+        val s = socket ?: return@withContext null
+        if (s.isClosed) return@withContext null
+
+        val startTime = System.currentTimeMillis()
         try {
             val bytes = query.toBencoded()
             val packet = DatagramPacket(bytes, bytes.size, targetAddress)
-            socket?.send(packet)
+            s.send(packet)
 
-            withTimeoutOrNull(timeoutMs) {
+            val resp = withTimeoutOrNull(timeoutMs) {
                 deferred.await()
             }
+            if (resp != null) {
+                val rtt = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                val responderId = resp.responseData["id"] as? ByteArray
+                recordNodeSuccess(targetAddress, rtt, responderId)
+            }
+            resp
         } catch (e: Exception) {
             null
         } finally {
@@ -323,10 +464,16 @@ class DhtLeafNode(
 
         val storedPeers = remoteStoredPeers[targetHex]?.map { DhtPeer(ByteArray(20), it) } ?: emptyList()
         val candidates = findClosestNodes(target, count = 24)
-        val bootstrapNodes = resolveBootstrapNodes().map {
-            DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+        val cachedFastest = getCachedFastestNodes()
+
+        // Prioritize cached fastest nodes, closest candidates, and stored peers over bootstrap routers
+        val primaryCandidates = (storedPeers + candidates + cachedFastest).distinctBy { it.address }
+        val nodesToQuery = if (primaryCandidates.isNotEmpty()) {
+            primaryCandidates
+        } else {
+            // Cold start fallback: only resolve bootstrap routers if cache and routing table are empty
+            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }
-        val nodesToQuery = (storedPeers + candidates + bootstrapNodes).distinctBy { it.address }
 
         if (nodesToQuery.isNotEmpty()) {
             val deferreds = nodesToQuery.map { peer ->
@@ -405,12 +552,15 @@ class DhtLeafNode(
             }
         }
 
-        // Step 2: Push to external DHT swarm peers
+        // Step 2: Push to external DHT swarm peers (prioritizing cached fastest nodes)
         val candidates = findClosestNodes(target, count = 24)
-        val bootstrapNodes = resolveBootstrapNodes().map {
-            DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+        val cachedFastest = getCachedFastestNodes()
+        val primaryCandidates = (candidates + cachedFastest).distinctBy { it.address }
+        val nodesToQuery = if (primaryCandidates.isNotEmpty()) {
+            primaryCandidates
+        } else {
+            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }
-        val nodesToQuery = (candidates + bootstrapNodes).distinctBy { it.address }
 
         var putSuccess = !skipLocalStore
 

@@ -123,3 +123,70 @@ interface ChunkDao {
     @Query("DELETE FROM chunks WHERE transferId = :transferId")
     suspend fun deleteChunks(transferId: String)
 }
+
+@Entity(
+    tableName = "dht_node_cache",
+    primaryKeys = ["ip", "port"],
+    indices = [
+        Index(value = ["rttMs"]),
+        Index(value = ["lastSeen"])
+    ]
+)
+data class DhtNodeCacheEntity(
+    val ip: String,
+    val port: Int,
+    val lastSeen: Long = System.currentTimeMillis(),
+    val rttMs: Long = 0L,
+    val nodeIdHex: String? = null
+)
+
+@Dao
+interface DhtNodeCacheDao {
+    @Query("SELECT * FROM dht_node_cache ORDER BY rttMs ASC LIMIT :limit")
+    suspend fun getFastestNodes(limit: Int = 40): List<DhtNodeCacheEntity>
+
+    @Query("SELECT * FROM dht_node_cache ORDER BY rttMs ASC")
+    suspend fun getAllNodes(): List<DhtNodeCacheEntity>
+
+    @Query("SELECT * FROM dht_node_cache WHERE ip = :ip AND port = :port LIMIT 1")
+    suspend fun getNode(ip: String, port: Int): DhtNodeCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(node: DhtNodeCacheEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateAll(nodes: List<DhtNodeCacheEntity>)
+
+    @Query("DELETE FROM dht_node_cache WHERE ip = :ip AND port = :port")
+    suspend fun deleteNode(ip: String, port: Int)
+
+    @Transaction
+    suspend fun upsertAndTrim(node: DhtNodeCacheEntity, maxCount: Int = 40) {
+        insertOrUpdate(node)
+        val all = getAllNodes()
+        if (all.size > maxCount) {
+            val toRemove = all.drop(maxCount)
+            for (item in toRemove) {
+                deleteNode(item.ip, item.port)
+            }
+        }
+    }
+
+    @Transaction
+    suspend fun trimToFastest(maxCount: Int = 40) {
+        val all = getAllNodes()
+        if (all.size > maxCount) {
+            val toRemove = all.drop(maxCount)
+            for (item in toRemove) {
+                deleteNode(item.ip, item.port)
+            }
+        }
+    }
+
+    @Query("DELETE FROM dht_node_cache")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM dht_node_cache")
+    suspend fun count(): Int
+}
+
