@@ -78,8 +78,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     init {
         dhtLeafNode.start()
         trafficGenerator.start()
-        pollingManager.onAppForegrounded()
         syncPollingIntervals()
+        pollingManager.onAppForegrounded()
 
         // Ensure Self-Notes / DHT Loopback contact exists
         viewModelScope.launch {

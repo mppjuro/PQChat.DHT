@@ -40,7 +40,7 @@ class AdaptivePollingManager(
     val nextPollInMs: StateFlow<Long> = _nextPollInMs.asStateFlow()
 
     /** Indicates whether a DHT poll is currently running. */
-    private val _isSyncing = MutableStateFlow(false)
+    private val _isSyncing = MutableStateFlow(true)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
@@ -60,11 +60,17 @@ class AdaptivePollingManager(
         bgIdle: Long,
         doze: Long
     ) {
+        val changed = intervalForegroundChatMs != foreground ||
+                intervalAppActiveMs != appActive ||
+                intervalBackgroundIdleMs != bgIdle ||
+                intervalDozeSleepMs != doze
         intervalForegroundChatMs = foreground
         intervalAppActiveMs = appActive
         intervalBackgroundIdleMs = bgIdle
         intervalDozeSleepMs = doze
-        restartPollingLoop()
+        if (changed && !_isSyncing.value) {
+            immediateSignal?.complete(Unit)
+        }
     }
 
     fun getCurrentIntervalMs(): Long {
@@ -110,7 +116,8 @@ class AdaptivePollingManager(
     }
 
     private fun restartPollingLoop() {
-        pollingJob?.cancel()
+        val oldJob = pollingJob
+        oldJob?.cancel()
         val state = _currentState.value
 
         // In DOZE_SLEEP, polling is primarily driven by WorkManager / AlarmManager
@@ -120,17 +127,22 @@ class AdaptivePollingManager(
             return
         }
 
+        _isSyncing.value = true
         pollingJob = scope.launch {
+            val myJob = coroutineContext.job
             while (isActive) {
-                // Fire the poll with active syncing state
                 _isSyncing.value = true
                 try {
                     onPollRequested(activeChatContactId)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                 } finally {
-                    val interval = getCurrentIntervalMs()
-                    _nextPollInMs.value = interval
-                    _isSyncing.value = false
+                    if (pollingJob == myJob) {
+                        val interval = getCurrentIntervalMs()
+                        _nextPollInMs.value = interval
+                        _isSyncing.value = false
+                    }
                 }
 
                 // Countdown with 250 ms ticks; can be short-circuited by triggerImmediatePoll()
@@ -155,8 +167,10 @@ class AdaptivePollingManager(
     }
 
     fun stop() {
+        val job = pollingJob
+        pollingJob = null
+        job?.cancel()
         _isSyncing.value = false
-        pollingJob?.cancel()
         scope.cancel()
     }
 }
