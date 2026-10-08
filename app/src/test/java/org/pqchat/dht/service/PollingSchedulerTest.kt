@@ -104,6 +104,10 @@ class PollingSchedulerTest {
         }
         override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean = false
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean = false
+        override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> =
+            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+        override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> =
+            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
     }
 
     private class FakeChunkDao : ChunkDao {

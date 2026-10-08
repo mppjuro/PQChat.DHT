@@ -158,6 +158,14 @@ class ChatRepositoryConcurrencyTest {
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean {
             return messages.any { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
         }
+
+        override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> {
+            return messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+        }
+
+        override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> {
+            return messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+        }
     }
 
     private class ThreadSafeChunkDao : ChunkDao {
@@ -233,7 +241,7 @@ class ChatRepositoryConcurrencyTest {
         assertNotNull(contact)
         assertEquals("counterOut should equal messageCount", messageCount, contact!!.counterOut)
 
-        val sentMessages = messageDao.messages.filter { it.contactId == contactId && it.status == "SENT_DHT" }
+        val sentMessages = messageDao.messages.filter { it.contactId == contactId && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
         assertEquals(messageCount, sentMessages.size)
 
         // Verify sequential unique sequence numbers
@@ -369,7 +377,7 @@ class ChatRepositoryConcurrencyTest {
         assertEquals("counterOut must advance to 1 after successful retry", 1, contactAfterRetry!!.counterOut)
 
         val updatedMsg = messageDao.messages.first { it.id == queuedMsg.id }
-        assertEquals("SENT_DHT", updatedMsg.status)
+        assertTrue("Status must be PENDING_DELIVERY or SENT_DHT", updatedMsg.status == "PENDING_DELIVERY" || updatedMsg.status == "SENT_DHT")
         assertEquals(0, updatedMsg.seqNum)
 
         fakeDht.stop()

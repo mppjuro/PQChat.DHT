@@ -36,7 +36,8 @@ object ChunkingEngine {
         seqNum: Int,
         ackNum: Int,
         transferId: ByteArray = CryptoUtils.secureRandomBytes(16),
-        direction: String? = null
+        direction: String? = null,
+        lastReceivedSeq: Int = ackNum
     ): List<ChunkItem> {
         val totalChunks = (data.size + CHUNK_SIZE - 1) / CHUNK_SIZE
         val chunks = ArrayList<ChunkItem>(totalChunks)
@@ -52,10 +53,10 @@ object ChunkingEngine {
 
             val subMsgKey = deriveChunkMsgKey(currentMsgKey, j)
 
-            // Encode into AEAD frame
+            // Encode into AEAD frame with piggybacked last_received_seq
             val plaintext = BinaryFrameCodec.encodeChunkData(
                 seqNum = seqNum,
-                ackNum = ackNum,
+                ackNum = lastReceivedSeq,
                 timestampUTC = System.currentTimeMillis(),
                 transferId = transferId,
                 chunkIndex = j,

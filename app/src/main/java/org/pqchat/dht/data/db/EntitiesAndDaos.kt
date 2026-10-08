@@ -96,9 +96,13 @@ data class MessageEntity(
     val timestamp: Long,
     val textContent: EncryptedText? = null,
     val imageBytes: EncryptedBlob? = null,
-    val status: String, // QUEUED, SENDING, SENT_DHT, DELIVERED, CONFIRMED_DHT
+    val status: String, // QUEUED, SENDING, SENT_DHT, PENDING_DELIVERY, DELIVERED, CONFIRMED_DHT
     val retryCount: Int = 0,
-    val lastAttemptTimestamp: Long = 0L
+    val lastAttemptTimestamp: Long = 0L,
+    val ackTarget: ByteArray? = null,
+    val ackRatchetKey: EncryptedBlob? = null,
+    val slotTarget: ByteArray? = null,
+    val slotEdSeed: EncryptedBlob? = null
 ) {
     @Ignore
     constructor(
@@ -113,7 +117,11 @@ data class MessageEntity(
         imageBytes: ByteArray? = null,
         status: String,
         retryCount: Int = 0,
-        lastAttemptTimestamp: Long = 0L
+        lastAttemptTimestamp: Long = 0L,
+        ackTarget: ByteArray? = null,
+        ackRatchetKey: ByteArray? = null,
+        slotTarget: ByteArray? = null,
+        slotEdSeed: ByteArray? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -126,7 +134,11 @@ data class MessageEntity(
         imageBytes = imageBytes?.let { EncryptedBlob(it) },
         status = status,
         retryCount = retryCount,
-        lastAttemptTimestamp = lastAttemptTimestamp
+        lastAttemptTimestamp = lastAttemptTimestamp,
+        ackTarget = ackTarget,
+        ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it) },
+        slotTarget = slotTarget,
+        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it) }
     )
 
     val rawTextContent: String? get() = textContent?.raw
@@ -338,6 +350,12 @@ interface MessageDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE contactId = :contactId AND seqNum = :seqNum AND isOutgoing = :isOutgoing)")
     suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT') ORDER BY id ASC")
+    suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT') ORDER BY id ASC")
+    suspend fun getAllPendingDeliveryMessages(): List<MessageEntity>
 }
 
 @Dao

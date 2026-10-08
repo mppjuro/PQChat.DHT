@@ -356,7 +356,7 @@ fun MessageBubble(message: MessageEntity) {
 
                     val statusColor = when (message.status) {
                         "CONFIRMED_DHT" -> ElectricGreen
-                        "DELIVERED", "SENT_DHT" -> appColors.primary
+                        "DELIVERED", "SENT_DHT", "PENDING_DELIVERY" -> appColors.primary
                         else -> AmberWarning
                     }
 
