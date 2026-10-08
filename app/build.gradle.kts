@@ -68,6 +68,7 @@ android {
 
     testOptions {
         unitTests.all {
+            it.useJUnitPlatform()
             it.exclude("**/integration/**")
         }
     }
@@ -131,7 +132,11 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("com.code-intelligence:jazzer-api:0.23.0")
+    testImplementation("com.code-intelligence:jazzer-junit:0.23.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
