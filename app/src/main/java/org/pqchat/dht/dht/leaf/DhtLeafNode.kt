@@ -1,6 +1,7 @@
 package org.pqchat.dht.dht.leaf
 
 import kotlinx.coroutines.*
+import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.Ed25519Engine
 import org.pqchat.dht.dht.bencode.Bencode
@@ -760,7 +761,9 @@ class DhtLeafNode(
         sk: ByteArray,
         skipLocalStore: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
-        require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
+        require(v.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES) {
+            "BEP 44 payload cannot exceed ${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes (got ${v.size})"
+        }
 
         // Step 1: Sign record with Ed25519
         val signData = Bencode.encodeBep44SignData(v, seq, salt)
@@ -843,12 +846,12 @@ class DhtLeafNode(
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
         val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
-        val dummyPayload = CryptoUtils.secureRandomBytes(1000)
+        val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
         return putMutable(
             target = target,
             v = dummyPayload,
-            seq = 1L,
+            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
             salt = null,
             sk = dummySeed
         )

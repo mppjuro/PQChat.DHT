@@ -3,6 +3,7 @@ package org.pqchat.dht.debug
 import org.pqchat.dht.BuildConfig
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.protocol.RatchetChain
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -39,12 +40,12 @@ object MessageDebugLogger {
         slot: RatchetChain.SlotParameters,
         seqNum: Int,
         ackNum: Int,
-        plaintext972: ByteArray,
-        frame900: ByteArray
+        plaintext: ByteArray,
+        frame: ByteArray
     ) {
         if (!isEnabled) return
 
-        val headerMap = extractHeaderMap(plaintext972).toMutableMap().apply {
+        val headerMap = extractHeaderMap(plaintext).toMutableMap().apply {
             put("explicitSeqNum", seqNum)
             put("explicitAckNum", ackNum)
         }
@@ -59,12 +60,12 @@ object MessageDebugLogger {
             "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
-                "bep44Seq" to (slot.counter + 1).toLong(),
+                "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
                 "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey),
                 "ed25519SeedPreview" to toHexPreview(slot.edPrivateKeySeed, 16)
             ),
             "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "${plaintext972.size} bajtów (rozmiar stały)",
+                "totalPlaintextSize" to "${plaintext.size} bajtów (rozmiar stały)",
                 "header" to headerMap,
                 "payload" to linkedMapOf(
                     "type" to "TextMessage (0x02)",
@@ -75,7 +76,7 @@ object MessageDebugLogger {
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
-                frame900 = frame900,
+                frame = frame,
                 slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
@@ -84,7 +85,7 @@ object MessageDebugLogger {
                     "description" to "Wiadomość jest chroniona symetrycznie AES-256-GCM kluczem MsgKey_${slot.counter}. Klucz ten pochodzi z łańcucha KDF (Ratchet), którego źródłem entropii jest post-kwantowa wymiana ML-KEM-512."
                 ),
                 dhtTarget = slot.target,
-                dhtSeq = (slot.counter + 1).toLong(),
+                dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 edPublicKey = slot.edPublicKey
             )
         )
@@ -99,7 +100,7 @@ object MessageDebugLogger {
         seqNum: Int,
         ackNum: Int,
         mlKemPublicKey: ByteArray,
-        frame900: ByteArray
+        frame: ByteArray
     ) {
         if (!isEnabled) return
 
@@ -111,7 +112,7 @@ object MessageDebugLogger {
             "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
-                "bep44Seq" to (slot.counter + 1).toLong(),
+                "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
                 "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey)
             ),
             "beforeEncryption_Plaintext" to linkedMapOf(
@@ -136,7 +137,7 @@ object MessageDebugLogger {
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
-                frame900 = frame900,
+                frame = frame,
                 slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
@@ -145,7 +146,7 @@ object MessageDebugLogger {
                     "description" to "Ładunek przenosi nowy klucz publiczny ML-KEM-512 (800 B) opakowany w szyfrowanie symetryczne AES-256-GCM."
                 ),
                 dhtTarget = slot.target,
-                dhtSeq = (slot.counter + 1).toLong(),
+                dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 edPublicKey = slot.edPublicKey
             )
         )
@@ -159,7 +160,7 @@ object MessageDebugLogger {
         slot: RatchetChain.SlotParameters,
         seqNum: Int,
         ackNum: Int,
-        frame900: ByteArray
+        frame: ByteArray
     ) {
         if (!isEnabled) return
 
@@ -171,7 +172,7 @@ object MessageDebugLogger {
             "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
-                "bep44Seq" to (slot.counter + 1).toLong(),
+                "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
                 "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey)
             ),
             "beforeEncryption_Plaintext" to linkedMapOf(
@@ -195,7 +196,7 @@ object MessageDebugLogger {
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
-                frame900 = frame900,
+                frame = frame,
                 slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
@@ -204,7 +205,7 @@ object MessageDebugLogger {
                     "description" to "BEZPOŚREDNIE SZYFROWANIE POST-KWANTOWE: Kapsuła ML-KEM-512 (768 B) znajduje się wewnątrz ramki AES-256-GCM."
                 ),
                 dhtTarget = slot.target,
-                dhtSeq = (slot.counter + 1).toLong(),
+                dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 edPublicKey = slot.edPublicKey
             )
         )
@@ -220,7 +221,7 @@ object MessageDebugLogger {
         target: ByteArray,
         seq: Long,
         slotMsgKey: ByteArray?,
-        frame900: ByteArray
+        frame: ByteArray
     ) {
         if (!isEnabled) return
 
@@ -251,7 +252,7 @@ object MessageDebugLogger {
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
-                frame900 = frame900,
+                frame = frame,
                 slotMsgKey = slotMsgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
@@ -271,7 +272,7 @@ object MessageDebugLogger {
         target: ByteArray,
         seq: Long,
         edPrivateKeySeed: ByteArray,
-        frame900: ByteArray
+        frame: ByteArray
     ) {
         if (!isEnabled) return
 
@@ -305,7 +306,7 @@ object MessageDebugLogger {
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
-                frame900 = frame900,
+                frame = frame,
                 slotMsgKey = null,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
@@ -332,13 +333,13 @@ object MessageDebugLogger {
         seq: Long,
         senderEdPublicKey: ByteArray?,
         senderSignature: ByteArray?,
-        frame900: ByteArray,
+        frame: ByteArray,
         frameMsg: BinaryFrameCodec.FrameMessage,
         slotMsgKey: ByteArray? = null
     ) {
         if (!isEnabled) return
 
-        val (iv, tag, ciphertext) = extractAesComponents(frame900)
+        val (iv, tag, ciphertext) = extractAesComponents(frame)
 
         val payloadMap = when (val p = frameMsg.payload) {
             is BinaryFrameCodec.DecodedPayload.TextMessage -> linkedMapOf<String, Any?>(
@@ -433,7 +434,7 @@ object MessageDebugLogger {
                 "signatureVerified" to (senderSignature != null)
             ),
             "beforeDecryption_EncryptedStructure" to linkedMapOf(
-                "totalFrameSize" to "${frame900.size} bajtów (surowe dane pobrane z DHT)",
+                "totalFrameSize" to "${frame.size} bajtów (surowe dane pobrane z DHT)",
                 "layer1_Symmetric_AES_GCM" to linkedMapOf(
                     "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
                     "derivedKeyPreview" to (slotMsgKey?.let { toHexPreview(it, 16) } ?: "klucz sesyjny slotu"),
@@ -477,13 +478,13 @@ object MessageDebugLogger {
         seq: Long,
         senderEdPublicKey: ByteArray?,
         senderSignature: ByteArray?,
-        frame900: ByteArray,
+        frame: ByteArray,
         seedInit: ByteArray,
         decapsulationSuccess: Boolean
     ) {
         if (!isEnabled) return
 
-        val (iv, tag, ciphertext) = extractAesComponents(frame900)
+        val (iv, tag, ciphertext) = extractAesComponents(frame)
 
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_RECEIVED_FROM_DHT_SERVER",
@@ -498,7 +499,7 @@ object MessageDebugLogger {
                 "seedInitHex" to CryptoUtils.toHex(seedInit)
             ),
             "beforeDecryption_EncryptedStructure" to linkedMapOf(
-                "totalFrameSize" to "${frame900.size} bajtów (surowe dane pobrane z Target_0)",
+                "totalFrameSize" to "${frame.size} bajtów (surowe dane pobrane z Target_0)",
                 "layer1_Symmetric_AES_GCM" to linkedMapOf(
                     "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
                     "symmetricKeyRole" to "kHs (klucz wyprowadzony z seedInit)",
@@ -550,18 +551,18 @@ object MessageDebugLogger {
     // STRUCTURAL HELPERS
     // ==========================================
 
-    private fun extractAesComponents(frame900: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
-        val iv = frame900.copyOfRange(0, BinaryFrameCodec.IV_SIZE)
-        val tag = frame900.copyOfRange(BinaryFrameCodec.IV_SIZE, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE)
-        val ciphertext = frame900.copyOfRange(
+    private fun extractAesComponents(frame: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
+        val iv = frame.copyOfRange(0, BinaryFrameCodec.IV_SIZE)
+        val tag = frame.copyOfRange(BinaryFrameCodec.IV_SIZE, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE)
+        val ciphertext = frame.copyOfRange(
             BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE,
-            minOf(frame900.size, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE + BinaryFrameCodec.CIPHERTEXT_SIZE)
+            minOf(frame.size, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE + BinaryFrameCodec.CIPHERTEXT_SIZE)
         )
         return Triple(iv, tag, ciphertext)
     }
 
-    private fun extractHeaderMap(plaintext972: ByteArray): Map<String, Any?> {
-        val buf = ByteBuffer.wrap(plaintext972).order(ByteOrder.BIG_ENDIAN)
+    private fun extractHeaderMap(plaintext: ByteArray): Map<String, Any?> {
+        val buf = ByteBuffer.wrap(plaintext).order(ByteOrder.BIG_ENDIAN)
         val msgType = buf.get()
         val seqNum = buf.short.toInt() and 0xFFFF
         val ackNum = buf.short.toInt() and 0xFFFF
@@ -586,17 +587,17 @@ object MessageDebugLogger {
     }
 
     private fun buildEncryptedStructureMap(
-        frame900: ByteArray,
+        frame: ByteArray,
         slotMsgKey: ByteArray?,
         pqcLayerInfo: Map<String, Any?>,
         dhtTarget: ByteArray,
         dhtSeq: Long,
         edPublicKey: ByteArray?
     ): Map<String, Any?> {
-        val (iv, tag, ciphertext) = extractAesComponents(frame900)
+        val (iv, tag, ciphertext) = extractAesComponents(frame)
 
         return linkedMapOf(
-            "totalFrameSize" to "${frame900.size} bajtów (standard ramki BEP 44)",
+            "totalFrameSize" to "${frame.size} bajtów (standard ramki BEP 44)",
             "layer1_Symmetric_AES_GCM" to linkedMapOf(
                 "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
                 "derivedKeyPreview" to (slotMsgKey?.let { toHexPreview(it, 16) } ?: "klucz sesyjny slotu"),

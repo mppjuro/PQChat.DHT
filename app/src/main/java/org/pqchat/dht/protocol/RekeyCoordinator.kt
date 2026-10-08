@@ -38,7 +38,7 @@ object RekeyCoordinator {
     ): Pair<PendingRekeyOffer, ByteArray> {
         val kemPair = MLKemEngine.generateKeyPair()
 
-        val plaintext972 = BinaryFrameCodec.encodeRekeyOffer(
+        val plaintext = BinaryFrameCodec.encodeRekeyOffer(
             seqNum = seqNum,
             ackNum = ackNum,
             timestampUTC = System.currentTimeMillis(),
@@ -46,7 +46,7 @@ object RekeyCoordinator {
             mlKemPublicKey = kemPair.publicKey
         )
 
-        val frame1000 = BinaryFrameCodec.packAeadFrame(msgKey, plaintext972)
+        val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext)
 
         val pending = PendingRekeyOffer(
             epoch = epoch,
@@ -54,12 +54,12 @@ object RekeyCoordinator {
             pkNew = kemPair.publicKey
         )
 
-        return Pair(pending, frame1000)
+        return Pair(pending, frame)
     }
 
     /**
      * Receiver processes Type 0x03 Offer, encapsulates SS_rekey, and builds Type 0x04 Response frame.
-     * Returns (SS_rekey, frame1000).
+     * Returns (SS_rekey, frame).
      */
     fun processOfferAndCreateResponse(
         offer: BinaryFrameCodec.DecodedPayload.RekeyOffer,
@@ -71,7 +71,7 @@ object RekeyCoordinator {
         val (ssRekey, ctNew) = MLKemEngine.encapsulate(offer.mlKemPublicKey)
 
         // 2. Build Type 0x04 Response frame for reverse channel
-        val plaintext972 = BinaryFrameCodec.encodeRekeyResponse(
+        val plaintext = BinaryFrameCodec.encodeRekeyResponse(
             seqNum = reverseSeqNum,
             ackNum = reverseAckNum,
             timestampUTC = System.currentTimeMillis(),
@@ -79,9 +79,9 @@ object RekeyCoordinator {
             mlKemCiphertext = ctNew
         )
 
-        val frame1000 = BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext972)
+        val frame = BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext)
 
-        return Pair(ssRekey, frame1000)
+        return Pair(ssRekey, frame)
     }
 
     /**

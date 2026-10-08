@@ -23,12 +23,15 @@ object HandshakeManager {
     }
 
     data class BobHandshakeResult(
-        val frame1000: ByteArray,
+        val frame: ByteArray,
         val target0: ByteArray,
         val edPrivateKeySeed: ByteArray,
         val chainKeyAtoB: ByteArray,
         val chainKeyBtoA: ByteArray
-    )
+    ) {
+        @Deprecated("Use frame instead", ReplaceWith("frame"))
+        val frame1000: ByteArray get() = frame
+    }
 
     data class EstablishedSession(
         val chainKeyOut: ByteArray, // 64 bytes
@@ -93,14 +96,14 @@ object HandshakeManager {
 
         // 5. Build Type 0x01 Handshake Finalize frame
         val salt = CryptoUtils.secureRandomBytes(32)
-        val plaintext972 = BinaryFrameCodec.encodeHandshakeFinalize(
+        val plaintext = BinaryFrameCodec.encodeHandshakeFinalize(
             seqNum = 0,
             ackNum = 0,
             timestampUTC = System.currentTimeMillis(),
             mlKemCiphertext = ctB,
             saltParameter = salt
         )
-        val frame1000 = BinaryFrameCodec.packAeadFrame(kHs, plaintext972)
+        val frame = BinaryFrameCodec.packAeadFrame(kHs, plaintext)
 
         // 6. Derive working KDF chains:
         // ChainKey_{A->B} = HKDF-Expand(SS_init, "AliceToBob", 64)
@@ -112,7 +115,7 @@ object HandshakeManager {
         // Outgoing chain: B->A
         // Incoming chain: A->B
         return BobHandshakeResult(
-            frame1000 = frame1000,
+            frame = frame,
             target0 = target0,
             edPrivateKeySeed = edSeed,
             chainKeyAtoB = chainAtoB,
@@ -127,10 +130,10 @@ object HandshakeManager {
     fun aliceFinalize(
         skA: ByteArray,
         seedInit: ByteArray,
-        frame1000: ByteArray
+        frame: ByteArray
     ): EstablishedSession {
         val kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
-        val frameMsg = BinaryFrameCodec.unpackAeadFrame(kHs, frame1000)
+        val frameMsg = BinaryFrameCodec.unpackAeadFrame(kHs, frame)
 
         require(frameMsg.msgType == BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE) {
             "Expected Handshake Finalize message (0x01), got 0x%02X".format(frameMsg.msgType)

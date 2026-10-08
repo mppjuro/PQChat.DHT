@@ -27,14 +27,14 @@ class ProtocolEngineTest {
 
         // 2. Bob scans QR and creates Type 0x01 frame for DHT
         val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
-        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, bobHandshake.frame1000.size)
+        assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, bobHandshake.frame.size)
         assertArrayEquals(aliceInit.target0, bobHandshake.target0)
 
         // 3. Alice receives frame from DHT Target_0 and finalizes
         val aliceSession = HandshakeManager.aliceFinalize(
             skA = aliceInit.skA,
             seedInit = aliceInit.seedInit,
-            frame1000 = bobHandshake.frame1000
+            frame = bobHandshake.frame
         )
 
         // 4. Verify working chains match:
@@ -58,8 +58,8 @@ class ProtocolEngineTest {
         for (i in messages.indices) {
             val slot = RatchetChain.deriveSlot(senderChain, i)
             val plaintext = BinaryFrameCodec.encodeTextMessage(i, 0, System.currentTimeMillis(), messages[i])
-            val frame1000 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
-            sentFrames.add(Pair(slot, frame1000))
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+            sentFrames.add(Pair(slot, frame))
             senderChain = slot.nextChainKey
         }
 
@@ -152,9 +152,9 @@ class ProtocolEngineTest {
         // Decrypt each chunk and verify
         val decodedChunks = ArrayList<BinaryFrameCodec.DecodedPayload.ChunkData>()
         for (chunkItem in chunks) {
-            assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, chunkItem.frame1000.size)
+            assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, chunkItem.frame.size)
             val subKey = ChunkingEngine.deriveChunkMsgKey(msgKey, chunkItem.chunkIndex)
-            val decodedMsg = BinaryFrameCodec.unpackAeadFrame(subKey, chunkItem.frame1000)
+            val decodedMsg = BinaryFrameCodec.unpackAeadFrame(subKey, chunkItem.frame)
             assertEquals(BinaryFrameCodec.TYPE_CHUNK_DATA, decodedMsg.msgType)
             decodedChunks.add(decodedMsg.payload as BinaryFrameCodec.DecodedPayload.ChunkData)
         }

@@ -10,6 +10,7 @@ import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.Ed25519Engine
 import org.pqchat.dht.crypto.MLKemEngine
 import org.pqchat.dht.data.db.*
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.ChunkingEngine
 import org.pqchat.dht.protocol.RatchetChain
@@ -172,13 +173,13 @@ class ChatRepository(
             val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
             // 5. Encode Type 0x02 message (wire seqNum is 16-bit)
-            val plaintext972 = BinaryFrameCodec.encodeTextMessage(
+            val plaintext = BinaryFrameCodec.encodeTextMessage(
                 seqNum = contact.counterOut and 0xFFFF,
                 ackNum = contact.counterIn and 0xFFFF,
                 timestampUTC = System.currentTimeMillis(),
                 text = text
             )
-            val frame1000 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
 
             org.pqchat.dht.debug.MessageDebugLogger.logOutgoingTextMessage(
                 contactId = contactId,
@@ -186,8 +187,8 @@ class ChatRepository(
                 slot = slot,
                 seqNum = contact.counterOut,
                 ackNum = contact.counterIn,
-                plaintext972 = plaintext972,
-                frame900 = frame1000
+                plaintext = plaintext,
+                frame = frame
             )
 
             // 6. Store message in database with seqEpoch
@@ -209,8 +210,8 @@ class ChatRepository(
             // 7. Put to DHT under Target_i
             val success = dhtLeafNode.putMutable(
                 target = slot.target,
-                v = frame1000,
-                seq = (contact.counterOut + 1).toLong(),
+                v = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 salt = null,
                 sk = slot.edPrivateKeySeed,
                 skipLocalStore = isSelf
@@ -344,14 +345,14 @@ class ChatRepository(
                     chunkIndex = c.chunkIndex,
                     totalChunks = c.totalChunks,
                     target = c.target,
-                    seq = (c.chunkIndex + 1).toLong(),
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     slotMsgKey = slot.msgKey,
-                    frame900 = c.frame1000
+                    frame = c.frame
                 )
                 val ok = dhtLeafNode.putMutable(
                     target = c.target,
-                    v = c.frame1000,
-                    seq = (c.chunkIndex + 1).toLong(),
+                    v = c.frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     sk = c.edPrivateKeySeed,
                     skipLocalStore = isSelf
                 )
@@ -429,8 +430,8 @@ class ChatRepository(
                 for (c in chunks) {
                     val ok = dhtLeafNode.putMutable(
                         target = c.target,
-                        v = c.frame1000,
-                        seq = (c.chunkIndex + 1).toLong(),
+                        v = c.frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         sk = c.edPrivateKeySeed,
                         skipLocalStore = isSelf
                     )
@@ -453,17 +454,17 @@ class ChatRepository(
                 }
             } else if (msg.textContent != null) {
                 val slot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
-                val plaintext972 = BinaryFrameCodec.encodeTextMessage(
+                val plaintext = BinaryFrameCodec.encodeTextMessage(
                     seqNum = currentContact.counterOut and 0xFFFF,
                     ackNum = currentContact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
                     text = msg.textContent.raw
                 )
-                val frame1000 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
+                val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
                 val ok = dhtLeafNode.putMutable(
                     target = slot.target,
-                    v = frame1000,
-                    seq = (currentContact.counterOut + 1).toLong(),
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
                     skipLocalStore = isSelf
@@ -512,14 +513,14 @@ class ChatRepository(
             seqNum = contact.counterOut,
             ackNum = contact.counterIn,
             mlKemPublicKey = pendingOffer.pkNew,
-            frame900 = offerFrame
+            frame = offerFrame
         )
 
         val isSelf = contact.id == SELF_CONTACT_ID
         val success = dhtLeafNode.putMutable(
             target = slot.target,
             v = offerFrame,
-            seq = (contact.counterOut + 1).toLong(),
+            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
             salt = null,
             sk = slot.edPrivateKeySeed,
             skipLocalStore = isSelf
@@ -746,7 +747,7 @@ class ChatRepository(
                 seq = item.seq,
                 senderEdPublicKey = item.k,
                 senderSignature = item.sig,
-                frame900 = item.v,
+                frame = item.v,
                 frameMsg = frameMsg,
                 slotMsgKey = slot.msgKey
             )
@@ -831,14 +832,14 @@ class ChatRepository(
                     // 3. Send Type 0x04 Response on receiver's outgoing channel (reverse direction)
                     val currentContact = contactDao.getContactById(contactId) ?: contact
                     val outSlot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
-                    val plaintext972 = BinaryFrameCodec.encodeRekeyResponse(
+                    val plaintext = BinaryFrameCodec.encodeRekeyResponse(
                         seqNum = currentContact.counterOut and 0xFFFF,
                         ackNum = frameMsg.seqNum and 0xFFFF,
                         timestampUTC = System.currentTimeMillis(),
                         rekeyEpoch = offerPayload.rekeyEpoch,
                         mlKemCiphertext = ctNew
                     )
-                    val respFrame = BinaryFrameCodec.packAeadFrame(outSlot.msgKey, plaintext972)
+                    val respFrame = BinaryFrameCodec.packAeadFrame(outSlot.msgKey, plaintext)
 
                     org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
                         contactId = contactId,
@@ -846,13 +847,13 @@ class ChatRepository(
                         slot = outSlot,
                         seqNum = currentContact.counterOut,
                         ackNum = frameMsg.seqNum,
-                        frame900 = respFrame
+                        frame = respFrame
                     )
 
                     dhtLeafNode.putMutable(
                         target = outSlot.target,
                         v = respFrame,
-                        seq = (currentContact.counterOut + 1).toLong(),
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         sk = outSlot.edPrivateKeySeed,
                         skipLocalStore = isSelf
                     )
