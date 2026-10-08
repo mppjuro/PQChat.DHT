@@ -1,6 +1,6 @@
 ==============================================================================
 PQChat.DHT Protocol Formal Verification Report
-Generated: 2026-10-08 19:43:23 UTC
+Generated: 2026-10-08 20:11:40 UTC
 Verifier: ProVerif (Symbolic Dolev-Yao Protocol Analysis)
 ==============================================================================
 
