@@ -1,0 +1,74 @@
+(* ==================================================================== *)
+(* PQChat.DHT Protocol Formal Verification: (d) Target Unlinkability     *)
+(* Proves that ephemeral key hopping targets Target_i = SHA-1(pk_i)      *)
+(* cannot be linked to the identity of communicating parties.            *)
+(* Proved via ProVerif Observational Equivalence (Diff-Equivalence).     *)
+(* ==================================================================== *)
+
+type id_t.
+type ed_skey.
+type ed_pkey.
+
+(* --- Ed25519 Ephemeral Signature & Key Derivation --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+
+(* --- Cryptographic Hash & KDF --- *)
+fun sha1(ed_pkey): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- Protocol Constants --- *)
+const TAG_STEP_0: bitstring.
+const TAG_STEP_1: bitstring.
+
+(* --- Channels --- *)
+free c_pub: channel.             (* Public DHT network *)
+
+(* --- Identities --- *)
+free Alice: id_t.
+free Bob: id_t.
+free Charlie: id_t.
+free Dave: id_t.
+
+(* ==================================================================== *)
+(* Observational Equivalence Process:                                   *)
+(* Target emitted in Session(Alice, Bob) vs Session(Charlie, Dave)      *)
+(* ==================================================================== *)
+
+process
+  (* Session 1: Alice & Bob share private chain key *)
+  new chain_key_AB: bitstring;
+  
+  (* Session 2: Charlie & Dave share independent private chain key *)
+  new chain_key_CD: bitstring;
+  
+  (* Step 0: Target derivation for Session AB *)
+  let entropy_AB_0 = hkdf_expand(chain_key_AB, TAG_STEP_0) in
+  let ed_seed_AB_0 = get_ed_seed(entropy_AB_0) in
+  let target_AB_0 = sha1(ed_pk(ed_derive_sk(ed_seed_AB_0))) in
+  let next_chain_AB = get_next_chain(entropy_AB_0) in
+  
+  (* Step 0: Target derivation for Session CD *)
+  let entropy_CD_0 = hkdf_expand(chain_key_CD, TAG_STEP_0) in
+  let ed_seed_CD_0 = get_ed_seed(entropy_CD_0) in
+  let target_CD_0 = sha1(ed_pk(ed_derive_sk(ed_seed_CD_0))) in
+  let next_chain_CD = get_next_chain(entropy_CD_0) in
+  
+  (* Step 1: Subsequent target derivation for Session AB *)
+  let entropy_AB_1 = hkdf_expand(next_chain_AB, TAG_STEP_1) in
+  let ed_seed_AB_1 = get_ed_seed(entropy_AB_1) in
+  let target_AB_1 = sha1(ed_pk(ed_derive_sk(ed_seed_AB_1))) in
+  
+  (* Step 1: Subsequent target derivation for Session CD *)
+  let entropy_CD_1 = hkdf_expand(next_chain_CD, TAG_STEP_1) in
+  let ed_seed_CD_1 = get_ed_seed(entropy_CD_1) in
+  let target_CD_1 = sha1(ed_pk(ed_derive_sk(ed_seed_CD_1))) in
+  
+  (* Attacker knows participants' identities Alice, Bob, Charlie, Dave *)
+  out(c_pub, (Alice, Bob, Charlie, Dave));
+  
+  (* Public DHT observer sees targets emitted by choice[Session_AB, Session_CD] *)
+  out(c_pub, choice[target_AB_0, target_CD_0]);
+  out(c_pub, choice[target_AB_1, target_CD_1])

@@ -1,0 +1,117 @@
+(* ==================================================================== *)
+(* PQChat.DHT Protocol Formal Verification: (c) Post-Compromise Security *)
+(* Proves that after an adversary completely compromises the ratchet     *)
+(* state (ChainKey), an ephemeral ML-KEM-512 rekey restores secrecy      *)
+(* (self-healing / post-compromise security).                            *)
+(* ==================================================================== *)
+
+type kem_skey.
+type kem_pkey.
+type kem_ct.
+type ed_skey.
+type ed_pkey.
+
+(* --- ML-KEM-512 Functions --- *)
+fun kem_pk(kem_skey): kem_pkey.
+fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
+fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
+reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Ed25519 Functions --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+fun ed_sign(ed_skey, bitstring): bitstring.
+reduc forall sk: ed_skey, m: bitstring; ed_verify(ed_pk(sk), m, ed_sign(sk, m)) = true.
+
+(* --- Hash & KDF --- *)
+fun sha1(ed_pkey): bitstring.
+fun hkdf_extract(bitstring, bitstring): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_msg_key(bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- AEAD (AES-256-GCM) --- *)
+fun aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
+  aead_dec(k, iv, aead_enc(k, iv, pt, aad), aad) = pt.
+
+(* --- Protocol Constants --- *)
+const TAG_REKEY_STEP: bitstring.
+const MSG_TYPE_TXT: bitstring.
+const MSG_TYPE_REKEY_OFFER: bitstring.
+const MSG_TYPE_REKEY_RESP: bitstring.
+
+(* --- Channels --- *)
+free c_dht: channel.             (* Public untrusted DHT transport *)
+free c_leak: channel.            (* State compromise channel *)
+
+(* --- Secrets to Prove Confidential --- *)
+free secret_new_chain_key: bitstring [private].
+free secret_msg_post_rekey: bitstring [private].
+
+(* ==================================================================== *)
+(* Security Queries                                                     *)
+(* ==================================================================== *)
+
+(* Goal (c): Post-Compromise Security of New Chain Key *)
+query attacker(secret_new_chain_key).
+
+(* Goal (c): Post-Compromise Security of messages sent after ML-KEM rekey *)
+query attacker(secret_msg_post_rekey).
+
+(* ==================================================================== *)
+(* Protocol Process                                                     *)
+(* ==================================================================== *)
+
+process
+  (* 1. Initial chain key exists *)
+  new chain_key_old: bitstring;
+  
+  (* 2. ADVERSARY COMPROMISE: Attacker learns chain_key_old *)
+  out(c_leak, chain_key_old);
+  
+  (* 3. PQC REKEY EPOCH: Alice generates fresh ML-KEM-512 keypair *)
+  new sk_rekey: kem_skey;
+  let pk_rekey = kem_pk(sk_rekey) in
+  
+  (* Alice sends Rekey Offer (Type 0x03) over public DHT *)
+  out(c_dht, (MSG_TYPE_REKEY_OFFER, pk_rekey));
+  
+  (* 4. Bob receives Rekey Offer and encapsulates fresh shared secret *)
+  in(c_dht, (=MSG_TYPE_REKEY_OFFER, recv_pk_rekey: kem_pkey));
+  new r_rekey: bitstring;
+  let ct_rekey = kem_encap_ct(recv_pk_rekey, r_rekey) in
+  let ss_rekey_bob = kem_encap_ss(recv_pk_rekey, r_rekey) in
+  
+  (* Bob sends Rekey Response (Type 0x04) over DHT *)
+  out(c_dht, (MSG_TYPE_REKEY_RESP, ct_rekey));
+  
+  (* Bob derives new healed chain key *)
+  let new_chain_key_bob = hkdf_extract(chain_key_old, ss_rekey_bob) in
+  
+  (* 5. Alice receives Rekey Response and decapsulates *)
+  in(c_dht, (=MSG_TYPE_REKEY_RESP, recv_ct_rekey: kem_ct));
+  let ss_rekey_alice = kem_decap(sk_rekey, recv_ct_rekey) in
+  
+  (* Alice derives new healed chain key *)
+  let new_chain_key_alice = hkdf_extract(chain_key_old, ss_rekey_alice) in
+  
+  (* 6. Alice sends post-rekey message *)
+  let entropy_post = hkdf_expand(new_chain_key_alice, TAG_REKEY_STEP) in
+  let msg_key_post = get_msg_key(entropy_post) in
+  let ed_seed_post = get_ed_seed(entropy_post) in
+  let ed_sk_post = ed_derive_sk(ed_seed_post) in
+  let ed_pk_post = ed_pk(ed_sk_post) in
+  let target_post = sha1(ed_pk_post) in
+  
+  new iv_post: bitstring;
+  let aad_post = (target_post, MSG_TYPE_TXT) in
+  let c_post = aead_enc(msg_key_post, iv_post, secret_msg_post_rekey, aad_post) in
+  let sig_post = ed_sign(ed_sk_post, (target_post, c_post)) in
+  
+  out(c_dht, (target_post, c_post, iv_post, sig_post));
+  
+  (* Canary to test secrecy of new healed chain key *)
+  new iv_canary: bitstring;
+  out(c_dht, aead_enc(new_chain_key_alice, iv_canary, secret_new_chain_key, TAG_REKEY_STEP))

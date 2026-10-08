@@ -1,0 +1,187 @@
+(* ==================================================================== *)
+(* PQChat.DHT Protocol Formal Verification: (a) Secrecy & Auth          *)
+(* Cryptographic Primitives: ML-KEM-512, HKDF-SHA512, AES-256-GCM,      *)
+(* Ed25519 (BEP 44 Transport & Key Hopping Target Derivation)           *)
+(* ==================================================================== *)
+
+type kem_skey.
+type kem_pkey.
+type kem_ct.
+type ed_skey.
+type ed_pkey.
+
+(* --- ML-KEM-512 Cryptographic Functions --- *)
+fun kem_pk(kem_skey): kem_pkey.
+fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
+fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
+reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Ed25519 Ephemeral Signature & Key Derivation --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+fun ed_sign(ed_skey, bitstring): bitstring.
+reduc forall sk: ed_skey, m: bitstring; ed_verify(ed_pk(sk), m, ed_sign(sk, m)) = true.
+
+(* --- Hash, HMAC & HKDF --- *)
+fun sha1(ed_pkey): bitstring.
+fun hmac(bitstring, bitstring): bitstring.
+fun hkdf_extract(bitstring, bitstring): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_msg_key(bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- AEAD (AES-256-GCM) --- *)
+fun aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
+  aead_dec(k, iv, aead_enc(k, iv, pt, aad), aad) = pt.
+
+(* --- Protocol Constants --- *)
+const TAG_RENDEZVOUS: bitstring.
+const TAG_KEY_CONFIRM: bitstring.
+const TAG_A2B: bitstring.
+const TAG_B2A: bitstring.
+const TAG_STEP_0: bitstring.
+const MSG_TYPE_TXT: bitstring.
+
+(* --- Channels --- *)
+free c_dht: channel.             (* Public untrusted DHT transport (Dolev-Yao attacker) *)
+free c_qr: channel [private].    (* Authentic out-of-band visual QR scan *)
+
+(* --- Secrets to Prove Confidential --- *)
+free secret_chain_A2B: bitstring [private].
+free secret_chain_B2A: bitstring [private].
+free secret_msg_A2B: bitstring [private].
+free secret_msg_B2A: bitstring [private].
+
+(* --- Correspondence Events --- *)
+event AliceStarted(kem_pkey, bitstring).
+event BobFinished(kem_pkey, bitstring, bitstring, bitstring).
+event AliceFinished(kem_pkey, bitstring, bitstring, bitstring).
+event AliceSentMsg(bitstring, bitstring).
+event BobRecvMsg(bitstring, bitstring).
+
+(* ==================================================================== *)
+(* Security Queries                                                     *)
+(* ==================================================================== *)
+
+(* Goal (a): Secrecy of initial and ratchet ChainKeys *)
+query attacker(secret_chain_A2B).
+query attacker(secret_chain_B2A).
+
+(* Goal (a): Secrecy of transmitted payloads on both tracks *)
+query attacker(secret_msg_A2B).
+query attacker(secret_msg_B2A).
+
+(* Key Confirmation & Handshake Agreement *)
+query pkA: kem_pkey, seed: bitstring, ckA2B: bitstring, ckB2A: bitstring;
+  inj-event(AliceFinished(pkA, seed, ckA2B, ckB2A)) ==> inj-event(BobFinished(pkA, seed, ckA2B, ckB2A)).
+
+(* ==================================================================== *)
+(* Protocol Roles                                                       *)
+(* ==================================================================== *)
+
+let processAlice =
+  (* 1. Alice generates ML-KEM-512 keypair and Seed_init *)
+  new sk_A: kem_skey;
+  let pk_A = kem_pk(sk_A) in
+  new seed_init: bitstring;
+  event AliceStarted(pk_A, seed_init);
+  
+  (* 2. Alice presents authentic visual QR code (pk_A || Seed_init) *)
+  out(c_qr, (pk_A, seed_init));
+  
+  (* 3. Alice derives rendezvous Target_0 *)
+  let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
+  
+  (* 4. Alice receives Type 0x01 Handshake packet from DHT Target_0 *)
+  in(c_dht, (=target_0, ct_B: kem_ct, salt: bitstring, auth_tag: bitstring));
+  
+  (* 5. Alice decapsulates and derives secrets with transcript binding *)
+  let ss_kem = kem_decap(sk_A, ct_B) in
+  let ss_init = hkdf_extract(salt, ss_kem) in
+  let conf_key = hkdf_expand(ss_init, TAG_KEY_CONFIRM) in
+  let transcript = (pk_A, ct_B, seed_init, salt) in
+  
+  (* 6. Verify Key Confirmation *)
+  if auth_tag = hmac(conf_key, transcript) then
+  let chain_key_A2B = hkdf_expand(ss_init, TAG_A2B) in
+  let chain_key_B2A = hkdf_expand(ss_init, TAG_B2A) in
+  event AliceFinished(pk_A, seed_init, chain_key_A2B, chain_key_B2A);
+  
+  (* 7. Alice initiates Track A -> B: Message 0 *)
+  let entropy_0 = hkdf_expand(chain_key_A2B, TAG_STEP_0) in
+  let msg_key_0 = get_msg_key(entropy_0) in
+  let ed_seed_0 = get_ed_seed(entropy_0) in
+  let next_chain_A2B = get_next_chain(entropy_0) in
+  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
+  let ed_pk_0 = ed_pk(ed_sk_0) in
+  let target_1 = sha1(ed_pk_0) in
+  
+  new iv_0: bitstring;
+  let aad_0 = (target_1, MSG_TYPE_TXT) in
+  let ciphertext_0 = aead_enc(msg_key_0, iv_0, secret_msg_A2B, aad_0) in
+  let sig_0 = ed_sign(ed_sk_0, (target_1, ciphertext_0)) in
+  
+  event AliceSentMsg(target_1, secret_msg_A2B);
+  out(c_dht, (target_1, ciphertext_0, iv_0, sig_0));
+  
+  (* Canaries to test secrecy of derived chain keys *)
+  new iv_canary_1: bitstring;
+  new iv_canary_2: bitstring;
+  out(c_dht, aead_enc(chain_key_A2B, iv_canary_1, secret_chain_A2B, TAG_A2B));
+  out(c_dht, aead_enc(chain_key_B2A, iv_canary_2, secret_chain_B2A, TAG_B2A)).
+
+let processBob =
+  (* 1. Bob scans QR code *)
+  in(c_qr, (pk_A: kem_pkey, seed_init: bitstring));
+  
+  (* 2. Bob encapsulates ML-KEM-512 shared secret *)
+  new r_kem: bitstring;
+  let ct_B = kem_encap_ct(pk_A, r_kem) in
+  let ss_kem = kem_encap_ss(pk_A, r_kem) in
+  new salt: bitstring;
+  let ss_init = hkdf_extract(salt, ss_kem) in
+  let conf_key = hkdf_expand(ss_init, TAG_KEY_CONFIRM) in
+  let transcript = (pk_A, ct_B, seed_init, salt) in
+  let auth_tag = hmac(conf_key, transcript) in
+  
+  (* 3. Bob derives dual chain keys and records completion *)
+  let chain_key_A2B = hkdf_expand(ss_init, TAG_A2B) in
+  let chain_key_B2A = hkdf_expand(ss_init, TAG_B2A) in
+  event BobFinished(pk_A, seed_init, chain_key_A2B, chain_key_B2A);
+
+  (* 4. Bob publishes Handshake packet to Target_0 *)
+  let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
+  out(c_dht, (target_0, ct_B, salt, auth_tag));
+  
+  (* 5. Bob receives Message 0 on Track A -> B *)
+  let entropy_0 = hkdf_expand(chain_key_A2B, TAG_STEP_0) in
+  let msg_key_0 = get_msg_key(entropy_0) in
+  let ed_seed_0 = get_ed_seed(entropy_0) in
+  let next_chain_A2B = get_next_chain(entropy_0) in
+  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
+  let ed_pk_0 = ed_pk(ed_sk_0) in
+  let target_1 = sha1(ed_pk_0) in
+  
+  in(c_dht, (=target_1, ciphertext_0: bitstring, iv_0: bitstring, sig_0: bitstring));
+  if ed_verify(ed_pk_0, (target_1, ciphertext_0), sig_0) = true then
+  let aad_0 = (target_1, MSG_TYPE_TXT) in
+  let recv_msg = aead_dec(msg_key_0, iv_0, ciphertext_0, aad_0) in
+  event BobRecvMsg(target_1, recv_msg);
+  
+  (* 6. Bob sends reply Message 0 on Track B -> A *)
+  let entropy_B0 = hkdf_expand(chain_key_B2A, TAG_STEP_0) in
+  let msg_key_B0 = get_msg_key(entropy_B0) in
+  let ed_seed_B0 = get_ed_seed(entropy_B0) in
+  let ed_sk_B0 = ed_derive_sk(ed_seed_B0) in
+  let ed_pk_B0 = ed_pk(ed_sk_B0) in
+  let target_B1 = sha1(ed_pk_B0) in
+  new iv_B0: bitstring;
+  let aad_B0 = (target_B1, MSG_TYPE_TXT) in
+  let ciphertext_B0 = aead_enc(msg_key_B0, iv_B0, secret_msg_B2A, aad_B0) in
+  let sig_B0 = ed_sign(ed_sk_B0, (target_B1, ciphertext_B0)) in
+  out(c_dht, (target_B1, ciphertext_B0, iv_B0, sig_B0)).
+
+process
+  (!processAlice) | (!processBob)
