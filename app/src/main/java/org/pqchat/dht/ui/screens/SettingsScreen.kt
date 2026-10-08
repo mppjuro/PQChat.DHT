@@ -210,6 +210,38 @@ fun SettingsScreen(
                         defaultMillis = DefaultIntervals.DOZE_SLEEP,
                         onSelect = { viewModel.setIntervalDozeSleep(it) }
                     )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Optional Foreground Service (Continuous Low-Latency Listening)
+                    val isFgServiceEnabled by viewModel.isForegroundServiceEnabled.collectAsState()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Tryb ciągłego nasłuchu (Foreground Service)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Podtrzymuje stały serwis w tle z powiadomieniem o niskim opóźnieniu (~10s) kosztem większego zużycia baterii.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isFgServiceEnabled,
+                            onCheckedChange = { viewModel.setForegroundServiceEnabled(it) }
+                        )
+                    }
                 }
             }
 

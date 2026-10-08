@@ -167,4 +167,60 @@ class AdaptivePollingManagerTest {
         assertFalse("isSyncing should remain false", manager!!.isSyncing.value)
         assertTrue("Countdown should be adjusted to new interval (<= 10s)", manager!!.nextPollInMs.value in 1L..10_000L)
     }
+
+    @Test
+    fun testTriggerImmediatePoll_inDozeSleep_executesPollAndResetsIsSyncing() = runBlocking {
+        var pollCallCount = 0
+        val gate = CompletableDeferred<Unit>()
+
+        manager = AdaptivePollingManager {
+            pollCallCount++
+            gate.await()
+        }
+
+        manager!!.onDeviceScreenOff()
+        assertEquals(AdaptivePollingManager.PollingState.DOZE_SLEEP, manager!!.currentState.value)
+        assertFalse("isSyncing should be false in DOZE_SLEEP", manager!!.isSyncing.value)
+
+        // Trigger immediate poll while in DOZE_SLEEP
+        manager!!.triggerImmediatePoll()
+        assertTrue("isSyncing should be true after triggering immediate poll in Doze", manager!!.isSyncing.value)
+
+        // Complete the poll
+        gate.complete(Unit)
+
+        var waited = 0
+        while (manager!!.isSyncing.value && waited < 2000) {
+            delay(50)
+            waited += 50
+        }
+
+        assertFalse("isSyncing must be reset to false after Doze poll finishes", manager!!.isSyncing.value)
+        assertEquals("Poll should have been executed once", 1, pollCallCount)
+    }
+
+    @Test
+    fun testTriggerImmediatePoll_inDozeSleep_unresponsiveNetworkTimesOutAndResetsIsSyncing() = runBlocking {
+        manager = AdaptivePollingManager {
+            // Simulate unresponsive network that never responds
+            delay(10_000L)
+        }
+        manager!!.immediatePollTimeoutMs = 150L // short timeout for test
+
+        manager!!.onDeviceScreenOff()
+        assertEquals(AdaptivePollingManager.PollingState.DOZE_SLEEP, manager!!.currentState.value)
+        assertFalse(manager!!.isSyncing.value)
+
+        manager!!.triggerImmediatePoll()
+        assertTrue("isSyncing should be true immediately after trigger", manager!!.isSyncing.value)
+
+        // Wait for timeout to fire (150ms + margin)
+        var waited = 0
+        while (manager!!.isSyncing.value && waited < 2000) {
+            delay(50)
+            waited += 50
+        }
+
+        assertFalse("isSyncing must be reset to false after timeout, preventing infinite spinner hang", manager!!.isSyncing.value)
+    }
 }

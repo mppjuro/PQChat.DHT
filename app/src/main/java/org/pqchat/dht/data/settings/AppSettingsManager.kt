@@ -40,14 +40,14 @@ object DefaultIntervals {
     const val DOZE_SLEEP = 900_000L      // 15 minut
 }
 
-class AppSettingsManager(context: Context) {
+class AppSettingsManager(context: Context? = null) {
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("pqchat_settings", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences? =
+        context?.getSharedPreferences("pqchat_settings", Context.MODE_PRIVATE)
 
     private val _themeMode = MutableStateFlow(
         try {
-            ThemeMode.valueOf(prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name)
+            ThemeMode.valueOf(prefs?.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name)
         } catch (_: Exception) {
             ThemeMode.SYSTEM
         }
@@ -55,48 +55,58 @@ class AppSettingsManager(context: Context) {
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
 
     private val _intervalForegroundChat = MutableStateFlow(
-        prefs.getLong(KEY_INTERVAL_FOREGROUND, DefaultIntervals.FOREGROUND_CHAT)
+        prefs?.getLong(KEY_INTERVAL_FOREGROUND, DefaultIntervals.FOREGROUND_CHAT) ?: DefaultIntervals.FOREGROUND_CHAT
     )
     val intervalForegroundChat: StateFlow<Long> = _intervalForegroundChat.asStateFlow()
 
     private val _intervalAppActive = MutableStateFlow(
-        prefs.getLong(KEY_INTERVAL_APP_ACTIVE, DefaultIntervals.APP_ACTIVE)
+        prefs?.getLong(KEY_INTERVAL_APP_ACTIVE, DefaultIntervals.APP_ACTIVE) ?: DefaultIntervals.APP_ACTIVE
     )
     val intervalAppActive: StateFlow<Long> = _intervalAppActive.asStateFlow()
 
     private val _intervalBackgroundIdle = MutableStateFlow(
-        prefs.getLong(KEY_INTERVAL_BG_IDLE, DefaultIntervals.BACKGROUND_IDLE)
+        prefs?.getLong(KEY_INTERVAL_BG_IDLE, DefaultIntervals.BACKGROUND_IDLE) ?: DefaultIntervals.BACKGROUND_IDLE
     )
     val intervalBackgroundIdle: StateFlow<Long> = _intervalBackgroundIdle.asStateFlow()
 
     private val _intervalDozeSleep = MutableStateFlow(
-        prefs.getLong(KEY_INTERVAL_DOZE, DefaultIntervals.DOZE_SLEEP)
+        prefs?.getLong(KEY_INTERVAL_DOZE, DefaultIntervals.DOZE_SLEEP) ?: DefaultIntervals.DOZE_SLEEP
     )
     val intervalDozeSleep: StateFlow<Long> = _intervalDozeSleep.asStateFlow()
 
+    private val _isForegroundServiceEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_FOREGROUND_SERVICE, false) ?: false
+    )
+    val isForegroundServiceEnabled: StateFlow<Boolean> = _isForegroundServiceEnabled.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
-        prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+        prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
     }
 
     fun setIntervalForegroundChat(millis: Long) {
-        prefs.edit().putLong(KEY_INTERVAL_FOREGROUND, millis).apply()
+        prefs?.edit()?.putLong(KEY_INTERVAL_FOREGROUND, millis)?.apply()
         _intervalForegroundChat.value = millis
     }
 
     fun setIntervalAppActive(millis: Long) {
-        prefs.edit().putLong(KEY_INTERVAL_APP_ACTIVE, millis).apply()
+        prefs?.edit()?.putLong(KEY_INTERVAL_APP_ACTIVE, millis)?.apply()
         _intervalAppActive.value = millis
     }
 
     fun setIntervalBackgroundIdle(millis: Long) {
-        prefs.edit().putLong(KEY_INTERVAL_BG_IDLE, millis).apply()
+        prefs?.edit()?.putLong(KEY_INTERVAL_BG_IDLE, millis)?.apply()
         _intervalBackgroundIdle.value = millis
     }
 
     fun setIntervalDozeSleep(millis: Long) {
-        prefs.edit().putLong(KEY_INTERVAL_DOZE, millis).apply()
+        prefs?.edit()?.putLong(KEY_INTERVAL_DOZE, millis)?.apply()
         _intervalDozeSleep.value = millis
+    }
+
+    fun setForegroundServiceEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_FOREGROUND_SERVICE, enabled)?.apply()
+        _isForegroundServiceEnabled.value = enabled
     }
 
     companion object {
@@ -105,5 +115,6 @@ class AppSettingsManager(context: Context) {
         private const val KEY_INTERVAL_APP_ACTIVE = "interval_app_active"
         private const val KEY_INTERVAL_BG_IDLE = "interval_bg_idle"
         private const val KEY_INTERVAL_DOZE = "interval_doze"
+        private const val KEY_FOREGROUND_SERVICE = "foreground_service_enabled"
     }
 }

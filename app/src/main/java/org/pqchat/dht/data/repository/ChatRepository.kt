@@ -53,6 +53,8 @@ class ChatRepository(
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
 
+    var onIncomingMessageDelivered: ((contactId: String, textContent: String, isImage: Boolean) -> Unit)? = null
+
     fun getContactMutex(contactId: String): Mutex =
         contactMutexes.computeIfAbsent(contactId) { Mutex() }
 
@@ -600,6 +602,7 @@ class ChatRepository(
                                     status = "DELIVERED"
                                 )
                             )
+                            onIncomingMessageDelivered?.invoke(contactId, textPayload.text, false)
                         }
                         bitmap.markReceived(sk.slotIndex)
                         contactDao.updateIncomingStateWithBitmap(
@@ -828,6 +831,7 @@ class ChatRepository(
                                 bitmap = bitmap.toByteArray()
                             )
                             preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                            onIncomingMessageDelivered?.invoke(contactId, textPayload.text, false)
                         }
                     }
                     true
@@ -1009,6 +1013,7 @@ class ChatRepository(
                                 bitmap = bitmap.toByteArray()
                             )
                             preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                            onIncomingMessageDelivered?.invoke(contactId, "[Image File - ${fullData.size} bytes]", true)
                         }
                     }
                     true

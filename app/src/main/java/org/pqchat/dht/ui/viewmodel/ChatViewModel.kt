@@ -24,27 +24,15 @@ import java.util.UUID
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database = AppDatabase.getInstance(application)
-    val dhtLeafNode = DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
-    val repository = ChatRepository(database, dhtLeafNode)
+    private val app = application as? org.pqchat.dht.PQChatApplication
+    private val database = app?.database ?: AppDatabase.getInstance(application)
+    val dhtLeafNode = app?.dhtLeafNode ?: DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
+    val repository = app?.repository ?: ChatRepository(database, dhtLeafNode)
 
-    val trafficGenerator = PoissonTrafficGenerator(dhtLeafNode)
-    val pollingManager = AdaptivePollingManager(
-        onPollRequested = { contactId ->
-            if (contactId != null) {
-                repository.pollContactIncoming(contactId)
-            } else {
-                repository.pollAllContactsIncoming()
-            }
-        },
-        onIdlePreWarm = { contactId ->
-            if (contactId != null) {
-                repository.preWarmContactNextTarget(contactId)
-            } else {
-                repository.preWarmAllContactsNextTargets()
-            }
-        }
-    )
+    val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(dhtLeafNode)
+    val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(application)
+    val pollingScheduler = app?.pollingScheduler ?: org.pqchat.dht.service.PollingScheduler(application, repository, dhtLeafNode, settingsManager)
+    val pollingManager = pollingScheduler.pollingManager
 
     val contacts: StateFlow<List<ContactEntity>> = repository.getAllContactsFlow()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -67,6 +55,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val nextPollInMs = pollingManager.nextPollInMs
     val isSyncing = pollingManager.isSyncing
 
+    val isForegroundServiceEnabled = settingsManager.isForegroundServiceEnabled
+
     private val _aliceHandshakeState = MutableStateFlow<HandshakeManager.AliceInitResult?>(null)
     val aliceHandshakeState: StateFlow<HandshakeManager.AliceInitResult?> = _aliceHandshakeState.asStateFlow()
 
@@ -76,8 +66,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusNotification = MutableStateFlow<String?>(null)
     val statusNotification: StateFlow<String?> = _statusNotification.asStateFlow()
 
-    val settingsManager = org.pqchat.dht.data.settings.AppSettingsManager(application)
-
     val themeMode: StateFlow<org.pqchat.dht.data.settings.ThemeMode> = settingsManager.themeMode
     val intervalForegroundChat: StateFlow<Long> = settingsManager.intervalForegroundChat
     val intervalAppActive: StateFlow<Long> = settingsManager.intervalAppActive
@@ -85,10 +73,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val intervalDozeSleep: StateFlow<Long> = settingsManager.intervalDozeSleep
 
     init {
-        dhtLeafNode.start()
-        trafficGenerator.start()
-        syncPollingIntervals()
-        pollingManager.onAppForegrounded()
+        if (app == null) {
+            dhtLeafNode.start()
+            trafficGenerator.start()
+        }
+        pollingScheduler.start()
+        pollingScheduler.onAppForegrounded()
 
         // Ensure Self-Notes / DHT Loopback contact exists and pre-warm targets
         viewModelScope.launch {
@@ -376,6 +366,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setForegroundServiceEnabled(enabled: Boolean) {
+        pollingScheduler.setForegroundServiceEnabled(enabled)
+    }
+
     fun dismissNotification() {
         _statusNotification.value = null
     }
@@ -384,8 +378,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         bobRepublishJob?.cancel()
         _aliceHandshakeState.value?.destroySensitiveKeys()
-        dhtLeafNode.stop()
-        trafficGenerator.stop()
-        pollingManager.stop()
+        if (app == null) {
+            dhtLeafNode.stop()
+            trafficGenerator.stop()
+            pollingScheduler.stop()
+        }
     }
 }

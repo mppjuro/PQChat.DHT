@@ -33,9 +33,9 @@ class MainActivity : ComponentActivity() {
         // Observe Lifecycle for Adaptive Polling
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.pollingManager.onAppForegrounded()
-                Lifecycle.Event.ON_PAUSE -> viewModel.pollingManager.onAppMinimized()
-                Lifecycle.Event.ON_STOP -> viewModel.pollingManager.onDeviceScreenOff()
+                Lifecycle.Event.ON_RESUME -> viewModel.pollingScheduler.onAppForegrounded()
+                Lifecycle.Event.ON_PAUSE -> viewModel.pollingScheduler.onAppMinimized()
+                Lifecycle.Event.ON_STOP -> viewModel.pollingScheduler.onDeviceScreenOff()
                 else -> {}
             }
         })
