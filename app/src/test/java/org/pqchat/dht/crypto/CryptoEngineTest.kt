@@ -5,6 +5,7 @@ import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider
 import org.junit.Assert.*
 import org.junit.BeforeClass
 import org.junit.Test
+import org.pqchat.dht.dht.bencode.Bencode
 import java.security.Security
 
 class CryptoEngineTest {
@@ -99,7 +100,7 @@ class CryptoEngineTest {
     }
 
     @Test
-    fun testBinaryFrameCodecTextMessageExact1000Bytes() {
+    fun testBinaryFrameCodecTextMessageExactPayloadSize() {
         val key = CryptoUtils.secureRandomBytes(32)
         val testText = "Zażółć gęślą jaźń! 🛡️ Post-quantum metadata-free chat."
 
@@ -112,7 +113,7 @@ class CryptoEngineTest {
         assertEquals(BinaryFrameCodec.CIPHERTEXT_SIZE, encodedPlaintext.size)
 
         val frame = BinaryFrameCodec.packAeadFrame(key, encodedPlaintext)
-        assertEquals("Total frame must be EXACTLY ${BinaryFrameCodec.TOTAL_FRAME_SIZE} bytes", BinaryFrameCodec.TOTAL_FRAME_SIZE, frame.size)
+        assertEquals("Total frame must be EXACTLY ${BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES} bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, frame.size)
 
         val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame)
         assertEquals(BinaryFrameCodec.TYPE_TEXT_MESSAGE, decoded.msgType)
@@ -202,5 +203,68 @@ class CryptoEngineTest {
         assertEquals(3, payload.chunkIndex)
         assertEquals(10, payload.totalChunks)
         assertArrayEquals(fakePngChunk, payload.data)
+    }
+
+    @Test
+    fun testAllBinaryFrameCodecGeneratedFramesFitIn1000BytesAfterBencodeEncoding() {
+        val key = CryptoUtils.secureRandomBytes(32)
+
+        // 1. Handshake Finalize (Type 0x01)
+        val ct1 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_CIPHERTEXT_SIZE)
+        val salt1 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
+        val plain1 = BinaryFrameCodec.encodeHandshakeFinalize(0, 0, System.currentTimeMillis(), ct1, salt1)
+        val frame1 = BinaryFrameCodec.packAeadFrame(key, plain1)
+
+        // 2. Text Message - short text (Type 0x02)
+        val plain2 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Post-quantum DHT chat")
+        val frame2 = BinaryFrameCodec.packAeadFrame(key, plain2)
+
+        // 3. Text Message - maximum allowable text size (Type 0x02)
+        val maxText = "X".repeat(BinaryFrameCodec.T2_MAX_TEXT_SIZE)
+        val plain3 = BinaryFrameCodec.encodeTextMessage(2, 1, System.currentTimeMillis(), maxText)
+        val frame3 = BinaryFrameCodec.packAeadFrame(key, plain3)
+
+        // 4. Rekey Offer (Type 0x03)
+        val pk3 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T3_PUBLIC_KEY_SIZE)
+        val plain4 = BinaryFrameCodec.encodeRekeyOffer(50, 49, System.currentTimeMillis(), 1L, pk3)
+        val frame4 = BinaryFrameCodec.packAeadFrame(key, plain4)
+
+        // 5. Rekey Response (Type 0x04)
+        val ct4 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T4_CIPHERTEXT_SIZE)
+        val plain5 = BinaryFrameCodec.encodeRekeyResponse(25, 50, System.currentTimeMillis(), 1L, ct4)
+        val frame5 = BinaryFrameCodec.packAeadFrame(key, plain5)
+
+        // 6. Chunk Data - max chunk size (Type 0x05)
+        val transferId = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T5_TRANSFER_ID_SIZE)
+        val maxChunk = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T5_MAX_CHUNK_SIZE)
+        val plain6 = BinaryFrameCodec.encodeChunkData(5, 2, System.currentTimeMillis(), transferId, 0, 1, maxChunk)
+        val frame6 = BinaryFrameCodec.packAeadFrame(key, plain6)
+
+        val generatedFrames = listOf(
+            "HandshakeFinalize" to frame1,
+            "TextMessageShort" to frame2,
+            "TextMessageMax" to frame3,
+            "RekeyOffer" to frame4,
+            "RekeyResponse" to frame5,
+            "ChunkDataMax" to frame6
+        )
+
+        for ((name, frame) in generatedFrames) {
+            // Raw frame payload must match MAX_FRAME_PAYLOAD_BYTES (900 bytes)
+            assertEquals("$name: Raw frame payload must be MAX_FRAME_PAYLOAD_BYTES",
+                BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, frame.size)
+
+            // Bencode encoding of byte string: "<len>:<data>" -> "900:" (4B) + 900B = 904B
+            val bencodedValue = Bencode.encode(frame)
+            assertTrue(
+                "$name: Bencoded value size (${bencodedValue.size} bytes) must NOT exceed MAX_DHT_VALUE_BYTES (${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes)",
+                bencodedValue.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES
+            )
+            assertEquals(
+                "$name: Bencoded byte string size for 900B payload should be exactly 904 bytes",
+                904,
+                bencodedValue.size
+            )
+        }
     }
 }

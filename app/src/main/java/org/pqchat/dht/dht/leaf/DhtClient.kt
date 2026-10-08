@@ -47,13 +47,22 @@ interface DhtClient {
         timeoutMs: Long = DhtLeafNode.FAST_GET_TIMEOUT_MS
     ): DhtLeafNode.MutableItem?
 
+    companion object {
+        /**
+         * Constant sequence number used for BEP 44 mutable puts across unique ephemeral targets.
+         * Using a constant seq prevents metadata leakage (such as conversation counters or file transfer sizes)
+         * to public DHT nodes.
+         */
+        const val DEFAULT_MUTABLE_SEQ: Long = 1L
+    }
+
     /**
      * BEP 44 put query to store mutable item.
      */
     suspend fun putMutable(
         target: ByteArray,
         v: ByteArray,
-        seq: Long,
+        seq: Long = DEFAULT_MUTABLE_SEQ,
         salt: ByteArray? = null,
         sk: ByteArray,
         skipLocalStore: Boolean = false

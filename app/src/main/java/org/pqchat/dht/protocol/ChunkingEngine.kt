@@ -20,11 +20,14 @@ object ChunkingEngine {
         val totalChunks: Int,
         val target: ByteArray,
         val edPrivateKeySeed: ByteArray,
-        val frame1000: ByteArray
-    )
+        val frame: ByteArray
+    ) {
+        @Deprecated("Use frame instead", ReplaceWith("frame"))
+        val frame1000: ByteArray get() = frame
+    }
 
     /**
-     * Splits data into 900-byte chunks and encodes each into a 1000-byte Type 0x05 frame.
+     * Splits data into chunks and encodes each into an AEAD Type 0x05 frame.
      */
     fun splitData(
         data: ByteArray,
@@ -48,8 +51,8 @@ object ChunkingEngine {
 
             val subMsgKey = deriveChunkMsgKey(currentMsgKey, j)
 
-            // Encode into 1000-byte AEAD frame
-            val plaintext972 = BinaryFrameCodec.encodeChunkData(
+            // Encode into AEAD frame
+            val plaintext = BinaryFrameCodec.encodeChunkData(
                 seqNum = seqNum,
                 ackNum = ackNum,
                 timestampUTC = System.currentTimeMillis(),
@@ -58,7 +61,7 @@ object ChunkingEngine {
                 totalChunks = totalChunks,
                 chunkData = chunkBytes
             )
-            val frame1000 = BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext972)
+            val frame = BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext)
 
             chunks.add(
                 ChunkItem(
@@ -67,7 +70,7 @@ object ChunkingEngine {
                     totalChunks = totalChunks,
                     target = subTarget,
                     edPrivateKeySeed = subEdSeed,
-                    frame1000 = frame1000
+                    frame = frame
                 )
             )
         }

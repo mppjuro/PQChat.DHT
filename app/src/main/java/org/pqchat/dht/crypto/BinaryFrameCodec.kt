@@ -4,12 +4,23 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 object BinaryFrameCodec {
-    const val TOTAL_FRAME_SIZE = 900
+    /**
+     * BEP 44 hard limit for the bencoded 'v' field (including bencode string length prefix "len:...").
+     */
+    const val MAX_DHT_VALUE_BYTES = 1000
+
+    /**
+     * Maximum binary frame payload size to guarantee that Bencode.encode(frame) <= MAX_DHT_VALUE_BYTES.
+     * For 900 bytes: "900:" (4 bytes) + 900 bytes = 904 bytes <= 1000 bytes.
+     */
+    const val MAX_FRAME_PAYLOAD_BYTES = 900
+
+    const val TOTAL_FRAME_SIZE = MAX_FRAME_PAYLOAD_BYTES
     const val IV_SIZE = 12
     const val TAG_SIZE = 16
-    const val CIPHERTEXT_SIZE = 872 // 900 - 12 - 16
+    const val CIPHERTEXT_SIZE = MAX_FRAME_PAYLOAD_BYTES - IV_SIZE - TAG_SIZE // 872
     const val INNER_HEADER_SIZE = 13
-    const val INNER_PAYLOAD_SIZE = 859 // 872 - 13
+    const val INNER_PAYLOAD_SIZE = CIPHERTEXT_SIZE - INNER_HEADER_SIZE // 859
 
     const val TYPE_HANDSHAKE_FINALIZE: Byte = 0x01
     const val TYPE_TEXT_MESSAGE: Byte = 0x02
@@ -242,35 +253,35 @@ object BinaryFrameCodec {
     }
 
     // ==========================================
-    // AEAD ENVELOPE (Creates exactly 1000B)
+    // AEAD ENVELOPE (Creates exactly MAX_FRAME_PAYLOAD_BYTES)
     // ==========================================
 
-    fun packAeadFrame(key: ByteArray, plaintext972: ByteArray): ByteArray {
-        require(plaintext972.size == CIPHERTEXT_SIZE)
+    fun packAeadFrame(key: ByteArray, plaintext: ByteArray): ByteArray {
+        require(plaintext.size == CIPHERTEXT_SIZE)
         val iv = CryptoUtils.secureRandomBytes(IV_SIZE)
-        val (tag, ciphertext) = AesGcmEngine.encrypt(key, iv, plaintext972)
+        val (tag, ciphertext) = AesGcmEngine.encrypt(key, iv, plaintext)
 
-        val frame = ByteArray(TOTAL_FRAME_SIZE)
+        val frame = ByteArray(MAX_FRAME_PAYLOAD_BYTES)
         System.arraycopy(iv, 0, frame, 0, IV_SIZE)
         System.arraycopy(tag, 0, frame, IV_SIZE, TAG_SIZE)
         System.arraycopy(ciphertext, 0, frame, IV_SIZE + TAG_SIZE, CIPHERTEXT_SIZE)
 
-        require(frame.size == TOTAL_FRAME_SIZE)
+        require(frame.size == MAX_FRAME_PAYLOAD_BYTES)
         return frame
     }
 
-    fun unpackAeadFrame(key: ByteArray, frame1000: ByteArray): FrameMessage {
-        require(frame1000.size == TOTAL_FRAME_SIZE) {
-            "Invalid frame size: ${frame1000.size}, expected $TOTAL_FRAME_SIZE"
+    fun unpackAeadFrame(key: ByteArray, frame: ByteArray): FrameMessage {
+        require(frame.size == MAX_FRAME_PAYLOAD_BYTES) {
+            "Invalid frame size: ${frame.size}, expected $MAX_FRAME_PAYLOAD_BYTES"
         }
 
         val iv = ByteArray(IV_SIZE)
         val tag = ByteArray(TAG_SIZE)
         val ciphertext = ByteArray(CIPHERTEXT_SIZE)
 
-        System.arraycopy(frame1000, 0, iv, 0, IV_SIZE)
-        System.arraycopy(frame1000, IV_SIZE, tag, 0, TAG_SIZE)
-        System.arraycopy(frame1000, IV_SIZE + TAG_SIZE, ciphertext, 0, CIPHERTEXT_SIZE)
+        System.arraycopy(frame, 0, iv, 0, IV_SIZE)
+        System.arraycopy(frame, IV_SIZE, tag, 0, TAG_SIZE)
+        System.arraycopy(frame, IV_SIZE + TAG_SIZE, ciphertext, 0, CIPHERTEXT_SIZE)
 
         val plaintext = AesGcmEngine.decrypt(key, iv, tag, ciphertext)
         require(plaintext.size == CIPHERTEXT_SIZE)

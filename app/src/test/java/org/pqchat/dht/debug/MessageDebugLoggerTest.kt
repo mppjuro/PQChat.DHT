@@ -27,8 +27,8 @@ class MessageDebugLoggerTest {
             val fakeChainKey = ByteArray(64) { 0x01 }
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
             val secretText = "TOP_SECRET_PLAINTEXT_SHOULD_NEVER_BE_LOGGED"
-            val plaintext972 = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), secretText)
-            val frame900 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
+            val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), secretText)
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
 
             // Attempt logging all types of sensitive messages
             MessageDebugLogger.logOutgoingTextMessage(
@@ -37,8 +37,8 @@ class MessageDebugLoggerTest {
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                plaintext972 = plaintext972,
-                frame900 = frame900
+                plaintext = plaintext,
+                frame = frame
             )
 
             MessageDebugLogger.logOutgoingRekeyOffer(
@@ -48,7 +48,7 @@ class MessageDebugLoggerTest {
                 seqNum = 0,
                 ackNum = 0,
                 mlKemPublicKey = ByteArray(800) { 0x02 },
-                frame900 = frame900
+                frame = frame
             )
 
             MessageDebugLogger.logIncomingAliceHandshakeFinalize(
@@ -56,7 +56,7 @@ class MessageDebugLoggerTest {
                 seq = 1L,
                 senderEdPublicKey = slot.edPublicKey,
                 senderSignature = ByteArray(64),
-                frame900 = frame900,
+                frame = frame,
                 seedInit = ByteArray(32) { 0x03 },
                 decapsulationSuccess = true
             )
@@ -83,8 +83,8 @@ class MessageDebugLoggerTest {
                 MessageDebugLogger.emitCount.set(0)
                 val fakeChainKey = ByteArray(64) { 0x01 }
                 val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
-                val plaintext972 = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
-                val frame900 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
+                val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
+                val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
 
                 MessageDebugLogger.logOutgoingTextMessage(
                     contactId = "debug_contact",
@@ -92,8 +92,8 @@ class MessageDebugLoggerTest {
                     slot = slot,
                     seqNum = 0,
                     ackNum = 0,
-                    plaintext972 = plaintext972,
-                    frame900 = frame900
+                    plaintext = plaintext,
+                    frame = frame
                 )
                 assertEquals("In release build, emit count must remain 0 even when isEnabled = true", 0, MessageDebugLogger.emitCount.get())
             } finally {
@@ -114,8 +114,8 @@ class MessageDebugLoggerTest {
 
             val fakeChainKey = ByteArray(64) { 0x01 }
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
-            val plaintext972 = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
-            val frame900 = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext972)
+            val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
 
             MessageDebugLogger.logOutgoingTextMessage(
                 contactId = "debug_contact",
@@ -123,8 +123,8 @@ class MessageDebugLoggerTest {
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                plaintext972 = plaintext972,
-                frame900 = frame900
+                plaintext = plaintext,
+                frame = frame
             )
 
             System.out.flush()

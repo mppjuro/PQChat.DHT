@@ -12,6 +12,7 @@ import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.db.ContactEntity
 import org.pqchat.dht.data.db.MessageEntity
 import org.pqchat.dht.data.repository.ChatRepository
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.ChunkingEngine
 import org.pqchat.dht.protocol.HandshakeManager
@@ -243,7 +244,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val session = HandshakeManager.aliceFinalize(
                             skA = aliceInit.skA,
                             seedInit = aliceInit.seedInit,
-                            frame1000 = item.v
+                            frame = item.v
                         )
 
                         org.pqchat.dht.debug.MessageDebugLogger.logIncomingAliceHandshakeFinalize(
@@ -251,7 +252,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             seq = item.seq,
                             senderEdPublicKey = item.k,
                             senderSignature = item.sig,
-                            frame900 = item.v,
+                            frame = item.v,
                             seedInit = aliceInit.seedInit,
                             decapsulationSuccess = true
                         )
@@ -296,16 +297,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
                     target = bobResult.target0,
-                    seq = 1L,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     edPrivateKeySeed = bobResult.edPrivateKeySeed,
-                    frame900 = bobResult.frame1000
+                    frame = bobResult.frame
                 )
 
                 // PUT to DHT Target_0
                 dhtLeafNode.putMutable(
                     target = bobResult.target0,
-                    v = bobResult.frame1000,
-                    seq = 1L,
+                    v = bobResult.frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = bobResult.edPrivateKeySeed
                 )
