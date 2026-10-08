@@ -1,0 +1,39 @@
+name: Remote DHT Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: 'Number of loopback trials or horizon'
+        required: false
+        default: '5'
+
+jobs:
+  real-bep44-remote-test:
+    name: Real BEP 44 Remote Integration Tests (Live BitTorrent DHT)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Real BEP 44 Remote Integration Tests
+        env:
+          RUN_REAL_DHT_TESTS: "true"
+        run: ./gradlew testDebugUnitTest -DrunRealDhtTests=true --tests "org.pqchat.dht.dht.integration.RealBep44RemoteIntegrationTest*"
+
+      - name: Upload Remote Test Report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: real-bep44-test-results
+          path: app/build/reports/tests/testDebugUnitTest/

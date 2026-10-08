@@ -4,13 +4,15 @@ Automated Measurement Harness for BitTorrent DHT Loopback & Retention Telemetry.
 
 Evaluates:
 1. PUT -> GET latency percentiles (p50, p90, p99) and Delivery Success Rate.
-2. Data retention across 1h, 2h, 6h, and 24h horizons (comparing with vs without republish).
+2. Data retention across 5min, 1h, 2h, 6h, 12h, and 24h horizons (comparing with vs without republish, N >= 300).
 3. Network environment profiles:
    - Stable Wi-Fi
    - Mobile LTE
    - Restrictive NAT / CGNAT
-4. Safe CSV export: Zero message content, zero cryptographic keys/seeds.
-5. Visualizations & summary report generation.
+4. Strict separation between MEASURED and SIMULATED telemetry.
+5. Removal of hardcoded artificial floors (e.g. max(0.85)).
+6. Safe CSV export: Zero message content, zero cryptographic keys/seeds.
+7. Visualizations & summary report generation.
 """
 
 import os
@@ -26,6 +28,11 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+
+# Payload size strictly matches BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES (900 bytes)
+MAX_FRAME_PAYLOAD_BYTES = 900
+BEP44_MAX_BENCODE_VALUE_BYTES = 1000
 
 
 @dataclass
@@ -78,6 +85,7 @@ PROFILES = {
 class TelemetryRecord:
     measurement_id: int
     timestamp_epoch_ms: int
+    data_source: str  # "MEASURED" or "SIMULATED"
     network_environment: str
     operation: str
     rtt_put_ms: float
@@ -128,7 +136,7 @@ def simulate_network_hop(profile: NetworkProfile, is_put: bool) -> Tuple[float, 
     return total_latency, success, retransmissions, nodes_contacted, nodes_responded
 
 
-def run_loopback_trial(measurement_id: int, profile: NetworkProfile) -> TelemetryRecord:
+def run_loopback_trial(measurement_id: int, profile: NetworkProfile, data_source: str = "SIMULATED") -> TelemetryRecord:
     """Executes a single loopback trial measuring PUT -> GET latency and delivery success."""
     t_now = int(time.time() * 1000)
 
@@ -148,11 +156,12 @@ def run_loopback_trial(measurement_id: int, profile: NetworkProfile) -> Telemetr
         delivery_success = False
         err_code = "PUT_TIMEOUT"
 
-    total_rtt = (put_rtt + get_rtt) if delivery_success else (put_rtt + get_rtt)
+    total_rtt = (put_rtt + get_rtt)
 
     return TelemetryRecord(
         measurement_id=measurement_id,
         timestamp_epoch_ms=t_now,
+        data_source=data_source,
         network_environment=profile.name,
         operation="LOOPBACK_PUT_GET",
         rtt_put_ms=round(put_rtt, 2),
@@ -172,11 +181,12 @@ def simulate_retention_probe(
     measurement_id: int,
     profile: NetworkProfile,
     hours: float,
-    republish_enabled: bool
+    republish_enabled: bool,
+    data_source: str = "SIMULATED"
 ) -> TelemetryRecord:
     """
     Simulates checking record retention in DHT after `hours` from initial publication.
-    Models Kademlia node churn (half-life ~ 50 min) and cache eviction.
+    Models Kademlia node churn (half-life ~ 50 min) and cache eviction without artificial floor clamping.
     """
     t_now = int(time.time() * 1000)
     k_replication = 8
@@ -186,7 +196,18 @@ def simulate_retention_probe(
     if not republish_enabled:
         # Without republish: exponential node survival decay
         p_node_survives = math.exp(-lambda_churn * hours)
-        cache_eviction = 0.95 if hours <= 2.0 else (0.65 if hours <= 6.0 else 0.20)
+        if hours <= (5.0 / 60.0):
+            cache_eviction = 0.99
+        elif hours <= 1.0:
+            cache_eviction = 0.96
+        elif hours <= 2.0:
+            cache_eviction = 0.88
+        elif hours <= 6.0:
+            cache_eviction = 0.55
+        elif hours <= 12.0:
+            cache_eviction = 0.28
+        else:
+            cache_eviction = 0.12
         p_item_survives = 1.0 - math.pow(1.0 - (p_node_survives * cache_eviction), k_replication)
         retrieval_discount = 1.0 - (profile.packet_loss_rate * 1.5)
         survival_prob = min(1.0, max(0.0, p_item_survives * retrieval_discount))
@@ -196,7 +217,8 @@ def simulate_retention_probe(
         cycles = int(hours / republish_interval)
         p_cycle_ok = 1.0 - (profile.packet_loss_rate * 2.0)
         base_survival = math.pow(p_cycle_ok, max(1, cycles) * 0.15)
-        survival_prob = max(0.85, base_survival * (1.0 - (profile.packet_loss_rate * 0.5)))
+        # REMOVED max(0.85): True calculated survival probability
+        survival_prob = min(1.0, max(0.0, base_survival * (1.0 - (profile.packet_loss_rate * 0.5))))
 
     survived = (random.random() < survival_prob)
     get_rtt, _, _, _, nodes_r = simulate_network_hop(profile, is_put=False)
@@ -204,6 +226,7 @@ def simulate_retention_probe(
     return TelemetryRecord(
         measurement_id=measurement_id,
         timestamp_epoch_ms=t_now,
+        data_source=data_source,
         network_environment=profile.name,
         operation="RETENTION_PROBE",
         rtt_put_ms=0.0,
@@ -227,6 +250,7 @@ def export_csv(records: List[TelemetryRecord], file_path: str):
         writer.writerow([
             "measurement_id",
             "timestamp_epoch_ms",
+            "data_source",
             "network_environment",
             "operation",
             "rtt_put_ms",
@@ -244,6 +268,7 @@ def export_csv(records: List[TelemetryRecord], file_path: str):
             writer.writerow([
                 r.measurement_id,
                 r.timestamp_epoch_ms,
+                r.data_source,
                 r.network_environment,
                 r.operation,
                 f"{r.rtt_put_ms:.2f}",
@@ -251,7 +276,7 @@ def export_csv(records: List[TelemetryRecord], file_path: str):
                 f"{r.rtt_total_ms:.2f}",
                 str(r.delivery_success),
                 r.retransmissions,
-                f"{r.retention_hours:.1f}",
+                f"{r.retention_hours:.3f}",
                 str(r.republish_enabled),
                 r.nodes_queried,
                 r.nodes_responded,
@@ -275,7 +300,7 @@ def run_full_harness():
     for env_key, profile in PROFILES.items():
         records_env = []
         for _ in range(trials_per_env):
-            rec = run_loopback_trial(measurement_id, profile)
+            rec = run_loopback_trial(measurement_id, profile, data_source="SIMULATED")
             measurement_id += 1
             records_env.append(rec)
             all_records.append(rec)
@@ -310,20 +335,19 @@ def run_full_harness():
               f"RTT Total: p50={stats['tot_p50']:5.1f}ms, p90={stats['tot_p90']:5.1f}ms, p99={stats['tot_p99']:5.1f}ms | "
               f"Retrans: {avg_retrans:4.2f}")
 
-    # 2. Data Retention Evaluation (1h, 2h, 6h, 24h)
-    horizons = [1.0, 2.0, 6.0, 24.0]
-    retention_samples = 500
+    # 2. Data Retention Evaluation (5 min, 1h, 2h, 6h, 12h, 24h, N=600 >= 300)
+    horizons = [5.0 / 60.0, 1.0, 2.0, 6.0, 12.0, 24.0]
+    retention_samples = 600
     retention_results = []
 
-    print(f"\n[Phase 2] Evaluating Data Retention across {horizons} hours (N={retention_samples})...")
+    print(f"\n[Phase 2] Evaluating Data Retention across horizons {horizons} hours (N={retention_samples})...")
     for hours in horizons:
         for republish in [False, True]:
-            # Average across environments
             survived_count = 0
             for env_key, profile in PROFILES.items():
                 env_samples = retention_samples // len(PROFILES)
                 for _ in range(env_samples):
-                    rec = simulate_retention_probe(measurement_id, profile, hours, republish)
+                    rec = simulate_retention_probe(measurement_id, profile, hours, republish, data_source="SIMULATED")
                     measurement_id += 1
                     all_records.append(rec)
                     if rec.delivery_success:
@@ -337,7 +361,8 @@ def run_full_harness():
             })
 
             mode_str = "WITH Republish" if republish else "NO Republish  "
-            print(f" -> Horizon: {hours:4.1f}h | Mode: {mode_str} | Survival Rate: {survival_rate:5.1f}%")
+            h_str = f"{hours*60:.0f}m" if hours < 1.0 else f"{hours:.0f}h"
+            print(f" -> Horizon: {h_str:>4s} | Mode: {mode_str} | Survival Rate: {survival_rate:5.1f}%")
 
     # 3. CSV Export
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -367,14 +392,14 @@ def run_full_harness():
     p90_vals = [p["tot_p90"] for p in profiles_list]
     p99_vals = [p["tot_p99"] for p in profiles_list]
 
-    b1 = ax_lat.bar(x - width, p50_vals, width, label='Median p50', color='#1e88e5', alpha=0.9)
-    b2 = ax_lat.bar(x, p90_vals, width, label='Tail p90', color='#fb8c00', alpha=0.9)
-    b3 = ax_lat.bar(x + width, p99_vals, width, label='Worst 1% p99', color='#e53935', alpha=0.9)
+    ax_lat.bar(x - width, p50_vals, width, label='Median p50', color='#1e88e5', alpha=0.9)
+    ax_lat.bar(x, p90_vals, width, label='Tail p90', color='#fb8c00', alpha=0.9)
+    ax_lat.bar(x + width, p99_vals, width, label='Worst 1% p99', color='#e53935', alpha=0.9)
 
     ax_lat.set_xticks(x)
     ax_lat.set_xticklabels(labels, fontsize=9.5, fontweight='bold')
     ax_lat.set_ylabel('Loopback Total RTT (ms)', fontsize=10, fontweight='bold')
-    ax_lat.set_title('A. Total PUT->GET Latency Percentiles (p50, p90, p99)', fontsize=11, fontweight='bold')
+    ax_lat.set_title('A. Total PUT->GET Latency Percentiles [SIMULATED Calibrated Network Profiles]', fontsize=10.5, fontweight='bold')
     ax_lat.legend(loc='upper left', fontsize=8.5, framealpha=0.9)
     ax_lat.grid(True, linestyle='--', alpha=0.5)
 
@@ -383,30 +408,31 @@ def run_full_harness():
     retrans_vals = [p["avg_retrans"] for p in profiles_list]
 
     ax_succ_twin = ax_succ.twinx()
-    b_succ = ax_succ.bar(x - 0.18, succ_vals, 0.36, label='Delivery Success Rate (%)', color='#2e7d32', alpha=0.85)
-    p_ret = ax_succ_twin.plot(x + 0.18, retrans_vals, marker='o', linewidth=2.5, color='#d81b60', label='Avg Retransmissions')
+    ax_succ.bar(x - 0.18, succ_vals, 0.36, label='Delivery Success Rate (%)', color='#2e7d32', alpha=0.85)
+    ax_succ_twin.plot(x + 0.18, retrans_vals, marker='o', linewidth=2.5, color='#d81b60', label='Avg Retransmissions')
 
     ax_succ.set_xticks(x)
     ax_succ.set_xticklabels(labels, fontsize=9.5, fontweight='bold')
     ax_succ.set_ylabel('Delivery Success Rate (%)', fontsize=10, fontweight='bold', color='#2e7d32')
     ax_succ_twin.set_ylabel('Avg Retransmissions per Hop', fontsize=10, fontweight='bold', color='#d81b60')
     ax_succ.set_ylim(0, 105)
-    ax_succ.set_title('B. Delivery Success Rate & Retransmissions', fontsize=11, fontweight='bold')
+    ax_succ.set_title('B. Delivery Success Rate & Retransmissions [SIMULATED]', fontsize=10.5, fontweight='bold')
     ax_succ.grid(True, linestyle='--', alpha=0.5)
 
-    # Panel C: Data Retention Curves (1h, 2h, 6h, 24h)
+    # Panel C: Data Retention Curves (5m, 1h, 2h, 6h, 12h, 24h)
     h_vals = horizons
     no_rep = [r["survival_rate"] for r in retention_results if not r["republish"]]
     with_rep = [r["survival_rate"] for r in retention_results if r["republish"]]
 
-    ax_ret.plot(h_vals, with_rep, marker='s', linewidth=2.6, color='#1e88e5', label='With Active Republish (~1.5h loop)')
-    ax_ret.plot(h_vals, no_rep, marker='o', linewidth=2.6, linestyle='--', color='#e53935', label='Without Republish (Single Publish)')
+    ax_ret.plot(h_vals, with_rep, marker='s', linewidth=2.6, color='#1e88e5', label='With Active Republish (~1.5h refresh) [SIMULATED]')
+    ax_ret.plot(h_vals, no_rep, marker='o', linewidth=2.6, linestyle='--', color='#e53935', label='Without Republish (Single Publish) [SIMULATED]')
 
     ax_ret.set_xticks(h_vals)
-    ax_ret.set_xticklabels([f"{int(h)}h" for h in h_vals], fontsize=9.5, fontweight='bold')
+    tick_labels = ["5m" if h < 1.0 else f"{int(h)}h" for h in h_vals]
+    ax_ret.set_xticklabels(tick_labels, fontsize=9.5, fontweight='bold')
     ax_ret.set_xlabel('Time Elapsed Since Initial Publication (hours)', fontsize=10, fontweight='bold')
     ax_ret.set_ylabel('Record Retention Survival Rate (%)', fontsize=10, fontweight='bold')
-    ax_ret.set_title('C. DHT Data Retention Decay (BEP 44 Store-and-Forward)', fontsize=11, fontweight='bold')
+    ax_ret.set_title('C. DHT Data Retention Decay (BEP 44 Store-and-Forward) [SIMULATED Decay, No Floor]', fontsize=10.5, fontweight='bold')
     ax_ret.set_ylim(-5, 105)
     ax_ret.legend(loc='lower left', fontsize=9, framealpha=0.9)
     ax_ret.grid(True, linestyle='--', alpha=0.5)
@@ -420,7 +446,7 @@ def run_full_harness():
 
     ax_cdf.set_xlabel('Total Latency (ms)', fontsize=10, fontweight='bold')
     ax_cdf.set_ylabel('Cumulative Probability (%)', fontsize=10, fontweight='bold')
-    ax_cdf.set_title('D. Cumulative Distribution Function (CDF) of Total RTT', fontsize=11, fontweight='bold')
+    ax_cdf.set_title('D. Cumulative Distribution Function (CDF) of Total RTT [SIMULATED]', fontsize=10.5, fontweight='bold')
     ax_cdf.set_xlim(0, 1000)
     ax_cdf.set_ylim(0, 105)
     ax_cdf.legend(loc='lower right', fontsize=8.5, framealpha=0.9)
@@ -431,7 +457,7 @@ def run_full_harness():
     plt.savefig(fig_path_docs, dpi=300)
     plt.close()
 
-    print(f"\n[Visualization] Generated 4-panel chart:")
+    print(f"\n[Visualization] Generated 4-panel chart with SIMULATED labeling:")
     print(f" -> {fig_path_tools}")
     print(f" -> {fig_path_docs}")
     print("\nHarness execution finished successfully.")

@@ -8,15 +8,11 @@ import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import java.io.File
 import java.io.StringWriter
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 import kotlin.random.Random
 
 /**
@@ -24,13 +20,39 @@ import kotlin.random.Random
  *
  * Evaluates:
  * 1. PUT -> GET latency percentiles (p50, p90, p99) and Delivery Success Rate.
- * 2. Data retention across 1h, 2h, 6h, and 24h horizons (comparing with vs without republish).
+ * 2. Data retention across 5min, 1h, 2h, 6h, 12h, and 24h horizons (comparing with vs without republish).
  * 3. Network environment profiles (Stable Wi-Fi, Mobile LTE, Restrictive NAT/CGNAT).
- * 4. Safe CSV telemetry export guaranteed to contain ZERO message content and ZERO cryptographic keys.
+ * 4. Strict separation between MEASURED (live DHT / testbed) and SIMULATED (churn model) telemetry.
+ * 5. Safe CSV telemetry export guaranteed to contain ZERO message content and ZERO cryptographic keys.
  */
 class LoopbackMeasurementHarness(
     private val dhtClient: DhtClient? = null
 ) {
+
+    companion object {
+        /**
+         * Standard retention horizons evaluated by the harness:
+         * 5 min (~0.0833h), 1h, 2h, 6h, 12h, 24h.
+         */
+        val DEFAULT_RETENTION_HORIZONS_HOURS = listOf(
+            5.0 / 60.0,
+            1.0,
+            2.0,
+            6.0,
+            12.0,
+            24.0
+        )
+
+        const val DEFAULT_SAMPLE_SIZE_PER_HORIZON = 300
+    }
+
+    /**
+     * Source of telemetry metric: live network measurements vs calibrated simulation model.
+     */
+    enum class DataSource {
+        MEASURED,
+        SIMULATED
+    }
 
     /**
      * Network environment classification for measurement trials.
@@ -55,6 +77,7 @@ class LoopbackMeasurementHarness(
     data class TelemetryMetric(
         val measurementId: Long,
         val timestampEpochMs: Long,
+        val dataSource: DataSource,
         val networkEnv: NetworkEnvironment,
         val operation: String,
         val rttPutMs: Long,
@@ -74,6 +97,7 @@ class LoopbackMeasurementHarness(
      */
     data class AggregateReport(
         val networkEnv: NetworkEnvironment,
+        val dataSource: DataSource,
         val totalTrials: Int,
         val successfulDeliveries: Int,
         val deliverySuccessRate: Double,
@@ -95,6 +119,7 @@ class LoopbackMeasurementHarness(
     data class RetentionPointResult(
         val hours: Double,
         val republishEnabled: Boolean,
+        val dataSource: DataSource,
         val survivalRate: Double,
         val testedRecords: Int,
         val survivingRecords: Int,
@@ -106,7 +131,7 @@ class LoopbackMeasurementHarness(
 
     /**
      * Executes a single loopback measurement trial (PUT -> GET cycle).
-     * Uses the provided DhtClient or network simulation model if dhtClient is null.
+     * Uses the provided DhtClient (MEASURED) or network simulation model (SIMULATED).
      */
     suspend fun runLoopbackIteration(
         networkEnv: NetworkEnvironment,
@@ -119,7 +144,10 @@ class LoopbackMeasurementHarness(
         val probeSeed = CryptoUtils.secureRandomBytes(32)
         val probeKeyPair = Ed25519Engine.generateKeyPairFromSeed(probeSeed)
         val target = Ed25519Engine.computeTarget(probeKeyPair.publicKey)
-        val testPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_DHT_VALUE_BYTES)
+
+        // Live payload MUST use MAX_FRAME_PAYLOAD_BYTES (900 bytes), NOT 1000 bytes,
+        // so that bencode string encoding length prefix "900:" stays <= 1000 B BEP 44 limit.
+        val testPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
         var retransmissions = 0
         var nodesQueried = 16
@@ -130,9 +158,11 @@ class LoopbackMeasurementHarness(
         val putOk: Boolean
         val getOk: Boolean
         var errCode: String? = null
+        val dataSource: DataSource
 
         if (dhtClient != null) {
-            // Live DHT execution
+            // Live DHT execution (MEASURED)
+            dataSource = DataSource.MEASURED
             val t0 = System.currentTimeMillis()
             putOk = try {
                 dhtClient.putMutable(
@@ -174,7 +204,8 @@ class LoopbackMeasurementHarness(
                 if (errCode == null) errCode = "PUT_FAILED"
             }
         } else {
-            // Calibrated Network Environment Emulation
+            // Calibrated Network Environment Emulation (SIMULATED)
+            dataSource = DataSource.SIMULATED
             val putResult = simulateNetworkHop(networkEnv, isPut = true, random)
             rttPutMs = putResult.rttMs
             retransmissions += putResult.retransmissions
@@ -195,12 +226,13 @@ class LoopbackMeasurementHarness(
             }
         }
 
-        val totalRtt = if (putOk && getOk) rttPutMs + rttGetMs else (rttPutMs + rttGetMs)
+        val totalRtt = rttPutMs + rttGetMs
         val success = putOk && getOk
 
         val metric = TelemetryMetric(
             measurementId = measurementId,
             timestampEpochMs = timestamp,
+            dataSource = dataSource,
             networkEnv = networkEnv,
             operation = "LOOPBACK_PUT_GET",
             rttPutMs = rttPutMs,
@@ -234,62 +266,167 @@ class LoopbackMeasurementHarness(
             val record = runLoopbackIteration(networkEnv, random)
             records.add(record)
         }
-        return computeAggregateReport(networkEnv, records)
+        val source = if (dhtClient != null) DataSource.MEASURED else DataSource.SIMULATED
+        return computeAggregateReport(networkEnv, source, records)
     }
 
     /**
-     * Evaluates data retention in DHT after 1, 2, 6, and 24 hours.
+     * Evaluates data retention in DHT across horizons (5 min, 1h, 2h, 6h, 12h, 24h).
      * Compares scenarios with active republication (republish) vs without republication.
+     *
+     * When [dhtClient] is provided, executes REAL PUT and subsequent GET operations on the DhtClient.
+     * When [dhtClient] is null, evaluates calibrated Kademlia churn decay without artificial floors.
      */
-    fun evaluateRetentionScenarios(
+    suspend fun evaluateRetentionScenarios(
         networkEnv: NetworkEnvironment,
-        horizonsHours: List<Double> = listOf(1.0, 2.0, 6.0, 24.0),
-        sampleSizePerHorizon: Int = 100,
-        random: Random = Random.Default
-    ): List<RetentionPointResult> {
+        horizonsHours: List<Double> = DEFAULT_RETENTION_HORIZONS_HOURS,
+        sampleSizePerHorizon: Int = DEFAULT_SAMPLE_SIZE_PER_HORIZON,
+        random: Random = Random.Default,
+        delayProvider: (suspend (delayMs: Long) -> Unit)? = null
+    ): List<RetentionPointResult> = withContext(Dispatchers.IO) {
         val results = mutableListOf<RetentionPointResult>()
 
         for (hours in horizonsHours) {
             for (republish in listOf(false, true)) {
                 var surviving = 0
                 val rtts = mutableListOf<Double>()
+                val dataSource = if (dhtClient != null) DataSource.MEASURED else DataSource.SIMULATED
 
                 for (i in 0 until sampleSizePerHorizon) {
-                    val survived = simulateRetentionSurvival(hours, republish, networkEnv, random)
-                    if (survived) {
-                        surviving++
-                        val retrieveRtt = simulateNetworkHop(networkEnv, isPut = false, random).rttMs
-                        rtts.add(retrieveRtt.toDouble())
+                    val survived: Boolean
+                    val retrieveRttMs: Long
+                    val errCode: String?
+
+                    if (dhtClient != null) {
+                        // Live DhtClient execution
+                        val probeSeed = CryptoUtils.secureRandomBytes(32)
+                        val probeKeyPair = Ed25519Engine.generateKeyPairFromSeed(probeSeed)
+                        val target = Ed25519Engine.computeTarget(probeKeyPair.publicKey)
+                        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+
+                        // 1. Initial PUT
+                        val t0 = System.currentTimeMillis()
+                        val putOk = try {
+                            dhtClient.putMutable(
+                                target = target,
+                                v = payload,
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = probeSeed,
+                                skipLocalStore = true
+                            )
+                        } catch (e: Exception) {
+                            false
+                        }
+                        val rttPut = max(1L, System.currentTimeMillis() - t0)
+
+                        // 2. Simulated delay or real-time progression if delayProvider supplied
+                        if (delayProvider != null) {
+                            val horizonMs = (hours * 3600 * 1000).toLong()
+                            delayProvider(horizonMs)
+                        }
+
+                        // 3. Optional republication refresh if enabled
+                        if (republish && putOk) {
+                            try {
+                                dhtClient.putMutable(
+                                    target = target,
+                                    v = payload,
+                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
+                                    salt = null,
+                                    sk = probeSeed,
+                                    skipLocalStore = true
+                                )
+                            } catch (_: Exception) {}
+                        }
+
+                        // 4. Retrieve record via GET
+                        val t2 = System.currentTimeMillis()
+                        val retrieved = try {
+                            dhtClient.getMutable(
+                                target = target,
+                                salt = null,
+                                skipLocalStore = true,
+                                timeoutMs = DhtLeafNode.FAST_GET_TIMEOUT_MS
+                            )
+                        } catch (e: Exception) {
+                            null
+                        }
+                        val t3 = System.currentTimeMillis()
+                        retrieveRttMs = max(1L, t3 - t2)
+                        survived = putOk && retrieved != null && retrieved.v.contentEquals(payload)
+                        errCode = if (!survived) "RETENTION_GET_FAILED" else null
+
+                        // Record metric
+                        val metric = TelemetryMetric(
+                            measurementId = idCounter.getAndIncrement(),
+                            timestampEpochMs = System.currentTimeMillis(),
+                            dataSource = DataSource.MEASURED,
+                            networkEnv = networkEnv,
+                            operation = "RETENTION_PROBE",
+                            rttPutMs = rttPut,
+                            rttGetMs = retrieveRttMs,
+                            rttTotalMs = rttPut + retrieveRttMs,
+                            deliverySuccess = survived,
+                            retransmissions = if (survived) 0 else 1,
+                            retentionHours = hours,
+                            republishEnabled = republish,
+                            nodesQueried = 16,
+                            nodesResponded = if (survived) 4 else 0,
+                            errorCode = errCode
+                        )
+                        synchronized(collectedMetrics) {
+                            collectedMetrics.add(metric)
+                        }
+                    } else {
+                        // Simulated Kademlia Churn Model
+                        survived = simulateRetentionSurvival(hours, republish, networkEnv, random)
+                        if (survived) {
+                            val hop = simulateNetworkHop(networkEnv, isPut = false, random)
+                            retrieveRttMs = hop.rttMs
+                            errCode = null
+                        } else {
+                            retrieveRttMs = 0L
+                            errCode = "RETENTION_EXPIRED"
+                        }
+
+                        val metric = TelemetryMetric(
+                            measurementId = idCounter.getAndIncrement(),
+                            timestampEpochMs = System.currentTimeMillis(),
+                            dataSource = DataSource.SIMULATED,
+                            networkEnv = networkEnv,
+                            operation = "RETENTION_PROBE",
+                            rttPutMs = 0L,
+                            rttGetMs = retrieveRttMs,
+                            rttTotalMs = retrieveRttMs,
+                            deliverySuccess = survived,
+                            retransmissions = if (survived) 0 else 1,
+                            retentionHours = hours,
+                            republishEnabled = republish,
+                            nodesQueried = 16,
+                            nodesResponded = if (survived) 3 else 0,
+                            errorCode = errCode
+                        )
+                        synchronized(collectedMetrics) {
+                            collectedMetrics.add(metric)
+                        }
                     }
 
-                    // Record telemetry metric for retention probe
-                    val metric = TelemetryMetric(
-                        measurementId = idCounter.getAndIncrement(),
-                        timestampEpochMs = System.currentTimeMillis(),
-                        networkEnv = networkEnv,
-                        operation = "RETENTION_PROBE",
-                        rttPutMs = 0L,
-                        rttGetMs = if (survived) rtts.last().toLong() else 0L,
-                        rttTotalMs = if (survived) rtts.last().toLong() else 0L,
-                        deliverySuccess = survived,
-                        retransmissions = if (survived) 0 else 1,
-                        retentionHours = hours,
-                        republishEnabled = republish,
-                        nodesQueried = 16,
-                        nodesResponded = if (survived) 3 else 0,
-                        errorCode = if (!survived) "RETENTION_EXPIRED" else null
-                    )
-                    synchronized(collectedMetrics) {
-                        collectedMetrics.add(metric)
+                    if (survived) {
+                        surviving++
+                        rtts.add(retrieveRttMs.toDouble())
                     }
                 }
 
+                // Compute exact empirical survival rate (NO hardcoded clamp like max(0.85))
                 val survivalRate = surviving.toDouble() / sampleSizePerHorizon
                 val meanRtt = if (rtts.isNotEmpty()) rtts.average() else 0.0
+
                 results.add(
                     RetentionPointResult(
                         hours = hours,
                         republishEnabled = republish,
+                        dataSource = dataSource,
                         survivalRate = survivalRate,
                         testedRecords = sampleSizePerHorizon,
                         survivingRecords = surviving,
@@ -299,12 +436,15 @@ class LoopbackMeasurementHarness(
             }
         }
 
-        return results
+        results
     }
 
     /**
      * Simulates probability of survival of a BEP 44 record in public BitTorrent DHT.
      * Models Kademlia node churn (exponential decay with median node session 45-60 min).
+     *
+     * Note: All artificial floor constants (e.g. max(0.85)) have been removed to ensure
+     * genuine mathematical decay modeling.
      */
     fun simulateRetentionSurvival(
         hours: Double,
@@ -321,9 +461,15 @@ class LoopbackMeasurementHarness(
             // Without republish: individual node survival prob p(t) = exp(-lambda * t)
             val pNodeSurvives = kotlin.math.exp(-lambdaChurn * hours)
             // Item survives if AT LEAST 1 of the original 8 storing nodes is still online and has not evicted
-            // Also factor in LRU cache eviction in non-dedicated nodes (2h-4h typical cache lifetime)
-            val cacheEvictionFactor = if (hours <= 2.0) 0.95 else if (hours <= 6.0) 0.65 else 0.20
-            val pItemSurvives = (1.0 - Math.pow(1.0 - (pNodeSurvives * cacheEvictionFactor), kReplication.toDouble()))
+            val cacheEvictionFactor = when {
+                hours <= (5.0 / 60.0) -> 0.99
+                hours <= 1.0 -> 0.96
+                hours <= 2.0 -> 0.88
+                hours <= 6.0 -> 0.55
+                hours <= 12.0 -> 0.28
+                else -> 0.12
+            }
+            val pItemSurvives = 1.0 - Math.pow(1.0 - (pNodeSurvives * cacheEvictionFactor), kReplication.toDouble())
 
             // Under restrictive NAT, retrieval failure increases due to packet loss
             val retrievalDiscount = 1.0 - (networkEnv.packetLossRate * 1.5)
@@ -336,9 +482,9 @@ class LoopbackMeasurementHarness(
 
             // Per-cycle success probability (re-publishing to new swarm of 8 nodes)
             val pCycleSuccess = 1.0 - (networkEnv.packetLossRate * 2.0)
-            // Even after 24h, periodic republication sustains ~92-98% survival
             val baseSurvival = Math.pow(pCycleSuccess, max(1, cycles).toDouble() * 0.15)
-            val degradedSurvival = max(0.85, baseSurvival * (1.0 - (networkEnv.packetLossRate * 0.5)))
+            // NO hardcoded max(0.85) clamp: true decayed survival without artificial floors
+            val degradedSurvival = min(1.0, max(0.0, baseSurvival * (1.0 - (networkEnv.packetLossRate * 0.5))))
             return random.nextDouble() < degradedSurvival
         }
     }
@@ -348,15 +494,26 @@ class LoopbackMeasurementHarness(
      */
     fun computeAggregateReport(
         networkEnv: NetworkEnvironment,
+        dataSource: DataSource,
         records: List<TelemetryMetric>
     ): AggregateReport {
         if (records.isEmpty()) {
             return AggregateReport(
-                networkEnv, 0, 0, 0.0,
-                0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0,
-                0.0
+                networkEnv = networkEnv,
+                dataSource = dataSource,
+                totalTrials = 0,
+                successfulDeliveries = 0,
+                deliverySuccessRate = 0.0,
+                putP50Ms = 0.0,
+                putP90Ms = 0.0,
+                putP99Ms = 0.0,
+                getP50Ms = 0.0,
+                getP90Ms = 0.0,
+                getP99Ms = 0.0,
+                totalP50Ms = 0.0,
+                totalP90Ms = 0.0,
+                totalP99Ms = 0.0,
+                averageRetransmissions = 0.0
             )
         }
 
@@ -372,6 +529,7 @@ class LoopbackMeasurementHarness(
 
         return AggregateReport(
             networkEnv = networkEnv,
+            dataSource = dataSource,
             totalTrials = totalTrials,
             successfulDeliveries = successful.size,
             deliverySuccessRate = successRate,
@@ -409,7 +567,7 @@ class LoopbackMeasurementHarness(
      */
     fun exportToCsvString(metricsList: List<TelemetryMetric> = collectedMetrics): String {
         val writer = StringWriter()
-        writer.appendLine("measurement_id,timestamp_epoch_ms,network_environment,operation,rtt_put_ms,rtt_get_ms,rtt_total_ms,delivery_success,retransmissions,retention_hours,republish_enabled,nodes_queried,nodes_responded,error_code")
+        writer.appendLine("measurement_id,timestamp_epoch_ms,data_source,network_environment,operation,rtt_put_ms,rtt_get_ms,rtt_total_ms,delivery_success,retransmissions,retention_hours,republish_enabled,nodes_queried,nodes_responded,error_code")
 
         val listCopy = synchronized(metricsList) { metricsList.toList() }
         for (m in listCopy) {
@@ -417,6 +575,7 @@ class LoopbackMeasurementHarness(
                 listOf(
                     m.measurementId.toString(),
                     m.timestampEpochMs.toString(),
+                    m.dataSource.name,
                     m.networkEnv.name,
                     m.operation,
                     m.rttPutMs.toString(),
@@ -424,7 +583,7 @@ class LoopbackMeasurementHarness(
                     m.rttTotalMs.toString(),
                     m.deliverySuccess.toString(),
                     m.retransmissions.toString(),
-                    String.format(Locale.US, "%.1f", m.retentionHours),
+                    String.format(Locale.US, "%.3f", m.retentionHours),
                     m.republishEnabled.toString(),
                     m.nodesQueried.toString(),
                     m.nodesResponded.toString(),
@@ -459,27 +618,22 @@ class LoopbackMeasurementHarness(
         var retransmissions = 0
         var success = true
 
-        // Base RTT + Jitter
         val baseRtt = env.baseRttMs
         val jitter = random.nextLong(-env.jitterMs, env.jitterMs + 1)
         var totalLatency = max(5L, baseRtt + jitter)
 
-        // Restrictive NAT mapping expiry or CGNAT state penalty
         if (env == NetworkEnvironment.RESTRICTIVE_NAT && random.nextDouble() < 0.22) {
-            totalLatency += random.nextLong(150L, 450L) // NAT binding stall
+            totalLatency += random.nextLong(150L, 450L)
         }
 
-        // LTE RRC promotion penalty (DCH promotion latency ~150-250ms)
         if (env == NetworkEnvironment.LTE && random.nextDouble() < 0.12) {
             totalLatency += random.nextLong(100L, 260L)
         }
 
-        // Packet loss check and retransmission
         if (random.nextDouble() < env.packetLossRate) {
             retransmissions++
-            totalLatency += max(400L, baseRtt * 4) // KRPC timeout and retry
+            totalLatency += max(400L, baseRtt * 4)
             if (random.nextDouble() < (env.packetLossRate * 1.5)) {
-                // Secondary drop -> operation failed
                 success = false
             }
         }
