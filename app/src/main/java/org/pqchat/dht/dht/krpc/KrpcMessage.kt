@@ -56,39 +56,97 @@ sealed class KrpcMessage {
 
     companion object {
         fun parse(bytes: ByteArray): KrpcMessage {
-            val decoded = Bencode.decode(bytes) as? Map<*, *>
-                ?: throw IllegalArgumentException("KRPC message must be a dictionary")
+            val decoded = try {
+                Bencode.decode(bytes) as? Map<*, *>
+            } catch (e: Exception) {
+                throw IllegalArgumentException("Malformed bencoded KRPC message: ${e.message}", e)
+            } ?: throw IllegalArgumentException("KRPC message must be a dictionary")
 
             val t = (decoded["t"] as? ByteArray)
-                ?: throw IllegalArgumentException("Missing transaction ID 't'")
+                ?: throw IllegalArgumentException("Missing or invalid transaction ID 't'")
+            if (t.isEmpty() || t.size > 256) {
+                throw IllegalArgumentException("Invalid transaction ID length (${t.size} B)")
+            }
 
             val yBytes = decoded["y"] as? ByteArray
             val y = yBytes?.let { String(it, StandardCharsets.UTF_8) }
                 ?: (decoded["y"] as? String)
-                ?: throw IllegalArgumentException("Missing message type 'y'")
+                ?: throw IllegalArgumentException("Missing or invalid message type 'y'")
 
             return when (y) {
                 "q" -> {
-                    val qBytes = decoded["q"] as? ByteArray
-                    val q = qBytes?.let { String(it, StandardCharsets.UTF_8) } ?: decoded["q"].toString()
-                    @Suppress("UNCHECKED_CAST")
-                    val a = (decoded["a"] as? Map<String, Any>) ?: emptyMap()
-                    val ro = (decoded["ro"] as? Long) == 1L
+                    val qRaw = decoded["q"]
+                    val q = when (qRaw) {
+                        is ByteArray -> String(qRaw, StandardCharsets.UTF_8)
+                        is String -> qRaw
+                        else -> throw IllegalArgumentException("Missing or invalid query method 'q'")
+                    }
+                    if (q.isEmpty() || q.length > 64) {
+                        throw IllegalArgumentException("Invalid query method name '$q'")
+                    }
+
+                    val aRaw = decoded["a"]
+                    val a = if (aRaw is Map<*, *>) {
+                        val safeMap = LinkedHashMap<String, Any>()
+                        for ((k, v) in aRaw) {
+                            val keyStr = when (k) {
+                                is String -> k
+                                is ByteArray -> String(k, StandardCharsets.UTF_8)
+                                else -> throw IllegalArgumentException("Non-string argument key in query '$q'")
+                            }
+                            if (v != null) safeMap[keyStr] = v
+                        }
+                        safeMap
+                    } else if (aRaw == null) {
+                        emptyMap()
+                    } else {
+                        throw IllegalArgumentException("Query arguments 'a' must be a dictionary")
+                    }
+
+                    val ro = when (val roVal = decoded["ro"]) {
+                        is Long -> roVal == 1L
+                        is Int -> roVal == 1
+                        is Number -> roVal.toLong() == 1L
+                        else -> false
+                    }
                     Query(t, q, a, ro)
                 }
                 "r" -> {
-                    @Suppress("UNCHECKED_CAST")
-                    val r = (decoded["r"] as? Map<String, Any>) ?: emptyMap()
+                    val rRaw = decoded["r"]
+                    val r = if (rRaw is Map<*, *>) {
+                        val safeMap = LinkedHashMap<String, Any>()
+                        for ((k, v) in rRaw) {
+                            val keyStr = when (k) {
+                                is String -> k
+                                is ByteArray -> String(k, StandardCharsets.UTF_8)
+                                else -> throw IllegalArgumentException("Non-string key in response dictionary")
+                            }
+                            if (v != null) safeMap[keyStr] = v
+                        }
+                        safeMap
+                    } else if (rRaw == null) {
+                        emptyMap()
+                    } else {
+                        throw IllegalArgumentException("Response data 'r' must be a dictionary")
+                    }
                     Response(t, r)
                 }
                 "e" -> {
                     val e = (decoded["e"] as? List<*>)
-                    val code = (e?.getOrNull(0) as? Long)?.toInt() ?: -1
-                    val msgBytes = e?.getOrNull(1) as? ByteArray
-                    val msg = msgBytes?.let { String(it, StandardCharsets.UTF_8) } ?: e?.getOrNull(1)?.toString() ?: "Unknown error"
+                        ?: throw IllegalArgumentException("KRPC error element 'e' must be a list")
+                    if (e.size < 2) {
+                        throw IllegalArgumentException("KRPC error list 'e' must have at least [code, message]")
+                    }
+                    val code = (e[0] as? Number)?.toInt()
+                        ?: throw IllegalArgumentException("KRPC error code must be numeric")
+                    val msgBytes = e[1] as? ByteArray
+                    val msg = msgBytes?.let { String(it, StandardCharsets.UTF_8) }
+                        ?: (e[1] as? String)
+                        ?: e[1]?.toString()
+                        ?: "Unknown error"
                     Error(t, code, msg)
                 }
-                else -> throw IllegalArgumentException("Unknown KRPC 'y' type: $y")
+                else -> throw IllegalArgumentException("Unknown KRPC message type 'y': '$y'")
             }
         }
 
