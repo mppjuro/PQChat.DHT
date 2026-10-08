@@ -34,7 +34,9 @@ object RekeyCoordinator {
         epoch: Long,
         seqNum: Int,
         ackNum: Int,
-        msgKey: ByteArray
+        msgKey: ByteArray,
+        target: ByteArray? = null,
+        direction: String? = null
     ): Pair<PendingRekeyOffer, ByteArray> {
         val kemPair = MLKemEngine.generateKeyPair()
 
@@ -46,7 +48,11 @@ object RekeyCoordinator {
             mlKemPublicKey = kemPair.publicKey
         )
 
-        val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext)
+        val frame = if (target != null && direction != null) {
+            BinaryFrameCodec.packAeadFrame(msgKey, plaintext, target, direction)
+        } else {
+            BinaryFrameCodec.packAeadFrame(msgKey, plaintext)
+        }
 
         val pending = PendingRekeyOffer(
             epoch = epoch,
@@ -65,7 +71,9 @@ object RekeyCoordinator {
         offer: BinaryFrameCodec.DecodedPayload.RekeyOffer,
         reverseSeqNum: Int,
         reverseAckNum: Int,
-        reverseMsgKey: ByteArray
+        reverseMsgKey: ByteArray,
+        reverseTarget: ByteArray? = null,
+        direction: String? = null
     ): Pair<ByteArray, ByteArray> {
         // 1. Encapsulate SS_rekey against sender's pk_new
         val (ssRekey, ctNew) = MLKemEngine.encapsulate(offer.mlKemPublicKey)
@@ -79,7 +87,11 @@ object RekeyCoordinator {
             mlKemCiphertext = ctNew
         )
 
-        val frame = BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext)
+        val frame = if (reverseTarget != null && direction != null) {
+            BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext, reverseTarget, direction)
+        } else {
+            BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext)
+        }
 
         return Pair(ssRekey, frame)
     }

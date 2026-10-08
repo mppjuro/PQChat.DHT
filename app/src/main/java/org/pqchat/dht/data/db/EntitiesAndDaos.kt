@@ -15,7 +15,10 @@ data class ContactEntity(
     val rekeyEpoch: Long = 0L,
     val receivedBitmapBase: Int = 0,
     val receivedBitmap: ByteArray = ByteArray(128), // 1024-bit sliding window
-    val lastActive: Long = System.currentTimeMillis()
+    val lastActive: Long = System.currentTimeMillis(),
+    val isInitiator: Boolean = true,
+    val sas: String = "",
+    val fingerprint: String = ""
 ) {
     @Ignore
     constructor(
@@ -28,7 +31,10 @@ data class ContactEntity(
         rekeyEpoch: Long = 0L,
         receivedBitmapBase: Int = 0,
         receivedBitmap: ByteArray = ByteArray(128),
-        lastActive: Long = System.currentTimeMillis()
+        lastActive: Long = System.currentTimeMillis(),
+        isInitiator: Boolean = true,
+        sas: String = "",
+        fingerprint: String = ""
     ) : this(
         id = id,
         name = name,
@@ -39,8 +45,21 @@ data class ContactEntity(
         rekeyEpoch = rekeyEpoch,
         receivedBitmapBase = receivedBitmapBase,
         receivedBitmap = receivedBitmap,
-        lastActive = lastActive
+        lastActive = lastActive,
+        isInitiator = isInitiator,
+        sas = sas,
+        fingerprint = fingerprint
     )
+
+    val outboundDirection: String
+        get() = if (isInitiator) "AliceToBob" else "BobToAlice"
+
+    val inboundDirection: String
+        get() = if (id == "self_notes_loopback") {
+            "AliceToBob"
+        } else {
+            if (isInitiator) "BobToAlice" else "AliceToBob"
+        }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
