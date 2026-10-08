@@ -54,12 +54,34 @@ class AdaptivePollingManager(
     @Volatile
     private var forceImmediatePoll = false
 
+    @Volatile
+    var immediatePollTimeoutMs: Long = 15_000L
+
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
     fun triggerImmediatePoll() {
         if (_isSyncing.value) return
         _isSyncing.value = true
-        forceImmediatePoll = true
-        immediateSignal?.complete(Unit)
+
+        val job = pollingJob
+        if (job != null && job.isActive) {
+            forceImmediatePoll = true
+            immediateSignal?.complete(Unit)
+        } else {
+            // In DOZE_SLEEP or when loop is paused, launch a one-shot poll with timeout protection
+            scope.launch {
+                try {
+                    withTimeoutOrNull(immediatePollTimeoutMs) {
+                        onPollRequested(activeChatContactId)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                } finally {
+                    lastPollFinishedTimestamp = System.currentTimeMillis()
+                    _isSyncing.value = false
+                }
+            }
+        }
     }
 
     @Volatile
@@ -174,7 +196,9 @@ class AdaptivePollingManager(
             while (isActive) {
                 _isSyncing.value = true
                 try {
-                    onPollRequested(activeChatContactId)
+                    withTimeoutOrNull(30_000L) {
+                        onPollRequested(activeChatContactId)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
