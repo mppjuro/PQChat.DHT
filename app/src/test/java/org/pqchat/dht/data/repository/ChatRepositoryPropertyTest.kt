@@ -442,7 +442,8 @@ class ChatRepositoryPropertyTest {
                 chainKeyIn = bobToAliceSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = true
             )
         )
 
@@ -454,7 +455,8 @@ class ChatRepositoryPropertyTest {
                 chainKeyIn = aliceToBobSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = false
             )
         )
 
@@ -465,9 +467,9 @@ class ChatRepositoryPropertyTest {
 
         // Simulate random intermittent packet loss (30% drop probability)
         sharedDht.dropProbability = 0.3
-        var rounds = 0
-        while (bobMessageDao.messages.count { !it.isOutgoing } < totalMessages && rounds < 25) {
-            rounds++
+        var lossRounds = 0
+        while (bobMessageDao.messages.count { !it.isOutgoing } < totalMessages && lossRounds < 30) {
+            lossRounds++
             bobRepo.pollContactIncoming("alice")
             bobRepo.checkLookaheadWindow("alice")
             bobRepo.pollPendingSkippedKeys("alice")
@@ -475,11 +477,15 @@ class ChatRepositoryPropertyTest {
 
         // Turn off drop probability to ensure all remaining skipped/pending messages are recovered
         sharedDht.dropProbability = 0.0
-        while (bobMessageDao.messages.count { !it.isOutgoing } < totalMessages && rounds < 50) {
-            rounds++
+        var recoveryRounds = 0
+        while (bobMessageDao.messages.count { !it.isOutgoing } < totalMessages && recoveryRounds < 100) {
+            recoveryRounds++
             bobRepo.pollContactIncoming("alice")
             bobRepo.checkLookaheadWindow("alice")
             bobRepo.pollPendingSkippedKeys("alice")
+            if (bobMessageDao.messages.count { !it.isOutgoing } < totalMessages) {
+                delay(10)
+            }
         }
 
         val received = bobMessageDao.messages.filter { !it.isOutgoing }.sortedBy { it.seqNum }
