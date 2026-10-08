@@ -164,4 +164,139 @@ class ProtocolEngineTest {
         assertArrayEquals("Reassembled image must match original 36KB file byte-for-byte", fakePng, reassembled)
         assertTrue(ChunkingEngine.isPngImage(reassembled))
     }
+
+    @Test
+    fun testAliceBobHandshakeWithKeyConfirmationAndSas() {
+        val aliceInit = HandshakeManager.aliceCreateHandshake()
+        val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
+
+        assertTrue(bobHandshake.sas.isNotEmpty())
+        assertEquals(6, bobHandshake.sas.length)
+        assertTrue(bobHandshake.fingerprint.isNotEmpty())
+
+        val skACopy = aliceInit.skA.copyOf()
+        val aliceSession = HandshakeManager.aliceFinalize(
+            skA = aliceInit.skA,
+            pkA = aliceInit.pkA,
+            seedInit = aliceInit.seedInit,
+            frame = bobHandshake.frame
+        )
+
+        // Chains must match
+        assertArrayEquals(aliceSession.chainKeyOut, bobHandshake.chainKeyAtoB)
+        assertArrayEquals(aliceSession.chainKeyIn, bobHandshake.chainKeyBtoA)
+
+        // SAS and fingerprint must match
+        assertEquals("SAS must match between Alice and Bob", bobHandshake.sas, aliceSession.sas)
+        assertEquals("Fingerprint must match between Alice and Bob", bobHandshake.fingerprint, aliceSession.fingerprint)
+
+        // skA must be securely zeroized after verified confirmation
+        assertTrue("skA must be wiped with zeroes after confirmation", aliceInit.skA.all { it == 0.toByte() })
+        assertFalse("Original skA was not all zeroes", skACopy.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun testHandshakeKeyConfirmationRejectsImplicitRejectionDesyncWithoutWipingSkA() {
+        val aliceInit = HandshakeManager.aliceCreateHandshake()
+        val pkA = aliceInit.pkA
+        val seedInit = aliceInit.seedInit
+        val target0 = aliceInit.target0
+
+        // Bob performs legitimate encapsulation
+        val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
+
+        // Attacker tampers with the ML-KEM ciphertext:
+        // In ML-KEM, modifying ciphertext doesn't throw on decapsulate (implicit rejection),
+        // but results in a different pseudorandom shared secret!
+        val forgedCt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_CIPHERTEXT_SIZE)
+        val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
+        val kHs = org.pqchat.dht.crypto.HkdfSha512.derive(null, seedInit, "hs_enc".toByteArray(Charsets.UTF_8), 32)
+
+        // Attacker creates a frame with forged ct and invalid confirmation tag
+        val forgedConfirmationTag = CryptoUtils.secureRandomBytes(32)
+        val forgedPlaintext = BinaryFrameCodec.encodeHandshakeFinalize(
+            seqNum = 0,
+            ackNum = 0,
+            timestampUTC = System.currentTimeMillis(),
+            mlKemCiphertext = forgedCt,
+            saltParameter = salt,
+            confirmationTag = forgedConfirmationTag
+        )
+        val forgedFrame = BinaryFrameCodec.packAeadFrame(
+            key = kHs,
+            plaintext = forgedPlaintext,
+            target = target0,
+            direction = "BobToAlice"
+        )
+
+        val skABackup = aliceInit.skA.copyOf()
+
+        // Alice attempts to finalize with forged frame: key confirmation MUST throw SecurityException
+        try {
+            HandshakeManager.aliceFinalize(
+                skA = aliceInit.skA,
+                pkA = pkA,
+                seedInit = seedInit,
+                frame = forgedFrame
+            )
+            fail("Expected SecurityException due to key confirmation failure on forged ciphertext")
+        } catch (e: SecurityException) {
+            assertTrue(e.message?.contains("key confirmation failed") == true)
+        }
+
+        // Alice's skA MUST NOT be wiped on failure, allowing retry on legitimate frame!
+        assertArrayEquals("skA must remain intact on key confirmation failure", skABackup, aliceInit.skA)
+
+        // Alice can now finalize with Bob's legitimate frame!
+        val session = HandshakeManager.aliceFinalize(
+            skA = aliceInit.skA,
+            pkA = pkA,
+            seedInit = seedInit,
+            frame = bobHandshake.frame
+        )
+        assertEquals(bobHandshake.sas, session.sas)
+        assertTrue("skA is wiped only after successful confirmation", aliceInit.skA.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun testAesGcmAadTargetTypeAndDirectionIntegrity() {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val otherTarget = CryptoUtils.secureRandomBytes(20)
+        val direction = "AliceToBob"
+        val wrongDirection = "BobToAlice"
+
+        val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Secret authenticated payload")
+        val frame = BinaryFrameCodec.packAeadFrame(key, plaintext, target, direction)
+
+        // 1. Correct AAD: decrypts successfully
+        val msg = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction, BinaryFrameCodec.TYPE_TEXT_MESSAGE)
+        assertEquals("Secret authenticated payload", (msg.payload as BinaryFrameCodec.DecodedPayload.TextMessage).text)
+
+        // 2. Tampered target: must fail AEAD verification
+        try {
+            BinaryFrameCodec.unpackAeadFrame(key, frame, otherTarget, direction, BinaryFrameCodec.TYPE_TEXT_MESSAGE)
+            fail("Expected decryption failure with wrong target in AAD")
+        } catch (_: Exception) {
+            // expected
+        }
+
+        // 3. Tampered direction: must fail AEAD verification
+        try {
+            val aadWrongDir = BinaryFrameCodec.buildAad(target, BinaryFrameCodec.TYPE_TEXT_MESSAGE, wrongDirection)
+            BinaryFrameCodec.unpackAeadFrame(key, frame, aadWrongDir)
+            fail("Expected decryption failure with wrong direction in AAD")
+        } catch (_: Exception) {
+            // expected
+        }
+
+        // 4. Tampered type: must fail AEAD verification
+        try {
+            val aadWrongType = BinaryFrameCodec.buildAad(target, BinaryFrameCodec.TYPE_CHUNK_DATA, direction)
+            BinaryFrameCodec.unpackAeadFrame(key, frame, aadWrongType)
+            fail("Expected decryption failure with wrong type in AAD")
+        } catch (_: Exception) {
+            // expected
+        }
+    }
 }

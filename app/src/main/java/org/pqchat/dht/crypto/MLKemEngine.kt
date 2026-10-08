@@ -119,4 +119,16 @@ object MLKemEngine {
         require(secret.size == SHARED_SECRET_SIZE) { "Invalid shared secret size" }
         return secret
     }
+
+    /**
+     * Extracts the 800-byte public key embedded within the ML-KEM-512 private key.
+     */
+    fun extractPublicKey(privateKeyBytes: ByteArray): ByteArray {
+        val privParams = KyberPrivateKeyParameters(KyberParameters.kyber512, privateKeyBytes)
+        val pk = privParams.publicKey
+        require(pk.size == PUBLIC_KEY_SIZE) {
+            "Extracted public key size mismatch: ${pk.size}, expected $PUBLIC_KEY_SIZE"
+        }
+        return pk
+    }
 }

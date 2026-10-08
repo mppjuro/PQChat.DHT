@@ -28,10 +28,11 @@ object BinaryFrameCodec {
     const val TYPE_REKEY_RESPONSE: Byte = 0x04
     const val TYPE_CHUNK_DATA: Byte = 0x05
 
-    // Type 0x01 limits (768 + 32 = 800 <= 859)
+    // Type 0x01 limits (768 + 32 + 32 = 832 <= 859)
     const val T1_CIPHERTEXT_SIZE = 768
     const val T1_SALT_SIZE = 32
-    const val T1_PADDING_SIZE = 59 // 859 - 800
+    const val T1_CONFIRMATION_TAG_SIZE = 32
+    const val T1_PADDING_SIZE = 27 // 859 - 832
 
     // Type 0x02 limits
     const val T2_MAX_TEXT_SIZE = 857 // 859 - 2
@@ -51,16 +52,22 @@ object BinaryFrameCodec {
     sealed class DecodedPayload {
         data class HandshakeFinalize(
             val mlKemCiphertext: ByteArray,
-            val saltParameter: ByteArray
+            val saltParameter: ByteArray,
+            val confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE)
         ) : DecodedPayload() {
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
                 if (other !is HandshakeFinalize) return false
                 return mlKemCiphertext.contentEquals(other.mlKemCiphertext) &&
-                        saltParameter.contentEquals(other.saltParameter)
+                        saltParameter.contentEquals(other.saltParameter) &&
+                        confirmationTag.contentEquals(other.confirmationTag)
             }
-            override fun hashCode(): Int =
-                31 * mlKemCiphertext.contentHashCode() + saltParameter.contentHashCode()
+            override fun hashCode(): Int {
+                var result = mlKemCiphertext.contentHashCode()
+                result = 31 * result + saltParameter.contentHashCode()
+                result = 31 * result + confirmationTag.contentHashCode()
+                return result
+            }
         }
 
         data class TextMessage(
@@ -136,14 +143,17 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         mlKemCiphertext: ByteArray,
-        saltParameter: ByteArray
+        saltParameter: ByteArray,
+        confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE)
     ): ByteArray {
         require(mlKemCiphertext.size == T1_CIPHERTEXT_SIZE)
         require(saltParameter.size == T1_SALT_SIZE)
+        require(confirmationTag.size == T1_CONFIRMATION_TAG_SIZE)
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE)
         buffer.put(mlKemCiphertext)
         buffer.put(saltParameter)
+        buffer.put(confirmationTag)
         buffer.put(CryptoUtils.secureRandomBytes(T1_PADDING_SIZE))
 
         return packPlaintext(TYPE_HANDSHAKE_FINALIZE, seqNum, ackNum, timestampUTC, buffer.array())
@@ -256,10 +266,23 @@ object BinaryFrameCodec {
     // AEAD ENVELOPE (Creates exactly MAX_FRAME_PAYLOAD_BYTES)
     // ==========================================
 
-    fun packAeadFrame(key: ByteArray, plaintext: ByteArray): ByteArray {
+    fun buildAad(target: ByteArray, msgType: Byte, direction: String): ByteArray {
+        val dirBytes = direction.toByteArray(Charsets.UTF_8)
+        val buffer = ByteBuffer.allocate(target.size + 1 + dirBytes.size)
+        buffer.put(target)
+        buffer.put(msgType)
+        buffer.put(dirBytes)
+        return buffer.array()
+    }
+
+    fun packAeadFrame(
+        key: ByteArray,
+        plaintext: ByteArray,
+        aad: ByteArray? = null
+    ): ByteArray {
         require(plaintext.size == CIPHERTEXT_SIZE)
         val iv = CryptoUtils.secureRandomBytes(IV_SIZE)
-        val (tag, ciphertext) = AesGcmEngine.encrypt(key, iv, plaintext)
+        val (tag, ciphertext) = AesGcmEngine.encrypt(key, iv, plaintext, aad)
 
         val frame = ByteArray(MAX_FRAME_PAYLOAD_BYTES)
         System.arraycopy(iv, 0, frame, 0, IV_SIZE)
@@ -270,7 +293,22 @@ object BinaryFrameCodec {
         return frame
     }
 
-    fun unpackAeadFrame(key: ByteArray, frame: ByteArray): FrameMessage {
+    fun packAeadFrame(
+        key: ByteArray,
+        plaintext: ByteArray,
+        target: ByteArray,
+        direction: String
+    ): ByteArray {
+        val msgType = plaintext[0]
+        val aad = buildAad(target, msgType, direction)
+        return packAeadFrame(key, plaintext, aad)
+    }
+
+    fun unpackAeadFrame(
+        key: ByteArray,
+        frame: ByteArray,
+        aad: ByteArray? = null
+    ): FrameMessage {
         require(frame.size == MAX_FRAME_PAYLOAD_BYTES) {
             "Invalid frame size: ${frame.size}, expected $MAX_FRAME_PAYLOAD_BYTES"
         }
@@ -283,7 +321,7 @@ object BinaryFrameCodec {
         System.arraycopy(frame, IV_SIZE, tag, 0, TAG_SIZE)
         System.arraycopy(frame, IV_SIZE + TAG_SIZE, ciphertext, 0, CIPHERTEXT_SIZE)
 
-        val plaintext = AesGcmEngine.decrypt(key, iv, tag, ciphertext)
+        val plaintext = AesGcmEngine.decrypt(key, iv, tag, ciphertext, aad)
         require(plaintext.size == CIPHERTEXT_SIZE)
 
         val buffer = ByteBuffer.wrap(plaintext).order(ByteOrder.BIG_ENDIAN)
@@ -296,9 +334,11 @@ object BinaryFrameCodec {
             TYPE_HANDSHAKE_FINALIZE -> {
                 val ct = ByteArray(T1_CIPHERTEXT_SIZE)
                 val salt = ByteArray(T1_SALT_SIZE)
+                val confTag = ByteArray(T1_CONFIRMATION_TAG_SIZE)
                 buffer.get(ct)
                 buffer.get(salt)
-                DecodedPayload.HandshakeFinalize(ct, salt)
+                buffer.get(confTag)
+                DecodedPayload.HandshakeFinalize(ct, salt, confTag)
             }
             TYPE_TEXT_MESSAGE -> {
                 val len = buffer.short.toInt() and 0xFFFF
@@ -334,5 +374,61 @@ object BinaryFrameCodec {
         }
 
         return FrameMessage(msgType, seqNum, ackNum, timestampUTC, payload)
+    }
+
+    fun unpackAeadFrame(
+        key: ByteArray,
+        frame: ByteArray,
+        target: ByteArray,
+        direction: String,
+        expectedType: Byte? = null
+    ): FrameMessage {
+        val candidateDirections = if (direction == "AliceToBob") {
+            listOf("AliceToBob", "BobToAlice")
+        } else if (direction == "BobToAlice") {
+            listOf("BobToAlice", "AliceToBob")
+        } else {
+            listOf(direction)
+        }
+
+        if (expectedType != null) {
+            for (dir in candidateDirections) {
+                try {
+                    val aad = buildAad(target, expectedType, dir)
+                    return unpackAeadFrame(key, frame, aad)
+                } catch (_: Exception) {}
+            }
+            try {
+                return unpackAeadFrame(key, frame, null)
+            } catch (_: Exception) {}
+            throw IllegalArgumentException("Failed to decrypt frame with expectedType 0x%02X and target".format(expectedType))
+        }
+
+        val candidateTypes = byteArrayOf(
+            TYPE_TEXT_MESSAGE,
+            TYPE_CHUNK_DATA,
+            TYPE_REKEY_OFFER,
+            TYPE_REKEY_RESPONSE,
+            TYPE_HANDSHAKE_FINALIZE
+        )
+        var lastException: Exception? = null
+        for (dir in candidateDirections) {
+            for (candidate in candidateTypes) {
+                try {
+                    val aad = buildAad(target, candidate, dir)
+                    val msg = unpackAeadFrame(key, frame, aad)
+                    if (msg.msgType == candidate) {
+                        return msg
+                    }
+                } catch (e: Exception) {
+                    lastException = e
+                }
+            }
+        }
+        try {
+            return unpackAeadFrame(key, frame, null)
+        } catch (_: Exception) {}
+
+        throw lastException ?: IllegalArgumentException("Failed to decrypt frame with AAD ($direction, target)")
     }
 }

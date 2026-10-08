@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.AppDatabase
@@ -227,6 +229,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Alice initiates Handshake:
      * Generates QR code data, begins polling Target_0 on DHT.
      */
+    private var bobRepublishJob: Job? = null
+
+    /**
+     * Alice initiates Handshake:
+     * Generates QR code data, begins polling Target_0 on DHT with an extended window (10 minutes).
+     * Sensitive private key sk_A is preserved across corrupted/invalid frames and only wiped on verified key confirmation.
+     */
     fun startAliceHandshake(contactName: String = "Bob") {
         val aliceInit = HandshakeManager.aliceCreateHandshake()
         _aliceHandshakeState.value = aliceInit
@@ -235,7 +244,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Waiting for partner to scan QR and PUT to DHT..."
             var attempts = 0
-            while (_isHandshaking.value && attempts < 60) {
+            val maxAttempts = 200 // 200 * 3000ms = 600s = 10 minutes
+            while (_isHandshaking.value && attempts < maxAttempts) {
                 delay(3000L)
                 attempts++
                 val item = dhtLeafNode.getMutable(aliceInit.target0)
@@ -243,6 +253,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         val session = HandshakeManager.aliceFinalize(
                             skA = aliceInit.skA,
+                            pkA = aliceInit.pkA,
                             seedInit = aliceInit.seedInit,
                             frame = item.v
                         )
@@ -264,20 +275,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             chainKeyOut = session.chainKeyOut,
                             chainKeyIn = session.chainKeyIn,
                             counterOut = session.counterOut,
-                            counterIn = session.counterIn
+                            counterIn = session.counterIn,
+                            isInitiator = true,
+                            sas = session.sas,
+                            fingerprint = session.fingerprint
                         )
 
                         repository.addContact(newContact)
                         _aliceHandshakeState.value = null
                         _isHandshaking.value = false
                         _selectedContactId.value = newContactId
-                        _statusNotification.value = "Handshake complete! Post-quantum tunnel established."
+                        _statusNotification.value = "Connected! SAS: ${session.sas}. Post-quantum ratcheting active."
                         break
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                        // Key confirmation failed or frame corrupted: preserve skA and keep listening
+                    }
                 }
             }
             if (_isHandshaking.value) {
-                _statusNotification.value = "Handshake timed out. Try again."
+                _statusNotification.value = "Handshake timed out (10 min). Try again."
+                aliceInit.destroySensitiveKeys()
+                _aliceHandshakeState.value = null
                 _isHandshaking.value = false
             }
         }
@@ -285,7 +303,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Bob joins Handshake:
-     * Scans QR bytes, encapsulates ML-KEM-512 secret, puts to DHT at Target_0.
+     * Scans QR bytes, encapsulates ML-KEM-512 secret, checks putMutable result,
+     * and sets up periodic republish to DHT at Target_0.
      */
     fun processBobHandshake(qrBytes: ByteArray, contactName: String = "Alice") {
         viewModelScope.launch(Dispatchers.IO) {
@@ -302,14 +321,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     frame = bobResult.frame
                 )
 
-                // PUT to DHT Target_0
-                dhtLeafNode.putMutable(
+                // 1. Bob verifies the result of putMutable
+                val success = dhtLeafNode.putMutable(
                     target = bobResult.target0,
                     v = bobResult.frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = bobResult.edPrivateKeySeed
                 )
+
+                if (!success) {
+                    _statusNotification.value = "Initial DHT publish failed, retrying in background..."
+                }
+
+                // 2. Launch republish loop: periodically republish to Target_0
+                bobRepublishJob?.cancel()
+                bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
+                    var republishCount = 0
+                    // Republish every 15s for up to 10 minutes (40 iterations)
+                    while (isActive && republishCount < 40) {
+                        delay(15_000L)
+                        republishCount++
+                        dhtLeafNode.putMutable(
+                            target = bobResult.target0,
+                            v = bobResult.frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = bobResult.edPrivateKeySeed
+                        )
+                    }
+                }
 
                 val newContactId = UUID.randomUUID().toString()
                 val newContact = ContactEntity(
@@ -318,13 +359,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     chainKeyOut = bobResult.chainKeyBtoA,
                     chainKeyIn = bobResult.chainKeyAtoB,
                     counterOut = 0,
-                    counterIn = 0
+                    counterIn = 0,
+                    isInitiator = false,
+                    sas = bobResult.sas,
+                    fingerprint = bobResult.fingerprint
                 )
 
                 repository.addContact(newContact)
                 _isHandshaking.value = false
                 _selectedContactId.value = newContactId
-                _statusNotification.value = "Connected! Post-quantum ratcheting active."
+                _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
             } catch (e: Exception) {
                 _statusNotification.value = "Failed to process QR: ${e.message}"
                 _isHandshaking.value = false
@@ -338,6 +382,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        bobRepublishJob?.cancel()
+        _aliceHandshakeState.value?.destroySensitiveKeys()
         dhtLeafNode.stop()
         trafficGenerator.stop()
         pollingManager.stop()

@@ -179,7 +179,12 @@ class ChatRepository(
                 timestampUTC = System.currentTimeMillis(),
                 text = text
             )
-            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                direction = contact.outboundDirection
+            )
 
             org.pqchat.dht.debug.MessageDebugLogger.logOutgoingTextMessage(
                 contactId = contactId,
@@ -319,7 +324,8 @@ class ChatRepository(
                 currentEdSeed = slot.edPrivateKeySeed,
                 currentMsgKey = slot.msgKey,
                 seqNum = contact.counterOut and 0xFFFF,
-                ackNum = contact.counterIn and 0xFFFF
+                ackNum = contact.counterIn and 0xFFFF,
+                direction = contact.outboundDirection
             )
 
             val msgId = messageDao.insertMessage(
@@ -460,7 +466,12 @@ class ChatRepository(
                     timestampUTC = System.currentTimeMillis(),
                     text = msg.textContent.raw
                 )
-                val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+                val frame = BinaryFrameCodec.packAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    direction = currentContact.outboundDirection
+                )
                 val ok = dhtLeafNode.putMutable(
                     target = slot.target,
                     v = frame,
@@ -493,7 +504,9 @@ class ChatRepository(
             epoch = newEpoch,
             seqNum = contact.counterOut and 0xFFFF,
             ackNum = contact.counterIn and 0xFFFF,
-            msgKey = slot.msgKey
+            msgKey = slot.msgKey,
+            target = slot.target,
+            direction = contact.outboundDirection
         )
 
         pendingRekeyOfferDao?.insertOrUpdate(
@@ -561,8 +574,13 @@ class ChatRepository(
         for (sk in skipped) {
             val item = dhtLeafNode.getMutable(sk.target, skipLocalStore = isSelf) ?: continue
             try {
-                val frameMsg = BinaryFrameCodec.unpackAeadFrame(sk.msgKey, item.v)
                 val contact = contactDao.getContactById(contactId) ?: continue
+                val frameMsg = BinaryFrameCodec.unpackAeadFrame(
+                    key = sk.msgKey,
+                    frame = item.v,
+                    target = sk.target,
+                    direction = contact.inboundDirection
+                )
                 val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
 
                 when (frameMsg.msgType) {
@@ -739,7 +757,13 @@ class ChatRepository(
         isSelf: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
         try {
-            val frameMsg = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, item.v)
+            val contact = contactDao.getContactById(contactId) ?: return@withContext false
+            val frameMsg = BinaryFrameCodec.unpackAeadFrame(
+                key = slot.msgKey,
+                frame = item.v,
+                target = slot.target,
+                direction = contact.inboundDirection
+            )
 
             org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
                 contactId = contactId,
@@ -752,7 +776,6 @@ class ChatRepository(
                 slotMsgKey = slot.msgKey
             )
 
-            val contact = contactDao.getContactById(contactId) ?: return@withContext false
             val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
 
             // Ignore if already marked in sliding window bitmap
@@ -839,7 +862,12 @@ class ChatRepository(
                         rekeyEpoch = offerPayload.rekeyEpoch,
                         mlKemCiphertext = ctNew
                     )
-                    val respFrame = BinaryFrameCodec.packAeadFrame(outSlot.msgKey, plaintext)
+                    val respFrame = BinaryFrameCodec.packAeadFrame(
+                        key = outSlot.msgKey,
+                        plaintext = plaintext,
+                        target = outSlot.target,
+                        direction = currentContact.outboundDirection
+                    )
 
                     org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
                         contactId = contactId,
