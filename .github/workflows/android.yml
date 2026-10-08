@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -32,14 +32,14 @@ jobs:
 
       - name: Upload Test Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: unit-test-results
           path: app/build/reports/tests/testDebugUnitTest/
 
       - name: Upload Lint Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lint-results
           path: app/build/reports/lint-results-debug.html
@@ -50,10 +50,10 @@ jobs:
     needs: unit-tests-and-lint
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -79,7 +79,7 @@ jobs:
 
       - name: Upload Instrumented Test Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: instrumented-test-results
           path: app/build/reports/androidTests/connected/
