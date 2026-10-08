@@ -69,7 +69,9 @@ android {
     testOptions {
         unitTests.all {
             it.useJUnitPlatform()
-            it.exclude("**/integration/**")
+            if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
+                it.exclude("**/integration/**")
+            }
         }
     }
 }
