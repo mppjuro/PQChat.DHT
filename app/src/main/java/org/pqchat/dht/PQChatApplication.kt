@@ -48,8 +48,9 @@ class PQChatApplication : Application() {
         // Initialize Core Components & Singletons
         database = AppDatabase.getInstance(this)
         dhtLeafNode = DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao()).apply { start() }
-        repository = ChatRepository(database, dhtLeafNode)
-        trafficGenerator = PoissonTrafficGenerator(dhtLeafNode).apply { start() }
+        val pendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
+        repository = ChatRepository(database, dhtLeafNode, pendingAckQueue)
+        trafficGenerator = PoissonTrafficGenerator(dhtLeafNode, pendingAckQueue = pendingAckQueue).apply { start() }
         settingsManager = AppSettingsManager(this)
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }
 

@@ -41,6 +41,16 @@ object CryptoUtils {
     }
 
     /**
+     * Compute HMAC-SHA256 (32 bytes).
+     */
+    fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        val secretKey = SecretKeySpec(key, "HmacSHA256")
+        mac.init(secretKey)
+        return mac.doFinal(data)
+    }
+
+    /**
      * Constant-time comparison of two byte arrays to prevent timing side-channel attacks.
      */
     fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {

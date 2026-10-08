@@ -132,7 +132,10 @@ object BinaryFrameCodec {
         val ackNum: Int,
         val timestampUTC: Long,
         val payload: DecodedPayload
-    )
+    ) {
+        val last_received_seq: Int get() = ackNum
+        val lastReceivedSeq: Int get() = ackNum
+    }
 
     // ==========================================
     // ENCODING / PACKING

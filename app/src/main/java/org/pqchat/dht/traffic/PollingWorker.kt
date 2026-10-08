@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import org.pqchat.dht.PQChatApplication
 import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.repository.ChatRepository
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import java.util.concurrent.TimeUnit
 
@@ -30,6 +31,9 @@ class PollingWorker(
             // Poll all registered contact incoming slots from DHT
             repository.pollAllContactsIncoming()
 
+            // Execute periodic republish pass for any messages pending delivery
+            executeRepublishPass(repository.dhtLeafNode)
+
             // Keep Doze alarm synced for maintenance windows
             app?.pollingScheduler?.scheduleNextDozeAlarm()
 
@@ -39,8 +43,72 @@ class PollingWorker(
         }
     }
 
+    data class RepublishTask(
+        val messageId: Long,
+        val contactId: String,
+        val target: ByteArray,
+        val payload: ByteArray,
+        val edPrivateKeySeed: ByteArray,
+        val seq: Long = DhtClient.DEFAULT_MUTABLE_SEQ,
+        val intervalMs: Long = 60_000L,
+        val maxRetries: Int = 40,
+        var currentAttempts: Int = 0
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is RepublishTask) return false
+            return messageId == other.messageId && contactId == other.contactId
+        }
+
+        override fun hashCode(): Int = messageId.hashCode()
+    }
+
     companion object {
         const val WORK_NAME = "PQChatPollingWorker"
+
+        private val republishTasks = java.util.concurrent.ConcurrentHashMap<Long, RepublishTask>()
+
+        fun registerRepublishTask(task: RepublishTask) {
+            republishTasks[task.messageId] = task
+        }
+
+        fun unregisterRepublishTask(messageId: Long): RepublishTask? {
+            return republishTasks.remove(messageId)
+        }
+
+        fun isRepublishTaskRegistered(messageId: Long): Boolean {
+            return republishTasks.containsKey(messageId)
+        }
+
+        fun getRegisteredRepublishTasks(): List<RepublishTask> {
+            return republishTasks.values.toList()
+        }
+
+        fun clearRepublishTasks() {
+            republishTasks.clear()
+        }
+
+        suspend fun executeRepublishPass(dhtClient: DhtClient): Int {
+            var count = 0
+            for ((id, task) in republishTasks) {
+                if (task.currentAttempts >= task.maxRetries) {
+                    republishTasks.remove(id)
+                    continue
+                }
+                val ok = dhtClient.putMutable(
+                    target = task.target,
+                    v = task.payload,
+                    seq = task.seq,
+                    salt = null,
+                    sk = task.edPrivateKeySeed
+                )
+                if (ok) {
+                    task.currentAttempts++
+                    count++
+                }
+            }
+            return count
+        }
 
         fun enqueuePeriodicWork(context: Context, intervalMinutes: Long = 15L) {
             val constraints = Constraints.Builder()

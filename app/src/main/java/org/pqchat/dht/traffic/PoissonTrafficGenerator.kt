@@ -19,12 +19,14 @@ import kotlin.math.ln
  */
 class PoissonTrafficGenerator(
     private val dhtLeafNode: DhtClient,
-    private val lambda: Double = 1.0 / 480.0 // average once every 8 minutes (480s)
+    private val lambda: Double = 1.0 / 480.0, // average once every 8 minutes (480s)
+    val pendingAckQueue: PendingAckQueue = PendingAckQueue()
 ) {
     data class CoverEvent(
         val timestamp: Long,
         val targetHex: String,
-        val intervalSeconds: Double
+        val intervalSeconds: Double,
+        val isAck: Boolean = false
     )
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -43,6 +45,49 @@ class PoissonTrafficGenerator(
         return (deltaSeconds * 1000.0).toLong().coerceAtLeast(1000L)
     }
 
+    /**
+     * Emits a single cover traffic tick:
+     * If pendingAckQueue has an item, replaces the dummy with an encrypted Cover-Traffic ACK token.
+     * Otherwise emits a CSPRNG dummy packet.
+     */
+    suspend fun processCoverTrafficTick(delayMs: Long = 0L): CoverEvent {
+        val pendingAck = pendingAckQueue.poll()
+        val event = if (pendingAck != null) {
+            val ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
+            val ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
+            val ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
+                ratchetKey = pendingAck.ratchetKey,
+                messageId = pendingAck.messageId,
+                seqNum = pendingAck.seqNum
+            )
+            dhtLeafNode.putMutable(
+                target = ackTarget,
+                v = ackPayload,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = ackSeed
+            )
+            CoverEvent(
+                timestamp = System.currentTimeMillis(),
+                targetHex = CryptoUtils.toHex(ackTarget),
+                intervalSeconds = delayMs / 1000.0,
+                isAck = true
+            )
+        } else {
+            val dummySeed = CryptoUtils.secureRandomBytes(32)
+            val dummyTarget = CryptoUtils.sha1(dummySeed)
+            dhtLeafNode.sendCoverTrafficDummy()
+            CoverEvent(
+                timestamp = System.currentTimeMillis(),
+                targetHex = CryptoUtils.toHex(dummyTarget),
+                intervalSeconds = delayMs / 1000.0,
+                isAck = false
+            )
+        }
+        _eventFlow.emit(event)
+        return event
+    }
+
     fun start() {
         if (isRunning) return
         isRunning = true
@@ -54,17 +99,7 @@ class PoissonTrafficGenerator(
                 if (!isRunning) break
 
                 try {
-                    val dummySeed = CryptoUtils.secureRandomBytes(32)
-                    val dummyTarget = CryptoUtils.sha1(dummySeed)
-                    dhtLeafNode.sendCoverTrafficDummy()
-
-                    _eventFlow.emit(
-                        CoverEvent(
-                            timestamp = System.currentTimeMillis(),
-                            targetHex = CryptoUtils.toHex(dummyTarget),
-                            intervalSeconds = delayMs / 1000.0
-                        )
-                    )
+                    processCoverTrafficTick(delayMs)
                 } catch (_: Exception) {}
             }
         }

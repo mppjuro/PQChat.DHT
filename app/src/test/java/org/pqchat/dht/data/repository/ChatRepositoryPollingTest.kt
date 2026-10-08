@@ -145,6 +145,14 @@ class ChatRepositoryPollingTest {
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean {
             return messages.any { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
         }
+
+        override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> {
+            return messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+        }
+
+        override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> {
+            return messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+        }
     }
 
     private class FakeChunkDao : ChunkDao {
