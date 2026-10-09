@@ -20,7 +20,8 @@ import kotlin.math.ln
 class PoissonTrafficGenerator(
     private val dhtLeafNode: DhtClient,
     private val lambda: Double = 1.0 / 480.0, // average once every 8 minutes (480s)
-    val pendingAckQueue: PendingAckQueue = PendingAckQueue()
+    val pendingAckQueue: PendingAckQueue = PendingAckQueue(),
+    val decoyTargetPool: DecoyTargetPool = DecoyTargetPool.defaultInstance
 ) {
     data class CoverEvent(
         val timestamp: Long,
@@ -67,6 +68,7 @@ class PoissonTrafficGenerator(
                 salt = null,
                 sk = ackSeed
             )
+            decoyTargetPool.registerPopulatedTarget(ackTarget)
             CoverEvent(
                 timestamp = System.currentTimeMillis(),
                 targetHex = CryptoUtils.toHex(ackTarget),
@@ -74,12 +76,12 @@ class PoissonTrafficGenerator(
                 isAck = true
             )
         } else {
-            val dummySeed = CryptoUtils.secureRandomBytes(32)
-            val dummyTarget = CryptoUtils.sha1(dummySeed)
-            dhtLeafNode.sendCoverTrafficDummy()
+            val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
+            val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
+            decoyTargetPool.registerPopulatedTarget(actualTarget)
             CoverEvent(
                 timestamp = System.currentTimeMillis(),
-                targetHex = CryptoUtils.toHex(dummyTarget),
+                targetHex = CryptoUtils.toHex(actualTarget),
                 intervalSeconds = delayMs / 1000.0,
                 isAck = false
             )
