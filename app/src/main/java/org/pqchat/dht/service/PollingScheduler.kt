@@ -6,12 +6,17 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.combine
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.data.settings.AppSettingsManager
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.traffic.AdaptivePollingManager
 import org.pqchat.dht.traffic.PollingWorker
+import org.pqchat.dht.traffic.RepublishPolicy
+import org.pqchat.dht.traffic.RepublishTier
+import org.pqchat.dht.traffic.WorkScheduleDecision
 import org.pqchat.dht.ui.util.NotificationHelper
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -102,6 +107,27 @@ class PollingScheduler(
                 }
             }
         }
+
+        // Synchronize republish policy changes with WorkManager scheduler
+        schedulerScope.launch {
+            combine(
+                settingsManager.intervalRepublishTier1,
+                settingsManager.intervalRepublishTier2,
+                settingsManager.intervalRepublishTier3,
+                settingsManager.republishMaxTtl
+            ) { _, _, _, _ ->
+                settingsManager.getRepublishPolicy()
+            }.collect { policy ->
+                applyRepublishSchedule(policy = policy)
+            }
+        }
+
+        // When a republish task is registered, unregistered, or updated in repository
+        repository.onRepublishTaskUpdated = {
+            schedulerScope.launch {
+                applyRepublishSchedule()
+            }
+        }
     }
 
     fun start() {
@@ -109,6 +135,11 @@ class PollingScheduler(
 
         // Enqueue WorkManager periodic background worker (every 15 min for Doze maintenance)
         context?.let { PollingWorker.enqueuePeriodicWork(it) }
+
+        // Evaluate and schedule republishing for any pending delivery messages
+        schedulerScope.launch {
+            applyRepublishSchedule()
+        }
 
         // Start adaptive polling loop
         pollingManager.onAppForegrounded()
@@ -259,8 +290,101 @@ class PollingScheduler(
         isStarted.set(false)
         pollingManager.stop()
         cancelDozeAlarm()
+        context?.let { PollingWorker.cancelRepublishWork(it) }
         stopForegroundService()
         schedulerScope.cancel()
+    }
+
+    /**
+     * Evaluates active republish tasks and determines the schedule for WorkManager.
+     * Selects the earliest republish interval across all active tasks based on their ages.
+     * Identifies expired tasks exceeding the TTL limit.
+     */
+    fun evaluateRepublishSchedule(
+        currentTimeMs: Long = System.currentTimeMillis(),
+        policy: RepublishPolicy = settingsManager.getRepublishPolicy(),
+        tasks: List<PollingWorker.RepublishTask> = PollingWorker.getRegisteredRepublishTasks()
+    ): WorkScheduleDecision {
+        val expiredIds = mutableListOf<Long>()
+        val activeTasks = mutableListOf<PollingWorker.RepublishTask>()
+
+        for (task in tasks) {
+            val age = (currentTimeMs - task.initialSentTimestamp).coerceAtLeast(0L)
+            if (policy.isExpired(age)) {
+                expiredIds.add(task.messageId)
+            } else {
+                activeTasks.add(task)
+            }
+        }
+
+        if (activeTasks.isEmpty()) {
+            return WorkScheduleDecision(
+                shouldSchedule = false,
+                intervalMinutes = 0L,
+                tier = null,
+                activeTaskCount = 0,
+                expiredTaskIds = expiredIds
+            )
+        }
+
+        var minIntervalMs = Long.MAX_VALUE
+        var highestPriorityTier = RepublishTier.TIER3_LONG_TERM
+
+        for (task in activeTasks) {
+            val age = (currentTimeMs - task.initialSentTimestamp).coerceAtLeast(0L)
+            val tier = policy.getTier(age)
+            val interval = policy.getIntervalForTier(tier)
+            if (interval in 1 until minIntervalMs) {
+                minIntervalMs = interval
+                highestPriorityTier = tier
+            }
+        }
+
+        // WorkManager minimum periodic interval constraint is 15 minutes
+        val intervalMinutes = TimeUnit.MILLISECONDS
+            .toMinutes(minIntervalMs)
+            .coerceAtLeast(15L)
+
+        return WorkScheduleDecision(
+            shouldSchedule = true,
+            intervalMinutes = intervalMinutes,
+            tier = highestPriorityTier,
+            activeTaskCount = activeTasks.size,
+            expiredTaskIds = expiredIds
+        )
+    }
+
+    /**
+     * Applies the calculated republish schedule:
+     * - Marks expired messages as EXPIRED_OFFLINE in Room DB and unregisters them.
+     * - Scans DB for any pending messages that expired offline.
+     * - If active tasks remain, schedules or updates WorkManager periodic republish work.
+     * - If no active tasks remain, cancels WorkManager republish work to stop waking device radio.
+     */
+    suspend fun applyRepublishSchedule(
+        currentTimeMs: Long = System.currentTimeMillis(),
+        policy: RepublishPolicy = settingsManager.getRepublishPolicy()
+    ): WorkScheduleDecision = withContext(Dispatchers.IO) {
+        val decision = evaluateRepublishSchedule(currentTimeMs, policy)
+
+        // Mark expired messages in DB and unregister
+        for (expiredId in decision.expiredTaskIds) {
+            repository.markMessageExpiredOffline(expiredId)
+        }
+
+        // Also check any offline pending messages in DB that might have expired
+        repository.expireOutdatedPendingMessages(policy.maxTtlMs, currentTimeMs)
+
+        val ctx = context
+        if (ctx != null) {
+            if (decision.shouldSchedule) {
+                PollingWorker.scheduleRepublishWork(ctx, decision.intervalMinutes)
+            } else {
+                PollingWorker.cancelRepublishWork(ctx)
+            }
+        }
+
+        decision
     }
 
     companion object {

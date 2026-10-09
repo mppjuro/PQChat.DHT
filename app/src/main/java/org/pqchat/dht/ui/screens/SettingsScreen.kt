@@ -41,6 +41,10 @@ fun SettingsScreen(
     val intervalAppActive by viewModel.intervalAppActive.collectAsState()
     val intervalBgIdle by viewModel.intervalBackgroundIdle.collectAsState()
     val intervalDoze by viewModel.intervalDozeSleep.collectAsState()
+    val intervalRepublishTier1 by viewModel.intervalRepublishTier1.collectAsState()
+    val intervalRepublishTier2 by viewModel.intervalRepublishTier2.collectAsState()
+    val intervalRepublishTier3 by viewModel.intervalRepublishTier3.collectAsState()
+    val republishMaxTtl by viewModel.republishMaxTtl.collectAsState()
 
     Scaffold(
         topBar = {
@@ -247,7 +251,93 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ==================== SECTION 3: SELF-CONVERSATION / DHT TEST ====================
+            // ==================== SECTION 3: DHT REPUBLISHING & TTL ====================
+            SettingsSectionHeader(
+                title = "Republishing DHT i limit TTL (Exponential Backoff)",
+                icon = Icons.Default.Autorenew
+            )
+
+            Surface(
+                color = appColors.surface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Odświeżanie rekordu w DHT i limit TTL",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Dla niepotwierdzonych wiadomości węzeł odświeża wpisy w sieci DHT ze stopniowo wydłużającymi się przerwami (Exponential Backoff) w celu ochrony baterii i radia urządzenia. Po przekroczeniu limitu TTL wiadomość zostaje oznaczona jako EXPIRED_OFFLINE, a wybudzanie radia urządzenia całkowicie zatrzymane.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // Tier 1: 0 - 2h (Default: 15 minut)
+                    IntervalDropdownRow(
+                        title = "1. Pierwsze 2 godziny (Tier 1)",
+                        subtitle = "Częste odświeżanie po nadaniu (domyślnie 15 minut)",
+                        currentMillis = intervalRepublishTier1,
+                        defaultMillis = DefaultRepublishConfig.TIER1_INTERVAL,
+                        options = REPUBLISH_TIER1_OPTIONS,
+                        onSelect = { viewModel.setIntervalRepublishTier1(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Tier 2: 2h - 12h (Default: 1 godzina)
+                    IntervalDropdownRow(
+                        title = "2. Od 2 do 12 godzin (Tier 2)",
+                        subtitle = "Średni interwał ponawiania (domyślnie 1 godzina)",
+                        currentMillis = intervalRepublishTier2,
+                        defaultMillis = DefaultRepublishConfig.TIER2_INTERVAL,
+                        options = REPUBLISH_TIER2_OPTIONS,
+                        onSelect = { viewModel.setIntervalRepublishTier2(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Tier 3: Powyżej 12h do TTL (Default: 6 godzin)
+                    IntervalDropdownRow(
+                        title = "3. Powyżej 12 godzin (Tier 3)",
+                        subtitle = "Rzadkie odświeżanie długoterminowe (domyślnie 6 godzin)",
+                        currentMillis = intervalRepublishTier3,
+                        defaultMillis = DefaultRepublishConfig.TIER3_INTERVAL,
+                        options = REPUBLISH_TIER3_OPTIONS,
+                        onSelect = { viewModel.setIntervalRepublishTier3(it) }
+                    )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Max TTL: (Default: 48 godzin)
+                    IntervalDropdownRow(
+                        title = "4. Maksymalny czas życia rekordu (TTL)",
+                        subtitle = "Po tym czasie wiadomość staje się EXPIRED_OFFLINE i radio przestaje się wybudzać (domyślnie 48 godzin)",
+                        currentMillis = republishMaxTtl,
+                        defaultMillis = DefaultRepublishConfig.MAX_TTL,
+                        options = REPUBLISH_TTL_OPTIONS,
+                        onSelect = { viewModel.setRepublishMaxTtl(it) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ==================== SECTION 4: SELF-CONVERSATION / DHT TEST ====================
             SettingsSectionHeader(
                 title = "Rozmowa ze sobą (Test DHT & Notatki)",
                 icon = Icons.Default.Bookmark
@@ -379,13 +469,14 @@ fun IntervalDropdownRow(
     subtitle: String,
     currentMillis: Long,
     defaultMillis: Long,
+    options: List<SyncIntervalOption> = SYNC_INTERVAL_OPTIONS,
     onSelect: (Long) -> Unit
 ) {
     val appColors = LocalAppColors.current
     var expanded by remember { mutableStateOf(false) }
 
-    val currentOption = remember(currentMillis) {
-        SYNC_INTERVAL_OPTIONS.find { it.millis == currentMillis }
+    val currentOption = remember(currentMillis, options) {
+        options.find { it.millis == currentMillis }
             ?: SyncIntervalOption("${currentMillis / 1000}s", currentMillis)
     }
 
@@ -436,7 +527,7 @@ fun IntervalDropdownRow(
                 onDismissRequest = { expanded = false },
                 modifier = Modifier.background(appColors.surface)
             ) {
-                SYNC_INTERVAL_OPTIONS.forEach { option ->
+                options.forEach { option ->
                     val isDefault = option.millis == defaultMillis
                     val isSelected = option.millis == currentMillis
 

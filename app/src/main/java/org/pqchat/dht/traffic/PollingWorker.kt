@@ -27,14 +27,31 @@ class PollingWorker(
                 val dhtNode = DhtLeafNode(nodeCacheDao = db.dhtNodeCacheDao())
                 ChatRepository(db, dhtNode)
             }
+            val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(applicationContext)
+            val policy = settingsManager.getRepublishPolicy()
 
-            // Poll all registered contact incoming slots from DHT
+            // 1. Poll all registered contact incoming slots from DHT
             repository.pollAllContactsIncoming()
 
-            // Execute periodic republish pass for any messages pending delivery
-            executeRepublishPass(repository.dhtLeafNode)
+            // 2. Check pending ACKs
+            repository.checkPendingAcks()
 
-            // Keep Doze alarm synced for maintenance windows
+            // 3. Mark any messages that expired offline in Room DB
+            repository.expireOutdatedPendingMessages(policy.maxTtlMs)
+
+            // 4. Execute periodic republish pass with Exponential Backoff & TTL
+            executeRepublishPass(
+                dhtClient = repository.dhtLeafNode,
+                policy = policy,
+                onMessageExpired = { messageId ->
+                    repository.markMessageExpiredOffline(messageId)
+                }
+            )
+
+            // 5. Update republish WorkManager schedule (adjust interval or stop if all messages ACKed/expired)
+            app?.pollingScheduler?.applyRepublishSchedule(policy = policy)
+
+            // 6. Keep Doze alarm synced for maintenance windows
             app?.pollingScheduler?.scheduleNextDozeAlarm()
 
             Result.success()
@@ -50,6 +67,8 @@ class PollingWorker(
         val payload: ByteArray,
         val edPrivateKeySeed: ByteArray,
         val seq: Long = DhtClient.DEFAULT_MUTABLE_SEQ,
+        val initialSentTimestamp: Long = System.currentTimeMillis(),
+        var lastRepublishedTimestamp: Long = initialSentTimestamp,
         val intervalMs: Long = 60_000L,
         val maxRetries: Int = 40,
         var currentAttempts: Int = 0
@@ -65,6 +84,8 @@ class PollingWorker(
 
     companion object {
         const val WORK_NAME = "PQChatPollingWorker"
+        const val REPUBLISH_WORK_NAME = "PQChatRepublishWorker"
+        const val TAG_REPUBLISH = "republish_work"
 
         private val republishTasks = java.util.concurrent.ConcurrentHashMap<Long, RepublishTask>()
 
@@ -88,26 +109,81 @@ class PollingWorker(
             republishTasks.clear()
         }
 
-        suspend fun executeRepublishPass(dhtClient: DhtClient): Int {
+        suspend fun executeRepublishPass(
+            dhtClient: DhtClient,
+            policy: RepublishPolicy = RepublishPolicy(),
+            currentTimeMs: Long = System.currentTimeMillis(),
+            onMessageExpired: (suspend (messageId: Long) -> Unit)? = null
+        ): Int {
             var count = 0
-            for ((id, task) in republishTasks) {
-                if (task.currentAttempts >= task.maxRetries) {
-                    republishTasks.remove(id)
+            val tasks = republishTasks.values.toList()
+            for (task in tasks) {
+                val age = (currentTimeMs - task.initialSentTimestamp).coerceAtLeast(0L)
+                if (policy.isExpired(age)) {
+                    republishTasks.remove(task.messageId)
+                    onMessageExpired?.invoke(task.messageId)
                     continue
                 }
-                val ok = dhtClient.putMutable(
-                    target = task.target,
-                    v = task.payload,
-                    seq = task.seq,
-                    salt = null,
-                    sk = task.edPrivateKeySeed
-                )
-                if (ok) {
-                    task.currentAttempts++
-                    count++
+
+                if (task.currentAttempts >= task.maxRetries) {
+                    republishTasks.remove(task.messageId)
+                    continue
+                }
+
+                val interval = policy.getIntervalForAge(age)
+                val timeSinceLast = if (task.lastRepublishedTimestamp == 0L) {
+                    Long.MAX_VALUE
+                } else {
+                    (currentTimeMs - task.lastRepublishedTimestamp).coerceAtLeast(0L)
+                }
+
+                if (timeSinceLast >= interval) {
+                    val ok = dhtClient.putMutable(
+                        target = task.target,
+                        v = task.payload,
+                        seq = task.seq,
+                        salt = null,
+                        sk = task.edPrivateKeySeed
+                    )
+                    if (ok) {
+                        task.lastRepublishedTimestamp = currentTimeMs
+                        task.currentAttempts++
+                        count++
+                    }
                 }
             }
             return count
+        }
+
+        fun buildPeriodicWorkRequest(intervalMinutes: Long): PeriodicWorkRequest {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            return PeriodicWorkRequestBuilder<PollingWorker>(
+                intervalMinutes.coerceAtLeast(15L), TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+                .addTag(TAG_REPUBLISH)
+                .build()
+        }
+
+        fun scheduleRepublishWork(context: Context, intervalMinutes: Long) {
+            try {
+                val workRequest = buildPeriodicWorkRequest(intervalMinutes)
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    REPUBLISH_WORK_NAME,
+                    ExistingPeriodicWorkPolicy.UPDATE,
+                    workRequest
+                )
+            } catch (_: Exception) {}
+        }
+
+        fun cancelRepublishWork(context: Context) {
+            try {
+                WorkManager.getInstance(context).cancelUniqueWork(REPUBLISH_WORK_NAME)
+            } catch (_: Exception) {}
         }
 
         fun enqueuePeriodicWork(context: Context, intervalMinutes: Long = 15L) {
