@@ -88,7 +88,8 @@ fun ChatScreen(
                 if (bytes != null && bytes.isNotEmpty()) {
                     viewModel.sendImagePayload(bytes)
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -357,6 +358,7 @@ fun MessageBubble(message: MessageEntity) {
                     val statusColor = when (message.status) {
                         "CONFIRMED_DHT" -> ElectricGreen
                         "DELIVERED", "SENT_DHT", "PENDING_DELIVERY" -> appColors.primary
+                        "EXPIRED_OFFLINE" -> Color(0xFFFF5252)
                         else -> AmberWarning
                     }
 

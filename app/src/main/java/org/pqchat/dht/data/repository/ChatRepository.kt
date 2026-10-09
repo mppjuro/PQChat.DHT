@@ -68,6 +68,33 @@ class ChatRepository(
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
 
     var onIncomingMessageDelivered: ((contactId: String, textContent: String, isImage: Boolean) -> Unit)? = null
+    var onRepublishTaskUpdated: (() -> Unit)? = null
+
+    suspend fun markMessageExpiredOffline(messageId: Long) = withContext(Dispatchers.IO) {
+        messageDao.updateStatus(messageId, "EXPIRED_OFFLINE")
+        org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(messageId)
+        onRepublishTaskUpdated?.invoke()
+    }
+
+    suspend fun expireOutdatedPendingMessages(
+        maxTtlMs: Long,
+        currentTimeMs: Long = System.currentTimeMillis()
+    ): List<Long> = withContext(Dispatchers.IO) {
+        val pending = messageDao.getAllPendingDeliveryMessages()
+        val expiredIds = mutableListOf<Long>()
+        for (msg in pending) {
+            val age = (currentTimeMs - msg.timestamp).coerceAtLeast(0L)
+            if (age >= maxTtlMs) {
+                messageDao.updateStatus(msg.id, "EXPIRED_OFFLINE")
+                org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(msg.id)
+                expiredIds.add(msg.id)
+            }
+        }
+        if (expiredIds.isNotEmpty()) {
+            onRepublishTaskUpdated?.invoke()
+        }
+        expiredIds
+    }
 
     fun getContactMutex(contactId: String): Mutex =
         contactMutexes.computeIfAbsent(contactId) { Mutex() }
@@ -257,9 +284,11 @@ class ChatRepository(
                             contactId = contactId,
                             target = slot.target,
                             payload = frame,
-                            edPrivateKeySeed = slot.edPrivateKeySeed
+                            edPrivateKeySeed = slot.edPrivateKeySeed,
+                            initialSentTimestamp = System.currentTimeMillis()
                         )
                     )
+                    onRepublishTaskUpdated?.invoke()
                 }
                 // Advance outgoing chain state ONLY on success
                 contactDao.updateOutgoingState(
@@ -425,9 +454,11 @@ class ChatRepository(
                             contactId = contactId,
                             target = firstChunk.target,
                             payload = firstChunk.frame,
-                            edPrivateKeySeed = firstChunk.edPrivateKeySeed
+                            edPrivateKeySeed = firstChunk.edPrivateKeySeed,
+                            initialSentTimestamp = System.currentTimeMillis()
                         )
                     )
+                    onRepublishTaskUpdated?.invoke()
                 }
                 contactDao.updateOutgoingState(
                     id = contactId,
@@ -517,9 +548,11 @@ class ChatRepository(
                                 contactId = contactId,
                                 target = firstChunk.target,
                                 payload = firstChunk.frame,
-                                edPrivateKeySeed = firstChunk.edPrivateKeySeed
+                                edPrivateKeySeed = firstChunk.edPrivateKeySeed,
+                                initialSentTimestamp = msg.timestamp
                             )
                         )
+                        onRepublishTaskUpdated?.invoke()
                     }
                     contactDao.updateOutgoingState(
                         id = contactId,
@@ -564,9 +597,11 @@ class ChatRepository(
                                 contactId = contactId,
                                 target = slot.target,
                                 payload = frame,
-                                edPrivateKeySeed = slot.edPrivateKeySeed
+                                edPrivateKeySeed = slot.edPrivateKeySeed,
+                                initialSentTimestamp = msg.timestamp
                             )
                         )
+                        onRepublishTaskUpdated?.invoke()
                     }
                     contactDao.updateOutgoingState(
                         id = contactId,
@@ -1170,6 +1205,7 @@ class ChatRepository(
             if (isValid) {
                 messageDao.updateStatus(msg.id, "DELIVERED")
                 org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(msg.id)
+                onRepublishTaskUpdated?.invoke()
 
                 val slotTarget = msg.slotTarget
                 val slotEdSeed = msg.slotEdSeed?.raw
@@ -1204,6 +1240,7 @@ class ChatRepository(
             if (msg.seqNum < lastReceivedSeq) {
                 messageDao.updateStatus(msg.id, "DELIVERED")
                 org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(msg.id)
+                onRepublishTaskUpdated?.invoke()
 
                 val slotTarget = msg.slotTarget
                 val slotEdSeed = msg.slotEdSeed?.raw
@@ -1225,14 +1262,39 @@ class ChatRepository(
 
     /**
      * Starts an active coroutine loop for periodically republishing a message until
-     * its task is unregistered (e.g. upon detecting ACK) or max retries are reached.
+     * its task is unregistered (e.g. upon detecting ACK) or max retries/TTL are reached.
      */
-    fun startRepublishLoopForMessage(task: org.pqchat.dht.traffic.PollingWorker.RepublishTask): Job {
+    fun startRepublishLoopForMessage(
+        task: org.pqchat.dht.traffic.PollingWorker.RepublishTask,
+        policy: org.pqchat.dht.traffic.RepublishPolicy? = null
+    ): Job {
         org.pqchat.dht.service.DhtWorker.registerRepublishTask(task)
+        onRepublishTaskUpdated?.invoke()
         return repositoryScope.launch {
             while (isActive && org.pqchat.dht.service.DhtWorker.isRepublishTaskRegistered(task.messageId)) {
-                delay(task.intervalMs)
+                val effectivePolicy = policy ?: org.pqchat.dht.traffic.RepublishPolicy()
+                val now = System.currentTimeMillis()
+                val age = (now - task.initialSentTimestamp).coerceAtLeast(0L)
+                if (effectivePolicy.isExpired(age)) {
+                    markMessageExpiredOffline(task.messageId)
+                    break
+                }
+
+                val interval = if (policy != null) {
+                    effectivePolicy.getIntervalForAge(age)
+                } else {
+                    task.intervalMs
+                }
+                delay(interval)
                 if (!isActive || !org.pqchat.dht.service.DhtWorker.isRepublishTaskRegistered(task.messageId)) break
+
+                val republishNow = System.currentTimeMillis()
+                val republishAge = (republishNow - task.initialSentTimestamp).coerceAtLeast(0L)
+                if (effectivePolicy.isExpired(republishAge)) {
+                    markMessageExpiredOffline(task.messageId)
+                    break
+                }
+
                 dhtLeafNode.putMutable(
                     target = task.target,
                     v = task.payload,
@@ -1240,9 +1302,11 @@ class ChatRepository(
                     salt = null,
                     sk = task.edPrivateKeySeed
                 )
+                task.lastRepublishedTimestamp = republishNow
                 task.currentAttempts++
                 if (task.currentAttempts >= task.maxRetries) {
                     org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(task.messageId)
+                    onRepublishTaskUpdated?.invoke()
                     break
                 }
             }

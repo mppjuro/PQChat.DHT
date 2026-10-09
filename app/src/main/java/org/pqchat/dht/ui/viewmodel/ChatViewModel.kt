@@ -31,7 +31,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(dhtLeafNode)
     val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(application)
-    val pollingScheduler = app?.pollingScheduler ?: org.pqchat.dht.service.PollingScheduler(application, repository, dhtLeafNode, settingsManager)
+    val pollingScheduler = app?.pollingScheduler ?: org.pqchat.dht.service.PollingScheduler(
+        application,
+        repository,
+        dhtLeafNode,
+        settingsManager
+    )
     val pollingManager = pollingScheduler.pollingManager
 
     val contacts: StateFlow<List<ContactEntity>> = repository.getAllContactsFlow()
@@ -71,6 +76,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val intervalAppActive: StateFlow<Long> = settingsManager.intervalAppActive
     val intervalBackgroundIdle: StateFlow<Long> = settingsManager.intervalBackgroundIdle
     val intervalDozeSleep: StateFlow<Long> = settingsManager.intervalDozeSleep
+
+    val intervalRepublishTier1: StateFlow<Long> = settingsManager.intervalRepublishTier1
+    val intervalRepublishTier2: StateFlow<Long> = settingsManager.intervalRepublishTier2
+    val intervalRepublishTier3: StateFlow<Long> = settingsManager.intervalRepublishTier3
+    val republishMaxTtl: StateFlow<Long> = settingsManager.republishMaxTtl
 
     init {
         if (app == null) {
@@ -117,6 +127,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setIntervalDozeSleep(ms: Long) {
         settingsManager.setIntervalDozeSleep(ms)
         syncPollingIntervals()
+    }
+
+    fun setIntervalRepublishTier1(ms: Long) {
+        settingsManager.setIntervalRepublishTier1(ms)
+    }
+
+    fun setIntervalRepublishTier2(ms: Long) {
+        settingsManager.setIntervalRepublishTier2(ms)
+    }
+
+    fun setIntervalRepublishTier3(ms: Long) {
+        settingsManager.setIntervalRepublishTier3(ms)
+    }
+
+    fun setRepublishMaxTtl(ms: Long) {
+        settingsManager.setRepublishMaxTtl(ms)
     }
 
     private fun syncPollingIntervals() {
