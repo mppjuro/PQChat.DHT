@@ -145,10 +145,32 @@ class FakeDht(
         return true
     }
 
-    override suspend fun sendCoverTrafficDummy(): Boolean {
+    override suspend fun sendCoverTrafficDummy(): ByteArray? {
         coverTrafficCalls.incrementAndGet()
         simulateDelay()
-        return true
+        val dummySeed = CryptoUtils.secureRandomBytes(32)
+        val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
+        val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
+        val dummyPayload = CryptoUtils.secureRandomBytes(1000)
+
+        val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(dummyPayload, DhtClient.DEFAULT_MUTABLE_SEQ, null)
+        val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(dummySeed, signData)
+        val targetHex = CryptoUtils.toHex(target)
+
+        storage[targetHex] = StoredEntry(
+            item = DhtLeafNode.MutableItem(
+                v = dummyPayload,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                k = dummyKeyPair.publicKey,
+                sig = sig,
+                salt = null,
+                token = null,
+                responder = InetSocketAddress("127.0.0.1", 6881)
+            ),
+            storedAt = System.currentTimeMillis(),
+            ttlMs = defaultTtlMs
+        )
+        return target
     }
 
     private suspend fun simulateDelay() {

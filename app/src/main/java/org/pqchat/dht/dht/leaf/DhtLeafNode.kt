@@ -842,18 +842,19 @@ class DhtLeafNode(
     /**
      * Send dummy cover traffic (chaffing) to random target.
      */
-    override suspend fun sendCoverTrafficDummy(): Boolean {
+    override suspend fun sendCoverTrafficDummy(): ByteArray? {
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
         val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
         val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
-        return putMutable(
+        val ok = putMutable(
             target = target,
             v = dummyPayload,
             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
             salt = null,
             sk = dummySeed
         )
+        return if (ok) target else null
     }
 }

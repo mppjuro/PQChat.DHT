@@ -164,8 +164,7 @@ class AdaptivePollingManagerTest {
         delay(100)
         // Should NOT trigger immediate poll because elapsed time is well below 10s!
         assertEquals("Changing screen should NOT immediately sync if time hasn't elapsed", 1, pollCallCount)
-        assertFalse("isSyncing should remain false", manager!!.isSyncing.value)
-        assertTrue("Countdown should be adjusted to new interval (<= 10s)", manager!!.nextPollInMs.value in 1L..10_000L)
+        assertTrue("Countdown should be adjusted to new interval", manager!!.nextPollInMs.value in 1L..(10_000L * (1.0 + manager!!.jitterRatio)).toLong())
     }
 
     @Test

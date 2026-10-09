@@ -70,6 +70,7 @@ interface DhtClient {
 
     /**
      * Send dummy cover traffic (chaffing) to random target.
+     * Returns the 20-byte target actually published to DHT, or null on failure.
      */
-    suspend fun sendCoverTrafficDummy(): Boolean
+    suspend fun sendCoverTrafficDummy(): ByteArray?
 }

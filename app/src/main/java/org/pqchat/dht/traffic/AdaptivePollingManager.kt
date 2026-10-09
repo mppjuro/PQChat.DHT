@@ -84,6 +84,26 @@ class AdaptivePollingManager(
         }
     }
 
+    /**
+     * Random jitter ratio applied to polling intervals (±30% per docs/threat_model.md).
+     * Distorts polling periodicity to prevent timing correlation attacks.
+     */
+    @Volatile
+    var jitterRatio: Double = 0.30
+
+    @Volatile
+    private var currentCycleIntervalMs: Long = 0L
+
+    /**
+     * Computes jittered interval: interval * (1 + Uniform(-jitterRatio, +jitterRatio)).
+     * E.g. for 0.30, resulting interval is within [0.70 * base, 1.30 * base].
+     */
+    fun computeJitteredInterval(baseIntervalMs: Long, customJitterRatio: Double = jitterRatio): Long {
+        if (customJitterRatio <= 0.0) return baseIntervalMs
+        val factor = (1.0 - customJitterRatio) + (org.pqchat.dht.crypto.CryptoUtils.secureRandom.nextDouble() * (2.0 * customJitterRatio))
+        return (baseIntervalMs * factor).toLong().coerceAtLeast(100L)
+    }
+
     @Volatile
     var activeChatContactId: String? = null
         private set
@@ -103,6 +123,8 @@ class AdaptivePollingManager(
         intervalBackgroundIdleMs = bgIdle
         intervalDozeSleepMs = doze
         if (changed && !_isSyncing.value) {
+            val base = getCurrentIntervalMs()
+            currentCycleIntervalMs = computeJitteredInterval(base)
             immediateSignal?.complete(Unit)
         }
     }
@@ -168,8 +190,10 @@ class AdaptivePollingManager(
                 // Necessary to sync immediately
                 triggerImmediatePoll()
             } else {
-                // Recalculate remaining countdown without forcing immediate poll
-                val remaining = (interval - timeSinceLastPoll).coerceAtLeast(0L)
+                // Recalculate remaining countdown with jitter without forcing immediate poll
+                val jittered = computeJitteredInterval(interval)
+                currentCycleIntervalMs = jittered
+                val remaining = (jittered - timeSinceLastPoll).coerceAtLeast(0L)
                 _nextPollInMs.value = remaining
                 immediateSignal?.complete(Unit)
             }
@@ -205,8 +229,10 @@ class AdaptivePollingManager(
                 } finally {
                     lastPollFinishedTimestamp = System.currentTimeMillis()
                     if (pollingJob == myJob) {
-                        val interval = getCurrentIntervalMs()
-                        _nextPollInMs.value = interval
+                        val base = getCurrentIntervalMs()
+                        val scheduledInterval = computeJitteredInterval(base)
+                        currentCycleIntervalMs = scheduledInterval
+                        _nextPollInMs.value = scheduledInterval
                         _isSyncing.value = false
                     }
                 }
@@ -226,9 +252,9 @@ class AdaptivePollingManager(
                         forceImmediatePoll = false
                         break
                     }
-                    val interval = getCurrentIntervalMs()
+                    val targetInterval = if (currentCycleIntervalMs > 0L) currentCycleIntervalMs else getCurrentIntervalMs()
                     val timeSinceLastPoll = System.currentTimeMillis() - lastPollFinishedTimestamp
-                    val remaining = (interval - timeSinceLastPoll).coerceAtLeast(0L)
+                    val remaining = (targetInterval - timeSinceLastPoll).coerceAtLeast(0L)
                     if (remaining <= 0L) {
                         // Interval has elapsed, proceed to next poll
                         break

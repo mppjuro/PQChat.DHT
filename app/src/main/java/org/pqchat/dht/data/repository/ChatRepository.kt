@@ -25,7 +25,8 @@ class ChatRepository(
     val pendingRekeyOfferDao: PendingRekeyOfferDao?,
     val skippedKeyDao: SkippedKeyDao? = null,
     val dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
-    val pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
+    val pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
+    val decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance
 ) {
     constructor(
         contactDao: ContactDao,
@@ -53,7 +54,8 @@ class ChatRepository(
     constructor(
         database: AppDatabase,
         dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
-        pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
+        pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
+        decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance
     ) : this(
         database.contactDao(),
         database.messageDao(),
@@ -61,8 +63,32 @@ class ChatRepository(
         database.pendingRekeyOfferDao(),
         database.skippedKeyDao(),
         dhtLeafNode,
-        pendingAckQueue
+        pendingAckQueue,
+        decoyTargetPool
     )
+
+    /**
+     * Average number of decoy GET queries executed per polling pass (docs/threat_model.md Section 5.1).
+     */
+    @Volatile
+    var decoyGetRatio: Double = 1.5
+
+    @Volatile
+    var enableDecoyGets: Boolean = true
+
+    /**
+     * Maximum randomized hold delay in ms for outgoing PUT operations (Delayed PUT).
+     * Breaks temporal correlation between chat interaction and DHT emission.
+     */
+    @Volatile
+    var delayedPutMaxMs: Long = 2000L
+
+    /**
+     * Number of parallel dummy decoy PUT slots published per outgoing message.
+     * Blurs sender emissions across multiple populated targets.
+     */
+    @Volatile
+    var decoyPutSlotsCount: Int = 1
 
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
@@ -106,6 +132,99 @@ class ChatRepository(
 
     suspend fun addContact(contact: ContactEntity) = withContext(Dispatchers.IO) {
         contactDao.insertOrUpdate(contact)
+    }
+
+    /**
+     * Publishes parallel dummy decoy PUT slots to the DHT.
+     * Generates a 1000-byte CSPRNG packet signed by an ephemeral Ed25519 key,
+     * blurs sender emission and registers the target in DecoyTargetPool.
+     */
+    internal suspend fun publishDecoyPutSlots(count: Int) {
+        if (count <= 0) return
+        for (i in 0 until count) {
+            val dummySeed = CryptoUtils.secureRandomBytes(32)
+            val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
+            val decoyTarget = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
+            val dummyPayload = CryptoUtils.secureRandomBytes(1000)
+
+            val ok = dhtLeafNode.putMutable(
+                target = decoyTarget,
+                v = dummyPayload,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = dummySeed,
+                skipLocalStore = false
+            )
+            if (ok) {
+                decoyTargetPool.registerPopulatedTarget(decoyTarget)
+            }
+        }
+    }
+
+    /**
+     * Computes the number of decoy GET queries to issue for this polling cycle,
+     * given the configured decoyGetRatio (e.g. 1.5 means 50% chance of 1, 50% chance of 2).
+     */
+    internal fun computeDecoyGetCount(ratio: Double): Int {
+        if (ratio <= 0.0) return 0
+        val base = ratio.toInt()
+        val remainder = ratio - base
+        val extra = if (CryptoUtils.secureRandom.nextDouble() < remainder) 1 else 0
+        return base + extra
+    }
+
+    /**
+     * Collects real, past, and expiring targets associated with existing contacts.
+     * Used to ensure decoy GETs query populated targets rather than unpopulated hashes.
+     */
+    internal suspend fun collectExpiringAndPastTargets(contactId: String?): List<ByteArray> {
+        val targets = mutableListOf<ByteArray>()
+        val contacts = if (contactId != null) {
+            val c = contactDao.getContactById(contactId)
+            if (c != null) listOf(c) else emptyList()
+        } else {
+            contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        }
+
+        for (c in contacts) {
+            if (c.counterIn > 0) {
+                val pastSlot1 = RatchetChain.deriveSlot(c.chainKeyIn, c.counterIn - 1)
+                targets.add(pastSlot1.target)
+            }
+            if (c.counterIn > 1) {
+                val pastSlot2 = RatchetChain.deriveSlot(c.chainKeyIn, c.counterIn - 2)
+                targets.add(pastSlot2.target)
+            }
+            val lookahead = RatchetChain.computeLookaheadSlots(c.chainKeyIn, c.counterIn, windowSize = 2)
+            for (s in lookahead) {
+                targets.add(s.target)
+            }
+        }
+        return targets
+    }
+
+    /**
+     * Executes decoy GET queries directed to real / expiring populated targets.
+     * In accordance with docs/threat_model.md Section 3.2, queries target populated slots
+     * (from Poisson cover traffic, decoy PUT slots, or past contact slots) to survive 0-PUT filtering.
+     */
+    suspend fun executeDecoyGets(contactId: String? = null): Int = withContext(Dispatchers.IO) {
+        if (!enableDecoyGets) return@withContext 0
+        val count = computeDecoyGetCount(decoyGetRatio)
+        if (count <= 0) return@withContext 0
+
+        val targets = decoyTargetPool.getDecoyTargets(count) {
+            runBlocking { collectExpiringAndPastTargets(contactId) }
+        }
+
+        var queried = 0
+        for (target in targets) {
+            try {
+                dhtLeafNode.getMutable(target, skipLocalStore = true)
+                queried++
+            } catch (_: Exception) {}
+        }
+        queried
     }
 
     companion object {
@@ -264,6 +383,19 @@ class ChatRepository(
 
             val isSelf = contactId == SELF_CONTACT_ID
 
+            // Delayed PUT: randomized hold delay (docs/threat_model.md Section 4 & 5.1)
+            if (delayedPutMaxMs > 0L && !isSelf) {
+                val delayMs = (CryptoUtils.secureRandom.nextDouble() * delayedPutMaxMs).toLong().coerceAtLeast(0L)
+                if (delayMs > 0L) {
+                    delay(delayMs)
+                }
+            }
+
+            // Decoy PUT Slots: publish parallel decoy record(s) to blur sender emission
+            if (decoyPutSlotsCount > 0 && !isSelf) {
+                publishDecoyPutSlots(decoyPutSlotsCount)
+            }
+
             // 7. Put to DHT under Target_i
             val success = dhtLeafNode.putMutable(
                 target = slot.target,
@@ -275,6 +407,7 @@ class ChatRepository(
             )
 
             if (success) {
+                decoyTargetPool.registerPopulatedTarget(slot.target)
                 val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
                 messageDao.updateStatus(msgId, newStatus)
                 if (!isSelf) {
@@ -418,6 +551,20 @@ class ChatRepository(
             pendingAckQueue.removeForContact(contactId, contact.counterIn)
 
             val isSelf = contactId == SELF_CONTACT_ID
+
+            // Delayed PUT: randomized hold delay (docs/threat_model.md Section 4 & 5.1)
+            if (delayedPutMaxMs > 0L && !isSelf) {
+                val delayMs = (CryptoUtils.secureRandom.nextDouble() * delayedPutMaxMs).toLong().coerceAtLeast(0L)
+                if (delayMs > 0L) {
+                    delay(delayMs)
+                }
+            }
+
+            // Decoy PUT Slots: publish parallel decoy record(s) to blur sender emission
+            if (decoyPutSlotsCount > 0 && !isSelf) {
+                publishDecoyPutSlots(decoyPutSlotsCount)
+            }
+
             var allSuccess = true
             for (c in chunks) {
                 org.pqchat.dht.debug.MessageDebugLogger.logOutgoingChunkData(
@@ -444,6 +591,9 @@ class ChatRepository(
             }
 
             if (allSuccess) {
+                for (c in chunks) {
+                    decoyTargetPool.registerPopulatedTarget(c.target)
+                }
                 val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
                 messageDao.updateStatus(msgId, newStatus)
                 if (!isSelf && chunks.isNotEmpty()) {
@@ -772,6 +922,9 @@ class ChatRepository(
 
         // Check for Cover-Traffic ACKs for messages pending delivery to this contact
         checkPendingAcks(contactId)
+
+        // Decoy GETs querying populated real / expiring targets (docs/threat_model.md Section 3.2 & 5.1)
+        executeDecoyGets(contactId)
 
         // 1. First, poll any preserved skipped keys for previously out-of-order slots
         if (pollPendingSkippedKeys(contactId)) {
@@ -1324,6 +1477,10 @@ class ChatRepository(
     suspend fun pollAllContactsIncoming(): List<Boolean> = coroutineScope {
         checkPendingAcks(null)
         val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        if (contacts.isEmpty()) {
+            executeDecoyGets(null)
+            return@coroutineScope emptyList()
+        }
         contacts.map { contact ->
             async {
                 pollContactIncoming(contact.id)
