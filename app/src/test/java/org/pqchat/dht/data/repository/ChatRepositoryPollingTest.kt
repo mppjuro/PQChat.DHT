@@ -196,7 +196,7 @@ class ChatRepositoryPollingTest {
         // But slot 1 HAS a message stored in DHT.
         val slot1 = RatchetChain.computeLookaheadSlots(seed, 0, windowSize = 2)[1]
         val plaintext1 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Ahead Msg")
-        val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1)
+        val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1, slot1.target, contact.inboundDirection)
         dhtNode.putMutable(slot1.target, frame1, 2L, null, slot1.edPrivateKeySeed)
 
         // Routine check: pollContactIncoming
@@ -235,13 +235,13 @@ class ChatRepositoryPollingTest {
         // Slot 0 has Message 0
         val slot0 = RatchetChain.deriveSlot(seed, 0)
         val plaintext0 = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Message 0")
-        val frame0 = BinaryFrameCodec.packAeadFrame(slot0.msgKey, plaintext0)
+        val frame0 = BinaryFrameCodec.packAeadFrame(slot0.msgKey, plaintext0, slot0.target, contact.inboundDirection)
         dhtNode.putMutable(slot0.target, frame0, 1L, null, slot0.edPrivateKeySeed)
 
         // Slot 1 has Message 1 (in lookahead window)
         val slot1 = RatchetChain.deriveSlot(slot0.nextChainKey, 1)
         val plaintext1 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Message 1")
-        val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1)
+        val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1, slot1.target, contact.inboundDirection)
         dhtNode.putMutable(slot1.target, frame1, 2L, null, slot1.edPrivateKeySeed)
 
         // Routine poll: message 0 is received at counterIn = 0
@@ -287,14 +287,18 @@ class ChatRepositoryPollingTest {
         val slotC1 = RatchetChain.deriveSlot(seed1, 0)
         val frameC1 = BinaryFrameCodec.packAeadFrame(
             slotC1.msgKey,
-            BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hi C1")
+            BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hi C1"),
+            slotC1.target,
+            c1.inboundDirection
         )
         dhtNode.putMutable(slotC1.target, frameC1, 1L, null, slotC1.edPrivateKeySeed)
 
         val slotC3 = RatchetChain.deriveSlot(seed3, 0)
         val frameC3 = BinaryFrameCodec.packAeadFrame(
             slotC3.msgKey,
-            BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hi C3")
+            BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hi C3"),
+            slotC3.target,
+            c3.inboundDirection
         )
         dhtNode.putMutable(slotC3.target, frameC3, 1L, null, slotC3.edPrivateKeySeed)
 

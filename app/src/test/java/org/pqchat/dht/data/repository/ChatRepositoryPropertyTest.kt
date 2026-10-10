@@ -340,7 +340,8 @@ class ChatRepositoryPropertyTest {
                 chainKeyIn = bobToAliceSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = true
             )
         )
 
@@ -352,7 +353,8 @@ class ChatRepositoryPropertyTest {
                 chainKeyIn = aliceToBobSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = false
             )
         )
 

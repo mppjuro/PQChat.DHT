@@ -35,8 +35,8 @@ object ChunkingEngine {
         currentMsgKey: ByteArray,
         seqNum: Int,
         ackNum: Int,
+        direction: String,
         transferId: ByteArray = CryptoUtils.secureRandomBytes(16),
-        direction: String? = null,
         lastReceivedSeq: Int = ackNum
     ): List<ChunkItem> {
         val totalChunks = (data.size + CHUNK_SIZE - 1) / CHUNK_SIZE
@@ -63,11 +63,7 @@ object ChunkingEngine {
                 totalChunks = totalChunks,
                 chunkData = chunkBytes
             )
-            val frame = if (direction != null) {
-                BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext, subTarget, direction)
-            } else {
-                BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext)
-            }
+            val frame = BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext, subTarget, direction)
 
             chunks.add(
                 ChunkItem(

@@ -80,7 +80,9 @@ object CoverAckProtocol {
             plaintext.put(CryptoUtils.secureRandomBytes(paddingSize))
         }
 
-        return BinaryFrameCodec.packAeadFrame(aesKey, plaintext.array())
+        val ackTarget = computeAckTarget(ratchetKey, messageId)
+        val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
+        return BinaryFrameCodec.packAeadFrame(aesKey, plaintext.array(), aad)
     }
 
     /**
@@ -103,8 +105,11 @@ object CoverAckProtocol {
         System.arraycopy(frame, BinaryFrameCodec.IV_SIZE, tag, 0, BinaryFrameCodec.TAG_SIZE)
         System.arraycopy(frame, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE, ciphertext, 0, BinaryFrameCodec.CIPHERTEXT_SIZE)
 
+        val ackTarget = computeAckTarget(ratchetKey, expectedMessageId)
+        val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
+
         val plaintextBytes = try {
-            AesGcmEngine.decrypt(aesKey, iv, tag, ciphertext, null)
+            AesGcmEngine.decrypt(aesKey, iv, tag, ciphertext, aad)
         } catch (_: Exception) {
             return false
         }

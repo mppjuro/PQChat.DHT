@@ -269,19 +269,18 @@ object BinaryFrameCodec {
     // AEAD ENVELOPE (Creates exactly MAX_FRAME_PAYLOAD_BYTES)
     // ==========================================
 
-    fun buildAad(target: ByteArray, msgType: Byte, direction: String): ByteArray {
+    fun buildAad(target: ByteArray, direction: String): ByteArray {
         val dirBytes = direction.toByteArray(Charsets.UTF_8)
-        val buffer = ByteBuffer.allocate(target.size + 1 + dirBytes.size)
-        buffer.put(target)
-        buffer.put(msgType)
-        buffer.put(dirBytes)
-        return buffer.array()
+        val aad = ByteArray(target.size + dirBytes.size)
+        System.arraycopy(target, 0, aad, 0, target.size)
+        System.arraycopy(dirBytes, 0, aad, target.size, dirBytes.size)
+        return aad
     }
 
     fun packAeadFrame(
         key: ByteArray,
         plaintext: ByteArray,
-        aad: ByteArray? = null
+        aad: ByteArray
     ): ByteArray {
         require(plaintext.size == CIPHERTEXT_SIZE)
         val iv = CryptoUtils.secureRandomBytes(IV_SIZE)
@@ -302,15 +301,14 @@ object BinaryFrameCodec {
         target: ByteArray,
         direction: String
     ): ByteArray {
-        val msgType = plaintext[0]
-        val aad = buildAad(target, msgType, direction)
+        val aad = buildAad(target, direction)
         return packAeadFrame(key, plaintext, aad)
     }
 
     fun unpackAeadFrame(
         key: ByteArray,
         frame: ByteArray,
-        aad: ByteArray? = null
+        aad: ByteArray
     ): FrameMessage {
         require(frame.size == MAX_FRAME_PAYLOAD_BYTES) {
             "Invalid frame size: ${frame.size}, expected $MAX_FRAME_PAYLOAD_BYTES"
@@ -383,55 +381,9 @@ object BinaryFrameCodec {
         key: ByteArray,
         frame: ByteArray,
         target: ByteArray,
-        direction: String,
-        expectedType: Byte? = null
+        direction: String
     ): FrameMessage {
-        val candidateDirections = if (direction == "AliceToBob") {
-            listOf("AliceToBob", "BobToAlice")
-        } else if (direction == "BobToAlice") {
-            listOf("BobToAlice", "AliceToBob")
-        } else {
-            listOf(direction)
-        }
-
-        if (expectedType != null) {
-            for (dir in candidateDirections) {
-                try {
-                    val aad = buildAad(target, expectedType, dir)
-                    return unpackAeadFrame(key, frame, aad)
-                } catch (_: Exception) {}
-            }
-            try {
-                return unpackAeadFrame(key, frame, null)
-            } catch (_: Exception) {}
-            throw IllegalArgumentException("Failed to decrypt frame with expectedType 0x%02X and target".format(expectedType))
-        }
-
-        val candidateTypes = byteArrayOf(
-            TYPE_TEXT_MESSAGE,
-            TYPE_CHUNK_DATA,
-            TYPE_REKEY_OFFER,
-            TYPE_REKEY_RESPONSE,
-            TYPE_HANDSHAKE_FINALIZE
-        )
-        var lastException: Exception? = null
-        for (dir in candidateDirections) {
-            for (candidate in candidateTypes) {
-                try {
-                    val aad = buildAad(target, candidate, dir)
-                    val msg = unpackAeadFrame(key, frame, aad)
-                    if (msg.msgType == candidate) {
-                        return msg
-                    }
-                } catch (e: Exception) {
-                    lastException = e
-                }
-            }
-        }
-        try {
-            return unpackAeadFrame(key, frame, null)
-        } catch (_: Exception) {}
-
-        throw lastException ?: IllegalArgumentException("Failed to decrypt frame with AAD ($direction, target)")
+        val aad = buildAad(target, direction)
+        return unpackAeadFrame(key, frame, aad)
     }
 }

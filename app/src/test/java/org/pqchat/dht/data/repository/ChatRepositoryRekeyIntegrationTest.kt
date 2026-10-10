@@ -229,7 +229,8 @@ class ChatRepositoryRekeyIntegrationTest {
                 chainKeyIn = bobToAliceSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = true
             )
         )
 
@@ -241,7 +242,8 @@ class ChatRepositoryRekeyIntegrationTest {
                 chainKeyIn = aliceToBobSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = false
             )
         )
 

@@ -28,7 +28,7 @@ class MessageDebugLoggerTest {
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
             val secretText = "TOP_SECRET_PLAINTEXT_SHOULD_NEVER_BE_LOGGED"
             val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), secretText)
-            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
 
             // Attempt logging all types of sensitive messages
             MessageDebugLogger.logOutgoingTextMessage(
@@ -84,7 +84,7 @@ class MessageDebugLoggerTest {
                 val fakeChainKey = ByteArray(64) { 0x01 }
                 val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
                 val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
-                val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+                val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
 
                 MessageDebugLogger.logOutgoingTextMessage(
                     contactId = "debug_contact",
@@ -115,7 +115,7 @@ class MessageDebugLoggerTest {
             val fakeChainKey = ByteArray(64) { 0x01 }
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
             val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
-            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
 
             MessageDebugLogger.logOutgoingTextMessage(
                 contactId = "debug_contact",
