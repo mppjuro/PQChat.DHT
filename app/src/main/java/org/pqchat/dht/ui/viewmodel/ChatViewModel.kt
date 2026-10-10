@@ -256,6 +256,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val aliceInit = HandshakeManager.aliceCreateHandshake()
         _aliceHandshakeState.value = aliceInit
         _isHandshaking.value = true
+        dhtLeafNode.preWarmTargetAsync(aliceInit.target0)
 
         viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Waiting for partner to scan QR and PUT to DHT..."
@@ -264,6 +265,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             while (_isHandshaking.value && attempts < maxAttempts) {
                 delay(3000L)
                 attempts++
+                if (attempts % 4 == 0) {
+                    dhtLeafNode.targetRouteCache.remove(aliceInit.target0)
+                }
                 val item = dhtLeafNode.getMutable(aliceInit.target0)
                 if (item != null) {
                     try {
@@ -329,6 +333,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 val bobResult = HandshakeManager.bobProcessQr(qrBytes)
+                dhtLeafNode.preWarmTarget(bobResult.target0)
 
                 org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
                     target = bobResult.target0,
