@@ -17,8 +17,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingRekeyOfferEntity::class,
         SkippedKeyEntity::class
     ],
-    version = 6,
-    exportSchema = false
+    version = 7,
+    exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -96,6 +96,61 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Encrypt existing plain data in skipped_keys (msgKey, edPrivateKeySeed)
+                val cursorSkipped = db.query("SELECT contactId, slotIndex, msgKey, edPrivateKeySeed FROM skipped_keys")
+                while (cursorSkipped.moveToNext()) {
+                    val contactId = cursorSkipped.getString(0)
+                    val slotIndex = cursorSkipped.getInt(1)
+                    val msgKey = cursorSkipped.getBlob(2)
+                    val edPrivateKeySeed = cursorSkipped.getBlob(3)
+                    val rowId = "${contactId}_${slotIndex}"
+                    val encMsgKey = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(msgKey, "skipped_keys", rowId)
+                    val encEdSeed = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(edPrivateKeySeed, "skipped_keys", rowId)
+                    if (encMsgKey != null && encEdSeed != null) {
+                        db.execSQL(
+                            "UPDATE skipped_keys SET msgKey = ?, edPrivateKeySeed = ? WHERE contactId = ? AND slotIndex = ?",
+                            arrayOf(encMsgKey, encEdSeed, contactId, slotIndex)
+                        )
+                    }
+                }
+                cursorSkipped.close()
+
+                // 2. Encrypt existing plain data in pending_rekey_offers (skNew)
+                val cursorOffers = db.query("SELECT contactId, skNew FROM pending_rekey_offers")
+                while (cursorOffers.moveToNext()) {
+                    val contactId = cursorOffers.getString(0)
+                    val skNew = cursorOffers.getBlob(1)
+                    val encSkNew = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(skNew, "pending_rekey_offers", contactId)
+                    if (encSkNew != null) {
+                        db.execSQL(
+                            "UPDATE pending_rekey_offers SET skNew = ? WHERE contactId = ?",
+                            arrayOf(encSkNew, contactId)
+                        )
+                    }
+                }
+                cursorOffers.close()
+
+                // 3. Encrypt existing plain data in chunks (data)
+                val cursorChunks = db.query("SELECT transferId, chunkIndex, data FROM chunks")
+                while (cursorChunks.moveToNext()) {
+                    val transferId = cursorChunks.getString(0)
+                    val chunkIndex = cursorChunks.getInt(1)
+                    val data = cursorChunks.getBlob(2)
+                    val rowId = "${transferId}_${chunkIndex}"
+                    val encData = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(data, "chunks", rowId)
+                    if (encData != null) {
+                        db.execSQL(
+                            "UPDATE chunks SET data = ? WHERE transferId = ? AND chunkIndex = ?",
+                            arrayOf(encData, transferId, chunkIndex)
+                        )
+                    }
+                }
+                cursorChunks.close()
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -103,7 +158,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                 INSTANCE = instance

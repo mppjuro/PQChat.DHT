@@ -38,8 +38,8 @@ data class ContactEntity(
     ) : this(
         id = id,
         name = name,
-        chainKeyOut = EncryptedBlob(chainKeyOut),
-        chainKeyIn = EncryptedBlob(chainKeyIn),
+        chainKeyOut = EncryptedBlob(chainKeyOut, "contacts", id),
+        chainKeyIn = EncryptedBlob(chainKeyIn, "contacts", id),
         counterOut = counterOut,
         counterIn = counterIn,
         rekeyEpoch = rekeyEpoch,
@@ -50,6 +50,9 @@ data class ContactEntity(
         sas = sas,
         fingerprint = fingerprint
     )
+
+    val rawChainKeyOut: ByteArray get() = chainKeyOut.raw
+    val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
 
     val outboundDirection: String
         get() = if (isInitiator) "AliceToBob" else "BobToAlice"
@@ -130,19 +133,21 @@ data class MessageEntity(
         seqNum = seqNum,
         ackNum = ackNum,
         timestamp = timestamp,
-        textContent = textContent?.let { EncryptedText(it) },
-        imageBytes = imageBytes?.let { EncryptedBlob(it) },
+        textContent = textContent?.let { EncryptedText(it, "messages", "${contactId}_${seqNum}") },
+        imageBytes = imageBytes?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
         status = status,
         retryCount = retryCount,
         lastAttemptTimestamp = lastAttemptTimestamp,
         ackTarget = ackTarget,
-        ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it) },
+        ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
         slotTarget = slotTarget,
-        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it) }
+        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") }
     )
 
     val rawTextContent: String? get() = textContent?.raw
     val rawImageBytes: ByteArray? get() = imageBytes?.raw
+    val rawAckRatchetKey: ByteArray? get() = ackRatchetKey?.raw
+    val rawSlotEdSeed: ByteArray? get() = slotEdSeed?.raw
 }
 
 @Entity(
@@ -155,23 +160,45 @@ data class MessageEntity(
 data class SkippedKeyEntity(
     val contactId: String,
     val slotIndex: Int,
-    val msgKey: ByteArray, // 32 bytes AES key
-    val target: ByteArray, // 20 bytes DHT target
-    val edPrivateKeySeed: ByteArray, // 32 bytes
+    val msgKey: EncryptedBlob, // 32 bytes AES key (encrypted at rest)
+    val target: ByteArray, // 20 bytes DHT target (public routing address)
+    val edPrivateKeySeed: EncryptedBlob, // 32 bytes (encrypted at rest)
     val createdAt: Long = System.currentTimeMillis(),
     val expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L // 72h TTL per BEP 44 buffer
 ) {
+    @Ignore
+    constructor(
+        contactId: String,
+        slotIndex: Int,
+        msgKey: ByteArray,
+        target: ByteArray,
+        edPrivateKeySeed: ByteArray,
+        createdAt: Long = System.currentTimeMillis(),
+        expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+    ) : this(
+        contactId = contactId,
+        slotIndex = slotIndex,
+        msgKey = EncryptedBlob(msgKey, "skipped_keys", "${contactId}_${slotIndex}"),
+        target = target,
+        edPrivateKeySeed = EncryptedBlob(edPrivateKeySeed, "skipped_keys", "${contactId}_${slotIndex}"),
+        createdAt = createdAt,
+        expiresAt = expiresAt
+    )
+
+    val rawMsgKey: ByteArray get() = msgKey.raw
+    val rawEdPrivateKeySeed: ByteArray get() = edPrivateKeySeed.raw
+
     fun destroy() {
-        java.util.Arrays.fill(msgKey, 0.toByte())
-        java.util.Arrays.fill(edPrivateKeySeed, 0.toByte())
+        msgKey.raw.fill(0)
+        edPrivateKeySeed.raw.fill(0)
     }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is SkippedKeyEntity) return false
         return contactId == other.contactId && slotIndex == other.slotIndex &&
-                msgKey.contentEquals(other.msgKey) && target.contentEquals(other.target) &&
-                edPrivateKeySeed.contentEquals(other.edPrivateKeySeed) &&
+                msgKey == other.msgKey && target.contentEquals(other.target) &&
+                edPrivateKeySeed == other.edPrivateKeySeed &&
                 createdAt == other.createdAt && expiresAt == other.expiresAt
     }
 
@@ -188,6 +215,28 @@ interface SkippedKeyDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(skippedKey: SkippedKeyEntity)
+
+    suspend fun insertOrUpdate(
+        contactId: String,
+        slotIndex: Int,
+        msgKey: ByteArray,
+        target: ByteArray,
+        edPrivateKeySeed: ByteArray,
+        createdAt: Long = System.currentTimeMillis(),
+        expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+    ) {
+        insertOrUpdate(
+            SkippedKeyEntity(
+                contactId = contactId,
+                slotIndex = slotIndex,
+                msgKey = msgKey,
+                target = target,
+                edPrivateKeySeed = edPrivateKeySeed,
+                createdAt = createdAt,
+                expiresAt = expiresAt
+            )
+        )
+    }
 
     @Query("DELETE FROM skipped_keys WHERE contactId = :contactId AND slotIndex = :slotIndex")
     suspend fun deleteSkippedKey(contactId: String, slotIndex: Int)
@@ -207,20 +256,39 @@ data class PendingRekeyOfferEntity(
     @PrimaryKey
     val contactId: String,
     val epoch: Long,
-    val skNew: ByteArray, // ML-KEM private key
+    val skNew: EncryptedBlob, // ML-KEM private key (encrypted at rest)
     val pkNew: ByteArray, // ML-KEM public key
     val offerSeqNum: Int,
     val createdAt: Long = System.currentTimeMillis()
 ) {
+    @Ignore
+    constructor(
+        contactId: String,
+        epoch: Long,
+        skNew: ByteArray,
+        pkNew: ByteArray,
+        offerSeqNum: Int,
+        createdAt: Long = System.currentTimeMillis()
+    ) : this(
+        contactId = contactId,
+        epoch = epoch,
+        skNew = EncryptedBlob(skNew, "pending_rekey_offers", contactId),
+        pkNew = pkNew,
+        offerSeqNum = offerSeqNum,
+        createdAt = createdAt
+    )
+
+    val rawSkNew: ByteArray get() = skNew.raw
+
     fun destroy() {
-        java.util.Arrays.fill(skNew, 0.toByte())
+        skNew.raw.fill(0)
     }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PendingRekeyOfferEntity) return false
         return contactId == other.contactId && epoch == other.epoch &&
-                skNew.contentEquals(other.skNew) && pkNew.contentEquals(other.pkNew) &&
+                skNew == other.skNew && pkNew.contentEquals(other.pkNew) &&
                 offerSeqNum == other.offerSeqNum
     }
 
@@ -235,6 +303,26 @@ interface PendingRekeyOfferDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(offer: PendingRekeyOfferEntity)
 
+    suspend fun insertOrUpdate(
+        contactId: String,
+        epoch: Long,
+        skNew: ByteArray,
+        pkNew: ByteArray,
+        offerSeqNum: Int,
+        createdAt: Long = System.currentTimeMillis()
+    ) {
+        insertOrUpdate(
+            PendingRekeyOfferEntity(
+                contactId = contactId,
+                epoch = epoch,
+                skNew = skNew,
+                pkNew = pkNew,
+                offerSeqNum = offerSeqNum,
+                createdAt = createdAt
+            )
+        )
+    }
+
     @Query("DELETE FROM pending_rekey_offers WHERE contactId = :contactId")
     suspend fun deletePendingOffer(contactId: String)
 }
@@ -247,8 +335,63 @@ data class ChunkEntity(
     val transferId: String,
     val chunkIndex: Int,
     val totalChunks: Int,
-    val data: ByteArray
-)
+    val data: EncryptedBlob // Chunk binary data (encrypted at rest)
+) {
+    @Ignore
+    constructor(
+        transferId: String,
+        chunkIndex: Int,
+        totalChunks: Int,
+        data: ByteArray
+    ) : this(
+        transferId = transferId,
+        chunkIndex = chunkIndex,
+        totalChunks = totalChunks,
+        data = EncryptedBlob(data, "chunks", "${transferId}_${chunkIndex}")
+    )
+
+    val rawData: ByteArray get() = data.raw
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ChunkEntity) return false
+        return transferId == other.transferId && chunkIndex == other.chunkIndex &&
+                totalChunks == other.totalChunks && data == other.data
+    }
+
+    override fun hashCode(): Int = 31 * transferId.hashCode() + chunkIndex
+}
+
+@Dao
+interface ChunkDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChunk(chunk: ChunkEntity)
+
+    suspend fun insertChunk(
+        transferId: String,
+        chunkIndex: Int,
+        totalChunks: Int,
+        data: ByteArray
+    ) {
+        insertChunk(
+            ChunkEntity(
+                transferId = transferId,
+                chunkIndex = chunkIndex,
+                totalChunks = totalChunks,
+                data = data
+            )
+        )
+    }
+
+    @Query("SELECT * FROM chunks WHERE transferId = :transferId ORDER BY chunkIndex ASC")
+    suspend fun getChunksForTransfer(transferId: String): List<ChunkEntity>
+
+    @Query("SELECT COUNT(*) FROM chunks WHERE transferId = :transferId")
+    suspend fun countChunks(transferId: String): Int
+
+    @Query("DELETE FROM chunks WHERE transferId = :transferId")
+    suspend fun deleteChunks(transferId: String)
+}
 
 @Dao
 interface ContactDao {
@@ -280,27 +423,27 @@ interface ContactDao {
     suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray)
 
     suspend fun updateOutgoingState(id: String, counterOut: Int, chainKeyOut: ByteArray) {
-        updateOutgoingState(id, counterOut, EncryptedBlob(chainKeyOut))
+        updateOutgoingState(id, counterOut, EncryptedBlob(chainKeyOut, "contacts", id))
     }
 
     suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: ByteArray, rekeyEpoch: Long) {
-        updateOutgoingStateAndEpoch(id, counterOut, EncryptedBlob(chainKeyOut), rekeyEpoch)
+        updateOutgoingStateAndEpoch(id, counterOut, EncryptedBlob(chainKeyOut, "contacts", id), rekeyEpoch)
     }
 
     suspend fun updateIncomingState(id: String, counterIn: Int, chainKeyIn: ByteArray) {
-        updateIncomingState(id, counterIn, EncryptedBlob(chainKeyIn))
+        updateIncomingState(id, counterIn, EncryptedBlob(chainKeyIn, "contacts", id))
     }
 
     suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, bitmapBase: Int, bitmap: ByteArray) {
-        updateIncomingStateWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn), bitmapBase, bitmap)
+        updateIncomingStateWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn, "contacts", id), bitmapBase, bitmap)
     }
 
     suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long) {
-        updateIncomingStateAndEpoch(id, counterIn, EncryptedBlob(chainKeyIn), rekeyEpoch)
+        updateIncomingStateAndEpoch(id, counterIn, EncryptedBlob(chainKeyIn, "contacts", id), rekeyEpoch)
     }
 
     suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: ByteArray, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
-        updateIncomingStateAndEpochWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn), rekeyEpoch, bitmapBase, bitmap)
+        updateIncomingStateAndEpochWithBitmap(id, counterIn, EncryptedBlob(chainKeyIn, "contacts", id), rekeyEpoch, bitmapBase, bitmap)
     }
 
     @Query("UPDATE contacts SET rekeyEpoch = :rekeyEpoch WHERE id = :id")
@@ -358,20 +501,6 @@ interface MessageDao {
     suspend fun getAllPendingDeliveryMessages(): List<MessageEntity>
 }
 
-@Dao
-interface ChunkDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertChunk(chunk: ChunkEntity)
-
-    @Query("SELECT * FROM chunks WHERE transferId = :transferId ORDER BY chunkIndex ASC")
-    suspend fun getChunksForTransfer(transferId: String): List<ChunkEntity>
-
-    @Query("SELECT COUNT(*) FROM chunks WHERE transferId = :transferId")
-    suspend fun countChunks(transferId: String): Int
-
-    @Query("DELETE FROM chunks WHERE transferId = :transferId")
-    suspend fun deleteChunks(transferId: String)
-}
 
 @Entity(
     tableName = "dht_node_cache",

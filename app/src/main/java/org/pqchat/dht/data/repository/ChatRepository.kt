@@ -848,7 +848,7 @@ class ChatRepository(
             try {
                 val contact = contactDao.getContactById(contactId) ?: continue
                 val frameMsg = BinaryFrameCodec.unpackAeadFrame(
-                    key = sk.msgKey,
+                    key = sk.rawMsgKey,
                     frame = item.v,
                     target = sk.target,
                     direction = contact.inboundDirection
@@ -1192,7 +1192,7 @@ class ChatRepository(
                     bitmap.markReceived(slot.counter)
 
                     if (pendingOffer != null && pendingOffer.epoch == respPayload.rekeyEpoch) {
-                        val ssRekey = MLKemEngine.decapsulate(pendingOffer.skNew, respPayload.mlKemCiphertext)
+                        val ssRekey = MLKemEngine.decapsulate(pendingOffer.rawSkNew, respPayload.mlKemCiphertext)
                         pendingOffer.destroy()
                         pendingRekeyOfferDao?.deletePendingOffer(contactId)
 
@@ -1263,7 +1263,7 @@ class ChatRepository(
                                 transferId = chunkPayload.transferId,
                                 chunkIndex = it.chunkIndex,
                                 totalChunks = it.totalChunks,
-                                data = it.data
+                                data = it.rawData
                             )
                         }
                         val fullData = ChunkingEngine.assembleChunks(decodedList)
