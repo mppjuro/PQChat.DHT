@@ -58,7 +58,7 @@ class ProtocolEngineTest {
         for (i in messages.indices) {
             val slot = RatchetChain.deriveSlot(senderChain, i)
             val plaintext = BinaryFrameCodec.encodeTextMessage(i, 0, System.currentTimeMillis(), messages[i])
-            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext)
+            val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
             sentFrames.add(Pair(slot, frame))
             senderChain = slot.nextChainKey
         }
@@ -71,7 +71,7 @@ class ProtocolEngineTest {
         for (i in messages.indices) {
             val slot = lookaheadSlots[i]
             val frame = sentFrames[i].second
-            val decoded = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, frame)
+            val decoded = BinaryFrameCodec.unpackAeadFrame(slot.msgKey, frame, slot.target, "AliceToBob")
             val textPayload = decoded.payload as BinaryFrameCodec.DecodedPayload.TextMessage
             assertEquals(messages[i], textPayload.text)
         }
@@ -94,12 +94,14 @@ class ProtocolEngineTest {
             epoch = 1L,
             seqNum = aliceCounter,
             ackNum = 0,
-            msgKey = slot50.msgKey
+            msgKey = slot50.msgKey,
+            target = slot50.target,
+            direction = "AliceToBob"
         )
         assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, offerFrame.size)
 
         // 2. Bob receives Offer, decodes, and creates Response (Type 0x04) in his reverse channel
-        val bobDecodedOfferMsg = BinaryFrameCodec.unpackAeadFrame(slot50.msgKey, offerFrame)
+        val bobDecodedOfferMsg = BinaryFrameCodec.unpackAeadFrame(slot50.msgKey, offerFrame, slot50.target, "AliceToBob")
         val offerPayload = bobDecodedOfferMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
 
         val bobReverseSlot = RatchetChain.deriveSlot(bobChain, 10)
@@ -107,13 +109,15 @@ class ProtocolEngineTest {
             offer = offerPayload,
             reverseSeqNum = 10,
             reverseAckNum = 50,
-            reverseMsgKey = bobReverseSlot.msgKey
+            reverseMsgKey = bobReverseSlot.msgKey,
+            reverseTarget = bobReverseSlot.target,
+            direction = "BobToAlice"
         )
         assertEquals(32, bobRekeySecret.size)
         assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, responseFrame.size)
 
         // 3. Alice receives Response in reverse channel, extracts SS_rekey
-        val aliceDecodedRespMsg = BinaryFrameCodec.unpackAeadFrame(bobReverseSlot.msgKey, responseFrame)
+        val aliceDecodedRespMsg = BinaryFrameCodec.unpackAeadFrame(bobReverseSlot.msgKey, responseFrame, bobReverseSlot.target, "BobToAlice")
         val respPayload = aliceDecodedRespMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyResponse
 
         val aliceRekeySecret = RekeyCoordinator.processResponse(respPayload, pendingOffer)
@@ -145,7 +149,8 @@ class ProtocolEngineTest {
             currentEdSeed = edSeed,
             currentMsgKey = msgKey,
             seqNum = 5,
-            ackNum = 1
+            ackNum = 1,
+            direction = "AliceToBob"
         )
         assertEquals(45, chunks.size) // 36000 / 800 = 45 chunks
 
@@ -154,7 +159,7 @@ class ProtocolEngineTest {
         for (chunkItem in chunks) {
             assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, chunkItem.frame.size)
             val subKey = ChunkingEngine.deriveChunkMsgKey(msgKey, chunkItem.chunkIndex)
-            val decodedMsg = BinaryFrameCodec.unpackAeadFrame(subKey, chunkItem.frame)
+            val decodedMsg = BinaryFrameCodec.unpackAeadFrame(subKey, chunkItem.frame, chunkItem.target, "AliceToBob")
             assertEquals(BinaryFrameCodec.TYPE_CHUNK_DATA, decodedMsg.msgType)
             decodedChunks.add(decodedMsg.payload as BinaryFrameCodec.DecodedPayload.ChunkData)
         }
@@ -259,7 +264,7 @@ class ProtocolEngineTest {
     }
 
     @Test
-    fun testAesGcmAadTargetTypeAndDirectionIntegrity() {
+    fun testAesGcmAadTargetAndDirectionIntegrity() {
         val key = CryptoUtils.secureRandomBytes(32)
         val target = CryptoUtils.secureRandomBytes(20)
         val otherTarget = CryptoUtils.secureRandomBytes(20)
@@ -270,12 +275,12 @@ class ProtocolEngineTest {
         val frame = BinaryFrameCodec.packAeadFrame(key, plaintext, target, direction)
 
         // 1. Correct AAD: decrypts successfully
-        val msg = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction, BinaryFrameCodec.TYPE_TEXT_MESSAGE)
+        val msg = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction)
         assertEquals("Secret authenticated payload", (msg.payload as BinaryFrameCodec.DecodedPayload.TextMessage).text)
 
         // 2. Tampered target: must fail AEAD verification
         try {
-            BinaryFrameCodec.unpackAeadFrame(key, frame, otherTarget, direction, BinaryFrameCodec.TYPE_TEXT_MESSAGE)
+            BinaryFrameCodec.unpackAeadFrame(key, frame, otherTarget, direction)
             fail("Expected decryption failure with wrong target in AAD")
         } catch (_: Exception) {
             // expected
@@ -283,18 +288,17 @@ class ProtocolEngineTest {
 
         // 3. Tampered direction: must fail AEAD verification
         try {
-            val aadWrongDir = BinaryFrameCodec.buildAad(target, BinaryFrameCodec.TYPE_TEXT_MESSAGE, wrongDirection)
-            BinaryFrameCodec.unpackAeadFrame(key, frame, aadWrongDir)
+            BinaryFrameCodec.unpackAeadFrame(key, frame, target, wrongDirection)
             fail("Expected decryption failure with wrong direction in AAD")
         } catch (_: Exception) {
             // expected
         }
 
-        // 4. Tampered type: must fail AEAD verification
+        // 4. Tampered AAD bytes directly
         try {
-            val aadWrongType = BinaryFrameCodec.buildAad(target, BinaryFrameCodec.TYPE_CHUNK_DATA, direction)
-            BinaryFrameCodec.unpackAeadFrame(key, frame, aadWrongType)
-            fail("Expected decryption failure with wrong type in AAD")
+            val tamperedAad = BinaryFrameCodec.buildAad(target, direction).apply { this[0] = (this[0].toInt() xor 0xFF).toByte() }
+            BinaryFrameCodec.unpackAeadFrame(key, frame, tamperedAad)
+            fail("Expected decryption failure with tampered raw AAD")
         } catch (_: Exception) {
             // expected
         }

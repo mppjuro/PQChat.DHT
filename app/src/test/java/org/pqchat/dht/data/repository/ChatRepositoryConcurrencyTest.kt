@@ -291,7 +291,8 @@ class ChatRepositoryConcurrencyTest {
                 chainKeyIn = aliceToBobSeed,
                 counterOut = 0,
                 counterIn = 0,
-                rekeyEpoch = 0
+                rekeyEpoch = 0,
+                isInitiator = false
             )
         )
 

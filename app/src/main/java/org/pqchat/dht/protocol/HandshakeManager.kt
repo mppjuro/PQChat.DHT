@@ -204,8 +204,7 @@ object HandshakeManager {
             key = kHs,
             frame = frame,
             target = target0,
-            direction = "BobToAlice",
-            expectedType = BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE
+            direction = "BobToAlice"
         )
 
         require(frameMsg.msgType == BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE) {

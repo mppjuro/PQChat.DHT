@@ -670,7 +670,8 @@ class ChatRepository(
                     currentEdSeed = slot.edPrivateKeySeed,
                     currentMsgKey = slot.msgKey,
                     seqNum = currentContact.counterOut and 0xFFFF,
-                    ackNum = currentContact.counterIn and 0xFFFF
+                    ackNum = currentContact.counterIn and 0xFFFF,
+                    direction = currentContact.outboundDirection
                 )
                 var allSuccess = true
                 for (c in chunks) {
@@ -1235,7 +1236,12 @@ class ChatRepository(
                         val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
                         if (subItem != null) {
                             try {
-                                val subFrame = BinaryFrameCodec.unpackAeadFrame(subMsgKey, subItem.v)
+                                val subFrame = BinaryFrameCodec.unpackAeadFrame(
+                                    key = subMsgKey,
+                                    frame = subItem.v,
+                                    target = subTarget,
+                                    direction = contact.inboundDirection
+                                )
                                 val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
                                 chunkDao.insertChunk(
                                     ChunkEntity(

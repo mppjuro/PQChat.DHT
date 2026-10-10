@@ -1,16 +1,16 @@
 package org.pqchat.dht.crypto
 
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyGenerationParameters
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyPairGenerator
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberParameters
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters
-import org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMExtractor
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMGenerator
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMKeyGenerationParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMKeyPairGenerator
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMPrivateKeyParameters
+import org.bouncycastle.pqc.crypto.mlkem.MLKEMPublicKeyParameters
 import java.security.SecureRandom
 
 /**
- * ML-KEM-512 (FIPS 203 / Kyber-512) Post-Quantum Cryptographic Engine.
+ * ML-KEM-512 (FIPS 203) Post-Quantum Cryptographic Engine.
  *
  * Parameters:
  * - Public Key (pk): 800 bytes
@@ -57,16 +57,16 @@ object MLKemEngine {
     }
 
     /**
-     * Generates a new ML-KEM-512 (Kyber-512) key pair (pk = 800B).
+     * Generates a new ML-KEM-512 (FIPS 203) key pair (pk = 800B).
      */
     fun generateKeyPair(random: SecureRandom = CryptoUtils.secureRandom): KeyPair {
-        val keyGenParams = KyberKeyGenerationParameters(random, KyberParameters.kyber512)
-        val generator = KyberKeyPairGenerator()
+        val keyGenParams = MLKEMKeyGenerationParameters(random, MLKEMParameters.ml_kem_512)
+        val generator = MLKEMKeyPairGenerator()
         generator.init(keyGenParams)
         val pair = generator.generateKeyPair()
 
-        val pub = pair.public as KyberPublicKeyParameters
-        val priv = pair.private as KyberPrivateKeyParameters
+        val pub = pair.public as MLKEMPublicKeyParameters
+        val priv = pair.private as MLKEMPrivateKeyParameters
 
         val pkBytes = pub.encoded
         val skBytes = priv.encoded
@@ -90,8 +90,8 @@ object MLKemEngine {
             "Invalid public key size: ${recipientPublicKeyBytes.size}, expected $PUBLIC_KEY_SIZE"
         }
 
-        val pubParams = KyberPublicKeyParameters(KyberParameters.kyber512, recipientPublicKeyBytes)
-        val kemGen = KyberKEMGenerator(random)
+        val pubParams = MLKEMPublicKeyParameters(MLKEMParameters.ml_kem_512, recipientPublicKeyBytes)
+        val kemGen = MLKEMGenerator(random)
         val secEnc = kemGen.generateEncapsulated(pubParams)
 
         val sharedSecret = secEnc.secret
@@ -112,8 +112,8 @@ object MLKemEngine {
             "Invalid ciphertext size: ${ciphertext.size}, expected $CIPHERTEXT_SIZE"
         }
 
-        val privParams = KyberPrivateKeyParameters(KyberParameters.kyber512, privateKeyBytes)
-        val kemExt = KyberKEMExtractor(privParams)
+        val privParams = MLKEMPrivateKeyParameters(MLKEMParameters.ml_kem_512, privateKeyBytes)
+        val kemExt = MLKEMExtractor(privParams)
         val secret = kemExt.extractSecret(ciphertext)
 
         require(secret.size == SHARED_SECRET_SIZE) { "Invalid shared secret size" }
@@ -124,7 +124,7 @@ object MLKemEngine {
      * Extracts the 800-byte public key embedded within the ML-KEM-512 private key.
      */
     fun extractPublicKey(privateKeyBytes: ByteArray): ByteArray {
-        val privParams = KyberPrivateKeyParameters(KyberParameters.kyber512, privateKeyBytes)
+        val privParams = MLKEMPrivateKeyParameters(MLKEMParameters.ml_kem_512, privateKeyBytes)
         val pk = privParams.publicKey
         require(pk.size == PUBLIC_KEY_SIZE) {
             "Extracted public key size mismatch: ${pk.size}, expected $PUBLIC_KEY_SIZE"
@@ -132,3 +132,4 @@ object MLKemEngine {
         return pk
     }
 }
+
