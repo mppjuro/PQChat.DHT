@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,8 +46,8 @@ fun HandshakeScreen(
     onSuccess: () -> Unit
 ) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableStateOf(if (initialTabIsBob) 1 else 0) }
-    var contactName by remember { mutableStateOf(if (selectedTab == 0) "Bob" else "Alice") }
+    var selectedTab by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) 1 else 0) }
+    var contactName by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) "Alice" else "Bob") }
     var qrBase64Input by remember { mutableStateOf("") }
     var isManualInputExpanded by remember { mutableStateOf(false) }
 
@@ -71,6 +72,21 @@ fun HandshakeScreen(
     val notification by viewModel.statusNotification.collectAsState()
 
     var connectedSas by remember { mutableStateOf<String?>(null) }
+    var galleryScanError by remember { mutableStateOf<String?>(null) }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            val decoded = QrCodeUtil.decodeQrFromUri(context, uri)
+            if (decoded != null && decoded.isNotBlank()) {
+                qrBase64Input = decoded
+                galleryScanError = null
+            } else {
+                galleryScanError = "No valid QR code found in selected image."
+            }
+        }
+    }
 
     // Display SAS dialog or trigger onSuccess navigation when handshake succeeds
     LaunchedEffect(notification) {
@@ -314,6 +330,57 @@ fun HandshakeScreen(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Grant Camera Access", fontWeight = FontWeight.Bold)
                                 }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Gallery / Photo Scan Button
+                    OutlinedButton(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = "Scan from Gallery",
+                            modifier = Modifier.size(20.dp),
+                            tint = NeonCyan
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Scan QR from Image / Gallery",
+                            fontWeight = FontWeight.SemiBold,
+                            color = NeonCyan
+                        )
+                    }
+
+                    if (galleryScanError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = Color.Red.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color.Red,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = galleryScanError ?: "",
+                                    color = Color.Red,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
                         }
                     }
