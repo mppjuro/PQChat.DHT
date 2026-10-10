@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -494,17 +495,40 @@ fun ContactItem(
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = contact.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = appColors.textPrimary
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = contact.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = appColors.textPrimary
+                    )
+                    if (contact.isVerified) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.VerifiedUser,
+                            contentDescription = "Zweryfikowany",
+                            tint = ElectricGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Post-Quantum Ratchet (FIPS 203)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ElectricGreen.copy(alpha = 0.8f)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Post-Quantum Ratchet (FIPS 203)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ElectricGreen.copy(alpha = 0.8f)
+                    )
+                    if (contact.sas.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "• SAS: ${contact.sas}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (contact.isVerified) ElectricGreen else AmberWarning,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
 
             Column(horizontalAlignment = Alignment.End) {

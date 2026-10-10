@@ -68,11 +68,26 @@ android {
 
     testOptions {
         unitTests.all {
-            it.useJUnitPlatform()
+            it.useJUnitPlatform {
+                if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
+                    excludeTags("slow")
+                }
+            }
             if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
                 it.exclude("**/integration/**")
             }
         }
+    }
+}
+
+tasks.register<Test>("slowTest") {
+    description = "Runs the slow unit and integration tests tagged with @Tag(\"slow\")."
+    group = "verification"
+    val buildDir = layout.buildDirectory.asFile.get()
+    testClassesDirs = files(buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
+    useJUnitPlatform {
+        includeTags("slow")
     }
 }
 

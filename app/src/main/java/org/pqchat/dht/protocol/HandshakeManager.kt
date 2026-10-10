@@ -63,15 +63,44 @@ object HandshakeManager {
     }
 
     /**
-     * Computes a 6-digit Short Authentication String (SAS).
-     * Users can compare this code out-of-band to detect any eavesdropper who saw the QR code
-     * and attempted to race/overwrite Target_0 on the DHT.
+     * Computes the cryptographic anti-grinding commitment over the handshake transcript.
+     * Binds the initiator's Seed_init, ephemeral ML-KEM public key, Bob's ciphertext, and salt.
      */
-    fun computeSas(masterKey: ByteArray): String {
-        val sasBytes = HkdfSha512.expand(masterKey, "PQChat_SAS_v1".toByteArray(Charsets.UTF_8), 4)
-        val num = java.nio.ByteBuffer.wrap(sasBytes).order(java.nio.ByteOrder.BIG_ENDIAN).int and 0x7FFFFFFF
-        val code = num % 1000000
-        return "%06d".format(code)
+    fun computeAntiGrindCommitment(seedInit: ByteArray, transcript: ByteArray): ByteArray {
+        val label = "PQChat_AntiGrind_v2".toByteArray(Charsets.UTF_8)
+        val data = ByteArray(label.size + seedInit.size + transcript.size)
+        var offset = 0
+        System.arraycopy(label, 0, data, offset, label.size)
+        offset += label.size
+        System.arraycopy(seedInit, 0, data, offset, seedInit.size)
+        offset += seedInit.size
+        System.arraycopy(transcript, 0, data, offset, transcript.size)
+        return CryptoUtils.sha256(data)
+    }
+
+    /**
+     * Computes an 8-digit Short Authentication String (SAS) in the format "XXXX-XXXX".
+     *
+     * Anti-grinding Commitment & Entropy:
+     * - Derives from masterKey and the anti-grinding commitment bound to the complete handshake transcript.
+     * - Provides 10^8 (~26.6 bits) search space against offline or active grinding.
+     * - Any tampering with transcript, KEM ciphertext, salt, or QR seed results in an entirely different SAS.
+     */
+    fun computeSas(masterKey: ByteArray, commitment: ByteArray? = null): String {
+        val label = "PQChat_SAS_v2_AntiGrind".toByteArray(Charsets.UTF_8)
+        val info = if (commitment != null) {
+            val combined = ByteArray(label.size + commitment.size)
+            System.arraycopy(label, 0, combined, 0, label.size)
+            System.arraycopy(commitment, 0, combined, label.size, commitment.size)
+            combined
+        } else {
+            label
+        }
+        val sasBytes = HkdfSha512.expand(masterKey, info, 8)
+        val buffer = java.nio.ByteBuffer.wrap(sasBytes).order(java.nio.ByteOrder.BIG_ENDIAN)
+        val part1 = (buffer.int and 0x7FFFFFFF) % 10000
+        val part2 = (buffer.int and 0x7FFFFFFF) % 10000
+        return "%04d-%04d".format(part1, part2)
     }
 
     /**
@@ -169,7 +198,8 @@ object HandshakeManager {
         // 8. Derive working KDF chains:
         val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
         val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
-        val sas = computeSas(masterKey)
+        val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
+        val sas = computeSas(masterKey, antiGrindCommitment)
         val fingerprint = computeFingerprint(masterKey)
 
         // For Bob:
@@ -239,7 +269,8 @@ object HandshakeManager {
         // Derive working chains
         val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
         val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
-        val sas = computeSas(masterKey)
+        val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
+        val sas = computeSas(masterKey, antiGrindCommitment)
         val fingerprint = computeFingerprint(masterKey)
 
         // For Alice:

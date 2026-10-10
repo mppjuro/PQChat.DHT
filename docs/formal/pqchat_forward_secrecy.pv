@@ -1,0 +1,97 @@
+(* ============================================================================== *)
+(* PQChat.DHT Protocol — Forward Secrecy Formal Verification (ProVerif 2.05)      *)
+(*                                                                                *)
+(* Proves that compromising a subsequent ratchet chain key (ChainKey_1)           *)
+(* does NOT compromise past message payloads (secret_msg_0).                      *)
+(* Primitives: HKDF-SHA512 one-way ratchet chain, AES-256-GCM, Ed25519            *)
+(* ============================================================================== *)
+
+type ed_skey.
+type ed_pkey.
+
+(* --- Ed25519 Ephemeral Signature & Key Derivation --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+fun ed_sign(ed_skey, bitstring): bitstring.
+reduc forall sk: ed_skey, m: bitstring; ed_verify(ed_pk(sk), m, ed_sign(sk, m)) = true.
+
+(* --- Cryptographic Hash & KDF (One-Way Functions) --- *)
+fun sha1(ed_pkey): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_msg_key(bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- AEAD (AES-256-GCM) with AAD binding --- *)
+fun aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
+  aead_dec(k, iv, aead_enc(k, iv, pt, aad), aad) = pt.
+
+(* --- Protocol Constants --- *)
+const TAG_STEP_0: bitstring.
+const TAG_STEP_1: bitstring.
+const TAG_DIRECTION: bitstring.
+
+(* --- Channels --- *)
+free c_dht: channel.             (* Public DHT network *)
+free c_leak: channel.            (* Adversary state compromise channel *)
+
+(* --- Secret Messages --- *)
+free secret_msg_0: bitstring [private].  (* Sent at step 0 BEFORE state compromise *)
+free secret_msg_1: bitstring [private].  (* Sent at step 1 AT/AFTER state compromise *)
+
+(* ============================================================================== *)
+(* SECURITY QUERIES                                                               *)
+(* ============================================================================== *)
+
+(* Forward Secrecy: past message 0 remains confidential despite compromise of ChainKey_1 *)
+query attacker(secret_msg_0).
+
+(* Sanity check: message 1 SHOULD be learnable because ChainKey_1 was leaked *)
+query attacker(secret_msg_1).
+
+(* ============================================================================== *)
+(* PROTOCOL PROCESS                                                               *)
+(* ============================================================================== *)
+
+process
+  (* Parties share initial unidirectional chain key ChainKey_0 *)
+  new chain_key_0: bitstring;
+  
+  (* === STEP 0: Send Message 0 === *)
+  let entropy_0 = hkdf_expand(chain_key_0, TAG_STEP_0) in
+  let msg_key_0 = get_msg_key(entropy_0) in
+  let ed_seed_0 = get_ed_seed(entropy_0) in
+  let chain_key_1 = get_next_chain(entropy_0) in
+  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
+  let ed_pk_0 = ed_pk(ed_sk_0) in
+  let target_0 = sha1(ed_pk_0) in
+  
+  new iv_0: bitstring;
+  let aad_0 = (target_0, TAG_DIRECTION) in
+  let c_0 = aead_enc(msg_key_0, iv_0, secret_msg_0, aad_0) in
+  let sig_0 = ed_sign(ed_sk_0, (target_0, c_0)) in
+  
+  (* Publish message 0 to DHT *)
+  out(c_dht, (target_0, c_0, iv_0, sig_0));
+  
+  (* === STEP 1: Send Message 1 === *)
+  let entropy_1 = hkdf_expand(chain_key_1, TAG_STEP_1) in
+  let msg_key_1 = get_msg_key(entropy_1) in
+  let ed_seed_1 = get_ed_seed(entropy_1) in
+  let chain_key_2 = get_next_chain(entropy_1) in
+  let ed_sk_1 = ed_derive_sk(ed_seed_1) in
+  let ed_pk_1 = ed_pk(ed_sk_1) in
+  let target_1 = sha1(ed_pk_1) in
+  
+  new iv_1: bitstring;
+  let aad_1 = (target_1, TAG_DIRECTION) in
+  let c_1 = aead_enc(msg_key_1, iv_1, secret_msg_1, aad_1) in
+  let sig_1 = ed_sign(ed_sk_1, (target_1, c_1)) in
+  
+  (* Publish message 1 to DHT *)
+  out(c_dht, (target_1, c_1, iv_1, sig_1));
+  
+  (* === COMPROMISE OF EPHEMERAL STATE AT STEP 1 === *)
+  (* Attacker inspects device memory and gains ChainKey_1 *)
+  out(c_leak, chain_key_1)

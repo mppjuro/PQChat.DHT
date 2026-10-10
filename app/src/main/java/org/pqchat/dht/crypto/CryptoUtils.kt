@@ -23,6 +23,14 @@ object CryptoUtils {
     }
 
     /**
+     * Compute SHA-256 digest (32 bytes).
+     */
+    fun sha256(data: ByteArray): ByteArray {
+        val md = MessageDigest.getInstance("SHA-256")
+        return md.digest(data)
+    }
+
+    /**
      * Compute SHA-512 digest (64 bytes).
      */
     fun sha512(data: ByteArray): ByteArray {

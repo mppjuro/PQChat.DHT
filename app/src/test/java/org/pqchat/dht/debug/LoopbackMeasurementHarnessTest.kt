@@ -2,13 +2,15 @@ package org.pqchat.dht.debug
 
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
-import org.junit.Test
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.dht.FakeDht
 import org.pqchat.dht.dht.bencode.Bencode
 import kotlin.random.Random
 
+@Tag("slow")
 class LoopbackMeasurementHarnessTest {
 
     @Test

@@ -510,6 +510,7 @@ class WorkManagerRepublishScheduleTest {
         override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {}
         override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {}
         override suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long) {}
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {}
         override suspend fun deleteContact(id: String) {}
     }
 

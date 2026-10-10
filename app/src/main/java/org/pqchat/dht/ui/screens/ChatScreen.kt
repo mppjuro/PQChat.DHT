@@ -32,8 +32,10 @@ import org.pqchat.dht.ui.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.delay
+import org.pqchat.dht.data.repository.ChatRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +53,7 @@ fun ChatScreen(
     val nextPollInMs by viewModel.nextPollInMs.collectAsState()
 
     var textInput by remember { mutableStateOf("") }
+    var showSasDialog by remember { mutableStateOf(false) }
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
@@ -108,17 +111,45 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(
-                            text = contact?.name ?: "Chat",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = appColors.textPrimary
-                        )
-                        contact?.let {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "TX: ${it.counterOut}  •  RX: ${it.counterIn}  •  Epoch: ${it.rekeyEpoch}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = appColors.primary
+                                text = contact?.name ?: "Chat",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = appColors.textPrimary
                             )
+                            if (contact != null && contact.id != ChatRepository.SELF_CONTACT_ID) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = { showSasDialog = true },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
+                                        contentDescription = if (contact.isVerified) "Zweryfikowany SAS" else "Niezweryfikowany SAS",
+                                        tint = if (contact.isVerified) ElectricGreen else AmberWarning,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                        contact?.let {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "TX: ${it.counterOut}  •  RX: ${it.counterIn}  •  Epoch: ${it.rekeyEpoch}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.primary
+                                )
+                                if (it.sas.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "SAS: ${it.sas}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (it.isVerified) ElectricGreen else AmberWarning,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -278,6 +309,84 @@ fun ChatScreen(
                 MessageBubble(message = msg)
                 Spacer(modifier = Modifier.height(8.dp))
             }
+        }
+
+        if (showSasDialog && contact != null) {
+            AlertDialog(
+                onDismissRequest = { showSasDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.Security,
+                            contentDescription = null,
+                            tint = if (contact.isVerified) ElectricGreen else AmberWarning
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (contact.isVerified) "Kontakt zweryfikowany" else "Weryfikacja tożsamości (SAS)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = appColors.textPrimary
+                        )
+                    }
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Kod SAS (Short Authentication String):",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = appColors.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = contact.sas.ifEmpty { "Brak SAS" },
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (contact.isVerified) ElectricGreen else appColors.primary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Porównaj powyższy 8-cyfrowy kod z rozmówcą przez zaufany kanał (np. osobiście lub telefonicznie). Kod powstał w oparciu o kryptograficzne zobowiązanie (anti-grinding commitment) powiązane z transkryptem ML-KEM-512.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.toggleContactVerified(contact.id, contact.isVerified)
+                            showSasDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (contact.isVerified) AmberWarning else ElectricGreen,
+                            contentColor = Color.Black
+                        )
+                    ) {
+                        Text(
+                            text = if (contact.isVerified) "Cofnij weryfikację" else "Oznacz jako zweryfikowany",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSasDialog = false }) {
+                        Text("Zamknij", color = appColors.textSecondary)
+                    }
+                },
+                containerColor = appColors.surface
+            )
         }
     }
 }

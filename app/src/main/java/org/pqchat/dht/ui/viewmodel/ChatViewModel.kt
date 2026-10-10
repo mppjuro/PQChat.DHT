@@ -396,6 +396,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         pollingScheduler.setForegroundServiceEnabled(enabled)
     }
 
+    fun setContactVerified(contactId: String, isVerified: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setContactVerified(contactId, isVerified)
+        }
+    }
+
+    fun toggleContactVerified(contactId: String, currentVerified: Boolean) {
+        setContactVerified(contactId, !currentVerified)
+    }
+
     fun dismissNotification() {
         _statusNotification.value = null
     }
