@@ -176,7 +176,8 @@ class ProtocolEngineTest {
         val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
 
         assertTrue(bobHandshake.sas.isNotEmpty())
-        assertEquals(6, bobHandshake.sas.length)
+        assertEquals(9, bobHandshake.sas.length) // "XXXX-XXXX"
+        assertTrue(bobHandshake.sas.matches(Regex("\\d{4}-\\d{4}")))
         assertTrue(bobHandshake.fingerprint.isNotEmpty())
 
         val skACopy = aliceInit.skA.copyOf()
@@ -198,6 +199,26 @@ class ProtocolEngineTest {
         // skA must be securely zeroized after verified confirmation
         assertTrue("skA must be wiped with zeroes after confirmation", aliceInit.skA.all { it == 0.toByte() })
         assertFalse("Original skA was not all zeroes", skACopy.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun testAntiGrindingCommitmentChangesSasOnAnyTranscriptTamper() {
+        val masterKey = ByteArray(64) { 0x42 }
+        val seedInit = ByteArray(32) { 0x11 }
+        val transcript = ByteArray(800 + 768 + 32 + 32) { 0x22 }
+
+        val commitment1 = HandshakeManager.computeAntiGrindCommitment(seedInit, transcript)
+        val sas1 = HandshakeManager.computeSas(masterKey, commitment1)
+
+        // Tamper with one byte in transcript (e.g. attacker tries to grind ephemeral KEM ciphertext or salt)
+        val tamperedTranscript = transcript.copyOf()
+        tamperedTranscript[100] = (tamperedTranscript[100] + 1).toByte()
+
+        val commitment2 = HandshakeManager.computeAntiGrindCommitment(seedInit, tamperedTranscript)
+        val sas2 = HandshakeManager.computeSas(masterKey, commitment2)
+
+        assertFalse("Commitment must change when transcript is modified", commitment1.contentEquals(commitment2))
+        assertNotEquals("SAS must change when commitment changes (anti-grinding)", sas1, sas2)
     }
 
     @Test

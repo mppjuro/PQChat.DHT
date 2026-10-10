@@ -18,7 +18,8 @@ data class ContactEntity(
     val lastActive: Long = System.currentTimeMillis(),
     val isInitiator: Boolean = true,
     val sas: String = "",
-    val fingerprint: String = ""
+    val fingerprint: String = "",
+    val isVerified: Boolean = false
 ) {
     @Ignore
     constructor(
@@ -34,7 +35,8 @@ data class ContactEntity(
         lastActive: Long = System.currentTimeMillis(),
         isInitiator: Boolean = true,
         sas: String = "",
-        fingerprint: String = ""
+        fingerprint: String = "",
+        isVerified: Boolean = false
     ) : this(
         id = id,
         name = name,
@@ -48,7 +50,8 @@ data class ContactEntity(
         lastActive = lastActive,
         isInitiator = isInitiator,
         sas = sas,
-        fingerprint = fingerprint
+        fingerprint = fingerprint,
+        isVerified = isVerified
     )
 
     val rawChainKeyOut: ByteArray get() = chainKeyOut.raw
@@ -448,6 +451,9 @@ interface ContactDao {
 
     @Query("UPDATE contacts SET rekeyEpoch = :rekeyEpoch WHERE id = :id")
     suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long)
+
+    @Query("UPDATE contacts SET isVerified = :isVerified WHERE id = :id")
+    suspend fun updateVerifiedStatus(id: String, isVerified: Boolean)
 
     @Query("DELETE FROM contacts WHERE id = :id")
     suspend fun deleteContact(id: String)

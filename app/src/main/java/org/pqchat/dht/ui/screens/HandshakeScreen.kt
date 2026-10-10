@@ -70,9 +70,15 @@ fun HandshakeScreen(
     val isHandshaking by viewModel.isHandshaking.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
 
-    // Trigger onSuccess navigation when handshake succeeds
+    var connectedSas by remember { mutableStateOf<String?>(null) }
+
+    // Display SAS dialog or trigger onSuccess navigation when handshake succeeds
     LaunchedEffect(notification) {
-        if (notification?.contains("Connected! Post-quantum ratcheting active.") == true) {
+        val notif = notification
+        if (notif != null && notif.contains("Connected! SAS:")) {
+            val sas = notif.substringAfter("Connected! SAS: ").substringBefore(".")
+            connectedSas = sas
+        } else if (notif?.contains("Connected! Post-quantum ratcheting active.") == true) {
             onSuccess()
         }
     }
@@ -425,6 +431,76 @@ fun HandshakeScreen(
                     }
                 }
             }
+        }
+
+        if (connectedSas != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    connectedSas = null
+                    onSuccess()
+                },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = ElectricGreen
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Sesja Post-Kwantowa Ustanowiona",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary
+                        )
+                    }
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Zweryfikuj kod SAS (Short Authentication String):",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = DarkSurfaceVariant,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = connectedSas ?: "",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = ElectricGreen
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Porównaj powyższy 8-cyfrowy kod z rozmówcą poza pasmem (np. osobiście lub przez telefon). Kod ten powstał na bazie kryptograficznego zobowiązania (anti-grinding commitment) związanego z transkryptem ML-KEM-512.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            connectedSas = null
+                            onSuccess()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen, contentColor = Color.Black)
+                    ) {
+                        Text("Przejdź do czatu", fontWeight = FontWeight.Bold)
+                    }
+                },
+                containerColor = DarkSurface
+            )
         }
     }
 }

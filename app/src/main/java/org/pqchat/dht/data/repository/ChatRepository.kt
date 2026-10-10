@@ -264,6 +264,10 @@ class ChatRepository(
         contactDao.getContactById(contactId)
     }
 
+    suspend fun setContactVerified(contactId: String, isVerified: Boolean) = withContext(Dispatchers.IO) {
+        contactDao.updateVerifiedStatus(contactId, isVerified)
+    }
+
     /**
      * Sends a text message to contact via DHT with key hopping and 1000-byte frame.
      * Protected by per-contact Mutex and backed by Room outbox queue.

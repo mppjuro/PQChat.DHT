@@ -4,7 +4,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
-import org.junit.Test
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
 import org.pqchat.dht.data.repository.ChatRepository
@@ -22,6 +23,7 @@ import kotlin.math.sqrt
  * - Decoy GET queries hitting real/expiring populated targets rather than random 0-PUT targets
  * - Delayed PUT & Decoy PUT Slots emission
  */
+@Tag("slow")
 class TrafficThreatModelStatisticalTest {
 
     @Test
@@ -350,6 +352,12 @@ class TrafficThreatModelStatisticalTest {
         override suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(rekeyEpoch = rekeyEpoch)
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(isVerified = isVerified)
             flow.value = contacts.values.toList()
         }
 

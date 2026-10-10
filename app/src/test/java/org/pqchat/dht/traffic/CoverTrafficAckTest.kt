@@ -100,6 +100,12 @@ class CoverTrafficAckTest {
             flow.value = contacts.values.toList()
         }
 
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(isVerified = isVerified)
+            flow.value = contacts.values.toList()
+        }
+
         override suspend fun deleteContact(id: String) {
             contacts.remove(id)
             flow.value = contacts.values.toList()

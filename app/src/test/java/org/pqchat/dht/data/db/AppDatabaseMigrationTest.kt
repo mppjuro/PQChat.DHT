@@ -197,4 +197,26 @@ class AppDatabaseMigrationTest {
             KeystoreCrypto.decrypt(migratedChunk.data, "chunks", "transfer_xyz_0")
         }
     }
+
+    @Test
+    fun testMigration7To8AddsIsVerifiedColumnToContacts() {
+        var executedSql = ""
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                if (method.name == "execSQL") {
+                    executedSql = args[0] as String
+                }
+                null
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_7_8.migrate(dbProxy)
+
+        assertTrue(
+            "Migration 7->8 must alter contacts table to add isVerified column",
+            executedSql.contains("ALTER TABLE contacts ADD COLUMN isVerified INTEGER NOT NULL DEFAULT 0")
+        )
+    }
 }

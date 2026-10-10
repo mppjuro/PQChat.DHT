@@ -60,6 +60,11 @@ class PollingSchedulerTest {
             contacts[id] = c.copy(rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(isVerified = isVerified)
+            flow.value = contacts.values.toList()
+        }
         override suspend fun deleteContact(id: String) {
             contacts.remove(id)
             flow.value = contacts.values.toList()

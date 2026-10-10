@@ -1,0 +1,147 @@
+(* ============================================================================== *)
+(* PQChat.DHT Protocol — Replay Protection Formal Model (ProVerif 2.05)           *)
+(*                                                                                *)
+(* Proves that neither Handshake packets nor message data packets can be          *)
+(* accepted more than once (Anti-Replay / Injective Correspondence Agreement).    *)
+(* Primitives: Injective events, ephemeral Target derivation, unique sequence nums*)
+(* ============================================================================== *)
+
+type kem_skey.
+type kem_pkey.
+type kem_ct.
+type ed_skey.
+type ed_pkey.
+
+(* --- ML-KEM-512 Functions --- *)
+fun kem_pk(kem_skey): kem_pkey.
+fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
+fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
+reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Ed25519 Functions --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+fun ed_sign(ed_skey, bitstring): bitstring.
+reduc forall sk: ed_skey, m: bitstring; ed_verify(ed_pk(sk), m, ed_sign(sk, m)) = true.
+
+(* --- Cryptographic Hash & KDF --- *)
+fun sha1(ed_pkey): bitstring.
+fun sha512(bitstring): bitstring.
+fun hmac(bitstring, bitstring): bitstring.
+fun hkdf_extract(bitstring, bitstring): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_msg_key(bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- AEAD (AES-256-GCM) with AAD binding --- *)
+fun aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
+  aead_dec(k, iv, aead_enc(k, iv, pt, aad), aad) = pt.
+
+(* --- Constants --- *)
+const TAG_RENDEZVOUS: bitstring.
+const TAG_KEY_CONFIRM: bitstring.
+const TAG_A2B: bitstring.
+const TAG_B2A: bitstring.
+const TAG_STEP_0: bitstring.
+const TAG_STEP_1: bitstring.
+
+(* --- Channels --- *)
+free c_dht: channel.             (* Public DHT network where Dolev-Yao attacker can replay packets *)
+free c_qr: channel [private].    (* Visual QR Code channel *)
+
+(* --- Replay Security Events --- *)
+event HandshakeSent(bitstring, kem_ct, bitstring).
+event HandshakeAccepted(bitstring, kem_ct, bitstring).
+event MessageSent(bitstring, bitstring, bitstring).
+event MessageAccepted(bitstring, bitstring, bitstring).
+
+(* ============================================================================== *)
+(* SECURITY QUERIES                                                               *)
+(* ============================================================================== *)
+
+(* 1. Injective Handshake Agreement (Replay Prevention on Handshake Type 0x01) *)
+query target: bitstring, ct: kem_ct, salt: bitstring;
+  inj-event(HandshakeAccepted(target, ct, salt)) ==> inj-event(HandshakeSent(target, ct, salt)).
+
+(* 2. Injective Message Delivery (Replay Prevention on Data Message Track) *)
+query target: bitstring, seq: bitstring, msg: bitstring;
+  inj-event(MessageAccepted(target, seq, msg)) ==> inj-event(MessageSent(target, seq, msg)).
+
+(* ============================================================================== *)
+(* PROTOCOL PROCESSES                                                             *)
+(* ============================================================================== *)
+
+let processAlice =
+  new sk_A: kem_skey;
+  let pk_A = kem_pk(sk_A) in
+  new seed_init: bitstring;
+  out(c_qr, (pk_A, seed_init));
+  
+  let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
+  in(c_dht, (=target_0, ct_B: kem_ct, salt: bitstring, confirm_tag: bitstring));
+  
+  let ss_kem = kem_decap(sk_A, ct_B) in
+  let transcript = (pk_A, ct_B, seed_init, salt) in
+  let prk = hkdf_extract(salt, ss_kem) in
+  let master_key = hkdf_expand(prk, sha512(transcript)) in
+  let expected_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
+  
+  if confirm_tag = expected_tag then
+  event HandshakeAccepted(target_0, ct_B, salt);
+  
+  let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
+  
+  (* Alice sends Message at sequence step 0 *)
+  let seq_0 = TAG_STEP_0 in
+  let entropy_0 = hkdf_expand(chain_key_A2B, seq_0) in
+  let msg_key_0 = get_msg_key(entropy_0) in
+  let ed_seed_0 = get_ed_seed(entropy_0) in
+  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
+  let ed_pk_0 = ed_pk(ed_sk_0) in
+  let target_1 = sha1(ed_pk_0) in
+  
+  new payload_0: bitstring;
+  new iv_0: bitstring;
+  let aad_0 = (target_1, TAG_A2B) in
+  let c_0 = aead_enc(msg_key_0, iv_0, payload_0, aad_0) in
+  let sig_0 = ed_sign(ed_sk_0, (target_1, c_0)) in
+  
+  event MessageSent(target_1, seq_0, payload_0);
+  out(c_dht, (target_1, c_0, iv_0, sig_0)).
+
+let processBob =
+  in(c_qr, (pk_A: kem_pkey, seed_init: bitstring));
+  new r_kem: bitstring;
+  let ct_B = kem_encap_ct(pk_A, r_kem) in
+  let ss_kem = kem_encap_ss(pk_A, r_kem) in
+  new salt: bitstring;
+  let transcript = (pk_A, ct_B, seed_init, salt) in
+  let prk = hkdf_extract(salt, ss_kem) in
+  let master_key = hkdf_expand(prk, sha512(transcript)) in
+  let confirm_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
+  
+  let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
+  event HandshakeSent(target_0, ct_B, salt);
+  out(c_dht, (target_0, ct_B, salt, confirm_tag));
+  
+  let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
+  
+  (* Bob receives Message at step 0 *)
+  let seq_0 = TAG_STEP_0 in
+  let entropy_0 = hkdf_expand(chain_key_A2B, seq_0) in
+  let msg_key_0 = get_msg_key(entropy_0) in
+  let ed_seed_0 = get_ed_seed(entropy_0) in
+  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
+  let ed_pk_0 = ed_pk(ed_sk_0) in
+  let target_1 = sha1(ed_pk_0) in
+  
+  in(c_dht, (=target_1, c_0: bitstring, iv_0: bitstring, sig_0: bitstring));
+  if ed_verify(ed_pk_0, (target_1, c_0), sig_0) = true then
+  let aad_0 = (target_1, TAG_A2B) in
+  let recv_payload = aead_dec(msg_key_0, iv_0, c_0, aad_0) in
+  event MessageAccepted(target_1, seq_0, recv_payload).
+
+process
+  (!processAlice) | (!processBob)

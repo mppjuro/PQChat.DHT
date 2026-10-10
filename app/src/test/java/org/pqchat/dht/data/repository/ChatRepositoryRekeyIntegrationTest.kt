@@ -5,8 +5,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.*
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
 import org.pqchat.dht.dht.FakeDht
@@ -14,11 +15,12 @@ import java.security.Security
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
+@Tag("slow")
 class ChatRepositoryRekeyIntegrationTest {
 
     companion object {
         @JvmStatic
-        @BeforeClass
+        @BeforeAll
         fun setup() {
             Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
             Security.insertProviderAt(BouncyCastleProvider(), 1)
@@ -83,6 +85,13 @@ class ChatRepositoryRekeyIntegrationTest {
         override suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(rekeyEpoch = rekeyEpoch)
+            }
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
+            contacts.computeIfPresent(id) { _, c ->
+                c.copy(isVerified = isVerified)
             }
             flow.value = contacts.values.toList()
         }

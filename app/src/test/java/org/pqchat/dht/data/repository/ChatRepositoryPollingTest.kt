@@ -5,8 +5,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.*
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
@@ -14,11 +15,12 @@ import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.RatchetChain
 import java.security.Security
 
+@Tag("slow")
 class ChatRepositoryPollingTest {
 
     companion object {
         @JvmStatic
-        @BeforeClass
+        @BeforeAll
         fun setup() {
             Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
             Security.insertProviderAt(BouncyCastleProvider(), 1)
@@ -77,6 +79,12 @@ class ChatRepositoryPollingTest {
         override suspend fun updateRekeyEpoch(id: String, rekeyEpoch: Long) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(rekeyEpoch = rekeyEpoch)
+            flow.value = contacts.values.toList()
+        }
+
+        override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(isVerified = isVerified)
             flow.value = contacts.values.toList()
         }
 
