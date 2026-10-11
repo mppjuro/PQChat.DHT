@@ -218,11 +218,11 @@ fun ChatScreen(
                         }
                     }
                     // ───────────────────────────────────────────────────────────────
-                    IconButton(onClick = { viewModel.sendTestPngImage() }) {
+                    IconButton(onClick = { imagePickerLauncher.launch("image/*") }) {
                         Icon(
-                            imageVector = Icons.Default.Image,
-                            contentDescription = "Send Chunked PNG Test",
-                            tint = appColors.secondary
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = "Wyślij obraz z galerii (PNG8)",
+                            tint = appColors.primary
                         )
                     }
                 },
