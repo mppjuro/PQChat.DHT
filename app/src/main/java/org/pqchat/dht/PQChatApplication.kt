@@ -49,9 +49,14 @@ class PQChatApplication : Application() {
         database = AppDatabase.getInstance(this)
         dhtLeafNode = DhtLeafNode(port = DhtLeafNode.DEFAULT_DHT_PORT, nodeCacheDao = database.dhtNodeCacheDao()).apply { start() }
         val pendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
-        repository = ChatRepository(database, dhtLeafNode, pendingAckQueue)
-        trafficGenerator = PoissonTrafficGenerator(dhtLeafNode, pendingAckQueue = pendingAckQueue).apply { start() }
         settingsManager = AppSettingsManager(this)
+        repository = ChatRepository(database, dhtLeafNode, pendingAckQueue)
+        trafficGenerator = PoissonTrafficGenerator(
+            dhtLeafNode,
+            pendingAckQueue = pendingAckQueue,
+            blindRepublishPool = repository.blindRepublishPool,
+            crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value }
+        ).apply { start() }
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }
 
         // Process-level lifecycle observation: keeps background polling active across activity recreations

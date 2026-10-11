@@ -47,6 +47,7 @@ fun SettingsScreen(
     val republishMaxTtl by viewModel.republishMaxTtl.collectAsState()
     val imageMaxEdge by viewModel.imageMaxEdge.collectAsState()
     val imageColorCount by viewModel.imageColorCount.collectAsState()
+    val isCrowdsourcedRepublishEnabled by viewModel.isCrowdsourcedRepublishEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -537,6 +538,37 @@ fun SettingsScreen(
                         options = REPUBLISH_TTL_OPTIONS,
                         onSelect = { viewModel.setRepublishMaxTtl(it) }
                     )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Współdzielone odświeżanie DHT (przekaźnik P2P)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Współdzielone odświeżanie DHT (przekaźnik P2P)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Pomaga dostarczać wiadomości użytkownikom offline i zwiększa anonimowość kosztem minimalnego transferu.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isCrowdsourcedRepublishEnabled,
+                            onCheckedChange = { viewModel.setCrowdsourcedRepublishEnabled(it) }
+                        )
+                    }
                 }
             }
 

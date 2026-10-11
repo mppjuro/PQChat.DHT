@@ -17,12 +17,57 @@ class AdaptivePollingManager(
     private val onPollRequested: suspend (contactId: String?) -> Unit
 ) {
     private var onIdlePreWarm: (suspend (contactId: String?) -> Unit)? = null
+    var trafficGenerator: PoissonTrafficGenerator? = null
+    var blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance
+    @Volatile var isCrowdsourcedRepublishEnabled: Boolean = true
+    var onCoverTrafficTick: (suspend () -> Unit)? = null
 
     constructor(
         onPollRequested: suspend (contactId: String?) -> Unit,
-        onIdlePreWarm: (suspend (contactId: String?) -> Unit)?
+        onIdlePreWarm: (suspend (contactId: String?) -> Unit)?,
+        trafficGenerator: PoissonTrafficGenerator? = null,
+        blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance
     ) : this(onPollRequested) {
         this.onIdlePreWarm = onIdlePreWarm
+        this.trafficGenerator = trafficGenerator
+        this.blindRepublishPool = blindRepublishPool
+    }
+
+    /**
+     * Executes a cover traffic tick:
+     * If crowdsourced republishing is enabled and BlindRepublishPool has entries,
+     * republishes a random third-party BEP 44 packet.
+     * Otherwise, sends a synthetic decoy dummy packet.
+     */
+    suspend fun executeCoverTrafficTick(dhtClient: org.pqchat.dht.dht.leaf.DhtClient? = null) {
+        val tg = trafficGenerator
+        if (tg != null) {
+            tg.processCoverTrafficTick()
+            return
+        }
+        val customHook = onCoverTrafficTick
+        if (customHook != null) {
+            customHook.invoke()
+            return
+        }
+        if (dhtClient != null) {
+            if (isCrowdsourcedRepublishEnabled && blindRepublishPool.size() > 0) {
+                val entry = blindRepublishPool.sampleRandomEntry()
+                if (entry != null) {
+                    dhtClient.putMutablePreSigned(
+                        target = entry.target,
+                        v = entry.v,
+                        seq = entry.seq,
+                        salt = entry.salt,
+                        pk = entry.publicKey,
+                        sig = entry.sig,
+                        skipLocalStore = false
+                    )
+                    return
+                }
+            }
+            dhtClient.sendCoverTrafficDummy()
+        }
     }
     enum class PollingState(val label: String) {
         FOREGROUND_CHAT("Foreground Chat"),

@@ -107,6 +107,12 @@ class PollingScheduler(
                 }
             }
         }
+        pollingManager.blindRepublishPool = repository.blindRepublishPool
+        schedulerScope.launch {
+            settingsManager.isCrowdsourcedRepublishEnabled.collect { enabled ->
+                pollingManager.isCrowdsourcedRepublishEnabled = enabled
+            }
+        }
 
         // Synchronize republish policy changes with WorkManager scheduler
         schedulerScope.launch {

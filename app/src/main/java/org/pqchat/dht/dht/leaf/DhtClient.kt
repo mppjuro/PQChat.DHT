@@ -69,6 +69,20 @@ interface DhtClient {
     ): Boolean
 
     /**
+     * BEP 44 put query to store mutable item using pre-existing public key and Ed25519 signature.
+     * Used for Blind Cooperative Republishing of third-party encrypted records where private seed is unknown.
+     */
+    suspend fun putMutablePreSigned(
+        target: ByteArray,
+        v: ByteArray,
+        seq: Long = DEFAULT_MUTABLE_SEQ,
+        salt: ByteArray? = null,
+        pk: ByteArray,
+        sig: ByteArray,
+        skipLocalStore: Boolean = false
+    ): Boolean
+
+    /**
      * Send dummy cover traffic (chaffing) to random target.
      * Returns the 20-byte target actually published to DHT, or null on failure.
      */

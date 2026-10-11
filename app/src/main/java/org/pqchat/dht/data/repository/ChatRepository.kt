@@ -26,7 +26,8 @@ class ChatRepository(
     val skippedKeyDao: SkippedKeyDao? = null,
     val dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
     val pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
-    val decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance
+    val decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance,
+    val blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance
 ) {
     constructor(
         contactDao: ContactDao,
@@ -55,7 +56,8 @@ class ChatRepository(
         database: AppDatabase,
         dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
         pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
-        decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance
+        decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance,
+        blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance
     ) : this(
         database.contactDao(),
         database.messageDao(),
@@ -64,7 +66,8 @@ class ChatRepository(
         database.skippedKeyDao(),
         dhtLeafNode,
         pendingAckQueue,
-        decoyTargetPool
+        decoyTargetPool,
+        blindRepublishPool
     )
 
     /**
@@ -220,11 +223,29 @@ class ChatRepository(
         var queried = 0
         for (target in targets) {
             try {
-                dhtLeafNode.getMutable(target, skipLocalStore = true)
+                val item = dhtLeafNode.getMutable(target, skipLocalStore = true)
+                if (item != null) {
+                    harvestUndecryptableItem(target, item)
+                }
                 queried++
             } catch (_: Exception) {}
         }
         queried
+    }
+
+    /**
+     * Caches third-party authentic BEP 44 mutable records into BlindRepublishPool
+     * when they cannot be decrypted by this node (e.g. from decoy queries or unmatched slots).
+     */
+    fun harvestUndecryptableItem(target: ByteArray, item: DhtLeafNode.MutableItem) {
+        blindRepublishPool.verifyAndAdd(
+            target = target,
+            publicKey = item.k,
+            seq = item.seq,
+            v = item.v,
+            sig = item.sig,
+            salt = item.salt
+        )
     }
 
     companion object {
@@ -915,7 +936,9 @@ class ChatRepository(
                     }
                     else -> {}
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+                harvestUndecryptableItem(sk.target, item)
+            }
         }
         return anyProcessed
     }
@@ -943,7 +966,10 @@ class ChatRepository(
             val item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf) ?: break
 
             val processed = processIncomingItem(contactId, currentSlot, item, isSelf)
-            if (!processed) break
+            if (!processed) {
+                harvestUndecryptableItem(currentSlot.target, item)
+                break
+            }
             anyProcessed = true
             contact = contactDao.getContactById(contactId) ?: break
         }
@@ -1022,6 +1048,8 @@ class ChatRepository(
                             hasMore = true
                             break
                         }
+                    } else {
+                        harvestUndecryptableItem(slot.target, item)
                     }
                 }
             }
