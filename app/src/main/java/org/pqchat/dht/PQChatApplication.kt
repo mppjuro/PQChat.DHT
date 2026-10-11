@@ -12,6 +12,7 @@ import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.service.PollingScheduler
 import org.pqchat.dht.traffic.PoissonTrafficGenerator
 import org.pqchat.dht.ui.util.NotificationHelper
+import kotlinx.coroutines.launch
 import java.security.Security
 
 class PQChatApplication : Application() {
@@ -32,6 +33,8 @@ class PQChatApplication : Application() {
     lateinit var settingsManager: AppSettingsManager
         private set
     lateinit var pollingScheduler: PollingScheduler
+        private set
+    lateinit var embeddedTorManager: org.pqchat.dht.network.tor.EmbeddedTorManager
         private set
 
     override fun onCreate() {
@@ -58,6 +61,33 @@ class PQChatApplication : Application() {
             crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value }
         ).apply { start() }
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }
+        embeddedTorManager = org.pqchat.dht.network.tor.EmbeddedTorManager(this)
+
+        val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+        appScope.launch {
+            settingsManager.isTorEnabled.collect { enabled ->
+                if (enabled) {
+                    embeddedTorManager.start()
+                } else {
+                    embeddedTorManager.stop()
+                    dhtLeafNode.setTorProxy(null)
+                }
+            }
+        }
+
+        appScope.launch {
+            embeddedTorManager.state.collect { state ->
+                if (state is org.pqchat.dht.network.tor.TorState.Connected && settingsManager.isTorEnabled.value) {
+                    dhtLeafNode.setTorProxy(
+                        org.pqchat.dht.dht.leaf.TorProxyConfig(
+                            enabled = true,
+                            socksHost = "127.0.0.1",
+                            socksPort = state.socksPort
+                        )
+                    )
+                }
+            }
+        }
 
         // Process-level lifecycle observation: keeps background polling active across activity recreations
         ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
@@ -77,5 +107,6 @@ class PQChatApplication : Application() {
         pollingScheduler.stop()
         trafficGenerator.stop()
         dhtLeafNode.stop()
+        embeddedTorManager.stop()
     }
 }

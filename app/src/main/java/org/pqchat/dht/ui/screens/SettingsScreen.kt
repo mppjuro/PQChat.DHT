@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pqchat.dht.data.settings.*
+import org.pqchat.dht.network.tor.TorState
 import org.pqchat.dht.ui.theme.ElectricGreen
 import org.pqchat.dht.ui.theme.LocalAppColors
 import org.pqchat.dht.ui.theme.NeonCyan
@@ -48,6 +49,8 @@ fun SettingsScreen(
     val imageMaxEdge by viewModel.imageMaxEdge.collectAsState()
     val imageColorCount by viewModel.imageColorCount.collectAsState()
     val isCrowdsourcedRepublishEnabled by viewModel.isCrowdsourcedRepublishEnabled.collectAsState()
+    val isTorEnabled by viewModel.isTorEnabled.collectAsState()
+    val torState by viewModel.torState.collectAsState()
 
     Scaffold(
         topBar = {
@@ -574,6 +577,102 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // ==================== SECTION 4: PRIVACY & TOR NETWORK ====================
+            SettingsSectionHeader(
+                title = "Prywatność i Sieć TOR",
+                icon = Icons.Default.Security
+            )
+
+            Surface(
+                color = appColors.surface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Wbudowane trasowanie przez sieć TOR (Embedded Tor)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Ukrywa Twój adres IP przed publicznymi węzłami BitTorrent DHT (BEP 44). Pakiety KRPC są trasowane przez sieć cebulową TOR bez konieczności instalowania zewnętrznych aplikacji (np. Orbot).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // Przełącznik: Połączenie przez sieć TOR
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Połączenie przez sieć TOR",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isTorEnabled) "Włączone (aktywne trasowanie SOCKS5)" else "Wyłączone (bezpośrednie gniazdo UDP)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isTorEnabled) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isTorEnabled,
+                            onCheckedChange = { viewModel.setTorEnabled(it) }
+                        )
+                    }
+
+                    // Informacja o potencjalnym zwiększeniu opóźnień (DHT latency tradeoff)
+                    Surface(
+                        color = appColors.surfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, appColors.border),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                text = "⚠️",
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(end = 10.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Zwiększone opóźnienia (DHT latency tradeoff)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = appColors.textPrimary
+                                )
+                                Text(
+                                    text = "Trasowanie przez 3 przekaźniki sieci Tor zwiększa czas odpowiedzi węzłów DHT (RTT) z kilkudziesięciu milisekund do 1–3 sekund. Pobieranie oraz wysyłanie wiadomości może trwać dłużej.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = appColors.textSecondary,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Status Tor w czasie rzeczywistym
+                    TorStatusCard(isTorEnabled = isTorEnabled, torState = torState)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             // ==================== SECTION 5: SELF-CONVERSATION / DHT TEST ====================
             SettingsSectionHeader(
                 title = "Rozmowa ze sobą (Test DHT & Notatki)",
@@ -797,6 +896,169 @@ fun IntervalDropdownRow(
                         },
                         contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TorStatusCard(
+    isTorEnabled: Boolean,
+    torState: TorState
+) {
+    val appColors = LocalAppColors.current
+
+    Surface(
+        color = appColors.surfaceVariant.copy(alpha = 0.4f),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, appColors.border),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Status węzła TOR",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = appColors.textPrimary
+                )
+
+                // State badge
+                val badgeText: String
+                val badgeColor: Color
+                val badgeBorder: Color
+
+                if (!isTorEnabled) {
+                    badgeText = "Wyłączony"
+                    badgeColor = appColors.textSecondary.copy(alpha = 0.2f)
+                    badgeBorder = appColors.border
+                } else {
+                    when (torState) {
+                        is TorState.Disconnected -> {
+                            badgeText = "Odłączony"
+                            badgeColor = appColors.textSecondary.copy(alpha = 0.2f)
+                            badgeBorder = appColors.border
+                        }
+                        is TorState.Starting -> {
+                            badgeText = "Inicjalizacja"
+                            badgeColor = Color(0xFFFF9800).copy(alpha = 0.2f)
+                            badgeBorder = Color(0xFFFF9800)
+                        }
+                        is TorState.Bootstrapping -> {
+                            badgeText = "Bootstrap: ${torState.progress}%"
+                            badgeColor = NeonCyan.copy(alpha = 0.2f)
+                            badgeBorder = NeonCyan
+                        }
+                        is TorState.Connected -> {
+                            badgeText = "Połączono"
+                            badgeColor = ElectricGreen.copy(alpha = 0.2f)
+                            badgeBorder = ElectricGreen
+                        }
+                        is TorState.Error -> {
+                            badgeText = "Błąd"
+                            badgeColor = Color(0xFFE53935).copy(alpha = 0.2f)
+                            badgeBorder = Color(0xFFE53935)
+                        }
+                    }
+                }
+
+                Surface(
+                    color = badgeColor,
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, badgeBorder)
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = appColors.textPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (!isTorEnabled) {
+                Text(
+                    text = "Tryb TOR jest obecnie wyłączony. Pakiety DHT wysyłane są bezpośrednim gniazdem transportowym UDP.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = appColors.textSecondary
+                )
+            } else {
+                when (torState) {
+                    is TorState.Disconnected -> {
+                        Text(
+                            text = "Oczekiwanie na start klienta TOR...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                    }
+                    is TorState.Starting -> {
+                        Text(
+                            text = "Uruchamianie wbudowanego silnika Tor i generowanie pliku torrc...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                            color = appColors.primary,
+                            trackColor = appColors.border
+                        )
+                    }
+                    is TorState.Bootstrapping -> {
+                        Text(
+                            text = "Łączenie z węzłami Tor: ${torState.progress}% ${if (torState.summary.isNotBlank()) "— ${torState.summary}" else ""}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { torState.progress / 100f },
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                            color = NeonCyan,
+                            trackColor = appColors.border
+                        )
+                    }
+                    is TorState.Connected -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = ElectricGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Połączono z siecią TOR (Port SOCKS5: ${torState.socksPort})",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = ElectricGreen
+                            )
+                        }
+                        Text(
+                            text = "Ruch DHT KRPC jest hermetyzowany i kierowany przez wbudowany proxy SOCKS5. Rozwiązywanie nazw domenowych (RFC 1928) następuje po stronie węzła wyjściowego.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    is TorState.Error -> {
+                        Text(
+                            text = "Wystąpił błąd podczas pracy klienta Tor: ${torState.message}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE53935),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }

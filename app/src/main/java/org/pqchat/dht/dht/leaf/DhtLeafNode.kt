@@ -158,6 +158,54 @@ class DhtLeafNode(
     val targetRouteCache = TargetRouteCache()
 
     @Volatile
+    private var torProxyConfig: TorProxyConfig? = null
+
+    @Volatile
+    private var torUdpAssociation: org.pqchat.dht.network.tor.Socks5Client.Socks5UdpAssociation? = null
+
+    private var torListenerJob: Job? = null
+
+    override val isTorRoutingActive: Boolean
+        get() = torProxyConfig?.enabled == true && torUdpAssociation?.isClosed == false
+
+    @Synchronized
+    override fun setTorProxy(config: TorProxyConfig?) {
+        torProxyConfig = config
+        torListenerJob?.cancel()
+        torListenerJob = null
+        torUdpAssociation?.close()
+        torUdpAssociation = null
+
+        if (config?.enabled == true) {
+            try {
+                val client = org.pqchat.dht.network.tor.Socks5Client(config.socksHost, config.socksPort)
+                val assoc = client.createUdpAssociation()
+                torUdpAssociation = assoc
+                startTorRelayListener(assoc)
+                println("[PQChat] DhtLeafNode: Tor SOCKS5 UDP association active on ${config.socksHost}:${config.socksPort}")
+            } catch (e: Exception) {
+                println("[PQChat] DhtLeafNode: Failed to establish Tor SOCKS5 association: $e")
+            }
+        } else {
+            println("[PQChat] DhtLeafNode: Tor routing disabled, returned to direct UDP transport")
+        }
+    }
+
+    private fun startTorRelayListener(assoc: org.pqchat.dht.network.tor.Socks5Client.Socks5UdpAssociation) {
+        torListenerJob = scope.launch(Dispatchers.IO) {
+            val buffer = ByteArray(4096)
+            while (isRunning && !assoc.isClosed && isTorRoutingActive) {
+                try {
+                    val packet = assoc.receive(buffer) ?: continue
+                    handleIncomingPacket(packet.data, packet.sender)
+                } catch (e: Exception) {
+                    if (!isRunning || assoc.isClosed) break
+                }
+            }
+        }
+    }
+
+    @Volatile
     private var isRunning = false
 
     @Synchronized
@@ -198,6 +246,13 @@ class DhtLeafNode(
 
     override fun stop() {
         isRunning = false
+        torListenerJob?.cancel()
+        torListenerJob = null
+        try {
+            torUdpAssociation?.close()
+        } catch (_: Exception) {
+        }
+        torUdpAssociation = null
         try {
             socket?.close()
         } catch (_: Exception) {
@@ -458,10 +513,15 @@ class DhtLeafNode(
             list.add(peer.address)
         }
         for ((host, port) in BOOTSTRAP_HOSTS) {
-            try {
-                val ip = InetAddress.getByName(host)
-                list.add(InetSocketAddress(ip, port))
-            } catch (_: Exception) {
+            if (isTorRoutingActive) {
+                // Prevent DNS leaks: pass unresolved domain to be resolved by Tor exit node
+                list.add(InetSocketAddress.createUnresolved(host, port))
+            } else {
+                try {
+                    val ip = InetAddress.getByName(host)
+                    list.add(InetSocketAddress(ip, port))
+                } catch (_: Exception) {
+                }
             }
         }
         list
@@ -535,16 +595,24 @@ class DhtLeafNode(
         val txKey = CryptoUtils.toHex(query.transactionId)
         pendingTransactions[txKey] = deferred
 
-        val s = socket ?: return@withContext null
-        if (s.isClosed) return@withContext null
-
         val startTime = System.currentTimeMillis()
         try {
             val bytes = query.toBencoded()
-            val packet = DatagramPacket(bytes, bytes.size, targetAddress)
-            s.send(packet)
+            val assoc = torUdpAssociation
 
-            val resp = withTimeoutOrNull(timeoutMs) {
+            if (isTorRoutingActive && assoc != null && !assoc.isClosed) {
+                // Route through Tor SOCKS5 UDP relay
+                assoc.send(bytes, targetAddress)
+            } else {
+                // Direct UDP socket
+                val s = socket ?: return@withContext null
+                if (s.isClosed) return@withContext null
+                val packet = DatagramPacket(bytes, bytes.size, targetAddress)
+                s.send(packet)
+            }
+
+            val effectiveTimeout = if (isTorRoutingActive) maxOf(timeoutMs, 4000L) else timeoutMs
+            val resp = withTimeoutOrNull(effectiveTimeout) {
                 deferred.await()
             }
             if (resp != null) {
