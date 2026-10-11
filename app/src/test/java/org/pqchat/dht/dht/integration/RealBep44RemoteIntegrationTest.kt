@@ -17,13 +17,18 @@ import java.security.Security
 /**
  * Integration test verifying real BitTorrent Mainline DHT BEP 44 remote PUT and GET operations.
  *
- * Designed to be executed manually or on-demand via GitHub Actions `workflow_dispatch`.
+ * Designed to be executed manually, on-demand via GitHub Actions `workflow_dispatch`,
+ * or scheduled nightly via cron.
  * Set environment variable `RUN_REAL_DHT_TESTS=true` or system property `-DrunRealDhtTests=true`
  * to execute against live public BitTorrent DHT bootstrap nodes.
  */
 class RealBep44RemoteIntegrationTest {
 
     companion object {
+        private const val EXTENDED_GET_TIMEOUT_MS = 25_000L
+        private const val MAX_RETRIEVAL_ATTEMPTS = 5
+        private const val RETRY_DELAY_MS = 4_000L
+
         @JvmStatic
         @BeforeClass
         fun setup() {
@@ -48,13 +53,13 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             val bootstrapNodes = node.resolveBootstrapNodes()
-            println("[Live DHT] Bootstrap nodes resolved: $bootstrapNodes")
+            println("[Live DHT] Bootstrap nodes resolved: \$bootstrapNodes")
             node.bootstrap()
 
             // Allow bootstrap queries to populate active peer routing table
-            delay(3500)
+            delay(5000)
             val peerCount = node.getActivePeerCount()
-            println("[Live DHT] Active peer count after bootstrap: $peerCount")
+            println("[Live DHT] Active peer count after bootstrap: \$peerCount")
             assertTrue("Should connect to at least 1 active DHT peer", peerCount > 0)
 
             // Ephemeral key pair and 900-byte payload (MAX_FRAME_PAYLOAD_BYTES)
@@ -65,7 +70,7 @@ class RealBep44RemoteIntegrationTest {
             assertEquals(900, payload.size)
 
             val targetHex = CryptoUtils.toHex(target)
-            println("[Live DHT] Publishing 900-byte payload under target: $targetHex")
+            println("[Live DHT] Publishing 900-byte payload under target: \$targetHex")
 
             val t0 = System.currentTimeMillis()
             val putResult = node.putMutable(
@@ -77,29 +82,49 @@ class RealBep44RemoteIntegrationTest {
                 skipLocalStore = true
             )
             val putRttMs = System.currentTimeMillis() - t0
-            println("[Live DHT] putMutable result: $putResult (RTT: ${putRttMs}ms)")
+            println("[Live DHT] putMutable result: $putResult (RTT:${putRttMs}ms)")
             assertTrue("putMutable to remote DHT peers must succeed", putResult)
 
             // Propagation window across Kademlia closest swarm
-            delay(3000)
+            delay(4000)
 
             // Clear local store to force remote KRPC get traversal
             node.localMutableStore.clear()
             println("[Live DHT] Local cache cleared. Querying remote peers via getMutable...")
 
-            val t1 = System.currentTimeMillis()
-            val retrieved = node.getMutable(
-                target = target,
-                salt = null,
-                skipLocalStore = true,
-                timeoutMs = DhtLeafNode.FAST_GET_TIMEOUT_MS
-            )
-            val getRttMs = System.currentTimeMillis() - t1
+            var retrieved: DhtLeafNode.MutableItem? = null
+            var lastGetRttMs = 0L
 
-            assertNotNull("Record must be retrieved from remote DHT peers", retrieved)
+            for (attempt in 1..MAX_RETRIEVAL_ATTEMPTS) {
+                val tStart = System.currentTimeMillis()
+                println("[Live DHT] Retrieval attempt \$attempt/$MAX_RETRIEVAL_ATTEMPTS (timeout=${EXTENDED_GET_TIMEOUT_MS}ms)...")
+
+                retrieved = node.getMutable(
+                    target = target,
+                    salt = null,
+                    skipLocalStore = true,
+                    timeoutMs = EXTENDED_GET_TIMEOUT_MS
+                )
+                lastGetRttMs = System.currentTimeMillis() - tStart
+
+                if (retrieved != null) {
+                    println("[Live DHT] Retrieved payload on attempt $attempt in${lastGetRttMs}ms")
+                    break
+                }
+
+                if (attempt < MAX_RETRIEVAL_ATTEMPTS) {
+                    println("[Live DHT] Record not found yet, retrying in \${RETRY_DELAY_MS}ms...")
+                    delay(RETRY_DELAY_MS)
+                }
+            }
+
+            assertNotNull(
+                "Record must be retrieved from remote DHT peers after \$MAX_RETRIEVAL_ATTEMPTS attempts",
+                retrieved
+            )
             assertEquals("Retrieved payload must have size 900", 900, retrieved!!.v.size)
             assertArrayEquals("Retrieved payload must match original byte-for-byte", payload, retrieved.v)
-            println("[Live DHT] Verification succeeded! getMutable RTT: ${getRttMs}ms, Total: ${putRttMs + getRttMs}ms")
+            println("[Live DHT] Verification succeeded! Last getMutable RTT: ${lastGetRttMs}ms, Total PUT+GET:${putRttMs + lastGetRttMs}ms")
         } finally {
             node.stop()
         }
@@ -116,7 +141,7 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             node.bootstrap()
-            delay(3000)
+            delay(4000)
 
             val harness = LoopbackMeasurementHarness(dhtClient = node)
             val trials = 3
@@ -127,7 +152,10 @@ class RealBep44RemoteIntegrationTest {
                 val metric = harness.runLoopbackIteration(LoopbackMeasurementHarness.NetworkEnvironment.WIFI)
                 results.add(metric)
                 println(" -> Trial $i: Success=${metric.deliverySuccess}, Total RTT=${metric.rttTotalMs}ms, Source=${metric.dataSource}")
-                assertTrue("Telemetry must be classified as MEASURED", metric.dataSource == LoopbackMeasurementHarness.DataSource.MEASURED)
+                assertTrue(
+                    "Telemetry must be classified as MEASURED",
+                    metric.dataSource == LoopbackMeasurementHarness.DataSource.MEASURED
+                )
                 assertTrue("Live loopback iteration should succeed", metric.deliverySuccess)
                 assertTrue("PUT RTT must be recorded", metric.rttPutMs > 0)
                 assertTrue("GET RTT must be recorded", metric.rttGetMs > 0)
@@ -142,7 +170,7 @@ class RealBep44RemoteIntegrationTest {
                 dataSource = LoopbackMeasurementHarness.DataSource.MEASURED,
                 records = results
             )
-            println("[Live DHT] Aggregate Report: SuccessRate=${report.deliverySuccessRate}%, p50=${report.totalP50Ms}ms")
+            println("[Live DHT] Aggregate Report: SuccessRate=${report.deliverySuccessRate}\%, p50=${report.totalP50Ms}ms")
             assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, report.dataSource)
             assertEquals(100.0, report.deliverySuccessRate, 0.001)
         } finally {
@@ -161,7 +189,7 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             node.bootstrap()
-            delay(3000)
+            delay(4000)
 
             val harness = LoopbackMeasurementHarness(dhtClient = node)
             val results = harness.evaluateRetentionScenarios(
@@ -174,7 +202,7 @@ class RealBep44RemoteIntegrationTest {
             for (res in results) {
                 assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, res.dataSource)
                 assertTrue("Tested records should equal 2", res.testedRecords == 2)
-                println("[Live DHT] Retention Probe Result (hours=${res.hours}, republish=${res.republishEnabled}): survival=${res.survivalRate * 100}%")
+                println("[Live DHT] Retention Probe Result (hours=\${res.hours}, republish=${res.republishEnabled}): survival=${res.survivalRate * 100}%")
             }
         } finally {
             node.stop()
