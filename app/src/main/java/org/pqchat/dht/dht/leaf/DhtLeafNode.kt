@@ -62,8 +62,11 @@ class DhtLeafNode(
 
         override val size: Int get() = synchronized(lock) { storage.size }
         override fun isEmpty(): Boolean = synchronized(lock) { storage.isEmpty() }
-        override fun containsKey(key: ByteArray): Boolean = synchronized(lock) { storage.containsKey(CryptoUtils.toHex(key)) }
-        override fun containsValue(value: List<PeerContact>): Boolean = synchronized(lock) { storage.values.any { it.second == value } }
+        override fun containsKey(key: ByteArray): Boolean =
+            synchronized(lock) { storage.containsKey(CryptoUtils.toHex(key)) }
+
+        override fun containsValue(value: List<PeerContact>): Boolean =
+            synchronized(lock) { storage.values.any { it.second == value } }
 
         override fun get(key: ByteArray): List<PeerContact>? = synchronized(lock) {
             storage[CryptoUtils.toHex(key)]?.second
@@ -122,8 +125,11 @@ class DhtLeafNode(
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is DhtPeer) return false
-            return address == other.address || (nodeId.size == 20 && other.nodeId.size == 20 && nodeId.contentEquals(other.nodeId))
+            return address == other.address || (nodeId.size == 20 && other.nodeId.size == 20 && nodeId.contentEquals(
+                other.nodeId
+            ))
         }
+
         override fun hashCode(): Int = address.hashCode()
     }
 
@@ -194,7 +200,8 @@ class DhtLeafNode(
         isRunning = false
         try {
             socket?.close()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         socket = null
         scope.cancel()
         pendingTransactions.clear()
@@ -213,7 +220,11 @@ class DhtLeafNode(
         try {
             val cachedEntities = dao.getFastestNodes(MAX_CACHED_NODES)
             for (entity in cachedEntities) {
-                val ip = try { InetAddress.getByName(entity.ip) } catch (_: Exception) { null } ?: continue
+                val ip = try {
+                    InetAddress.getByName(entity.ip)
+                } catch (_: Exception) {
+                    null
+                } ?: continue
                 val addr = InetSocketAddress(ip, entity.port)
                 val nodeId = if (entity.nodeIdHex != null && entity.nodeIdHex.length == 40) {
                     CryptoUtils.fromHex(entity.nodeIdHex)
@@ -229,7 +240,8 @@ class DhtLeafNode(
                 recordNodeSuccessInternal(peer, persistToDb = false)
             }
             println("[PQChat] Loaded ${fastestNodesCache.size} fastest DHT nodes from persistent cache")
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     fun recordNodeSuccess(
@@ -279,7 +291,8 @@ class DhtLeafNode(
             scope.launch {
                 try {
                     nodeCacheDao.upsertAndTrim(entity, MAX_CACHED_NODES)
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -329,10 +342,12 @@ class DhtLeafNode(
                     val deferred = pendingTransactions.remove(txKey)
                     deferred?.complete(msg)
                 }
+
                 is KrpcMessage.Error -> {
                     val deferred = pendingTransactions.remove(txKey)
                     deferred?.completeExceptionally(RuntimeException("KRPC Error ${msg.code}: ${msg.message}"))
                 }
+
                 is KrpcMessage.Query -> {
                     when (msg.method) {
                         "ping" -> {
@@ -340,6 +355,7 @@ class DhtLeafNode(
                             val bencoded = resp.toBencoded()
                             socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
                         }
+
                         "get" -> {
                             val target = msg.arguments["target"] as? ByteArray
                             if (target != null) {
@@ -362,6 +378,7 @@ class DhtLeafNode(
                                 socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
                             }
                         }
+
                         "put" -> {
                             val v = msg.arguments["v"] as? ByteArray
                             val k = msg.arguments["k"] as? ByteArray
@@ -371,7 +388,10 @@ class DhtLeafNode(
                             if (v != null && k != null && sig != null) {
                                 val signData = Bencode.encodeBep44SignData(v, seq, salt)
                                 if (Ed25519Engine.verify(k, signData, sig)) {
-                                    val target = if (salt != null && salt.isNotEmpty()) CryptoUtils.sha1(k + salt) else CryptoUtils.sha1(k)
+                                    val target =
+                                        if (salt != null && salt.isNotEmpty()) CryptoUtils.sha1(k + salt) else CryptoUtils.sha1(
+                                            k
+                                        )
                                     val targetHex = CryptoUtils.toHex(target)
                                     val existing = localMutableStore[targetHex]
                                     if (existing == null || seq > existing.seq) {
@@ -426,7 +446,9 @@ class DhtLeafNode(
         return localEndpoints.mapNotNull { (ipStr, p) ->
             try {
                 DhtPeer(ByteArray(20), InetSocketAddress(InetAddress.getByName(ipStr), p))
-            } catch (_: Exception) { null }
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
@@ -439,7 +461,8 @@ class DhtLeafNode(
             try {
                 val ip = InetAddress.getByName(host)
                 list.add(InetSocketAddress(ip, port))
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
         list
     }
@@ -455,7 +478,8 @@ class DhtLeafNode(
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
                     sendQuery(node, query, 1500L)
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                }
             }
         }
         localJobs.joinAll()
@@ -467,7 +491,8 @@ class DhtLeafNode(
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
                         sendQuery(peer.address, query, TIMEOUT_MS)
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                    }
                 }
             }
             cachedJobs.joinAll()
@@ -481,7 +506,8 @@ class DhtLeafNode(
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
                         sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                    }
                 }
             }
             initialJobs.joinAll()
@@ -494,7 +520,8 @@ class DhtLeafNode(
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
                     sendQuery(peer.address, query, TIMEOUT_MS)
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -613,7 +640,8 @@ class DhtLeafNode(
                             val parsed = parseCompactNodesList(nodesBytes)
                             parsed.forEach { allDiscovered.add(it) }
                         }
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                    }
                 }
             }
             jobs.awaitAll()
@@ -638,13 +666,13 @@ class DhtLeafNode(
         return scope.launch {
             try {
                 preWarmTarget(target)
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
 
     private fun parseAndVerifyGetResult(
         resp: KrpcMessage.Response,
-        target: ByteArray,
         salt: ByteArray?,
         responderAddress: InetSocketAddress
     ): MutableItem? {
@@ -660,16 +688,9 @@ class DhtLeafNode(
             return null
         }
 
-        // 2. Verify Target matches SHA-1(k) (or k + salt) for standard BEP 44,
-        // or accept verified custom rendezvous targets (such as Handshake Target_0)
-        val expectedTarget = if (salt != null && salt.isNotEmpty()) {
-            CryptoUtils.sha1(k + salt)
-        } else {
-            CryptoUtils.sha1(k)
-        }
-
-        // For custom rendezvous targets (e.g. Target_0), the authentic Ed25519 signature
-        // proves authorship, and the payload is further authenticated via AEAD and KEM transcript binding.
+        // For standard BEP 44 as well as custom rendezvous targets (e.g. Handshake Target_0),
+        // the authentic Ed25519 signature proves authorship, and the payload is further
+        // authenticated via AEAD and KEM transcript binding.
         return MutableItem(v, seq, k, sig, salt, token, responderAddress)
     }
 
@@ -743,7 +764,7 @@ class DhtLeafNode(
                         val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
                         val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
 
-                        val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
+                        val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                         if (verified != null) {
                             if (foundItem.compareAndSet(null, verified)) {
                                 queryJobs.forEach { job ->
@@ -760,8 +781,8 @@ class DhtLeafNode(
                             if (nodesBytes != null) {
                                 val discovered = parseCompactNodesList(nodesBytes)
                                 if (closestKnownDistance != null && discovered.any { node ->
-                                    compareBytes(xorDistance(node.nodeId, target), closestKnownDistance) < 0
-                                }) {
+                                        compareBytes(xorDistance(node.nodeId, target), closestKnownDistance) < 0
+                                    }) {
                                     hasCloser = true
                                     closerNodeIndicated.set(true)
                                 }
@@ -780,7 +801,8 @@ class DhtLeafNode(
                                 }
                             }
                         }
-                    } catch (_: Exception) {}
+                    } catch (_: Exception) {
+                    }
                 }
             }
             queryJobs.joinAll()
@@ -798,7 +820,7 @@ class DhtLeafNode(
                             try {
                                 val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
                                 val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
-                                val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
+                                val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                                 if (verified != null) {
                                     if (foundItem.compareAndSet(null, verified)) {
                                         secondJobs.forEach { job ->
@@ -806,7 +828,8 @@ class DhtLeafNode(
                                         }
                                     }
                                 }
-                            } catch (_: Exception) {}
+                            } catch (_: Exception) {
+                            }
                         }
                     }
                     secondJobs.joinAll()
@@ -912,7 +935,8 @@ class DhtLeafNode(
                     putSuccess = true
                 }
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
 
         println("[PQChat] putMutablePreSigned target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")
         putSuccess
