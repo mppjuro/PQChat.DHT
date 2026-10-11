@@ -45,6 +45,8 @@ fun SettingsScreen(
     val intervalRepublishTier2 by viewModel.intervalRepublishTier2.collectAsState()
     val intervalRepublishTier3 by viewModel.intervalRepublishTier3.collectAsState()
     val republishMaxTtl by viewModel.republishMaxTtl.collectAsState()
+    val imageMaxEdge by viewModel.imageMaxEdge.collectAsState()
+    val imageColorCount by viewModel.imageColorCount.collectAsState()
 
     Scaffold(
         topBar = {
@@ -137,7 +139,210 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // ==================== SECTION 2: DHT INTERVALS ====================
+            // ==================== SECTION 2: IMAGE COMPRESSION (PNG8) ====================
+            SettingsSectionHeader(
+                title = "Kompresja obrazów (Transfer DHT / PNG8)",
+                icon = Icons.Default.Image
+            )
+
+            Surface(
+                color = appColors.surface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Format PNG8 z kwantyzacją palety barw",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Przesyłanie plików przez sieć BitTorrent DHT dzieli dane na 800-bajtowe fragmenty. Kompresja do formatu PNG8 pozwala przesłać zdjęcia w zaledwie kilkudziesięciu pakietach UDP.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // 1. Rozdzielczość (najdłuższa krawędź)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Rozdzielczość (najdłuższa krawędź)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = appColors.textPrimary
+                            )
+                            Text(
+                                text = "Dłuższy bok zdjęcia jest skalowany do wybranej wartości",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Surface(
+                            color = appColors.primary.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = "${imageMaxEdge} px",
+                                color = appColors.primary,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Szybkie presety rozdzielczości
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(600, 800, 1000, 1200, 1600).forEach { px ->
+                            val isSelected = imageMaxEdge == px
+                            Surface(
+                                color = if (isSelected) appColors.primary.copy(alpha = 0.2f) else appColors.surfaceVariant.copy(alpha = 0.5f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (isSelected) 1.5.dp else 1.dp,
+                                    if (isSelected) appColors.primary else appColors.border
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { viewModel.setImageMaxEdge(px) }
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${px}p",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) appColors.primary else appColors.textPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(
+                        value = imageMaxEdge.toFloat(),
+                        onValueChange = { viewModel.setImageMaxEdge(it.toInt()) },
+                        valueRange = 400f..1600f,
+                        steps = 11,
+                        colors = SliderDefaults.colors(
+                            thumbColor = appColors.primary,
+                            activeTrackColor = appColors.primary,
+                            inactiveTrackColor = appColors.border
+                        )
+                    )
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // 2. Ilość kolorów palety (PNG8)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Ilość kolorów palety (PNG8)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = appColors.textPrimary
+                            )
+                            Text(
+                                text = "Mniejsza liczba kolorów = wyższa kompresja i szybszy transfer DHT",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Surface(
+                            color = appColors.primary.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = "$imageColorCount kolorów",
+                                color = appColors.primary,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Szybkie presety palety kolorów
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(16, 32, 64, 128, 256).forEach { colors ->
+                            val isSelected = imageColorCount == colors
+                            Surface(
+                                color = if (isSelected) appColors.primary.copy(alpha = 0.2f) else appColors.surfaceVariant.copy(alpha = 0.5f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (isSelected) 1.5.dp else 1.dp,
+                                    if (isSelected) appColors.primary else appColors.border
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { viewModel.setImageColorCount(colors) }
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "$colors",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) appColors.primary else appColors.textPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(
+                        value = imageColorCount.toFloat(),
+                        onValueChange = { viewModel.setImageColorCount(it.toInt()) },
+                        valueRange = 8f..256f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = appColors.primary,
+                            activeTrackColor = appColors.primary,
+                            inactiveTrackColor = appColors.border
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ==================== SECTION 3: DHT INTERVALS ====================
             SettingsSectionHeader(
                 title = "Interwały synchronizacji DHT (4 tryby)",
                 icon = Icons.Default.Sync
@@ -331,140 +536,6 @@ fun SettingsScreen(
                         defaultMillis = DefaultRepublishConfig.MAX_TTL,
                         options = REPUBLISH_TTL_OPTIONS,
                         onSelect = { viewModel.setRepublishMaxTtl(it) }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // ==================== SECTION 4: IMAGE COMPRESSION (PNG8) ====================
-            val imageMaxEdge by viewModel.imageMaxEdge.collectAsState()
-            val imageColorCount by viewModel.imageColorCount.collectAsState()
-
-            SettingsSectionHeader(
-                title = "Kompresja obrazów (Transfer DHT)",
-                icon = Icons.Default.Image
-            )
-
-            Surface(
-                color = appColors.surface,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Optymalizacja transferu blokowego (PNG8)",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = appColors.textPrimary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "Obrazy przesyłane są przez publiczną sieć DHT w 800-bajtowych fragmentach (chunks). Zapis w formacie PNG8 z adaptacyjną paletą kolorów zmniejsza rozmiar pliku i liczbę pakietów UDP.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = appColors.textSecondary,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
-                    )
-
-                    // 1. Rozdzielczość (najdłuższa krawędź)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text(
-                                text = "Rozdzielczość (najdłuższa krawędź)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = appColors.textPrimary
-                            )
-                            Text(
-                                text = "Dłuższy bok obrazu jest skalowany do tej wartości (domyślnie 1000px).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = appColors.textSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Surface(
-                            color = appColors.primary.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f))
-                        ) {
-                            Text(
-                                text = "${imageMaxEdge} px",
-                                color = appColors.primary,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Slider(
-                        value = imageMaxEdge.toFloat(),
-                        onValueChange = { viewModel.setImageMaxEdge(it.toInt()) },
-                        valueRange = 400f..1600f,
-                        steps = 11,
-                        colors = SliderDefaults.colors(
-                            thumbColor = appColors.primary,
-                            activeTrackColor = appColors.primary,
-                            inactiveTrackColor = appColors.border
-                        )
-                    )
-
-                    HorizontalDivider(
-                        color = appColors.border,
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
-
-                    // 2. Suwak ilości kolorów (PNG8)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                            Text(
-                                text = "Ilość kolorów palety (PNG8)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = appColors.textPrimary
-                            )
-                            Text(
-                                text = "Mniejsza liczba kolorów (np. 16–64) zapewnia drastycznie wyższą kompresję i mniej chunków DHT.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = appColors.textSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Surface(
-                            color = appColors.primary.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f))
-                        ) {
-                            Text(
-                                text = "$imageColorCount kolorów",
-                                color = appColors.primary,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Slider(
-                        value = imageColorCount.toFloat(),
-                        onValueChange = { viewModel.setImageColorCount(it.toInt()) },
-                        valueRange = 8f..256f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = appColors.primary,
-                            activeTrackColor = appColors.primary,
-                            inactiveTrackColor = appColors.border
-                        )
                     )
                 }
             }

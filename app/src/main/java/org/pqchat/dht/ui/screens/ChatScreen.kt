@@ -217,14 +217,6 @@ fun ChatScreen(
                             }
                         }
                     }
-                    // ───────────────────────────────────────────────────────────────
-                    IconButton(onClick = { imagePickerLauncher.launch("image/*") }) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoLibrary,
-                            contentDescription = "Wyślij obraz z galerii (PNG8)",
-                            tint = appColors.primary
-                        )
-                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = appColors.surface
