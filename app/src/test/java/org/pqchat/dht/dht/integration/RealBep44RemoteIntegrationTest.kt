@@ -170,7 +170,7 @@ class RealBep44RemoteIntegrationTest {
                 dataSource = LoopbackMeasurementHarness.DataSource.MEASURED,
                 records = results
             )
-            println("[Live DHT] Aggregate Report: SuccessRate=${report.deliverySuccessRate}\%, p50=${report.totalP50Ms}ms")
+            println("[Live DHT] Aggregate Report: SuccessRate=${report.deliverySuccessRate}%, p50=${report.totalP50Ms}ms")
             assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, report.dataSource)
             assertEquals(100.0, report.deliverySuccessRate, 0.001)
         } finally {
