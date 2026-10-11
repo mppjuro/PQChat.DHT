@@ -88,6 +88,12 @@ class ChatRepositoryPollingTest {
             flow.value = contacts.values.toList()
         }
 
+        override suspend fun updateContactName(id: String, name: String) {
+            val c = contacts[id] ?: return
+            contacts[id] = c.copy(name = name)
+            flow.value = contacts.values.toList()
+        }
+
         override suspend fun deleteContact(id: String) {
             contacts.remove(id)
             flow.value = contacts.values.toList()

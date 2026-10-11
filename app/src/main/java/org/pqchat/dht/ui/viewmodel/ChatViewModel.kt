@@ -416,6 +416,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         setContactVerified(contactId, !currentVerified)
     }
 
+    fun updateContactName(contactId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateContactName(contactId, trimmed)
+        }
+    }
+
     fun confirmHandshakeAndVerify(contactId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.setContactVerified(contactId, true)
