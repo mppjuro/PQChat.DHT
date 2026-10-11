@@ -1,12 +1,15 @@
 package org.pqchat.dht.ui.screens
 
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,19 +24,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import org.pqchat.dht.data.db.MessageEntity
 import org.pqchat.dht.ui.theme.*
+import org.pqchat.dht.ui.util.ImageGallerySaver
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.delay
 import org.pqchat.dht.data.repository.ChatRepository
 
@@ -54,6 +65,9 @@ fun ChatScreen(
 
     var textInput by remember { mutableStateOf("") }
     var showSasDialog by remember { mutableStateOf(false) }
+    var showEditContactNameDialog by remember { mutableStateOf(false) }
+    var editedContactName by remember { mutableStateOf("") }
+    var fullscreenImageBytes by remember { mutableStateOf<ByteArray?>(null) }
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
@@ -111,12 +125,33 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = contact != null) {
+                                    if (contact != null) {
+                                        editedContactName = contact.name
+                                        showEditContactNameDialog = true
+                                    }
+                                }
+                        ) {
                             Text(
                                 text = contact?.name ?: "Chat",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = appColors.textPrimary
+                                color = appColors.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            if (contact != null) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Zmień nazwę kontaktu",
+                                    tint = appColors.textSecondary.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                             if (contact != null && contact.id != ChatRepository.SELF_CONTACT_ID) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 IconButton(
@@ -133,22 +168,29 @@ fun ChatScreen(
                             }
                         }
                         contact?.let {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "TX: ${it.counterOut}  •  RX: ${it.counterIn}  •  Epoch: ${it.rekeyEpoch}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = appColors.primary
-                                )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 if (it.sas.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "SAS: ${it.sas}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (it.isVerified) ElectricGreen else AmberWarning,
                                         fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
+                                    Spacer(modifier = Modifier.width(10.dp))
                                 }
+                                Text(
+                                    text = "TX: ${it.counterOut}  RX: ${it.counterIn}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.primary,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                             }
                         }
                     }
@@ -298,9 +340,79 @@ fun ChatScreen(
             reverseLayout = false
         ) {
             items(messages, key = { it.id }) { msg ->
-                MessageBubble(message = msg)
+                MessageBubble(
+                    message = msg,
+                    onImageClick = { bytes -> fullscreenImageBytes = bytes }
+                )
                 Spacer(modifier = Modifier.height(8.dp))
             }
+        }
+
+        if (showEditContactNameDialog && contact != null) {
+            AlertDialog(
+                onDismissRequest = { showEditContactNameDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = appColors.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Zmień nazwę kontaktu",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = appColors.textPrimary
+                        )
+                    }
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Podaj nową nazwę dla kontaktu w PQChat:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = editedContactName,
+                            onValueChange = { editedContactName = it },
+                            placeholder = { Text("Nazwa kontaktu", color = appColors.textSecondary) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = appColors.primary,
+                                unfocusedBorderColor = appColors.border,
+                                focusedTextColor = appColors.textPrimary,
+                                unfocusedTextColor = appColors.textPrimary
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val trimmed = editedContactName.trim()
+                            if (trimmed.isNotEmpty()) {
+                                viewModel.updateContactName(contact.id, trimmed)
+                            }
+                            showEditContactNameDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = appColors.primary,
+                            contentColor = Color.Black
+                        )
+                    ) {
+                        Text("Zapisz", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showEditContactNameDialog = false }) {
+                        Text("Anuluj", color = appColors.textSecondary)
+                    }
+                },
+                containerColor = appColors.surface
+            )
         }
 
         if (showSasDialog && contact != null) {
@@ -380,11 +492,29 @@ fun ChatScreen(
                 containerColor = appColors.surface
             )
         }
+
+        fullscreenImageBytes?.let { bytes ->
+            FullscreenImageViewer(
+                imageBytes = bytes,
+                onDismiss = { fullscreenImageBytes = null },
+                onSave = {
+                    val saved = ImageGallerySaver.saveImageToGallery(context, bytes)
+                    if (saved) {
+                        Toast.makeText(context, "Zapisano zdjęcie w galerii", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Błąd podczas zapisywania zdjęcia", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
     }
 }
 
 @Composable
-fun MessageBubble(message: MessageEntity) {
+fun MessageBubble(
+    message: MessageEntity,
+    onImageClick: ((ByteArray) -> Unit)? = null
+) {
     val appColors = LocalAppColors.current
 
     val isOut = message.isOutgoing
@@ -420,14 +550,44 @@ fun MessageBubble(message: MessageEntity) {
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     }
                     if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "PNG Attachment",
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
+                                .height(180.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                        )
+                                .clickable { onImageClick?.invoke(bytes) }
+                        ) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "PNG Attachment",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(topStart = 8.dp),
+                                color = Color.Black.copy(alpha = 0.65f),
+                                modifier = Modifier.align(Alignment.BottomEnd)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Powiększ zdjęcie",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Podgląd",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -468,6 +628,129 @@ fun MessageBubble(message: MessageEntity) {
                         style = MaterialTheme.typography.labelSmall,
                         color = statusColor,
                         fontSize = 10.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FullscreenImageViewer(
+    imageBytes: ByteArray,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit
+) {
+    val bitmap = remember(imageBytes) {
+        BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+    }
+
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            if (bitmap != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(1f, 5f)
+                                if (scale > 1f) {
+                                    val maxOffsetX = (size.width * (scale - 1f)) / 2f
+                                    val maxOffsetY = (size.height * (scale - 1f)) / 2f
+                                    offset = Offset(
+                                        x = (offset.x + pan.x).coerceIn(-maxOffsetX, maxOffsetX),
+                                        y = (offset.y + pan.y).coerceIn(-maxOffsetY, maxOffsetY)
+                                    )
+                                } else {
+                                    offset = Offset.Zero
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Zdjęcie na pełnym ekranie",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offset.x
+                                translationY = offset.y
+                            }
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Nie można załadować zdjęcia",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
+
+            // Top control bar with Close (X) and Save button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .align(Alignment.TopCenter),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(22.dp))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Zamknij",
+                        tint = Color.White
+                    )
+                }
+
+                Button(
+                    onClick = onSave,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricGreen,
+                        contentColor = Color.Black
+                    ),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SaveAlt,
+                        contentDescription = "Zapisz w galerii",
+                        tint = Color.Black,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Zapisz w galerii",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
                     )
                 }
             }

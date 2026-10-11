@@ -96,6 +96,13 @@ class ChatRepositoryConcurrencyTest {
             flow.value = contacts.values.toList()
         }
 
+        override suspend fun updateContactName(id: String, name: String) {
+            contacts.computeIfPresent(id) { _, c ->
+                c.copy(name = name)
+            }
+            flow.value = contacts.values.toList()
+        }
+
         override suspend fun deleteContact(id: String) {
             contacts.remove(id)
             flow.value = contacts.values.toList()
