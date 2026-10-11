@@ -166,7 +166,8 @@ class TrafficThreatModelStatisticalTest {
         val generator = PoissonTrafficGenerator(
             dhtLeafNode = fakeDht,
             pendingAckQueue = queue,
-            decoyTargetPool = decoyPool
+            decoyTargetPool = decoyPool,
+            blindRepublishPool = BlindRepublishPool()
         )
 
         // 1. Tick with dummy: must emit actually stored target
@@ -319,7 +320,12 @@ class TrafficThreatModelStatisticalTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(
+            id: String,
+            counterOut: Int,
+            chainKeyOut: EncryptedBlob,
+            rekeyEpoch: Long
+        ) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
@@ -331,21 +337,50 @@ class TrafficThreatModelStatisticalTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            rekeyEpoch: Long
+        ) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            bitmapBase: Int,
+            bitmap: ByteArray
+        ) {
             val c = contacts[id] ?: return
-            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            contacts[id] = c.copy(
+                counterIn = counterIn,
+                chainKeyIn = chainKeyIn,
+                receivedBitmapBase = bitmapBase,
+                receivedBitmap = bitmap
+            )
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            rekeyEpoch: Long,
+            bitmapBase: Int,
+            bitmap: ByteArray
+        ) {
             val c = contacts[id] ?: return
-            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            contacts[id] = c.copy(
+                counterIn = counterIn,
+                chainKeyIn = chainKeyIn,
+                rekeyEpoch = rekeyEpoch,
+                receivedBitmapBase = bitmapBase,
+                receivedBitmap = bitmap
+            )
             flow.value = contacts.values.toList()
         }
 
@@ -398,7 +433,8 @@ class TrafficThreatModelStatisticalTest {
 
         override suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long) {
             val idx = messages.indexOfFirst { it.id == id }
-            if (idx >= 0) messages[idx] = messages[idx].copy(status = status, retryCount = retryCount, lastAttemptTimestamp = timestamp)
+            if (idx >= 0) messages[idx] =
+                messages[idx].copy(status = status, retryCount = retryCount, lastAttemptTimestamp = timestamp)
         }
 
         override suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity> =
@@ -408,11 +444,17 @@ class TrafficThreatModelStatisticalTest {
             messages.filter { it.isOutgoing && it.status == "QUEUED" }.sortedBy { it.id }
 
         override suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {
-            val idx = messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
+            val idx =
+                messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
             if (idx >= 0) messages[idx] = messages[idx].copy(status = status)
         }
 
-        override suspend fun updateMessageStatusAndDirection(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {
+        override suspend fun updateMessageStatusAndDirection(
+            contactId: String,
+            seqNum: Int,
+            isOutgoing: Boolean,
+            status: String
+        ) {
             val idx = messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum }
             if (idx >= 0) messages[idx] = messages[idx].copy(status = status, isOutgoing = isOutgoing)
         }
@@ -423,17 +465,24 @@ class TrafficThreatModelStatisticalTest {
             messages.removeAll { it.contactId == contactId }
         }
 
-        override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean =
+        override suspend fun existsMessageWithEpoch(
+            contactId: String,
+            seqEpoch: Int,
+            seqNum: Int,
+            isOutgoing: Boolean
+        ): Boolean =
             messages.any { it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean =
             messages.any { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 
         override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> =
-            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
+                .sortedBy { it.id }
 
         override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> =
-            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
+                .sortedBy { it.id }
     }
 
     private class FakeChunkDao : ChunkDao {

@@ -31,6 +31,7 @@ class CoverTrafficAckTest {
 
     private lateinit var fakeDht: FakeDht
 
+    /* 
     @Before
     fun setUp() {
         fakeDht = FakeDht()
@@ -42,6 +43,23 @@ class CoverTrafficAckTest {
     fun tearDown() {
         fakeDht.stop()
         PollingWorker.clearRepublishTasks()
+    }
+    */
+    @Before
+    fun setUp() {
+        fakeDht = FakeDht()
+        fakeDht.start()
+        PollingWorker.clearRepublishTasks()
+        BlindRepublishPool.defaultInstance.clear()
+        DecoyTargetPool.defaultInstance.clear()
+    }
+
+    @After
+    fun tearDown() {
+        fakeDht.stop()
+        PollingWorker.clearRepublishTasks()
+        BlindRepublishPool.defaultInstance.clear()
+        DecoyTargetPool.defaultInstance.clear()
     }
 
     // --- Fake DAOs for ChatRepository tests ---
@@ -64,7 +82,12 @@ class CoverTrafficAckTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateOutgoingStateAndEpoch(id: String, counterOut: Int, chainKeyOut: EncryptedBlob, rekeyEpoch: Long) {
+        override suspend fun updateOutgoingStateAndEpoch(
+            id: String,
+            counterOut: Int,
+            chainKeyOut: EncryptedBlob,
+            rekeyEpoch: Long
+        ) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterOut = counterOut, chainKeyOut = chainKeyOut, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
@@ -76,21 +99,50 @@ class CoverTrafficAckTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpoch(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long) {
+        override suspend fun updateIncomingStateAndEpoch(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            rekeyEpoch: Long
+        ) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch)
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateWithBitmap(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            bitmapBase: Int,
+            bitmap: ByteArray
+        ) {
             val c = contacts[id] ?: return
-            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            contacts[id] = c.copy(
+                counterIn = counterIn,
+                chainKeyIn = chainKeyIn,
+                receivedBitmapBase = bitmapBase,
+                receivedBitmap = bitmap
+            )
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateIncomingStateAndEpochWithBitmap(id: String, counterIn: Int, chainKeyIn: EncryptedBlob, rekeyEpoch: Long, bitmapBase: Int, bitmap: ByteArray) {
+        override suspend fun updateIncomingStateAndEpochWithBitmap(
+            id: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            rekeyEpoch: Long,
+            bitmapBase: Int,
+            bitmap: ByteArray
+        ) {
             val c = contacts[id] ?: return
-            contacts[id] = c.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, rekeyEpoch = rekeyEpoch, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            contacts[id] = c.copy(
+                counterIn = counterIn,
+                chainKeyIn = chainKeyIn,
+                rekeyEpoch = rekeyEpoch,
+                receivedBitmapBase = bitmapBase,
+                receivedBitmap = bitmap
+            )
             flow.value = contacts.values.toList()
         }
 
@@ -143,7 +195,8 @@ class CoverTrafficAckTest {
 
         override suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long) {
             val idx = messages.indexOfFirst { it.id == id }
-            if (idx >= 0) messages[idx] = messages[idx].copy(status = status, retryCount = retryCount, lastAttemptTimestamp = timestamp)
+            if (idx >= 0) messages[idx] =
+                messages[idx].copy(status = status, retryCount = retryCount, lastAttemptTimestamp = timestamp)
         }
 
         override suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity> =
@@ -153,11 +206,17 @@ class CoverTrafficAckTest {
             messages.filter { it.isOutgoing && it.status == "QUEUED" }.sortedBy { it.id }
 
         override suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {
-            val idx = messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
+            val idx =
+                messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
             if (idx >= 0) messages[idx] = messages[idx].copy(status = status)
         }
 
-        override suspend fun updateMessageStatusAndDirection(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {
+        override suspend fun updateMessageStatusAndDirection(
+            contactId: String,
+            seqNum: Int,
+            isOutgoing: Boolean,
+            status: String
+        ) {
             val idx = messages.indexOfFirst { it.contactId == contactId && it.seqNum == seqNum }
             if (idx >= 0) messages[idx] = messages[idx].copy(status = status, isOutgoing = isOutgoing)
         }
@@ -168,17 +227,24 @@ class CoverTrafficAckTest {
             messages.removeAll { it.contactId == contactId }
         }
 
-        override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean =
+        override suspend fun existsMessageWithEpoch(
+            contactId: String,
+            seqEpoch: Int,
+            seqNum: Int,
+            isOutgoing: Boolean
+        ): Boolean =
             messages.any { it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 
         override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean =
             messages.any { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 
         override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> =
-            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
+                .sortedBy { it.id }
 
         override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> =
-            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }.sortedBy { it.id }
+            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
+                .sortedBy { it.id }
     }
 
     private class FakeChunkDao : ChunkDao {
@@ -199,8 +265,10 @@ class CoverTrafficAckTest {
         assertEquals(20, ackTarget.size)
 
         val payload = CoverAckProtocol.createAckPayload(ratchetKey, messageId, seqNum)
-        assertEquals("Payload must be exactly MAX_FRAME_PAYLOAD_BYTES (900 bytes)",
-            BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, payload.size)
+        assertEquals(
+            "Payload must be exactly MAX_FRAME_PAYLOAD_BYTES (900 bytes)",
+            BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, payload.size
+        )
 
         // Valid verification
         val isValid = CoverAckProtocol.verifyAckPayload(ratchetKey, payload, messageId, seqNum)
@@ -259,7 +327,9 @@ class CoverTrafficAckTest {
         val queue = PendingAckQueue()
         val generator = PoissonTrafficGenerator(
             dhtLeafNode = fakeDht,
-            pendingAckQueue = queue
+            pendingAckQueue = queue,
+            blindRepublishPool = BlindRepublishPool(),
+            decoyTargetPool = DecoyTargetPool()
         )
 
         // 1. Tick when queue is empty -> sends dummy packet
@@ -437,7 +507,8 @@ class CoverTrafficAckTest {
 
         // 2. Simulate receiver publishing Cover-Traffic ACK into Target_ACK
         val ackSeed = CoverAckProtocol.deriveAckSeed(sentMsg.ackRatchetKey!!.raw, "${sentMsg.seqNum}")
-        val ackPayload = CoverAckProtocol.createAckPayload(sentMsg.ackRatchetKey!!.raw, "${sentMsg.seqNum}", sentMsg.seqNum)
+        val ackPayload =
+            CoverAckProtocol.createAckPayload(sentMsg.ackRatchetKey!!.raw, "${sentMsg.seqNum}", sentMsg.seqNum)
         fakeDht.putMutable(
             target = sentMsg.ackTarget!!,
             v = ackPayload,
@@ -455,8 +526,10 @@ class CoverTrafficAckTest {
         assertEquals("DELIVERED", updatedMsg.status)
 
         // 5. Verify republish task was unregistered and loop terminates
-        assertFalse("Republish task must be unregistered after ACK detection",
-            PollingWorker.isRepublishTaskRegistered(sentMsg.id))
+        assertFalse(
+            "Republish task must be unregistered after ACK detection",
+            PollingWorker.isRepublishTaskRegistered(sentMsg.id)
+        )
 
         // Wait briefly to confirm loop finishes
         delay(100L)
@@ -538,7 +611,9 @@ class CoverTrafficAckTest {
 
         val msgAfterAck = messageDao.messages.first { it.id == msgId }
         assertEquals("Message must transition to DELIVERED via piggybacked ACK", "DELIVERED", msgAfterAck.status)
-        assertFalse("Republish task must be unregistered on piggybacked ACK",
-            PollingWorker.isRepublishTaskRegistered(msgId))
+        assertFalse(
+            "Republish task must be unregistered on piggybacked ACK",
+            PollingWorker.isRepublishTaskRegistered(msgId)
+        )
     }
 }
