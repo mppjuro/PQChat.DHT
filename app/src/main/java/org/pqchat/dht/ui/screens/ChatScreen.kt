@@ -317,7 +317,7 @@ fun ChatScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.Security,
+                            imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
                             contentDescription = null,
                             tint = if (contact.isVerified) ElectricGreen else AmberWarning
                         )
@@ -375,7 +375,7 @@ fun ChatScreen(
                         )
                     ) {
                         Text(
-                            text = if (contact.isVerified) "Cofnij weryfikację" else "Oznacz jako zweryfikowany",
+                            text = if (contact.isVerified) "Cofnij weryfikację" else "Zatwierdź tożsamość (SAS zgodny)",
                             fontWeight = FontWeight.Bold
                         )
                     }

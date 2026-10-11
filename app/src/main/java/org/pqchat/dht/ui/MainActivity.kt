@@ -80,10 +80,10 @@ fun MainAppNavigation(viewModel: ChatViewModel) {
         }
     }
 
-    // Auto-navigate to chat screen when a new session is selected or established
+    // Auto-navigate to chat screen when a session is selected outside HandshakeScreen
     LaunchedEffect(selectedContactId) {
         val id = selectedContactId
-        if (id != null && currentScreen !is Screen.Chat) {
+        if (id != null && currentScreen !is Screen.Chat && currentScreen !is Screen.Handshake) {
             currentScreen = Screen.Chat(id)
         }
     }
@@ -126,8 +126,14 @@ fun MainAppNavigation(viewModel: ChatViewModel) {
             HandshakeScreen(
                 viewModel = viewModel,
                 initialTabIsBob = screen.isBob,
-                onBack = { currentScreen = Screen.ContactList },
-                onSuccess = { currentScreen = Screen.ContactList }
+                onBack = {
+                    viewModel.resetHandshakeState()
+                    currentScreen = Screen.ContactList
+                },
+                onSuccess = { contactId ->
+                    viewModel.selectContact(contactId)
+                    currentScreen = Screen.Chat(contactId)
+                }
             )
         }
 

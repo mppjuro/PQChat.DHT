@@ -509,6 +509,14 @@ fun ContactItem(
                             tint = ElectricGreen,
                             modifier = Modifier.size(16.dp)
                         )
+                    } else if (contact.id != ChatRepository.SELF_CONTACT_ID) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.GppMaybe,
+                            contentDescription = "Niezweryfikowany SAS",
+                            tint = AmberWarning,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(2.dp))

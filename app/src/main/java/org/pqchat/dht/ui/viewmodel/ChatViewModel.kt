@@ -65,6 +65,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _aliceHandshakeState = MutableStateFlow<HandshakeManager.AliceInitResult?>(null)
     val aliceHandshakeState: StateFlow<HandshakeManager.AliceInitResult?> = _aliceHandshakeState.asStateFlow()
 
+    data class HandshakeCompletedState(
+        val contactId: String,
+        val contactName: String,
+        val sas: String
+    )
+
+    private val _handshakeCompleted = MutableStateFlow<HandshakeCompletedState?>(null)
+    val handshakeCompleted: StateFlow<HandshakeCompletedState?> = _handshakeCompleted.asStateFlow()
+
     private val _isHandshaking = MutableStateFlow(false)
     val isHandshaking: StateFlow<Boolean> = _isHandshaking.asStateFlow()
 
@@ -304,7 +313,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         repository.addContact(newContact)
                         _aliceHandshakeState.value = null
                         _isHandshaking.value = false
-                        _selectedContactId.value = newContactId
+                        _handshakeCompleted.value = HandshakeCompletedState(
+                            contactId = newContactId,
+                            contactName = contactName,
+                            sas = session.sas
+                        )
                         _statusNotification.value = "Connected! SAS: ${session.sas}. Post-quantum ratcheting active."
                         break
                     } catch (_: Exception) {
@@ -388,7 +401,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 repository.addContact(newContact)
                 _isHandshaking.value = false
-                _selectedContactId.value = newContactId
+                _handshakeCompleted.value = HandshakeCompletedState(
+                    contactId = newContactId,
+                    contactName = contactName,
+                    sas = bobResult.sas
+                )
                 _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
             } catch (e: Exception) {
                 _statusNotification.value = "Failed to process QR: ${e.message}"
@@ -411,6 +428,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         setContactVerified(contactId, !currentVerified)
     }
 
+    fun confirmHandshakeAndVerify(contactId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.setContactVerified(contactId, true)
+        }
+        _selectedContactId.value = contactId
+        resetHandshakeState()
+    }
+
+    fun confirmHandshakeWithoutVerification(contactId: String) {
+        _selectedContactId.value = contactId
+        resetHandshakeState()
+    }
+
+    fun resetHandshakeState() {
+        _aliceHandshakeState.value?.destroySensitiveKeys()
+        _aliceHandshakeState.value = null
+        _isHandshaking.value = false
+        _handshakeCompleted.value = null
+        _statusNotification.value = null
+    }
+
     fun dismissNotification() {
         _statusNotification.value = null
     }
@@ -418,7 +456,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         bobRepublishJob?.cancel()
-        _aliceHandshakeState.value?.destroySensitiveKeys()
+        resetHandshakeState()
         if (app == null) {
             dhtLeafNode.stop()
             trafficGenerator.stop()
