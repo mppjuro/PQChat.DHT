@@ -91,6 +91,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val intervalRepublishTier3: StateFlow<Long> = settingsManager.intervalRepublishTier3
     val republishMaxTtl: StateFlow<Long> = settingsManager.republishMaxTtl
 
+    val imageMaxEdge: StateFlow<Int> = settingsManager.imageMaxEdge
+    val imageColorCount: StateFlow<Int> = settingsManager.imageColorCount
+
     init {
         if (app == null) {
             dhtLeafNode.start()
@@ -154,6 +157,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         settingsManager.setRepublishMaxTtl(ms)
     }
 
+    fun setImageMaxEdge(maxEdge: Int) {
+        settingsManager.setImageMaxEdge(maxEdge)
+    }
+
+    fun setImageColorCount(colors: Int) {
+        settingsManager.setImageColorCount(colors)
+    }
+
     private fun syncPollingIntervals() {
         pollingManager.updateIntervals(
             foreground = settingsManager.intervalForegroundChat.value,
@@ -195,58 +206,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendTestPngImage() {
-        val contactId = _selectedContactId.value ?: return
-
-        viewModelScope.launch {
-            val validPng: ByteArray = run {
-                val bitmap = android.graphics.Bitmap.createBitmap(240, 240, android.graphics.Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bitmap)
-                val paint = android.graphics.Paint()
-                paint.color = android.graphics.Color.rgb(0x00, 0xF5, 0xD4)
-                canvas.drawRect(0f, 0f, 240f, 240f, paint)
-                paint.color = android.graphics.Color.rgb(0x7B, 0x2C, 0xBF)
-                canvas.drawCircle(120f, 120f, 80f, paint)
-                paint.color = android.graphics.Color.rgb(0x00, 0xBB, 0xF9)
-                canvas.drawCircle(120f, 120f, 40f, paint)
-                val baos = java.io.ByteArrayOutputStream()
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
-                baos.toByteArray()
-            }
-
-            repository.sendImagePayload(contactId, validPng)
-        }
-    }
-
     /**
-     * Sends user-selected image file over DHT using 900-byte Chunking Engine.
+     * Compresses user-selected image file into PNG8 format (with maxEdge and colorCount settings)
+     * and sends it over DHT using the 800-byte Chunking Engine.
      */
     fun sendImagePayload(rawBytes: ByteArray) {
         val contactId = _selectedContactId.value ?: return
+        val maxEdge = settingsManager.imageMaxEdge.value
+        val colorCount = settingsManager.imageColorCount.value
 
         viewModelScope.launch(Dispatchers.IO) {
-            val bitmap = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
-            val finalBytes: ByteArray = if (bitmap != null) {
-                val maxDim = 720
-                val scaled = if (bitmap.width > maxDim || bitmap.height > maxDim) {
-                    val ratio = minOf(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
-                    android.graphics.Bitmap.createScaledBitmap(
-                        bitmap,
-                        (bitmap.width * ratio).toInt(),
-                        (bitmap.height * ratio).toInt(),
-                        true
-                    )
-                } else {
-                    bitmap
-                }
-                val baos = java.io.ByteArrayOutputStream()
-                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, baos)
-                baos.toByteArray()
+            _statusNotification.value = "Kompresowanie obrazu (PNG8)..."
+            val finalBytes = org.pqchat.dht.media.Png8Compressor.compressToPng8(rawBytes, maxEdge, colorCount)
+            _statusNotification.value = "Wysyłanie obrazu (${finalBytes.size} B) przez DHT..."
+            val success = repository.sendImagePayload(contactId, finalBytes)
+            if (success) {
+                _statusNotification.value = "Wysłano obraz (${finalBytes.size} B) przez DHT"
             } else {
-                rawBytes
+                _statusNotification.value = "Błąd wysyłania obrazu"
             }
-
-            repository.sendImagePayload(contactId, finalBytes)
         }
     }
 

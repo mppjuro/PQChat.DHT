@@ -49,6 +49,15 @@ object DefaultRepublishConfig {
     const val MAX_TTL = 48 * 60 * 60 * 1000L         // 48 godzin (maksymalny TTL)
 }
 
+object DefaultImageCompression {
+    const val DEFAULT_MAX_EDGE = 1000 // Domyślna wartość najdłuższej krawędzi: 1000px
+    const val DEFAULT_COLOR_COUNT = 128 // Domyślna liczba kolorów PNG8
+    const val MIN_COLORS = 8
+    const val MAX_COLORS = 256
+    const val MIN_MAX_EDGE = 400
+    const val MAX_MAX_EDGE = 1600
+}
+
 val REPUBLISH_TIER1_OPTIONS = listOf(
     SyncIntervalOption("5 minut", 5 * 60 * 1000L),
     SyncIntervalOption("10 minut", 10 * 60 * 1000L),
@@ -141,6 +150,16 @@ class AppSettingsManager(context: Context? = null) {
     )
     val republishMaxTtl: StateFlow<Long> = _republishMaxTtl.asStateFlow()
 
+    private val _imageMaxEdge = MutableStateFlow(
+        prefs?.getInt(KEY_IMAGE_MAX_EDGE, DefaultImageCompression.DEFAULT_MAX_EDGE) ?: DefaultImageCompression.DEFAULT_MAX_EDGE
+    )
+    val imageMaxEdge: StateFlow<Int> = _imageMaxEdge.asStateFlow()
+
+    private val _imageColorCount = MutableStateFlow(
+        prefs?.getInt(KEY_IMAGE_COLOR_COUNT, DefaultImageCompression.DEFAULT_COLOR_COUNT) ?: DefaultImageCompression.DEFAULT_COLOR_COUNT
+    )
+    val imageColorCount: StateFlow<Int> = _imageColorCount.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -191,6 +210,18 @@ class AppSettingsManager(context: Context? = null) {
         _republishMaxTtl.value = millis
     }
 
+    fun setImageMaxEdge(maxEdge: Int) {
+        val clamped = maxEdge.coerceIn(DefaultImageCompression.MIN_MAX_EDGE, DefaultImageCompression.MAX_MAX_EDGE)
+        prefs?.edit()?.putInt(KEY_IMAGE_MAX_EDGE, clamped)?.apply()
+        _imageMaxEdge.value = clamped
+    }
+
+    fun setImageColorCount(count: Int) {
+        val clamped = count.coerceIn(DefaultImageCompression.MIN_COLORS, DefaultImageCompression.MAX_COLORS)
+        prefs?.edit()?.putInt(KEY_IMAGE_COLOR_COUNT, clamped)?.apply()
+        _imageColorCount.value = clamped
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -211,5 +242,7 @@ class AppSettingsManager(context: Context? = null) {
         private const val KEY_REPUBLISH_TIER2 = "republish_tier2_interval"
         private const val KEY_REPUBLISH_TIER3 = "republish_tier3_interval"
         private const val KEY_REPUBLISH_MAX_TTL = "republish_max_ttl"
+        private const val KEY_IMAGE_MAX_EDGE = "image_max_edge"
+        private const val KEY_IMAGE_COLOR_COUNT = "image_color_count"
     }
 }
