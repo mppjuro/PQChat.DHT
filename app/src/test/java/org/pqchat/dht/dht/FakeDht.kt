@@ -102,12 +102,13 @@ class FakeDht(
         return entry.item
     }
 
-    override suspend fun putMutable(
+    override suspend fun putMutablePreSigned(
         target: ByteArray,
         v: ByteArray,
         seq: Long,
         salt: ByteArray?,
-        sk: ByteArray,
+        pk: ByteArray,
+        sig: ByteArray,
         skipLocalStore: Boolean
     ): Boolean {
         putCalls.incrementAndGet()
@@ -119,18 +120,14 @@ class FakeDht(
 
         require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
 
-        val signData = Bencode.encodeBep44SignData(v, seq, salt)
-        val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(sk, signData)
-        val pk = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
         val targetHex = CryptoUtils.toHex(target)
-
         val existing = storage[targetHex]
         if (existing == null || seq >= existing.item.seq) {
             val item = DhtLeafNode.MutableItem(
                 v = v.copyOf(),
                 seq = seq,
-                k = pk,
-                sig = sig,
+                k = pk.copyOf(),
+                sig = sig.copyOf(),
                 salt = salt?.copyOf(),
                 token = null,
                 responder = InetSocketAddress("127.0.0.1", 6881)
@@ -143,6 +140,21 @@ class FakeDht(
         }
 
         return true
+    }
+
+    override suspend fun putMutable(
+        target: ByteArray,
+        v: ByteArray,
+        seq: Long,
+        salt: ByteArray?,
+        sk: ByteArray,
+        skipLocalStore: Boolean
+    ): Boolean {
+        require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
+        val signData = Bencode.encodeBep44SignData(v, seq, salt)
+        val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(sk, signData)
+        val pk = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
+        return putMutablePreSigned(target, v, seq, salt, pk, sig, skipLocalStore)
     }
 
     override suspend fun sendCoverTrafficDummy(): ByteArray? {

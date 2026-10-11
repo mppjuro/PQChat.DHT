@@ -29,8 +29,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val dhtLeafNode = app?.dhtLeafNode ?: DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
     val repository = app?.repository ?: ChatRepository(database, dhtLeafNode)
 
-    val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(dhtLeafNode)
     val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(application)
+    val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(
+        dhtLeafNode,
+        blindRepublishPool = repository.blindRepublishPool,
+        crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value }
+    )
     val pollingScheduler = app?.pollingScheduler ?: org.pqchat.dht.service.PollingScheduler(
         application,
         repository,
@@ -93,6 +97,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val imageMaxEdge: StateFlow<Int> = settingsManager.imageMaxEdge
     val imageColorCount: StateFlow<Int> = settingsManager.imageColorCount
+
+    val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = settingsManager.isCrowdsourcedRepublishEnabled
 
     init {
         if (app == null) {
@@ -163,6 +169,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setImageColorCount(colors: Int) {
         settingsManager.setImageColorCount(colors)
+    }
+
+    fun setCrowdsourcedRepublishEnabled(enabled: Boolean) {
+        settingsManager.setCrowdsourcedRepublishEnabled(enabled)
     }
 
     private fun syncPollingIntervals() {

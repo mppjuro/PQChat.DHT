@@ -160,6 +160,11 @@ class AppSettingsManager(context: Context? = null) {
     )
     val imageColorCount: StateFlow<Int> = _imageColorCount.asStateFlow()
 
+    private val _isCrowdsourcedRepublishEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_CROWDSOURCED_REPUBLISH, true) ?: true
+    )
+    val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = _isCrowdsourcedRepublishEnabled.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -222,6 +227,11 @@ class AppSettingsManager(context: Context? = null) {
         _imageColorCount.value = clamped
     }
 
+    fun setCrowdsourcedRepublishEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_CROWDSOURCED_REPUBLISH, enabled)?.apply()
+        _isCrowdsourcedRepublishEnabled.value = enabled
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -244,5 +254,6 @@ class AppSettingsManager(context: Context? = null) {
         private const val KEY_REPUBLISH_MAX_TTL = "republish_max_ttl"
         private const val KEY_IMAGE_MAX_EDGE = "image_max_edge"
         private const val KEY_IMAGE_COLOR_COUNT = "image_color_count"
+        private const val KEY_CROWDSOURCED_REPUBLISH = "crowdsourced_republish_enabled"
     }
 }

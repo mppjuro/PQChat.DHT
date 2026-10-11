@@ -294,6 +294,86 @@ class CoverTrafficAckTest {
     }
 
     @Test
+    fun testPoissonTrafficGenerator_BlindRepublishingSubstitutesDummy() = runBlocking {
+        val pool = BlindRepublishPool(maxCapacity = 10)
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = PendingAckQueue(),
+            blindRepublishPool = pool,
+            isCrowdsourcedRepublishEnabled = true
+        )
+
+        // Generate a valid BEP 44 packet and add to pool
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(keyPair.publicKey)
+        val v = CryptoUtils.secureRandomBytes(1000)
+        val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(v, 42L, null)
+        val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(seed, signData)
+        val entry = BlindRepublishEntry(target, keyPair.publicKey, 42L, v, sig)
+        assertTrue(pool.verifyAndAdd(entry))
+
+        // Tick when pool is populated -> republishes packet instead of synthetic dummy
+        val event = generator.processCoverTrafficTick(delayMs = 4000L)
+        assertFalse("Must not be ACK", event.isAck)
+        assertTrue("Must be blind republish", event.isBlindRepublish)
+        assertEquals(CryptoUtils.toHex(target), event.targetHex)
+        assertEquals(1, fakeDht.putCalls.get())
+        assertEquals(0, fakeDht.coverTrafficCalls.get())
+
+        // Verify record exists in fake DHT
+        val stored = fakeDht.getMutable(target)
+        assertNotNull(stored)
+        assertEquals(42L, stored!!.seq)
+        assertArrayEquals(v, stored.v)
+    }
+
+    @Test
+    fun testPoissonTrafficGenerator_DisabledCrowdsourcedRepublish_RevertsToSyntheticDecoy() = runBlocking {
+        val pool = BlindRepublishPool(maxCapacity = 10)
+        var crowdsourcedSetting = false
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = PendingAckQueue(),
+            blindRepublishPool = pool,
+            crowdsourcedRepublishEnabledProvider = { crowdsourcedSetting }
+        )
+
+        // Add valid packet to pool
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(keyPair.publicKey)
+        val v = CryptoUtils.secureRandomBytes(1000)
+        val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(v, 1L, null)
+        val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(seed, signData)
+        val entry = BlindRepublishEntry(target, keyPair.publicKey, 1L, v, sig)
+        assertTrue(pool.verifyAndAdd(entry))
+        assertEquals(1, pool.size())
+
+        // 1. When setting is disabled (false), tick must ignore pool and emit synthetic dummy decoy
+        val dummyEvent = generator.processCoverTrafficTick(delayMs = 5000L)
+        assertFalse("Disabled crowdsourcing must NOT emit blind republish", dummyEvent.isBlindRepublish)
+        assertFalse("Must NOT be an ACK", dummyEvent.isAck)
+        assertEquals("Must call sendCoverTrafficDummy on fake DHT", 1, fakeDht.coverTrafficCalls.get())
+        assertEquals("Must NOT perform putCalls when disabled", 0, fakeDht.putCalls.get())
+
+        // 2. Enable setting (true) in runtime settings -> subsequent tick now uses blind republishing
+        crowdsourcedSetting = true
+        val republishEvent = generator.processCoverTrafficTick(delayMs = 5000L)
+        assertTrue("Enabled crowdsourcing must emit blind republish", republishEvent.isBlindRepublish)
+        assertEquals(1, fakeDht.coverTrafficCalls.get()) // Unchanged
+        assertEquals(1, fakeDht.putCalls.get()) // Incremented by republish put
+        assertEquals(CryptoUtils.toHex(target), republishEvent.targetHex)
+
+        // 3. Disable setting again (false) -> reverts back to synthetic decoy
+        crowdsourcedSetting = false
+        val secondDummyEvent = generator.processCoverTrafficTick(delayMs = 5000L)
+        assertFalse("Disabled crowdsourcing must revert to synthetic decoy", secondDummyEvent.isBlindRepublish)
+        assertEquals(2, fakeDht.coverTrafficCalls.get())
+        assertEquals(1, fakeDht.putCalls.get()) // Unchanged
+    }
+
+    @Test
     fun testRepublishLoopTermination_OnCoverAckDetection() = runBlocking {
         val contactDao = FakeContactDao()
         val messageDao = FakeMessageDao()

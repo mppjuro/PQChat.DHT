@@ -832,25 +832,21 @@ class DhtLeafNode(
     }
 
     /**
-     * BEP 44 put query to store mutable item.
+     * BEP 44 put query to store mutable item using pre-existing public key and Ed25519 signature.
      * Signs v using Ed25519 sk and stores in local store and propagates to remote DHT peers.
      */
-    override suspend fun putMutable(
+    override suspend fun putMutablePreSigned(
         target: ByteArray,
         v: ByteArray,
         seq: Long,
         salt: ByteArray?,
-        sk: ByteArray,
+        pk: ByteArray,
+        sig: ByteArray,
         skipLocalStore: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
         require(v.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES) {
             "BEP 44 payload cannot exceed ${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes (got ${v.size})"
         }
-
-        // Step 1: Sign record with Ed25519
-        val signData = Bencode.encodeBep44SignData(v, seq, salt)
-        val sig = Ed25519Engine.sign(sk, signData)
-        val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
         val targetHex = CryptoUtils.toHex(target)
 
         // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
@@ -918,8 +914,29 @@ class DhtLeafNode(
             }
         } catch (_: Exception) {}
 
-        println("[PQChat] putMutable target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")
+        println("[PQChat] putMutablePreSigned target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")
         putSuccess
+    }
+
+    /**
+     * BEP 44 put query to store mutable item.
+     * Signs v using Ed25519 sk and delegates to putMutablePreSigned.
+     */
+    override suspend fun putMutable(
+        target: ByteArray,
+        v: ByteArray,
+        seq: Long,
+        salt: ByteArray?,
+        sk: ByteArray,
+        skipLocalStore: Boolean
+    ): Boolean {
+        require(v.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES) {
+            "BEP 44 payload cannot exceed ${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes (got ${v.size})"
+        }
+        val signData = Bencode.encodeBep44SignData(v, seq, salt)
+        val sig = Ed25519Engine.sign(sk, signData)
+        val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
+        return putMutablePreSigned(target, v, seq, salt, pk, sig, skipLocalStore)
     }
 
     /**
