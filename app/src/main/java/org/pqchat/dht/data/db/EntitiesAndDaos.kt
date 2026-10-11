@@ -78,7 +78,11 @@ data class ContactEntity(
                 rekeyEpoch == other.rekeyEpoch &&
                 receivedBitmapBase == other.receivedBitmapBase &&
                 receivedBitmap.contentEquals(other.receivedBitmap) &&
-                lastActive == other.lastActive
+                lastActive == other.lastActive &&
+                isInitiator == other.isInitiator &&
+                sas == other.sas &&
+                fingerprint == other.fingerprint &&
+                isVerified == other.isVerified
     }
 
     override fun hashCode(): Int = id.hashCode()

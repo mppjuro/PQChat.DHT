@@ -43,7 +43,7 @@ fun HandshakeScreen(
     viewModel: ChatViewModel,
     initialTabIsBob: Boolean = false,
     onBack: () -> Unit,
-    onSuccess: () -> Unit
+    onSuccess: (String) -> Unit
 ) {
     val context = LocalContext.current
     var selectedTab by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) 1 else 0) }
@@ -70,9 +70,20 @@ fun HandshakeScreen(
     val aliceInitState by viewModel.aliceHandshakeState.collectAsState()
     val isHandshaking by viewModel.isHandshaking.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
+    val handshakeCompleted by viewModel.handshakeCompleted.collectAsState()
 
-    var connectedSas by remember { mutableStateOf<String?>(null) }
     var galleryScanError by remember { mutableStateOf<String?>(null) }
+
+    // Ensure fresh handshake state on entrance and cleanup on disposal
+    LaunchedEffect(Unit) {
+        viewModel.resetHandshakeState()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.resetHandshakeState()
+        }
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -85,17 +96,6 @@ fun HandshakeScreen(
             } else {
                 galleryScanError = "No valid QR code found in selected image."
             }
-        }
-    }
-
-    // Display SAS dialog or trigger onSuccess navigation when handshake succeeds
-    LaunchedEffect(notification) {
-        val notif = notification
-        if (notif != null && notif.contains("Connected! SAS:")) {
-            val sas = notif.substringAfter("Connected! SAS: ").substringBefore(".")
-            connectedSas = sas
-        } else if (notif?.contains("Connected! Post-quantum ratcheting active.") == true) {
-            onSuccess()
         }
     }
 
@@ -115,7 +115,10 @@ fun HandshakeScreen(
             TopAppBar(
                 title = { Text("Secure Rendezvous Handshake") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        viewModel.resetHandshakeState()
+                        onBack()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
@@ -137,7 +140,11 @@ fun HandshakeScreen(
             ) {
                 Tab(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0; contactName = "Bob" },
+                    onClick = {
+                        selectedTab = 0
+                        contactName = "Bob"
+                        viewModel.resetHandshakeState()
+                    },
                     text = { Text("Alice (Display QR)") },
                     icon = { Icon(Icons.Default.QrCode, contentDescription = null) }
                 )
@@ -146,6 +153,7 @@ fun HandshakeScreen(
                     onClick = {
                         selectedTab = 1
                         contactName = "Alice"
+                        viewModel.resetHandshakeState()
                         // If camera permission not yet granted, request it on tab switch
                         if (!hasCameraPermission) {
                             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -500,70 +508,113 @@ fun HandshakeScreen(
             }
         }
 
-        if (connectedSas != null) {
+        val completedState = handshakeCompleted
+        if (completedState != null) {
             AlertDialog(
                 onDismissRequest = {
-                    connectedSas = null
-                    onSuccess()
+                    viewModel.resetHandshakeState()
+                    onBack()
+                },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = null,
+                        tint = ElectricGreen,
+                        modifier = Modifier.size(36.dp)
+                    )
                 },
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = ElectricGreen
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Sesja Post-Kwantowa Ustanowiona",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
-                        )
-                    }
+                    Text(
+                        text = "Sesja Post-Kwantowa Ustanowiona",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
                 },
                 text = {
-                    Column {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(
-                            text = "Zweryfikuj kod SAS (Short Authentication String):",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
+                            text = "Nowy rozmówca: ${completedState.contactName}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = NeonCyan
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Porównaj poniższy 8-cyfrowy kod SAS (Short Authentication String) z rozmówcą poza pasmem (np. osobiście lub telefonicznie):",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
                         Surface(
                             color = DarkSurfaceVariant,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, ElectricGreen.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Box(
-                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp, horizontal = 12.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = connectedSas ?: "",
+                                    text = completedState.sas,
                                     style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.ExtraBold,
                                     fontFamily = FontFamily.Monospace,
-                                    color = ElectricGreen
+                                    color = ElectricGreen,
+                                    letterSpacing = 4.sp
                                 )
                             }
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Porównaj powyższy 8-cyfrowy kod z rozmówcą poza pasmem (np. osobiście lub przez telefon). Kod ten powstał na bazie kryptograficznego zobowiązania (anti-grinding commitment) związanego z transkryptem ML-KEM-512.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
+                            text = "Zgodność kodów potwierdza brak ataku Man-in-the-Middle (MitM) na poziomie ML-KEM-512.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
-                            connectedSas = null
-                            onSuccess()
+                            val targetId = completedState.contactId
+                            viewModel.confirmHandshakeAndVerify(targetId)
+                            onSuccess(targetId)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen, contentColor = Color.Black)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricGreen,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Przejdź do czatu", fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Zatwierdź tożsamość (SAS zgodny)", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(
+                        onClick = {
+                            val targetId = completedState.contactId
+                            viewModel.confirmHandshakeWithoutVerification(targetId)
+                            onSuccess(targetId)
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = AmberWarning
+                        ),
+                        border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Przejdź bez weryfikacji", fontWeight = FontWeight.Normal)
                     }
                 },
                 containerColor = DarkSurface
