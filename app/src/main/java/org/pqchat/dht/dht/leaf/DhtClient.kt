@@ -2,6 +2,12 @@ package org.pqchat.dht.dht.leaf
 
 import kotlinx.coroutines.Job
 
+data class TorProxyConfig(
+    val enabled: Boolean = true,
+    val socksHost: String = "127.0.0.1",
+    val socksPort: Int = 9050
+)
+
 /**
  * Common abstraction for DHT client implementations (production leaf node, fake/mock nodes for testing).
  */
@@ -10,6 +16,17 @@ interface DhtClient {
      * Unique 20-byte Node ID.
      */
     val myNodeId: ByteArray
+
+    /**
+     * Configures Tor SOCKS5 proxy routing.
+     * When null or enabled=false, direct UDP networking is used immediately.
+     */
+    fun setTorProxy(config: TorProxyConfig?) {}
+
+    /**
+     * Whether KRPC queries are currently routed through Tor SOCKS5 proxy.
+     */
+    val isTorRoutingActive: Boolean get() = false
 
     /**
      * Start DHT client background loops, listeners or workers.

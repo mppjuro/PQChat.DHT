@@ -99,6 +99,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val imageColorCount: StateFlow<Int> = settingsManager.imageColorCount
 
     val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = settingsManager.isCrowdsourcedRepublishEnabled
+    val isTorEnabled: StateFlow<Boolean> = settingsManager.isTorEnabled
+    val torState: StateFlow<org.pqchat.dht.network.tor.TorState> =
+        app?.embeddedTorManager?.state ?: MutableStateFlow(org.pqchat.dht.network.tor.TorState.Disconnected)
+
+    fun setTorEnabled(enabled: Boolean) {
+        settingsManager.setTorEnabled(enabled)
+    }
 
     init {
         if (app == null) {

@@ -90,10 +90,13 @@ val REPUBLISH_TTL_OPTIONS = listOf(
     SyncIntervalOption("72 godziny", 72 * 60 * 60 * 1000L)
 )
 
-class AppSettingsManager(context: Context? = null) {
+class AppSettingsManager(
+    context: Context? = null,
+    sharedPreferences: SharedPreferences? = null
+) {
 
     private val prefs: SharedPreferences? =
-        context?.getSharedPreferences("pqchat_settings", Context.MODE_PRIVATE)
+        sharedPreferences ?: context?.getSharedPreferences("pqchat_settings", Context.MODE_PRIVATE)
 
     private val _themeMode = MutableStateFlow(
         try {
@@ -165,6 +168,11 @@ class AppSettingsManager(context: Context? = null) {
     )
     val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = _isCrowdsourcedRepublishEnabled.asStateFlow()
 
+    private val _isTorEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_TOR_ENABLED, false) ?: false
+    )
+    val isTorEnabled: StateFlow<Boolean> = _isTorEnabled.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -232,6 +240,11 @@ class AppSettingsManager(context: Context? = null) {
         _isCrowdsourcedRepublishEnabled.value = enabled
     }
 
+    fun setTorEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_TOR_ENABLED, enabled)?.apply()
+        _isTorEnabled.value = enabled
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -255,5 +268,6 @@ class AppSettingsManager(context: Context? = null) {
         private const val KEY_IMAGE_MAX_EDGE = "image_max_edge"
         private const val KEY_IMAGE_COLOR_COUNT = "image_color_count"
         private const val KEY_CROWDSOURCED_REPUBLISH = "crowdsourced_republish_enabled"
+        private const val KEY_TOR_ENABLED = "tor_enabled"
     }
 }
