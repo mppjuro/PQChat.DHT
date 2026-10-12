@@ -7,7 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
-- [`7d99006`](https://github.com/mppjuro/PQChat.DHT/commit/7d99006dc1e6026edef73ba4dbca3bb61f5203d3) (2026-10-12) — **security**: implement security hardening, keystore strongbox, bep43 ro=1, flag_secure and minify
+- [`4631477`](https://github.com/mppjuro/PQChat.DHT/commit/4631477c2089cb020cdf46a497d84ee243885727) (2026-10-12) — **security**: implement security hardening, keystore strongbox, bep43 ro=1, flag_secure and minify
 - [`4d7b841`](https://github.com/mppjuro/PQChat.DHT/commit/4d7b841da32b973c734780eeaa09ab08833d8b5b) (2026-10-12) — GNU General Public License v3
 - [`2e4d976`](https://github.com/mppjuro/PQChat.DHT/commit/2e4d97631bc296780a21c2b36f6df27044a04598) (2026-10-11) — **tor**: add embedded Tor engine with SOCKS5 KRPC routing and UI integration
 - [`ab8bf15`](https://github.com/mppjuro/PQChat.DHT/commit/ab8bf1530a53700f424f3ced676375293c217268) (2026-10-11) — **ui**: dodaj pelnoekranowy podglad zdjec z zapisem do galerii, jednoliniowy SAS i edycje nazwy kontaktu
