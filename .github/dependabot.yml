@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      androidx-and-compose:
+        patterns:
+          - "androidx.*"
+          - "*compose*"
+    ignore:
+      - dependency-name: "org.bouncycastle:*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "pip"
+    directory: "/tools/threat_sim"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
