@@ -20,14 +20,15 @@ class PollingWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val app = applicationContext as? PQChatApplication
+        val repository = app?.repository
+        if (repository == null) {
+            android.util.Log.e("PollingWorker", "PQChatApplication repository not initialized, aborting worker")
+            return@withContext Result.failure()
+        }
+
         return@withContext try {
-            val app = applicationContext as? PQChatApplication
-            val repository = app?.repository ?: run {
-                val db = AppDatabase.getInstance(applicationContext)
-                val dhtNode = DhtLeafNode(nodeCacheDao = db.dhtNodeCacheDao())
-                ChatRepository(db, dhtNode)
-            }
-            val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(applicationContext)
+            val settingsManager = app.settingsManager
             val policy = settingsManager.getRepublishPolicy()
 
             // 1. Poll all registered contact incoming slots from DHT
@@ -49,13 +50,14 @@ class PollingWorker(
             )
 
             // 5. Update republish WorkManager schedule (adjust interval or stop if all messages ACKed/expired)
-            app?.pollingScheduler?.applyRepublishSchedule(policy = policy)
+            app.pollingScheduler.applyRepublishSchedule(policy = policy)
 
             // 6. Keep Doze alarm synced for maintenance windows
-            app?.pollingScheduler?.scheduleNextDozeAlarm()
+            app.pollingScheduler.scheduleNextDozeAlarm()
 
             Result.success()
         } catch (e: Exception) {
+            android.util.Log.e("PollingWorker", "Error during PollingWorker background execution", e)
             Result.retry()
         }
     }
@@ -177,48 +179,64 @@ class PollingWorker(
                     ExistingPeriodicWorkPolicy.UPDATE,
                     workRequest
                 )
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("PollingWorker", "Failed to schedule republish work", e)
+            }
         }
 
         fun cancelRepublishWork(context: Context) {
             try {
                 WorkManager.getInstance(context).cancelUniqueWork(REPUBLISH_WORK_NAME)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("PollingWorker", "Failed to cancel republish work", e)
+            }
         }
 
         fun enqueuePeriodicWork(context: Context, intervalMinutes: Long = 15L) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
+            try {
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
 
-            val periodicWork = PeriodicWorkRequestBuilder<PollingWorker>(
-                intervalMinutes.coerceAtLeast(15L), TimeUnit.MINUTES
-            )
-                .setConstraints(constraints)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
-                .build()
+                val periodicWork = PeriodicWorkRequestBuilder<PollingWorker>(
+                    intervalMinutes.coerceAtLeast(15L), TimeUnit.MINUTES
+                )
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+                    .build()
 
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
-                periodicWork
-            )
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    WORK_NAME,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    periodicWork
+                )
+            } catch (e: Throwable) {
+                android.util.Log.w("PollingWorker", "Failed to enqueue periodic work (e.g. in test environment)", e)
+            }
         }
 
         fun cancelPeriodicWork(context: Context) {
-            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            try {
+                WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            } catch (e: Throwable) {
+                android.util.Log.w("PollingWorker", "Failed to cancel periodic work", e)
+            }
         }
 
         fun enqueueImmediateOneShot(context: Context) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
+            try {
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
 
-            val oneShot = OneTimeWorkRequestBuilder<PollingWorker>()
-                .setConstraints(constraints)
-                .build()
+                val oneShot = OneTimeWorkRequestBuilder<PollingWorker>()
+                    .setConstraints(constraints)
+                    .build()
 
-            WorkManager.getInstance(context).enqueue(oneShot)
+                WorkManager.getInstance(context).enqueue(oneShot)
+            } catch (e: Throwable) {
+                android.util.Log.w("PollingWorker", "Failed to enqueue one-shot work", e)
+            }
         }
     }
 }

@@ -89,12 +89,25 @@ class PQChatApplication : Application() {
             }
         }
 
+        // Screen-state observation: switches between BACKGROUND_IDLE and DOZE_SLEEP based on screen on/off
+        screenStateReceiver = org.pqchat.dht.service.ScreenStateReceiver(pollingScheduler)
+        try {
+            registerReceiver(screenStateReceiver, org.pqchat.dht.service.ScreenStateReceiver.createIntentFilter())
+        } catch (e: Exception) {
+            android.util.Log.e("PQChatApplication", "Failed to register ScreenStateReceiver", e)
+        }
+
         // Process-level lifecycle observation: keeps background polling active across activity recreations
         ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> pollingScheduler.onAppForegrounded()
                 Lifecycle.Event.ON_STOP -> {
-                    pollingScheduler.onAppMinimized()
+                    val isInteractive = org.pqchat.dht.service.ScreenStateReceiver.isScreenInteractive(this)
+                    if (!isInteractive) {
+                        pollingScheduler.onDeviceScreenOff()
+                    } else {
+                        pollingScheduler.onAppMinimized()
+                    }
                     pollingScheduler.scheduleNextDozeAlarm()
                 }
                 else -> {}
@@ -102,8 +115,13 @@ class PQChatApplication : Application() {
         })
     }
 
+    private var screenStateReceiver: org.pqchat.dht.service.ScreenStateReceiver? = null
+
     override fun onTerminate() {
         super.onTerminate()
+        try {
+            screenStateReceiver?.let { unregisterReceiver(it) }
+        } catch (_: Exception) {}
         pollingScheduler.stop()
         trafficGenerator.stop()
         dhtLeafNode.stop()

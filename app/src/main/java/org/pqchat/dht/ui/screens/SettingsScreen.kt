@@ -26,6 +26,8 @@ import org.pqchat.dht.network.tor.TorState
 import org.pqchat.dht.ui.theme.ElectricGreen
 import org.pqchat.dht.ui.theme.LocalAppColors
 import org.pqchat.dht.ui.theme.NeonCyan
+import org.pqchat.dht.ui.util.BatteryOptimizationHelper
+import androidx.compose.ui.platform.LocalContext
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -455,6 +457,60 @@ fun SettingsScreen(
                             checked = isFgServiceEnabled,
                             onCheckedChange = { viewModel.setForegroundServiceEnabled(it) }
                         )
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Battery Optimization Whitelist Request
+                    val context = LocalContext.current
+                    var isBatteryIgnored by remember {
+                        mutableStateOf(BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Wyłączenie optymalizacji baterii (Doze whitelist)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = if (isBatteryIgnored) {
+                                    "Optymalizacje wyłączone — alarmy Doze i radio wybudzają się bez przeszkód."
+                                } else {
+                                    "Wymagane, aby system Android nie blokował budzenia radia w trybie uśpienia Doze."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isBatteryIgnored) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        if (!isBatteryIgnored) {
+                            Button(
+                                onClick = {
+                                    BatteryOptimizationHelper.requestIgnoreBatteryOptimizations(context)
+                                    isBatteryIgnored = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(context)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text("Wyłącz", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+                        } else {
+                            Text(
+                                text = "Aktywne ✓",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = appColors.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

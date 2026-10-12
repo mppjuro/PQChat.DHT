@@ -4,13 +4,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.pqchat.dht.PQChatApplication
-import org.pqchat.dht.data.db.AppDatabase
-import org.pqchat.dht.data.repository.ChatRepository
-import org.pqchat.dht.dht.leaf.DhtLeafNode
 
 /**
  * BroadcastReceiver triggered by AlarmManager.setAndAllowWhileIdle during Doze mode.
@@ -18,40 +16,52 @@ import org.pqchat.dht.dht.leaf.DhtLeafNode
  */
 class DhtAlarmReceiver : BroadcastReceiver() {
 
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_DOZE_POLL) return
+    override fun onReceive(context: Context, intent: Intent?) {
+        if (intent?.action != ACTION_DOZE_POLL) return
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pqchat:dht_doze_poll")
-        wakeLock?.acquire(30_000L) // Max 30s safety timeout
+        try {
+            wakeLock?.acquire(30_000L) // Max 30s safety timeout
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to acquire wake lock for Doze poll", e)
+        }
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
+            val app = context.applicationContext as? PQChatApplication
             try {
-                val app = context.applicationContext as? PQChatApplication
-                val repository = app?.repository ?: run {
-                    val db = AppDatabase.getInstance(context.applicationContext)
-                    val node = DhtLeafNode(nodeCacheDao = db.dhtNodeCacheDao())
-                    ChatRepository(db, node)
+                val repository = app?.repository
+                if (repository == null) {
+                    Log.w(TAG, "PQChatApplication repository not initialized, skipping Doze poll")
+                    return@launch
                 }
 
                 repository.pollAllContactsIncoming()
-
-                // Reschedule for next Doze interval
-                app?.pollingScheduler?.scheduleNextDozeAlarm()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during Doze DHT poll pass", e)
             } finally {
+                // Ensure the next Doze alarm is scheduled even if polling fails or throws
+                try {
+                    app?.pollingScheduler?.scheduleNextDozeAlarm()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to reschedule next Doze alarm in finally", e)
+                }
+
                 try {
                     if (wakeLock?.isHeld == true) {
                         wakeLock.release()
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to release wake lock", e)
+                }
                 pendingResult.finish()
             }
         }
     }
 
     companion object {
+        private const val TAG = "DhtAlarmReceiver"
         const val ACTION_DOZE_POLL = "org.pqchat.dht.ACTION_DOZE_POLL"
     }
 }
