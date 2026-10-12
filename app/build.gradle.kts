@@ -91,8 +91,8 @@ tasks.register<Test>("integrationTest") {
 
 dependencies {
     // Kotlin & Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // AndroidX Core & Lifecycle
     implementation("androidx.core:core-ktx:1.13.1")
@@ -140,7 +140,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.1.3")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("com.code-intelligence:jazzer-api:0.30.0")
     testImplementation("com.code-intelligence:jazzer-junit:0.30.0")
