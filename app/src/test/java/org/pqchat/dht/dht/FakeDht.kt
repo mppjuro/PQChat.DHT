@@ -163,7 +163,7 @@ class FakeDht(
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
         val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
-        val dummyPayload = CryptoUtils.secureRandomBytes(1000)
+        val dummyPayload = CryptoUtils.secureRandomBytes(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
         val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(dummyPayload, DhtClient.DEFAULT_MUTABLE_SEQ, null)
         val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(dummySeed, signData)

@@ -11,7 +11,7 @@ Opisano w nim profil adwersarza, matematyczne mechanizmy wycieku metadanych, zai
 PQChat.DHT jest w pełni zdecentralizowanym (*serverless*), post-kwantowym komunikatorem mobilnym na platformę Android, wykorzystującym sieć BitTorrent Mainline DHT (Kademlia KRPC UDP) jako efemeryczny magazyn buforujący typu *Store-and-Forward* na okres 24–72 godzin:
 - **Warstwa asymetryczna (KEM):** ML-KEM-512 (FIPS 203 / Kyber-512) dla uzgadniania wspólnego sekretu w procesie parowania QR oraz okresowej rotacji kluczy (*Rekeying* co 50 wiadomości).
 - **Warstwa symetryczna (AEAD):** AES-256-GCM z kluczem 256-bitowym, 12-bajtowym IV, 16-bajtowym tagiem uwierzytelniającym oraz AAD powiązanym z adresem docelowym, typem ramki i kierunkiem transmisji.
-- **Transport BEP 44:** Wiadomości publikowane są jako rekordy mutowalne pod adresem $\text{Target} = \text{SHA-1}(pk_{\text{Ed25519}})$, o sztywnym rozmiarze dokładnie 1000 bajtów (`MAX_DHT_VALUE_BYTES = 1000`). Niewykorzystana przestrzeń ładunku jest dopełniana kryptograficznym szumem CSPRNG (`SecureRandom` padding).
+- **Transport BEP 44:** Wiadomości publikowane są jako rekordy mutowalne pod adresem $\text{Target} = \text{SHA-1}(pk_{\text{Ed25519}})$, o sztywnym rozmiarze ładunku dokładnie 900 bajtów (`MAX_FRAME_PAYLOAD_BYTES = 900`). Po zakodowaniu formatem Bencode (`900:...`) rekord ma dokładnie 904 bajty, ściśle spełniając limit BEP 44 ($\le 1000$ B; surowy ładunek 1000 B po zakodowaniu bencode dawałby 1005 B i zostałby odrzucony przez węzły DHT). Niewykorzystana przestrzeń ładunku jest dopełniana kryptograficznym szumem CSPRNG (`SecureRandom` padding).
 - **Deterministyczne rozdzielenie torów (Dual Unidirectional Chains):** Niezależne tory $A \to B$ oraz $B \to A$ sterowane odrębnymi licznikami sekwencyjnymi ($Counter_{\text{out}}$, $Counter_{\text{in}}$).
 - **Key Hopping (Efemeryczne przeskakiwanie adresów):** Każda wiadomość $i$ publikowana jest pod unikalnym adresem:
   $$\text{Target}_i = \text{SHA-1}(pk_i), \quad pk_i \leftarrow \text{HKDF-Expand}(ChainKey^i, \text{"step"} \parallel i, 128)$$
@@ -81,7 +81,7 @@ Jeżeli klient generuje zapytania wabikowe wyłącznie pod losowe hasze w przest
 - W rezultacie naiwne zapytania wabikowe zostają w 100% odfiltrowane, przywracając skuteczność korelacji do 100%.
 
 **Architektura obronna PQChat.DHT:**
-1. **Nieskoordynowane rekordy maskujące (*Poisson Dummy PUTs*):** Generator `PoissonTrafficGenerator` publikuje w tle rekordy o sztywnym rozmiarze 1000 bajtów wypełnione kryptograficznym szumem CSPRNG. Rekordy te posiadają fizyczny zapis `PUT` w DHT.
+1. **Nieskoordynowane rekordy maskujące (*Poisson Dummy PUTs*):** Generator `PoissonTrafficGenerator` publikuje w tle rekordy o sztywnym rozmiarze dokładnie 900 bajtów (904 B w formacie Bencode) wypełnione kryptograficznym szumem CSPRNG. Rekordy te posiadają fizyczny zapis `PUT` w DHT.
 2. **Wielopodmiotowe targetowanie aktywne:** Zapytania wabikowe kierowane są w $60\%$ do puli slotów aktywnych i dummy-PUTów, a nie wyłącznie do pustej przestrzeni haszy, dzięki czemu przetrwają stanowe filtrowanie 0-PUT.
 
 ### 3.3. Wielosesyjny Atak Przecięć (Statistical Disclosure)
@@ -110,6 +110,19 @@ W aplikacji `AdaptivePollingManager` implementuje 4 stany energetyczne:
 4. `DOZE_SLEEP` ($T = 900\text{ s} / 15\text{ min}$): Urządzenie zablokowane / uśpione.
    - **Kluczowa zasada:** W trybie Doze proces w tle jest wstrzymywany przez system operacyjny. **Ruch maskujący Poissona jest wyłączony**, a wybudzenia następują wyłącznie periodycznie przez `WorkManager` / `AlarmManager.setAndAllowWhileIdle`. Zapobiega to drenowaniu baterii i ubijaniu procesu przez Android LMK.
 
+### 3.6. Wektor Wycieku Metadanych przez Rekordy Tombstone (Czyszczenie Slotu)
+W rozproszonych magazynach DHT zgodnych z BEP 44 po odebraniu wiadomości przez odbiorcę i wykryciu potwierdzenia ACK, nadawca nadpisuje pierwotny slot transmisji w celu uniemożliwienia odzyskania archiwalnego kryptogramu z węzłów Kademlia (Forward Secrecy na poziomie magazynu DHT).
+
+* **Podatność wariantu naiwnego (0 B / pusty rekord):**
+  Wczesna koncepcja zakładała publikację pustego rekordu (`v = ByteArray(0)`, w Bencode: `"0:"`). Taki zabieg wprowadza krytyczny wektor ataku:
+  1. **Rozróżnialność rozmiarowa:** Wszystkie standardowe wiadomości, fragmenty plików i ruch maskujący mają jednolity rozmiar 900 B (904 B w Bencode). Zapis o długości 0 B (2 B w Bencode) stanowi unikalną anomalię w ruchu sieciowym.
+  2. **Wyciek faktu i czasu dostarczenia:** Węzeł przechowujący oraz pasywny podsłuchiwacz natychmiast rejestrują zdarzenie przejścia slotu z 900 B na 0 B. Ujawnia to moment, w którym odbiorca pobrał wiadomość, demaskując sukces doręczenia i umożliwiając adwersarzowi wyznaczenie dokładnego czasu RTT transmisji.
+* **Wdrożona obrona (Jednolity Tombstone 900 B):**
+  W PQChat.DHT tombstone jest publikowany z ładunkiem o **identycznym, stałym rozmiarze dokładnie 900 bajtów** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES`) czystego szumu CSPRNG pod zinkrementowanym numerem sekwencyjnym (`seq = DEFAULT_MUTABLE_SEQ + 1`, zgodnie z regułą nadpisywania BEP 44).
+  - Węzły DHT bezpowrotnie niszczą pierwotny kryptogram, zastępując go szumem pod wyższym numerem sekwencyjnym.
+  - Dla węzłów i obserwatorów sieciowych zapis jest całkowicie nieodróżnialny od zwykłej publikacji, rekeyingu lub ruchu maskującego.
+  - Całkowicie eliminuje to wyciek metadanych dotyczących doręczenia wiadomości.
+
 ---
 
 ## 4. Architektura Środków Obronnych
@@ -122,8 +135,9 @@ W aplikacji `AdaptivePollingManager` implementuje 4 stany energetyczne:
 │ 2. Cover Decoy GETs       │ Zapytania wabikowe do puli aktywnych slotów│
 │ 3. Polling Jitter         │ Losowe rozmycie interwałów (±30%)          │
 │ 4. Delayed PUT & Decoys   │ Opóźnione emisje i równoległe sloty-wabiki │
-│ 5. Poisson Cover Traffic  │ CSPRNG rekordy 1000 B wg rozkładu lambda   │
-│ 6. Lifecycle Adaptation   │ Wyłączanie szumu w Doze, interwały do 15m  │
+│ 5. Poisson Cover Traffic  │ CSPRNG rekordy 900 B wg rozkładu lambda    │
+│ 6. Uniform Tombstones     │ 900 B CSPRNG pod seq+1 (zero wycieku ACK)  │
+│ 7. Lifecycle Adaptation   │ Wyłączanie szumu w Doze, interwały do 15m  │
 └───────────────────────────┴────────────────────────────────────────────┘
 ```
 

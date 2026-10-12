@@ -231,56 +231,67 @@ Gdy $Counter_{out} > 0$ oraz $Counter_{out} \equiv 0 \pmod{50}$:
 
 ## 7. Format Binarny Ramek DHT (BEP 44 Value)
 
-Każdy rekord publikowany w DHT ma **sztywny, stały rozmiar dokładnie 1000 bajtów** (ochrona przed analizą wielkości pakietów).
+Każdy rekord binarny ('v') publikowany w DHT ma **sztywny, stały rozmiar dokładnie 900 bajtów** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES = 900`).
+
+### 7.1. Uzasadnienie Rozmiaru 900 B i Zgodność ze Specyfikacją BEP 44
+Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'v'` po zakodowaniu formatem Bencode **nie może przekraczać 1000 bajtów**:
+* W formacie Bencode ciąg binarny kodowany jest z prefiksem długości: `<długość>:<dane>`.
+* Dla surowego ładunku 900 bajtów zakodowany ciąg wynosi `"900:"` (4 bajty) + 900 bajtów danych = **dokładnie 904 bajty**, co spełnia sztywny limit BEP 44 ($\le 1000$ B).
+* **Uwaga krytyczna:** Gdyby surowy ładunek miał 1000 bajtów, jego postać Bencode wynosiłaby `"1000:"` (5 bajtów) + 1000 bajtów danych = **1005 bajtów**, co **przekracza dopuszczalny limit BEP 44** i skutkuje odrzuceniem pakietu przez publiczne węzły sieci BitTorrent DHT!
 
 ```
 +─────────────────────────────────────────────────────────────────────────────+
-|                  REKORD BEP 44 VALUE (SZTYWNE 1000 BAJTÓW)                  |
+|                   REKORD BEP 44 VALUE (SZTYWNE 900 BAJTÓW)                  |
 +────────────┬─────────────┬──────────────────────────────────────────────────+
 | IV (Nonce) |  AEAD Tag   |              SZYFROWANY ŁADUNEK                  |
-|  12 bajtów |  16 bajtów  |                 972 bajty                        |
+|  12 bajtów |  16 bajtów  |                 872 bajty                        |
 +────────────┴─────────────┴─────────────────┬──────────────────┬─────────────+
                            | Nagłówek (13 B) |   Dane Typu      | CSPRNG Szum |
                            +─────────────────┴──────────────────┴─────────────+
 ```
 
-### 7.1. Uwierzytelnienie AEAD i AAD
+### 7.2. Uwierzytelnienie AEAD i AAD
 * **Szyfrowanie:** AES-256-GCM.
 * **AAD (Additional Authenticated Data):**
   $$\text{AAD} = Target \ (20\text{ B}) \parallel Direction \ (\text{"AliceToBob" lub "BobToAlice"})$$
   Wiązanie AAD uniemożliwia ataki typu reflection oraz podmianę adresu docelowego w węzłach DHT.
 
-### 7.2. Nagłówek Wewnętrzny Ładunku (13 bajtów Plaintextu)
+### 7.3. Nagłówek Wewnętrzny Ładunku (13 bajtów Plaintextu)
 1. `MsgType` (1 B): identyfikator typu komunikatu.
 2. `SeqNum` (2 B, UInt16 BE): numer sekwencyjny nadawcy $Counter_{out}$.
 3. `AckNum` (2 B, UInt16 BE): ostatnio odebrany numer sekwencyjny rozmówcy.
 4. `TimestampUTC` (8 B, Int64 BE): uniksowy znacznik czasu w milisekundach.
 
-### 7.3. Typy Wiadomości i Struktury Ładunku (959 bajtów po odliczeniu nagłówka)
+### 7.4. Typy Wiadomości i Struktury Ładunku (859 bajtów po odliczeniu nagłówka 872 - 13)
 * **Typ 0x01 (Handshake Finalize):**
   * `ML-KEM-512 Ciphertext`: 768 B
   * `Salt`: 32 B
   * `Key Confirmation Tag`: 32 B
-  * `CSPRNG Padding`: 127 B
+  * `CSPRNG Padding`: 27 B (859 - 832)
 * **Typ 0x02 (Wiadomość Tekstowa):**
-  * `TextLength` ($L$): 2 B (UInt16, wartość $\le 957$)
-  * `UTF-8 Payload`: $L$ bajtów
-  * `CSPRNG Padding`: $957 - L$ bajtów
+  * `TextLength` ($L$): 2 B (UInt16, wartość $\le 857$)
+  * `UTF-8 Payload`: $L$ bajtów (maksymalnie 857 B czystego tekstu)
+  * `CSPRNG Padding`: $857 - L$ bajtów
 * **Typ 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
   * `ML-KEM-512 PublicKey`: 800 B
-  * `CSPRNG Padding`: 155 B
+  * `CSPRNG Padding`: 55 B (859 - 804)
 * **Typ 0x04 (PQC Rekey Response):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
   * `ML-KEM-512 Ciphertext`: 768 B
-  * `CSPRNG Padding`: 187 B
+  * `CSPRNG Padding`: 87 B (859 - 772)
 * **Typ 0x05 (Segment Transferu Blokowego — Chunk):**
   * `TransferID`: 16 B (UUID)
   * `ChunkIndex`: 2 B (UInt16 BE)
   * `TotalChunks`: 2 B (UInt16 BE)
-  * `ChunkLength` ($C$): 2 B (UInt16, wartość $\le 937$)
+  * `ChunkLength` ($C$): 2 B (UInt16, wartość $\le 837$)
   * `BinaryData`: $C$ bajtów
-  * `CSPRNG Padding`: $937 - C$ bajtów
+  * `CSPRNG Padding`: $837 - C$ bajtów
+
+### 7.5. Dodatkowe Typy Rekordów o Stałym Rozmiarze 900 B
+* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $Target_{ACK}$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).
+* **Cover Traffic Dummy:** Nieskoordynowany rekord 900 bajtów wypełniony czystym szumem CSPRNG (`DhtLeafNode.sendCoverTrafficDummy`).
+* **Bezpieczny Tombstone (Czyszczenie slotu po odebraniu):** Zastąpienie skonsumowanej wiadomości rekordem o sztywnym rozmiarze dokładnie 900 bajtów czystego szumu CSPRNG pod `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). Zastępuje to podatny wariant 0 B, który ujawniał węzłom i podsłuchiwaczom fakt oraz dokładny moment dostarczenia wiadomości. Dzięki zachowaniu stałego rozmiaru 900 B (904 B w Bencode) operacja tombstone jest całkowicie nierozróżnialna od normalnego zapisu lub ruchu maskującego.
 
 ---
 

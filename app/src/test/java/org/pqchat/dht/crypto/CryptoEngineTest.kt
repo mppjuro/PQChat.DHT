@@ -280,4 +280,101 @@ class CryptoEngineTest {
             )
         }
     }
+
+    @Test
+    fun testAllRecordTypesHaveStrictlyUniformSizeAndFitBencodeBep44Limit() = kotlinx.coroutines.runBlocking {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val direction = "AliceToBob"
+
+        // 1. Handshake Finalize (Type 0x01)
+        val ct1 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_CIPHERTEXT_SIZE)
+        val salt1 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
+        val plain1 = BinaryFrameCodec.encodeHandshakeFinalize(0, 0, System.currentTimeMillis(), ct1, salt1)
+        val frameHandshake = BinaryFrameCodec.packAeadFrame(key, plain1, target, direction)
+
+        // 2. Text Message (Type 0x02)
+        val plain2 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Post-Quantum DHT Chat Message")
+        val frameText = BinaryFrameCodec.packAeadFrame(key, plain2, target, direction)
+
+        // 3. PQC Rekey Offer (Type 0x03)
+        val pk3 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T3_PUBLIC_KEY_SIZE)
+        val plain3 = BinaryFrameCodec.encodeRekeyOffer(50, 49, System.currentTimeMillis(), 1L, pk3)
+        val frameRekeyOffer = BinaryFrameCodec.packAeadFrame(key, plain3, target, direction)
+
+        // 4. PQC Rekey Response (Type 0x04)
+        val ct4 = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T4_CIPHERTEXT_SIZE)
+        val plain4 = BinaryFrameCodec.encodeRekeyResponse(25, 50, System.currentTimeMillis(), 1L, ct4)
+        val frameRekeyResponse = BinaryFrameCodec.packAeadFrame(key, plain4, target, direction)
+
+        // 5. Chunk Data (Type 0x05)
+        val transferId = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T5_TRANSFER_ID_SIZE)
+        val chunkData = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T5_MAX_CHUNK_SIZE)
+        val plain5 = BinaryFrameCodec.encodeChunkData(5, 2, System.currentTimeMillis(), transferId, 0, 1, chunkData)
+        val frameChunk = BinaryFrameCodec.packAeadFrame(key, plain5, target, direction)
+
+        // 6. Cover-Traffic ACK
+        val ratchetKey = CryptoUtils.secureRandomBytes(32)
+        val frameAck = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(ratchetKey, "42", 42)
+
+        // 7. Dummy Cover Traffic from sendCoverTrafficDummy
+        val fakeDht = org.pqchat.dht.dht.FakeDht()
+        fakeDht.start()
+        val dummyTarget = fakeDht.sendCoverTrafficDummy()
+        assertNotNull(dummyTarget)
+        val dummyEntry = fakeDht.storage[CryptoUtils.toHex(dummyTarget!!)]
+        assertNotNull(dummyEntry)
+        val frameDummy = dummyEntry!!.item.v
+
+        // 8. Tombstone (uniform constant 900B CSPRNG payload)
+        val frameTombstone = BinaryFrameCodec.createTombstonePayload()
+
+        val allRecordTypes = listOf(
+            "TextMessage" to frameText,
+            "ChunkData" to frameChunk,
+            "RekeyOffer" to frameRekeyOffer,
+            "RekeyResponse" to frameRekeyResponse,
+            "HandshakeFinalize" to frameHandshake,
+            "CoverAck" to frameAck,
+            "CoverTrafficDummy" to frameDummy,
+            "Tombstone" to frameTombstone
+        )
+
+        assertEquals("Must test all 8 canonical record types", 8, allRecordTypes.size)
+
+        for ((name, record) in allRecordTypes) {
+            // Raw frame payload must match MAX_FRAME_PAYLOAD_BYTES (900 bytes) exactly
+            assertEquals(
+                "$name: Raw payload size must be exactly ${BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES} bytes",
+                BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES,
+                record.size
+            )
+
+            // Bencode encoding: "900:" (4 bytes) + 900 bytes = 904 bytes
+            val bencoded = Bencode.encode(record)
+            assertEquals(
+                "$name: Bencoded size must be exactly 904 bytes (4B prefix + 900B payload)",
+                904,
+                bencoded.size
+            )
+            assertTrue(
+                "$name: Bencoded size must not exceed BEP 44 limit (${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes)",
+                bencoded.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES
+            )
+        }
+
+        // Verify that 1000 bytes of raw payload STRICTLY EXCEEDS the BEP 44 1000B limit when bencoded!
+        // "1000:" (5 bytes) + 1000 bytes = 1005 bytes > 1000 bytes!
+        val raw1000Bytes = ByteArray(1000)
+        val bencoded1000 = Bencode.encode(raw1000Bytes)
+        assertEquals(
+            "1000B raw payload in Bencode requires 5B prefix ('1000:') resulting in 1005 bytes",
+            1005,
+            bencoded1000.size
+        )
+        assertTrue(
+            "1000B raw payload exceeds BEP 44 maximum allowed 'v' size of 1000 bytes",
+            bencoded1000.size > BinaryFrameCodec.MAX_DHT_VALUE_BYTES
+        )
+    }
 }

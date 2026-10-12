@@ -61,8 +61,8 @@ class SimulationConfig:
     sim_duration_sec: float = 3600.0    # 1 hour simulation run
     msg_rate_per_pair_hour: float = 20  # Average 20 messages per pair per hour
     poll_interval_sec: float = 10.0     # Default active foreground chat poll interval (10s)
-    bep44_value_bytes: int = 1000       # Exact BEP 44 value payload size (1000 B)
-    krpc_put_overhead_bytes: int = 70   # KRPC UDP/Bencode put header overhead (~1070 B total)
+    bep44_value_bytes: int = 900        # Exact BEP 44 value payload size (900 B raw, 904 B bencoded)
+    krpc_put_overhead_bytes: int = 70   # KRPC UDP/Bencode put header overhead (~974 B total UDP packet)
     krpc_get_overhead_bytes: int = 150  # KRPC UDP/Bencode get query+response (~150 B)
     rrc_tail_time_sec: float = 8.0      # Cellular modem RRC inactivity timer (8s)
     power_active_mw: float = 1200.0     # Modem active/tail power draw (mW)
