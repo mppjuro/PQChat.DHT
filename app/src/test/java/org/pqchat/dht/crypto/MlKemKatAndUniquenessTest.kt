@@ -6,6 +6,7 @@ import org.bouncycastle.crypto.params.MLKEMKeyGenerationParameters
 import org.bouncycastle.crypto.params.MLKEMParameters
 import org.bouncycastle.crypto.params.MLKEMPrivateKeyParameters
 import org.bouncycastle.crypto.params.MLKEMPublicKeyParameters
+import org.bouncycastle.util.test.FixedSecureRandom
 import org.junit.Assert.*
 import org.junit.Test
 import org.pqchat.dht.protocol.ChunkingEngine
@@ -31,11 +32,10 @@ class MlKemKatAndUniquenessTest {
         val z = ByteArray(32) { (it * 13 + 3).toByte() }
         val m = ByteArray(32) { (it * 17 + 5).toByte() }
 
-        val keyGen = MLKEMKeyPairGenerator()
-        keyGen.init(MLKEMKeyGenerationParameters(SecureRandom(), MLKEMParameters.ml_kem_512))
-
-        // Deterministic key generation via internalGenerateKeyPair(d, z)
-        val keyPair1 = keyGen.internalGenerateKeyPair(d, z)
+        // Deterministic key generation via FixedSecureRandom with seeds (d, z)
+        val keyGen1 = MLKEMKeyPairGenerator()
+        keyGen1.init(MLKEMKeyGenerationParameters(FixedSecureRandom(arrayOf(d, z)), MLKEMParameters.ml_kem_512))
+        val keyPair1 = keyGen1.generateKeyPair()
         val pub1 = keyPair1.public as MLKEMPublicKeyParameters
         val priv1 = keyPair1.private as MLKEMPrivateKeyParameters
 
@@ -46,7 +46,9 @@ class MlKemKatAndUniquenessTest {
         assertTrue(skBytes1.size > 0)
 
         // Repeat with identical seeds (d, z) must produce byte-for-byte identical keys
-        val keyPair2 = keyGen.internalGenerateKeyPair(d, z)
+        val keyGen2 = MLKEMKeyPairGenerator()
+        keyGen2.init(MLKEMKeyGenerationParameters(FixedSecureRandom(arrayOf(d, z)), MLKEMParameters.ml_kem_512))
+        val keyPair2 = keyGen2.generateKeyPair()
         val pub2 = keyPair2.public as MLKEMPublicKeyParameters
         val priv2 = keyPair2.private as MLKEMPrivateKeyParameters
 
@@ -57,9 +59,8 @@ class MlKemKatAndUniquenessTest {
         val extractedPk = MLKemEngine.extractPublicKey(skBytes1)
         assertArrayEquals("Extracted public key must match original public key", pkBytes1, extractedPk)
 
-        // Deterministic encapsulation via internalGenerateEncapsulated(pub, m)
-        val kemGen = MLKEMGenerator(SecureRandom())
-        val encResult1 = kemGen.internalGenerateEncapsulated(pub1, m)
+        // Deterministic encapsulation via static MLKEMGenerator.internalGenerateEncapsulated(pub, m)
+        val encResult1 = MLKEMGenerator.internalGenerateEncapsulated(pub1, m)
         val ss1 = encResult1.secret
         val ct1 = encResult1.encapsulation
 
@@ -67,7 +68,7 @@ class MlKemKatAndUniquenessTest {
         assertEquals(MLKemEngine.CIPHERTEXT_SIZE, ct1.size)
 
         // Repeat with identical m and pub must produce identical secret and ciphertext
-        val encResult2 = kemGen.internalGenerateEncapsulated(pub1, m)
+        val encResult2 = MLKEMGenerator.internalGenerateEncapsulated(pub1, m)
         assertArrayEquals("Deterministic encaps must produce identical shared secret", ss1, encResult2.secret)
         assertArrayEquals("Deterministic encaps must produce identical ciphertext", ct1, encResult2.encapsulation)
 
