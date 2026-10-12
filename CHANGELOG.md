@@ -64,7 +64,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
-- [`65a966a`](https://github.com/mppjuro/PQChat.DHT/commit/65a966a0c306d1dd88b3830a0cb940445dfe3f22) (2026-10-12) — add issue and PR templates, nightly build and release workflows, and changelog automation
+- [`fd7e1d8`](https://github.com/mppjuro/PQChat.DHT/commit/fd7e1d8886ed59afd559960747647b274f2c11e5) (2026-10-12) — add issue and PR templates, nightly build and release workflows, and changelog automation
 - [`44099a7`](https://github.com/mppjuro/PQChat.DHT/commit/44099a746e48e87813dc6e83e99e2227e458d6e3) (2026-10-12) — **dependencies**: updated dependencies in build.gradle.kts to last version
 - [`20ff6b5`](https://github.com/mppjuro/PQChat.DHT/commit/20ff6b5b08c45b318902ce610aea5f73171b3a79) (2026-10-12) — **deps**: bump org.jetbrains.kotlinx:kotlinx-coroutines-android
 - [`f97204f`](https://github.com/mppjuro/PQChat.DHT/commit/f97204f9f006919943be1e0e377c1dab3207e3c5) (2026-10-12) — **deps**: bump org.jetbrains.kotlinx:kotlinx-coroutines-test
