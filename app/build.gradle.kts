@@ -138,7 +138,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // QR Code Engine (Generation & ZXing Core)
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
 
     // CameraX (16 KB page-size aligned since 1.4.0+)
