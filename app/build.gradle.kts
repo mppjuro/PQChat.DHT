@@ -139,7 +139,7 @@ dependencies {
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.1.3")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("com.code-intelligence:jazzer-api:0.30.0")
