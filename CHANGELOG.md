@@ -41,7 +41,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
-- [`2e4df4e`](https://github.com/mppjuro/PQChat.DHT/commit/2e4df4e612b1f7fae78fa3b8c391505aea0f980e) (2026-10-12) — **service**: fix background state machine, add boot receiver, fgs timeout, and battery optimization prompt
+- [`09869d7`](https://github.com/mppjuro/PQChat.DHT/commit/09869d7a390ce3106c7e1c0ab743e4dfde6ce968) (2026-10-12) — **service**: fix background state machine, add boot receiver, fgs timeout, and battery optimization prompt
 - [`05146be`](https://github.com/mppjuro/PQChat.DHT/commit/05146be9cb058d10ebc5c80e8ddd45f2bc23bc59) (2026-10-12) — **crypto**: update ML-KEM KAT test for Bouncy Castle 1.86 and set compileSdk to 37
 - [`96552fd`](https://github.com/mppjuro/PQChat.DHT/commit/96552fd349bb622ba2878c9a0ebb0c9972772ed2) (2026-10-12) — **test**: isolate PollingWorker state and refresh FakeDht in WorkManagerRepublishScheduleTest
 - [`289eebe`](https://github.com/mppjuro/PQChat.DHT/commit/289eebe6b2c3478d0e8c9de4f66a6800a8349424) (2026-10-12) — **spec**: Unify record payload to 900B, implement uniform tombstone, and align documentation
