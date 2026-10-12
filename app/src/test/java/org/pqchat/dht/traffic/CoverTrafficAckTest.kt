@@ -508,7 +508,7 @@ class CoverTrafficAckTest {
         // 2. Simulate receiver publishing Cover-Traffic ACK into Target_ACK
         val ackSeed = CoverAckProtocol.deriveAckSeed(sentMsg.ackRatchetKey!!.raw, "${sentMsg.seqNum}")
         val ackPayload =
-            CoverAckProtocol.createAckPayload(sentMsg.ackRatchetKey!!.raw, "${sentMsg.seqNum}", sentMsg.seqNum)
+            CoverAckProtocol.createAckPayload(sentMsg.ackRatchetKey.raw, "${sentMsg.seqNum}", sentMsg.seqNum)
         fakeDht.putMutable(
             target = sentMsg.ackTarget!!,
             v = ackPayload,
@@ -536,9 +536,8 @@ class CoverTrafficAckTest {
         assertFalse("Republish loop job should be completed or cancelled", loopJob.isActive)
 
         // 6. Verify tombstone was placed on slotTarget (uniform constant 900B payload, seq incremented)
-        val tombstone = fakeDht.getMutable(sentMsg.slotTarget!!)
-        assertNotNull("Tombstone must be published on slotTarget", tombstone)
-        assertEquals("Tombstone payload must match constant 900B frame size", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, tombstone!!.v.size)
+        val tombstone = requireNotNull(fakeDht.getMutable(sentMsg.slotTarget)) { "Tombstone must be published on slotTarget" }
+        assertEquals("Tombstone payload must match constant 900B frame size", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, tombstone.v.size)
         assertEquals("Tombstone seq must be incremented by 1 according to BEP 44", DhtClient.DEFAULT_MUTABLE_SEQ + 1, tombstone.seq)
     }
 
