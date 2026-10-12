@@ -1,2 +1,284 @@
 # PQChat.DHT
-Projekt PQChat.DHT to w pełni zdecentralizowany, odporny na cenzurę i chroniący metadane komunikator mobilny na system Android, wykorzystujący publiczną sieć BitTorrent Mainline DHT (BEP 44) jako efemeryczny magazyn buforujący
+
+<p align="center">
+  <strong>Decentralized, Post-Quantum P2P Covert Messaging over BitTorrent Mainline DHT</strong><br>
+  <em>Statistical Traffic Masking • Formal ProVerif Verification • Zero Infrastructure</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml/badge.svg" alt="Android CI" />
+  </a>
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly_slow_tests.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly_slow_tests.yml/badge.svg" alt="Nightly Tests" />
+  </a>
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/remote_dht_test.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/remote_dht_test.yml/badge.svg" alt="Remote DHT Tests" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" />
+  </a>
+  <a href="https://csrc.nist.gov/pubs/fips/203/final">
+    <img src="https://img.shields.io/badge/Cryptography-FIPS_203_(ML--KEM--512)-green.svg" alt="FIPS 203 ML-KEM" />
+  </a>
+  <a href="formal/">
+    <img src="https://img.shields.io/badge/Verification-ProVerif_Formally_Verified-purple.svg" alt="ProVerif Verified" />
+  </a>
+</p>
+
+---
+
+## 🔬 Overview & Academic Context
+
+Traditional secure messaging platforms rely on centralized directory and signaling servers, leaking rich transactional metadata (timing, communication graphs, peer IP addresses) and remaining susceptible to future decryption by quantum adversaries through **Harvest Now, Decrypt Later (HNDL)** attacks.
+
+**PQChat.DHT** is an experimental, serverless peer-to-peer covert messaging system developed for Android as part of a Master's Thesis in Computer Science. It achieves end-to-end privacy and metadata resistance by combining:
+1. **Post-Quantum Cryptography (PQC)**: Key exchange based on **ML-KEM-512** (NIST FIPS 203) with double ratcheting for Forward Secrecy and Post-Compromise Security.
+2. **Serverless P2P Storage**: Storage and discovery via BitTorrent Mainline DHT using signed mutable items (**BEP 44** / Kademlia).
+3. **Statistical Traffic Masking**: Shaping network traffic using Poisson-distributed cover traffic, blind republishing, and decoy queries to defeat side-channel and timing correlation attacks.
+4. **Network Obfuscation**: Optional embedded SOCKS5 routing through the Tor network.
+5. **Formal Verification**: Verified protocol invariants using **ProVerif 2.05+** symbolic analysis.
+
+> [!WARNING]
+> **Alpha Status**: This project is an academic research prototype. While the core protocol has been formally verified with ProVerif, the Android implementation has not undergone independent professional cryptographic and application security audits. Do not rely on it for operational life-critical communications.
+
+---
+
+## 🏛️ System Architecture
+
+```mermaid
+flowchart TB
+    subgraph UI_Layer [Presentation & Identity Layer]
+        UI[Jetpack Compose UI]
+        QR[Out-of-Band QR Code Exchange]
+        KS[Android Keystore / Ed25519 Identity]
+    end
+
+    subgraph Security_Layer [Cryptographic & Protocol Engine]
+        KEM[Hybrid ML-KEM-512 Engine]
+        RATCHET[Ratchet Chain / Rekey Coordinator]
+        AES[AES-256-GCM Framing & Sliding Window]
+    end
+
+    subgraph Traffic_Layer [Traffic Shaping & Metadata Defense]
+        POISSON[Poisson Traffic Generator]
+        DECOY[Decoy Target Pool]
+        POLL[Adaptive Polling Manager]
+        COVER[Cover ACK Protocol]
+    end
+
+    subgraph Transport_Layer [Network & P2P Transport]
+        TOR[Embedded Tor SOCKS5 Client]
+        DHT[BEP 44 Mainline DHT Leaf Node]
+        BENCODE[Bencode / KRPC UDP Engine]
+    end
+
+    UI --> KS
+    QR --> KEM
+    KS --> RATCHET
+    KEM --> RATCHET
+    RATCHET --> AES
+    AES --> POISSON
+    POISSON --> DECOY
+    DECOY --> POLL
+    POLL --> COVER
+    COVER --> TOR
+    COVER --> DHT
+    DHT --> BENCODE
+
+```
+
+---
+
+## ✨ Key Features
+
+### 1. Post-Quantum End-to-End Cryptography
+
+* **ML-KEM-512 (FIPS 203 / Kyber)**: High-performance lattice-based key encapsulation mechanism protecting against both classical and quantum adversaries (`MLKemEngine.kt`).
+* **Hardware-Backed Identity**: Ed25519 signing keys anchored in the Android hardware-backed Keystore (`KeystoreCrypto.kt`, `Ed25519Engine.kt`).
+* **Ratchet Rekeying Engine**: Ephemeral ratchet chains providing both **Perfect Forward Secrecy (PFS)** and **Post-Compromise Security (PCS)** (`RatchetChain.kt`, `RekeyCoordinator.kt`).
+* **Frame Integrity**: Authenticated framing via AES-256-GCM with replay protection through bitmap sliding windows (`SlidingWindowBitmap.kt`, `BinaryFrameCodec.kt`).
+
+### 2. Decentralized BEP 44 DHT Transport
+
+* **Zero Infrastructure**: Operates on the public BitTorrent Mainline DHT network with no custom servers, relays, or STUN/TURN infrastructure.
+* **Lightweight Leaf Node**: Memory- and battery-conscious Android Kademlia leaf node (`DhtLeafNode.kt`, `DhtClient.kt`).
+* **Performance Enhancements**: Implements **Target Pre-Warming** and **Fast Termination** algorithms to minimize DHT lookup latency under flaky mobile networks (`FastTerminationTest.kt`, `TargetPreWarmingTest.kt`).
+* **BEP 44 Encrypted Storage**: Stores cryptographically signed, encrypted blobs indexed by target hashes.
+
+### 3. Traffic Analysis Countermeasures
+
+* **Poisson-Distributed Intervals**: Masking bursty human chat habits with randomized packet emission following a Poisson point process (`PoissonTrafficGenerator.kt`).
+* **Decoy Target Pooling & Blind Republishing**: Injects indistinguishable decoy DHT queries and background republish packets into the peer network (`DecoyTargetPool.kt`, `BlindRepublishPool.kt`).
+* **Cover ACKs**: Prevents correlation between message delivery and acknowledgement frames (`CoverAckProtocol.kt`).
+* **Adaptive Polling**: Dynamically schedules background poll workers without waking the radio unnecessarily (`AdaptivePollingManager.kt`, `PollingScheduler.kt`).
+
+### 4. Anonymity & Media Processing
+
+* **Embedded Tor Support**: Embedded Tor daemon runner for SOCKS5 proxy routing (`EmbeddedTorManager.kt`, `TorSocketFactory.kt`).
+* **Low-Bandwidth Media Compression**: In-flight 8-bit PNG palette quantizer (`Png8Compressor.kt`) and chunked frame stream delivery (`ChunkingEngine.kt`) designed to fit small payload constraints.
+* **Out-of-Band Pairing**: Mutual contact pairing via animated QR codes (`CameraQrScanner.kt`, `QrCodeUtil.kt`).
+
+---
+
+## 🔒 Protocol Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Alice as Alice (Client A)
+    participant OutOfBand as Out-of-Band QR
+    participant DHT as BitTorrent DHT (BEP 44)
+    participant Bob as Bob (Client B)
+
+    Alice->>OutOfBand: Display Ed25519 PubKey + Initial KEM Public Key
+    Bob->>OutOfBand: Scan & Mutual Identity Verification
+    Bob->>Bob: Encapsulate shared secret via ML-KEM-512
+    Bob->>DHT: Put BEP 44 mutable payload (Ciphertext + Ed25519 Sig)
+    Note over DHT: Distributed storage across closest Kademlia nodes
+    Alice->>DHT: Get BEP 44 query (Target Hash)
+    DHT-->>Alice: Return encrypted payload
+    Alice->>Alice: ML-KEM Decapsulate & Derive Session Key via HKDF-SHA-512
+    Alice->>Bob: Symmetrical Ratchet Data Frames (AES-GCM) + Periodic Rekeying
+    Bob-->>Alice: Cover ACKs (Poisson-timed dummy/real acknowledgements)
+
+```
+
+Detailed message layouts, frame headers, and serialization rules are specified in [`docs/PROTOCOL.md`](https://www.google.com/search?q=docs/PROTOCOL.md). The security assumptions and adversary capabilities are analyzed in [`docs/threat_model.md`](https://www.google.com/search?q=docs/threat_model.md).
+
+---
+
+## 📐 Formal Verification (ProVerif)
+
+The core cryptographic protocol is formally verified using **[ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/)** symbolic protocol analyzer. All verification scripts and proof models are available in the [`formal/`](https://www.google.com/search?q=formal/) directory.
+
+| Property | Model File | Verified Security Guarantee | Status |
+| --- | --- | --- | --- |
+| **Secrecy** | `pqchat_secrecy.pv` | Payload secrecy against active Dolev-Yao adversary | `RESULT: True` |
+| **Forward Secrecy** | `pqchat_forward_secrecy.pv` | Past messages protected upon long-term key compromise | `RESULT: True` |
+| **Post-Compromise** | `pqchat_post_compromise.pv` | Session recovery and security restoration after breach | `RESULT: True` |
+| **Replay Protection** | `pqchat_replay.pv` | Monotonic frame sequence & nonces prevent replay | `RESULT: True` |
+| **Unlinkability** | `pqchat_unlinkability.pv` | Anonymity against passive eavesdroppers | `RESULT: True` |
+
+To reproduce the formal verification suite locally:
+
+```bash
+cd formal
+chmod +x run.sh
+./run.sh
+
+```
+
+---
+
+## 🧪 Testing & Fuzzing
+
+The repository maintains an extensive test suite exceeding standard unit testing:
+
+* **Known Answer Tests (KAT)**: Validates ML-KEM-512 against official NIST test vectors (`MlKemKatAndUniquenessTest.kt`).
+* **Security & Parser Fuzzing**: Continuous fuzzing powered by **Jazzer** targeting KRPC message parsing and Bencode decoders (`JazzerFuzzTest.kt`, `BencodeSecurityTest.kt`).
+* **Traffic Threat Statistical Tests**: Monte-Carlo simulations testing statistical indistinguishability of cover traffic (`TrafficThreatModelStatisticalTest.kt`).
+* **DHT Integration Tests**: Real-world loopback and remote DHT persistence verification (`RealBep44RemoteIntegrationTest.kt`, `tools/dht_harness/`).
+
+Run unit and integration tests:
+
+```bash
+./gradlew testDebugUnitTest
+
+```
+
+---
+
+## 📊 Empirical Benchmarks & Simulation
+
+The repo includes reproducible Python test harnesses and threat simulators to evaluate battery, bandwidth, and latency trade-offs:
+
+* **Loopback DHT Measurement**: Real packet retention and latency charts generated under [`docs/dht_retention_report.md`](https://www.google.com/search?q=docs/dht_retention_report.md).
+* **Threat Simulator**: Simulates deanonymization probability against adversary nodes under varying cover-traffic rates (`tools/threat_sim/threat_simulator.py`).
+
+```bash
+# Run the simulation suite
+cd tools/threat_sim
+pip install -r requirements.txt
+python threat_simulator.py
+
+```
+
+---
+
+## 📂 Repository Layout
+
+```text
+PQChat.DHT/
+├── .github/                 # Workflows: CI, Dependabot, Nightly & Remote DHT tests
+├── app/
+│   └── src/
+│       ├── main/java/org/pqchat/dht/
+│       │   ├── crypto/      # ML-KEM, Ed25519, AES-GCM, HKDF, Keystore wrappers
+│       │   ├── data/        # Room Database, Repositories, Preferences
+│       │   ├── dht/         # BEP 44 client, Kademlia leaf node, KRPC, Bencode
+│       │   ├── media/       # PNG-8 quantizer & compressor
+│       │   ├── network/tor/ # Embedded Tor daemon & SOCKS5 socket factory
+│       │   ├── protocol/    # Handshake, Ratchet chains, Chunking, Cover ACKs
+│       │   ├── service/     # Foreground polling, Alarm receivers, WorkManager
+│       │   ├── traffic/     # Poisson generator, Decoy pools, Blind republishing
+│       │   └── ui/          # Jetpack Compose screens, ViewModels, QR scanner
+│       └── test/java/       # KAT tests, Jazzer fuzzing, Concurrency & Property tests
+├── docs/                    # Technical documentation, PROTOCOL.md, Threat Model
+├── formal/                  # ProVerif formal verification models (.pv) & scripts
+└── tools/
+    ├── dht_harness/         # P2P loopback benchmarking scripts & raw CSV metrics
+    └── threat_sim/          # Python Monte-Carlo anonymity vs. battery simulator
+
+```
+
+---
+
+## 🚀 Building & Getting Started
+
+### Prerequisites
+
+* **JDK 17** or **JDK 21**
+* **Android SDK** (minSdk 26, targetSdk 34)
+* **Android Studio Ladybug** (2024.2+) or CLI Gradle
+
+### Build Instructions
+
+```bash
+# Clone the repository
+git clone https://github.com/mppjuro/PQChat.DHT.git
+cd PQChat.DHT
+
+# Verify code style and linting
+./gradlew lintDebug
+
+# Run unit tests and crypto KATs
+./gradlew testDebugUnitTest
+
+# Build the debug APK
+./gradlew assembleDebug
+
+```
+
+The compiled APK will be available in `app/build/outputs/apk/debug/app-debug.apk`.
+
+---
+
+## 📄 License & Attribution
+
+This project is licensed under the **GNU General Public License v3.0** (GPLv3) — see the [`LICENSE`](https://www.google.com/search?q=LICENSE) file for details.
+
+### Academic Citation
+
+If you utilize this work or its formal models in academic research, please cite:
+
+```bibtex
+@mastersthesis{pqchat_dht_2026,
+  author       = {Miłosz Piórkowski},
+  title        = {Zdecentralizowany komunikator mobilny P2P odporny na analizę ruchu, oparty na sieci DHT i kryptografii postkwantowej},
+  school       = {Nicolaus Copernicus University in Toruń (UMK)},
+  year         = {2026},
+  note         = {GitHub: [https://github.com/mppjuro/PQChat.DHT](https://github.com/mppjuro/PQChat.DHT)}
+}
+
+```
