@@ -1230,7 +1230,7 @@ class ChatRepository(
                     if (pendingOffer != null && pendingOffer.epoch == respPayload.rekeyEpoch) {
                         val ssRekey = MLKemEngine.decapsulate(pendingOffer.rawSkNew, respPayload.mlKemCiphertext)
                         pendingOffer.destroy()
-                        pendingRekeyOfferDao?.deletePendingOffer(contactId)
+                        pendingRekeyOfferDao.deletePendingOffer(contactId)
 
                         val latestContact = contactDao.getContactById(contactId) ?: contact
                         val rekeyedChainOut = RatchetChain.injectRekeySecret(latestContact.chainKeyOut, ssRekey)
