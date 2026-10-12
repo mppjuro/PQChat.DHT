@@ -1,0 +1,3 @@
+#!/bin/sh
+# Auto-update CHANGELOG.md after each commit
+python scripts/generate_changelog.py

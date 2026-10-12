@@ -24,6 +24,12 @@
   <a href="formal/">
     <img src="https://img.shields.io/badge/Verification-ProVerif_Formally_Verified-purple.svg" alt="ProVerif Verified" />
   </a>
+  <a href="CHANGELOG.md">
+    <img src="https://img.shields.io/badge/Changelog-Conventional_Commits-orange.svg" alt="Changelog" />
+  </a>
+  <a href="https://github.com/mppjuro/PQChat.DHT/releases/tag/nightly">
+    <img src="https://img.shields.io/badge/Nightly_Build-APK_Download-blueviolet.svg" alt="Nightly Build" />
+  </a>
 </p>
 
 ---
@@ -264,9 +270,17 @@ The compiled APK will be available in `app/build/outputs/apk/debug/app-debug.apk
 
 ---
 
+## 📜 Changelog & Releases
+
+- **Historia zmian:** Pełna lista wprowadzonych funkcji, poprawek i zmian znajduje się w pliku [`CHANGELOG.md`](CHANGELOG.md).
+- **Oficjalne wydania (Releases):** Przejdź do zakładki [Releases](https://github.com/mppjuro/PQChat.DHT/releases), aby pobrać stabilne pakiety instalacyjne APK.
+- **Wydania codzienne (Nightly Builds):** Najnowsza wersja deweloperska APK jest automatycznie kompilowana co noc i dostępna w [Nightly Release](https://github.com/mppjuro/PQChat.DHT/releases/tag/nightly).
+
+---
+
 ## 📄 License & Attribution
 
-This project is licensed under the **GNU General Public License v3.0** (GPLv3) — see the [`LICENSE`](https://www.google.com/search?q=LICENSE) file for details.
+This project is licensed under the **GNU General Public License v3.0** (GPLv3) — see the [`LICENSE`](LICENSE) file for details.
 
 ### Academic Citation
 
