@@ -1408,7 +1408,7 @@ class ChatRepository(
                     try {
                         dhtLeafNode.putMutable(
                             target = slotTarget,
-                            v = ByteArray(0),
+                            v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,
@@ -1443,7 +1443,7 @@ class ChatRepository(
                     try {
                         dhtLeafNode.putMutable(
                             target = slotTarget,
-                            v = ByteArray(0),
+                            v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,

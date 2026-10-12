@@ -182,7 +182,7 @@ class TrafficThreatModelStatisticalTest {
             fakeDht.storage.containsKey(dummyEvent.targetHex)
         )
         val storedItem = fakeDht.storage[dummyEvent.targetHex]!!.item
-        assertEquals(1000, storedItem.v.size)
+        assertEquals(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, storedItem.v.size)
         assertTrue(
             "DecoyTargetPool must have registered the emitted target",
             decoyPool.getAllPopulatedTargets().any { CryptoUtils.toHex(it) == dummyEvent.targetHex }

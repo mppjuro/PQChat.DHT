@@ -386,4 +386,14 @@ object BinaryFrameCodec {
         val aad = buildAad(target, direction)
         return unpackAeadFrame(key, frame, aad)
     }
+
+    /**
+     * Creates a constant-size tombstone payload (exactly [MAX_FRAME_PAYLOAD_BYTES] of CSPRNG noise).
+     * Overwriting the ephemeral transmission slot with an identical 900-byte frame under seq + 1
+     * destroys the original ciphertext on DHT storage nodes while preventing traffic analysis:
+     * outside observers cannot distinguish tombstone overwrites from normal PUT updates or chaffing.
+     */
+    fun createTombstonePayload(): ByteArray {
+        return CryptoUtils.secureRandomBytes(MAX_FRAME_PAYLOAD_BYTES)
+    }
 }

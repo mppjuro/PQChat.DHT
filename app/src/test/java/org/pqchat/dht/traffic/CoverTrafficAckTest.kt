@@ -383,7 +383,7 @@ class CoverTrafficAckTest {
         val seed = CryptoUtils.secureRandomBytes(32)
         val keyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(seed)
         val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(keyPair.publicKey)
-        val v = CryptoUtils.secureRandomBytes(1000)
+        val v = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
         val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(v, 42L, null)
         val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(seed, signData)
         val entry = BlindRepublishEntry(target, keyPair.publicKey, 42L, v, sig)
@@ -419,7 +419,7 @@ class CoverTrafficAckTest {
         val seed = CryptoUtils.secureRandomBytes(32)
         val keyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(seed)
         val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(keyPair.publicKey)
-        val v = CryptoUtils.secureRandomBytes(1000)
+        val v = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
         val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(v, 1L, null)
         val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(seed, signData)
         val entry = BlindRepublishEntry(target, keyPair.publicKey, 1L, v, sig)
@@ -535,10 +535,11 @@ class CoverTrafficAckTest {
         delay(100L)
         assertFalse("Republish loop job should be completed or cancelled", loopJob.isActive)
 
-        // 6. Verify tombstone was placed on slotTarget (length 0 payload)
+        // 6. Verify tombstone was placed on slotTarget (uniform constant 900B payload, seq incremented)
         val tombstone = fakeDht.getMutable(sentMsg.slotTarget!!)
         assertNotNull("Tombstone must be published on slotTarget", tombstone)
-        assertEquals("Tombstone payload must be empty (BEP 44 empty record)", 0, tombstone!!.v.size)
+        assertEquals("Tombstone payload must match constant 900B frame size", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, tombstone!!.v.size)
+        assertEquals("Tombstone seq must be incremented by 1 according to BEP 44", DhtClient.DEFAULT_MUTABLE_SEQ + 1, tombstone.seq)
     }
 
     @Test

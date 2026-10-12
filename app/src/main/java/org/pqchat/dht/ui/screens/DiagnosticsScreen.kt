@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
@@ -36,7 +37,7 @@ fun DiagnosticsScreen(
         viewModel.trafficGenerator.eventFlow.collect { event ->
             val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             val time = sdf.format(Date(event.timestamp))
-            val entry = "[$time] Target: ${event.targetHex.take(12)}... Δt=${String.format(Locale.US, "%.1f", event.intervalSeconds)}s (1000B)"
+            val entry = "[$time] Target: ${event.targetHex.take(12)}... Δt=${String.format(Locale.US, "%.1f", event.intervalSeconds)}s (${BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES}B)"
             coverEvents = (listOf(entry) + coverEvents).take(20)
         }
     }
@@ -145,7 +146,7 @@ fun DiagnosticsScreen(
             item {
                 SectionCard(title = "Poisson Cover Traffic (Chaffing Stream)") {
                     Text(
-                        text = "λ = 1/480 s⁻¹ (Exponential Distribution, Constant 1000B)",
+                        text = "λ = 1/480 s⁻¹ (Exponential Distribution, Constant ${BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES}B)",
                         style = MaterialTheme.typography.labelSmall,
                         color = CryptoPurple
                     )
