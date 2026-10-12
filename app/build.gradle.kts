@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.pqchat.dht"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.pqchat.dht"
