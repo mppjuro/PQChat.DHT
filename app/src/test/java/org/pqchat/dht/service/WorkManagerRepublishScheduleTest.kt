@@ -36,14 +36,16 @@ class WorkManagerRepublishScheduleTest {
     private val fakeContactDao = FakeContactDao()
     private val fakeMessageDao = FakeMessageDao()
     private val fakeChunkDao = FakeChunkDao()
-    private val fakeDht = org.pqchat.dht.dht.FakeDht()
+    private var fakeDht = org.pqchat.dht.dht.FakeDht()
     private lateinit var repository: ChatRepository
     private lateinit var settingsManager: AppSettingsManager
 
     @Before
     fun setUp() {
+        fakeDht = org.pqchat.dht.dht.FakeDht()
         fakeDht.start()
         PollingWorker.clearRepublishTasks()
+        fakeContactDao.contacts.clear()
         fakeMessageDao.messages.clear()
         repository = ChatRepository(fakeContactDao, fakeMessageDao, fakeChunkDao, fakeDht)
         settingsManager = AppSettingsManager(null)
@@ -432,65 +434,73 @@ class WorkManagerRepublishScheduleTest {
 
     @Test
     fun testExecuteRepublishPassRespectsIntervalsAndTtl() = runBlocking {
-        val now = 10_000_000L
+        PollingWorker.clearRepublishTasks()
+        fakeDht.clear()
+        fakeDht.start()
+
+        val now = 1_000_000_000L
         val policy = RepublishPolicy()
 
-        // Task 1: Tier 1, interval elapsed (last republished 20 min ago > 15 min interval)
-        val task1 = PollingWorker.RepublishTask(
-            messageId = 1L,
-            contactId = "alice",
-            target = ByteArray(20),
-            payload = ByteArray(100),
-            edPrivateKeySeed = ByteArray(32),
-            initialSentTimestamp = now - TimeUnit.MINUTES.toMillis(30),
-            lastRepublishedTimestamp = now - TimeUnit.MINUTES.toMillis(20)
-        )
+        try {
+            // Task 1: Tier 1, interval elapsed (last republished 20 min ago > 15 min interval)
+            val task1 = PollingWorker.RepublishTask(
+                messageId = 1L,
+                contactId = "alice",
+                target = ByteArray(20),
+                payload = ByteArray(100),
+                edPrivateKeySeed = ByteArray(32),
+                initialSentTimestamp = now - TimeUnit.MINUTES.toMillis(30),
+                lastRepublishedTimestamp = now - TimeUnit.MINUTES.toMillis(20)
+            )
 
-        // Task 2: Tier 1, interval NOT elapsed (last republished 5 min ago < 15 min interval)
-        val task2 = PollingWorker.RepublishTask(
-            messageId = 2L,
-            contactId = "bob",
-            target = ByteArray(20),
-            payload = ByteArray(100),
-            edPrivateKeySeed = ByteArray(32),
-            initialSentTimestamp = now - TimeUnit.MINUTES.toMillis(30),
-            lastRepublishedTimestamp = now - TimeUnit.MINUTES.toMillis(5)
-        )
+            // Task 2: Tier 1, interval NOT elapsed (last republished 5 min ago < 15 min interval)
+            val task2 = PollingWorker.RepublishTask(
+                messageId = 2L,
+                contactId = "bob",
+                target = ByteArray(20),
+                payload = ByteArray(100),
+                edPrivateKeySeed = ByteArray(32),
+                initialSentTimestamp = now - TimeUnit.MINUTES.toMillis(30),
+                lastRepublishedTimestamp = now - TimeUnit.MINUTES.toMillis(5)
+            )
 
-        // Task 3: TTL expired (50 hours old)
-        val task3 = PollingWorker.RepublishTask(
-            messageId = 3L,
-            contactId = "charlie",
-            target = ByteArray(20),
-            payload = ByteArray(100),
-            edPrivateKeySeed = ByteArray(32),
-            initialSentTimestamp = now - TimeUnit.HOURS.toMillis(50),
-            lastRepublishedTimestamp = now - TimeUnit.HOURS.toMillis(10)
-        )
+            // Task 3: TTL expired (50 hours old)
+            val task3 = PollingWorker.RepublishTask(
+                messageId = 3L,
+                contactId = "charlie",
+                target = ByteArray(20),
+                payload = ByteArray(100),
+                edPrivateKeySeed = ByteArray(32),
+                initialSentTimestamp = now - TimeUnit.HOURS.toMillis(50),
+                lastRepublishedTimestamp = now - TimeUnit.HOURS.toMillis(10)
+            )
 
-        PollingWorker.registerRepublishTask(task1)
-        PollingWorker.registerRepublishTask(task2)
-        PollingWorker.registerRepublishTask(task3)
+            PollingWorker.registerRepublishTask(task1)
+            PollingWorker.registerRepublishTask(task2)
+            PollingWorker.registerRepublishTask(task3)
 
-        val expiredCallbackIds = mutableListOf<Long>()
-        val count = PollingWorker.executeRepublishPass(
-            dhtClient = fakeDht,
-            policy = policy,
-            currentTimeMs = now,
-            onMessageExpired = { expiredCallbackIds.add(it) }
-        )
+            val expiredCallbackIds = mutableListOf<Long>()
+            val count = PollingWorker.executeRepublishPass(
+                dhtClient = fakeDht,
+                policy = policy,
+                currentTimeMs = now,
+                onMessageExpired = { expiredCallbackIds.add(it) }
+            )
 
-        // Only Task 1 was due for republishing
-        assertEquals(1, count)
-        assertEquals(1, task1.currentAttempts)
-        assertEquals(now, task1.lastRepublishedTimestamp)
-        assertEquals(0, task2.currentAttempts)
+            // Only Task 1 was due for republishing
+            assertEquals("Only 1 task (task1) should be republished", 1, count)
+            assertEquals("Task 1 attempt count should increment to 1", 1, task1.currentAttempts)
+            assertEquals("Task 1 lastRepublishedTimestamp should update to now", now, task1.lastRepublishedTimestamp)
+            assertEquals("Task 2 attempt count should remain 0", 0, task2.currentAttempts)
 
-        // Task 3 must be expired and removed from tasks
-        assertEquals(listOf(3L), expiredCallbackIds)
-        assertFalse(PollingWorker.isRepublishTaskRegistered(3L))
-        assertTrue(PollingWorker.isRepublishTaskRegistered(1L))
-        assertTrue(PollingWorker.isRepublishTaskRegistered(2L))
+            // Task 3 must be expired and removed from tasks
+            assertEquals("Task 3 should be reported as expired", listOf(3L), expiredCallbackIds)
+            assertFalse("Task 3 should be unregistered from PollingWorker", PollingWorker.isRepublishTaskRegistered(3L))
+            assertTrue("Task 1 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(1L))
+            assertTrue("Task 2 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(2L))
+        } finally {
+            PollingWorker.clearRepublishTasks()
+        }
     }
 
     // =========================================================================
