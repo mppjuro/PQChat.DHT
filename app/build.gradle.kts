@@ -55,14 +55,17 @@ android {
     }
 
     testOptions {
-        unitTests.all {
-            it.useJUnitPlatform {
-                if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
-                    excludeTags("slow")
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.useJUnitPlatform {
+                    if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
+                        excludeTags("slow")
+                    }
                 }
-            }
-            if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
-                it.exclude("**/integration/**")
+                if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
+                    it.exclude("**/integration/**")
+                }
             }
         }
     }
@@ -143,6 +146,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.1.3")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("com.code-intelligence:jazzer-api:0.30.0")

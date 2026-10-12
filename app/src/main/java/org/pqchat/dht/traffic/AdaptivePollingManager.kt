@@ -120,7 +120,8 @@ class AdaptivePollingManager(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.e("AdaptivePollingManager", "Immediate poll request failed", e)
                 } finally {
                     lastPollFinishedTimestamp = System.currentTimeMillis()
                     _isSyncing.value = false
@@ -270,7 +271,8 @@ class AdaptivePollingManager(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.e("AdaptivePollingManager", "Adaptive poll cycle failed", e)
                 } finally {
                     lastPollFinishedTimestamp = System.currentTimeMillis()
                     if (pollingJob == myJob) {
@@ -287,7 +289,9 @@ class AdaptivePollingManager(
                     scope.launch {
                         try {
                             onIdlePreWarm?.invoke(activeChatContactId)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            android.util.Log.w("AdaptivePollingManager", "Idle pre-warming failed", e)
+                        }
                     }
                 }
 

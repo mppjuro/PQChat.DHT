@@ -12,8 +12,6 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.screens.*
 import org.pqchat.dht.ui.theme.PQChatTheme
@@ -32,15 +30,6 @@ class MainActivity : FragmentActivity() {
         // Initialize Notification Channels
         NotificationHelper.createNotificationChannel(this)
 
-        // Observe Lifecycle for Adaptive Polling
-        lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.pollingScheduler.onAppForegrounded()
-                Lifecycle.Event.ON_PAUSE -> viewModel.pollingScheduler.onAppMinimized()
-                Lifecycle.Event.ON_STOP -> viewModel.pollingScheduler.onDeviceScreenOff()
-                else -> {}
-            }
-        })
 
         setContent {
             val themeMode by viewModel.themeMode.collectAsState()

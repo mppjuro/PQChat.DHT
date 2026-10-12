@@ -272,7 +272,9 @@ class PollingScheduler(
             } else {
                 ctx.startService(intent)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.e("PollingScheduler", "Failed to start ChatHeadService", e)
+        }
     }
 
     fun stopForegroundService() {
@@ -280,7 +282,9 @@ class PollingScheduler(
         val intent = Intent(ctx, ChatHeadService::class.java)
         try {
             ctx.stopService(intent)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.e("PollingScheduler", "Failed to stop ChatHeadService", e)
+        }
     }
 
     fun setForegroundServiceEnabled(enabled: Boolean) {
