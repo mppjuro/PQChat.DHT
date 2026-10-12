@@ -115,7 +115,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Cryptography: Bouncy Castle (ML-KEM / Kyber-512, Ed25519, AES, HKDF)
-    implementation("org.bouncycastle:bcprov-jdk18on:1.79")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     // Room Database
     val roomVersion = "2.8.5"
