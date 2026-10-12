@@ -30,7 +30,7 @@ jobs:
 
       - name: Upload Slow Test Report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: slow-test-results
           path: app/build/reports/tests/testDebugUnitTest/
