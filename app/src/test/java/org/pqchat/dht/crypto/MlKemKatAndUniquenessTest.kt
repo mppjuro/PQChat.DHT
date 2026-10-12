@@ -1,11 +1,11 @@
 package org.pqchat.dht.crypto
 
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMGenerator
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMKeyGenerationParameters
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMKeyPairGenerator
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMParameters
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMPrivateKeyParameters
-import org.bouncycastle.pqc.crypto.mlkem.MLKEMPublicKeyParameters
+import org.bouncycastle.crypto.generators.MLKEMKeyPairGenerator
+import org.bouncycastle.crypto.kems.MLKEMGenerator
+import org.bouncycastle.crypto.params.MLKEMKeyGenerationParameters
+import org.bouncycastle.crypto.params.MLKEMParameters
+import org.bouncycastle.crypto.params.MLKEMPrivateKeyParameters
+import org.bouncycastle.crypto.params.MLKEMPublicKeyParameters
 import org.junit.Assert.*
 import org.junit.Test
 import org.pqchat.dht.protocol.ChunkingEngine
