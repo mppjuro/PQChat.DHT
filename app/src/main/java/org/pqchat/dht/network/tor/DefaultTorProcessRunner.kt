@@ -251,9 +251,9 @@ class DefaultTorProcessRunner(
             out.flush()
 
             // 2. Request
-            val reqVer = `in`.read()
+            `in`.read() // reqVer
             val cmd = `in`.read()
-            val rsv = `in`.read()
+            `in`.read() // rsv
             val atyp = `in`.read()
 
             when (cmd) {
@@ -350,8 +350,6 @@ class DefaultTorProcessRunner(
                     // Listen loop for UDP relaying
                     val relayJob = launch {
                         val buffer = ByteArray(4096)
-                        val clientEndpoint = AtomicBoolean(false)
-                        var clientUdpAddress: InetSocketAddress? = null
 
                         while (isActive && running.get() && !relayUdpSocket.isClosed) {
                             try {
@@ -387,7 +385,7 @@ class DefaultTorProcessRunner(
                                 val payload = ByteArray(payloadLen)
                                 System.arraycopy(packet.data, bb.position(), payload, 0, payloadLen)
 
-                                clientUdpAddress = InetSocketAddress(packet.address, packet.port)
+                                val clientUdpAddress = InetSocketAddress(packet.address, packet.port)
 
                                 // Forward payload directly to actual target DHT node via UDP
                                 val forwardSocket = DatagramSocket()

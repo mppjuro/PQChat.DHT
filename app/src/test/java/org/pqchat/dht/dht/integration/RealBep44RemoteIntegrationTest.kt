@@ -53,13 +53,13 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             val bootstrapNodes = node.resolveBootstrapNodes()
-            println("[Live DHT] Bootstrap nodes resolved: \$bootstrapNodes")
+            println("[Live DHT] Bootstrap nodes resolved: $bootstrapNodes")
             node.bootstrap()
 
             // Allow bootstrap queries to populate active peer routing table
             delay(5000)
             val peerCount = node.getActivePeerCount()
-            println("[Live DHT] Active peer count after bootstrap: \$peerCount")
+            println("[Live DHT] Active peer count after bootstrap: $peerCount")
             assertTrue("Should connect to at least 1 active DHT peer", peerCount > 0)
 
             // Ephemeral key pair and 900-byte payload (MAX_FRAME_PAYLOAD_BYTES)
@@ -70,7 +70,7 @@ class RealBep44RemoteIntegrationTest {
             assertEquals(900, payload.size)
 
             val targetHex = CryptoUtils.toHex(target)
-            println("[Live DHT] Publishing 900-byte payload under target: \$targetHex")
+            println("[Live DHT] Publishing 900-byte payload under target: $targetHex")
 
             val t0 = System.currentTimeMillis()
             val putResult = node.putMutable(
@@ -97,7 +97,7 @@ class RealBep44RemoteIntegrationTest {
 
             for (attempt in 1..MAX_RETRIEVAL_ATTEMPTS) {
                 val tStart = System.currentTimeMillis()
-                println("[Live DHT] Retrieval attempt \$attempt/$MAX_RETRIEVAL_ATTEMPTS (timeout=${EXTENDED_GET_TIMEOUT_MS}ms)...")
+                println("[Live DHT] Retrieval attempt $attempt/$MAX_RETRIEVAL_ATTEMPTS (timeout=${EXTENDED_GET_TIMEOUT_MS}ms)...")
 
                 retrieved = node.getMutable(
                     target = target,
@@ -113,13 +113,13 @@ class RealBep44RemoteIntegrationTest {
                 }
 
                 if (attempt < MAX_RETRIEVAL_ATTEMPTS) {
-                    println("[Live DHT] Record not found yet, retrying in \${RETRY_DELAY_MS}ms...")
+                    println("[Live DHT] Record not found yet, retrying in ${RETRY_DELAY_MS}ms...")
                     delay(RETRY_DELAY_MS)
                 }
             }
 
             assertNotNull(
-                "Record must be retrieved from remote DHT peers after \$MAX_RETRIEVAL_ATTEMPTS attempts",
+                "Record must be retrieved from remote DHT peers after $MAX_RETRIEVAL_ATTEMPTS attempts",
                 retrieved
             )
             assertEquals("Retrieved payload must have size 900", 900, retrieved!!.v.size)
@@ -202,7 +202,7 @@ class RealBep44RemoteIntegrationTest {
             for (res in results) {
                 assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, res.dataSource)
                 assertTrue("Tested records should equal 2", res.testedRecords == 2)
-                println("[Live DHT] Retention Probe Result (hours=\${res.hours}, republish=${res.republishEnabled}): survival=${res.survivalRate * 100}%")
+                println("[Live DHT] Retention Probe Result (hours=${res.hours}, republish=${res.republishEnabled}): survival=${res.survivalRate * 100}%")
             }
         } finally {
             node.stop()

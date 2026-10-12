@@ -74,7 +74,7 @@ class Socks5Client(
         // 3. Connect Reply
         val repVer = `in`.readUnsignedByte()
         val repCode = `in`.readUnsignedByte()
-        val rsv = `in`.readUnsignedByte()
+        `in`.readUnsignedByte() // RSV
         val atyp = `in`.readUnsignedByte()
 
         if (repVer != 0x05 || repCode != 0x00) {
@@ -84,7 +84,7 @@ class Socks5Client(
 
         // Read bound address and port
         readBoundAddress(`in`, atyp)
-        val boundPort = `in`.readUnsignedShort()
+        `in`.readUnsignedShort() // Bound port
 
         return socket
     }
@@ -120,7 +120,7 @@ class Socks5Client(
         // 3. Response
         val repVer = `in`.readUnsignedByte()
         val repCode = `in`.readUnsignedByte()
-        val rsv = `in`.readUnsignedByte()
+        `in`.readUnsignedByte() // RSV
         val atyp = `in`.readUnsignedByte()
 
         if (repVer != 0x05 || repCode != 0x00) {
@@ -237,8 +237,8 @@ class Socks5Client(
             if (length < 10) return null // Minimum header size is 10 for IPv4
 
             val bb = ByteBuffer.wrap(packet.data, 0, length)
-            val rsv = bb.short
-            val frag = bb.get()
+            bb.short // RSV
+            bb.get() // FRAG
             val atyp = bb.get().toInt() and 0xFF
 
             val senderAddress: InetSocketAddress = when (atyp) {

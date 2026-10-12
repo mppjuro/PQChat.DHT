@@ -147,7 +147,7 @@ class EmbeddedTorManagerTest {
             val out = DataOutputStream(client.getOutputStream())
 
             // 1. Handshake
-            val ver = `in`.readUnsignedByte()
+            `in`.readUnsignedByte() // ver
             val nMethods = `in`.readUnsignedByte()
             val methods = ByteArray(nMethods)
             `in`.readFully(methods)
@@ -156,9 +156,9 @@ class EmbeddedTorManagerTest {
             out.flush()
 
             // 2. Request
-            val reqVer = `in`.readUnsignedByte()
-            val cmd = `in`.readUnsignedByte()
-            val rsv = `in`.readUnsignedByte()
+            `in`.readUnsignedByte() // reqVer
+            `in`.readUnsignedByte() // cmd
+            `in`.readUnsignedByte() // rsv
             val atyp = `in`.readUnsignedByte()
             receivedAtyp = atyp
 
