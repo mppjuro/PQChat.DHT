@@ -27,17 +27,17 @@ class MessageDebugLoggerTest {
             val fakeChainKey = ByteArray(64) { 0x01 }
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
             val secretText = "TOP_SECRET_PLAINTEXT_SHOULD_NEVER_BE_LOGGED"
+            val textBytes = secretText.toByteArray(Charsets.UTF_8)
             val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), secretText)
             val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
 
             // Attempt logging all types of sensitive messages
             MessageDebugLogger.logOutgoingTextMessage(
                 contactId = "victim_contact",
-                text = secretText,
+                textLength = textBytes.size,
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                plaintext = plaintext,
                 frame = frame
             )
 
@@ -47,7 +47,7 @@ class MessageDebugLoggerTest {
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                mlKemPublicKey = ByteArray(800) { 0x02 },
+                mlKemPublicKeySize = 800,
                 frame = frame
             )
 
@@ -57,7 +57,6 @@ class MessageDebugLoggerTest {
                 senderEdPublicKey = slot.edPublicKey,
                 senderSignature = ByteArray(64),
                 frame = frame,
-                seedInit = ByteArray(32) { 0x03 },
                 decapsulationSuccess = true
             )
 
@@ -74,7 +73,7 @@ class MessageDebugLoggerTest {
     }
 
     @Test
-    fun testDebugModeLogsStructuredJsonWhenEnabled() {
+    fun testDebugModeLogsMetadataOnlyWithoutPlaintextOrKeys() {
         if (!BuildConfig.DEBUG) {
             // In release builds, BuildConfig.DEBUG is false, so it must never log even if isEnabled = true
             val originalEnabled = MessageDebugLogger.isEnabled
@@ -88,11 +87,10 @@ class MessageDebugLoggerTest {
 
                 MessageDebugLogger.logOutgoingTextMessage(
                     contactId = "debug_contact",
-                    text = "Hello Debug",
+                    textLength = 11,
                     slot = slot,
                     seqNum = 0,
                     ackNum = 0,
-                    plaintext = plaintext,
                     frame = frame
                 )
                 assertEquals("In release build, emit count must remain 0 even when isEnabled = true", 0, MessageDebugLogger.emitCount.get())
@@ -114,16 +112,17 @@ class MessageDebugLoggerTest {
 
             val fakeChainKey = ByteArray(64) { 0x01 }
             val slot = RatchetChain.deriveSlot(fakeChainKey, 0)
-            val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), "Hello Debug")
+            val secretText = "SuperConfidentialUserContent123"
+            val textBytes = secretText.toByteArray(Charsets.UTF_8)
+            val plaintext = BinaryFrameCodec.encodeTextMessage(0, 0, System.currentTimeMillis(), secretText)
             val frame = BinaryFrameCodec.packAeadFrame(slot.msgKey, plaintext, slot.target, "AliceToBob")
 
             MessageDebugLogger.logOutgoingTextMessage(
                 contactId = "debug_contact",
-                text = "Hello Debug",
+                textLength = textBytes.size,
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                plaintext = plaintext,
                 frame = frame
             )
 
@@ -132,6 +131,14 @@ class MessageDebugLoggerTest {
             assertEquals("Emit count must be 1 in DEBUG build", 1, MessageDebugLogger.emitCount.get())
             assertTrue("Should contain debug banner", capturedOutput.contains("[PQChat-DEBUG]"))
             assertTrue("Should contain JSON structure", capturedOutput.contains("\"event\": \"MESSAGE_SENT_TO_DHT_SERVER\""))
+            assertTrue("Should contain textByteLength metadata", capturedOutput.contains("\"textByteLength\": ${textBytes.size}"))
+
+            // STRICT HYGIENE ASSERTIONS (AGENTS.md §8.1)
+            assertFalse("Plaintext message must NEVER be logged", capturedOutput.contains(secretText))
+            assertFalse("Private key seed preview must NOT be logged", capturedOutput.contains("ed25519SeedPreview"))
+            assertFalse("Private key seed hex must NOT be logged", capturedOutput.contains(CryptoUtils.toHex(slot.edPrivateKeySeed)))
+            assertFalse("AES symmetric key hex must NOT be logged", capturedOutput.contains(CryptoUtils.toHex(slot.msgKey)))
+            assertFalse("AES symmetric key preview must NOT be logged", capturedOutput.contains("derivedKeyPreview"))
         } finally {
             MessageDebugLogger.isEnabled = originalEnabled
             System.setOut(originalOut)

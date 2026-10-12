@@ -173,6 +173,11 @@ class AppSettingsManager(
     )
     val isTorEnabled: StateFlow<Boolean> = _isTorEnabled.asStateFlow()
 
+    private val _isBiometricLockEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_BIOMETRIC_LOCK, false) ?: false
+    )
+    val isBiometricLockEnabled: StateFlow<Boolean> = _isBiometricLockEnabled.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -245,6 +250,11 @@ class AppSettingsManager(
         _isTorEnabled.value = enabled
     }
 
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_BIOMETRIC_LOCK, enabled)?.apply()
+        _isBiometricLockEnabled.value = enabled
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -269,5 +279,6 @@ class AppSettingsManager(
         private const val KEY_IMAGE_COLOR_COUNT = "image_color_count"
         private const val KEY_CROWDSOURCED_REPUBLISH = "crowdsourced_republish_enabled"
         private const val KEY_TOR_ENABLED = "tor_enabled"
+        private const val KEY_BIOMETRIC_LOCK = "biometric_lock_enabled"
     }
 }

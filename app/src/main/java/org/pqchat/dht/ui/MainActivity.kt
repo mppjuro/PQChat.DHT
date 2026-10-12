@@ -17,10 +17,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.screens.*
 import org.pqchat.dht.ui.theme.PQChatTheme
+import androidx.fragment.app.FragmentActivity
+import org.pqchat.dht.ui.util.BiometricAuthHelper
 import org.pqchat.dht.ui.util.NotificationHelper
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private val viewModel: ChatViewModel by viewModels()
 
@@ -42,8 +44,22 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by viewModel.themeMode.collectAsState()
+            val isBiometricEnabled by viewModel.isBiometricLockEnabled.collectAsState()
+            var isUnlocked by remember(isBiometricEnabled) { mutableStateOf(!isBiometricEnabled) }
+
             PQChatTheme(themeMode = themeMode) {
-                MainAppNavigation(viewModel)
+                if (isBiometricEnabled && !isUnlocked) {
+                    BiometricLockScreen(
+                        onUnlockRequested = {
+                            BiometricAuthHelper.authenticate(
+                                activity = this@MainActivity,
+                                onSuccess = { isUnlocked = true }
+                            )
+                        }
+                    )
+                } else {
+                    MainAppNavigation(viewModel)
+                }
             }
         }
     }

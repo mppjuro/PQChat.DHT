@@ -50,6 +50,7 @@ fun SettingsScreen(
     val imageColorCount by viewModel.imageColorCount.collectAsState()
     val isCrowdsourcedRepublishEnabled by viewModel.isCrowdsourcedRepublishEnabled.collectAsState()
     val isTorEnabled by viewModel.isTorEnabled.collectAsState()
+    val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
 
     Scaffold(
@@ -627,6 +628,37 @@ fun SettingsScreen(
                         Switch(
                             checked = isTorEnabled,
                             onCheckedChange = { viewModel.setTorEnabled(it) }
+                        )
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Przełącznik: Blokada biometryczna aplikacji
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Blokada biometryczna aplikacji",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isBiometricLockEnabled) "Włączona (wymaga biometrii/kodu)" else "Wyłączona (bezpośredni dostęp)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isBiometricLockEnabled) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isBiometricLockEnabled,
+                            onCheckedChange = { viewModel.setBiometricLockEnabled(it) }
                         )
                     }
 

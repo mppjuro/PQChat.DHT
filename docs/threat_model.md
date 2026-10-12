@@ -259,8 +259,69 @@ Poniższy wykres (wygenerowany automatycznie przez `tools/threat_sim/threat_simu
 
 ---
 
-## 7. Podsumowanie
+---
+
+## 7. Hardening Bezpieczeństwa Urządzenia, Pamięci i Magazynu Danych (Device & Local Storage Hardening)
+
+W celu ochrony danych użytkownika przed atakami lokalnymi (fizyczna ekstrakcja, aplikacje szpiegujące na urządzeniu, zrzuty ekranu, analiza pamięci flash):
+
+### 7.1. Architektura Szyfrowania Room i Analiza Ryzyka Resztkowego Metadanych
+
+W bazie danych Room (SQLite) zastosowano hybrydową architekturę bezpieczeństwa:
+1. **Szyfrowanie wrażliwych ładunków i kluczy (Zero Plaintext at Rest):**
+   - Wszystkie klucze ratchetu (`chainKeyOut`, `chainKeyIn`, `msgKey`), klucze KEM (`skNew`), prywatne ziarna Ed25519 (`edPrivateKeySeed`) oraz treści wiadomości i pliki binarne (`textContent`, `imageBytes`, `chunks`) są szyfrowane sprzętowym kluczem AES-256-GCM z **Android Keystore**.
+   - Zastosowano kryptograficzne wiązanie wiersza (*Row-Level Binding*): nagłówek każdego zaszyfrowanego bloba zawiera identyfikator tabeli oraz klucz główny wiersza, które są wstrzykiwane jako dodatkowe dane uwierzytelniające (**AAD = `table + id`**). Uniemożliwia to ataki typu *cut-and-paste* pomiędzy rekordami lub tabelami SQLite.
+2. **Jawne metadane relacyjne (Nazwy kontaktów, Znaczniki czasu, Efemeryczne adresy DHT):**
+   - Pola relacyjne i indeksowe (`ContactEntity.name`, `timestamp`, `ContactEntity.lastActive`, `MessageEntity.slotTarget`, `MessageEntity.ackTarget`, `status`, `seqNum`) pozostają w postaci jawnych kolumn SQLite.
+   - **Uzasadnienie architektoniczne:**
+     - *Wymogi zapytań i indeksowania:* B-drzewa SQLite wymagają jawnych wartości do wydajnego sortowania (`ORDER BY timestamp ASC/DESC`), stronicowania oraz zapytań złożonych `(contactId, seqEpoch, seqNum)`. Losowy IV w szyfrowaniu blokowym uniemożliwia sortowanie i efektywne wyszukiwanie wewnątrz silnika bazy danych. Szyfrowanie deterministyczne (np. AES-SIV) wprowadziłoby podatność na analizę częstotliwościową i korelację statystyczną.
+     - *Eliminacja bibliotek natywnych C/C++:* Pełne szyfrowanie bazy danych na poziomie stron (np. SQLCipher) wymagałoby dołączenia skompilowanych binariów natywnych (`.so`), co stanowiłoby bezpośrednie naruszenie naczelnej zasady architektonicznej projektu (**AGENTS.md §2: 100% czystego kodu Kotlin, całkowity brak C++/JNI**).
+   - **Ocena ryzyka resztkowego:**
+     - Ryzyko odczytu metadanych ogranicza się do adwersarza posiadającego uprawnienia roota lub wykonującego zaawansowaną ekstrakcję kryminalistyczną pamięci flash wyłączonego urządzenia.
+     - W takim scenariuszu adwersarz poznaje etykiety kontaktów i czasy nadania, jednak **nie jest w stanie odzyskać ani jednego bajtu treści wiadomości ani kluczy sesyjnych** (klucz nadrzędny w Keystore jest chroniony sprzętowo).
+     - Ephemerality targetów DHT: adresy `slotTarget` i `ackTarget` podlegają mechanizmowi *Key Hopping* (zmieniają się co wiadomość) i wygasają w publicznej sieci DHT po 24–72 godzinach, co uniemożliwia długoterminową korelację zewnętrzną.
+
+### 7.2. Sprzętowy Android Keystore: StrongBox HSM, TEE i Unlocked Device
+
+Mechanizm zarządzania kluczem nadrzędnym `KeystoreCrypto`:
+1. **Priorytetyzacja StrongBox HSM (API 28+):**
+   - Podczas generowania klucza aplikacja próbuje utworzyć klucz w dedykowanym, sprzętowym module bezpieczeństwa (**StrongBox Keymaster**, np. chip Google Titan M lub odpowiednik OEM) za pomocą `setIsStrongBoxBacked(true)`.
+   - W przypadku braku dedykowanego chipu StrongBox (`StrongBoxUnavailableException` / `ProviderException`) następuje płynny, bezpieczny fallback do standardowego sprzętowego środowiska zaufanego (**TEE Keymaster**).
+2. **Wymóg odblokowanego urządzenia (`setUnlockedDeviceRequired(true)`):**
+   - Klucz nadrzędny Keystore jest skonfigurowany z flagą `setUnlockedDeviceRequired(true)`.
+   - Operacje szyfrowania i deszyfrowania mogą być wykonywane wyłącznie wtedy, gdy ekran urządzenia jest fizycznie odblokowany przez użytkownika (kod PIN, wzór, biometria). Gdy telefon znajduje się w stanie zablokowanym (np. po przejęciu urządzenia), sprzętowy Keystore odrzuca wszelkie żądania kryptograficzne.
+3. **Opcjonalna blokada biometryczna aplikacji:**
+   - Wprowadzono opcjonalną blokadę interfejsu (`BiometricAuthHelper` / `BiometricPrompt`) zintegrowaną z `BiometricManager.Authenticators.BIOMETRIC_STRONG or DEVICE_CREDENTIAL`.
+   - Po jej włączeniu aplikacja przed przyznaniem dostępu do ekranów konwersacji wymaga potwierdzenia tożsamości użytkownika (odcisk palca, rozpoznawanie twarzy lub kod blokady ekranu).
+
+### 7.3. Wymuszenie Flagi `ro=1` (BEP 43) we Wszystkich Zapytaniach Klienta Liścia
+
+Zgodnie ze specyfikacją BitTorrent BEP 43 (*Read-only DHT Nodes*):
+- PQChat.DHT działa wyłącznie w trybie **Client-Only Leaf Node** (`AGENTS.md §1.4`) — urządzenie nigdy nie trasuje cudzych zapytań ani nie buforuje danych innych węzłów.
+- Flaga `ro=1` jest bezwzględnie wymuszona we **wszystkich** zapytaniach KRPC wysyłanych przez klienta, w tym w zapytaniach `find_node`, `get`, `ping` oraz **`put` (BEP 44)**.
+- **Uzasadnienie dla zapytań PUT:** Nawet gdy smartfon zapisuje rekord mutowalny (`put`), nie staje się węzłem trasującym. Węzły odbierające pakiet `put` z flagą `ro=1` poprawnie zapisują rekord pod docelowym targetem, ale **nie dodają adresu IP i portu smartfona do swoich tablic routingu Kademlia**. Chroni to smartfon przed niepożądanym ruchem przychodzącym, atakami typu reflection/amplification oraz skanowaniem topologii sieci.
+
+### 7.4. Ochrona Interfejsu Przed Przechwytywaniem (`FLAG_SECURE`)
+
+W oknach o najwyższym poziomie wrażliwości wdrożono ochronę `FLAG_SECURE` (`WindowManager.LayoutParams.FLAG_SECURE`):
+1. **HandshakeScreen (Wymiana kluczy QR):**
+   - Kod QR prezentuje klucz publiczny ML-KEM-512 ($pk_A$, 800 B) oraz sekretne ziarno inicjalizujące ($Seed_{\text{init}}$, 32 B).
+   - Włączenie `FLAG_SECURE` uniemożliwia złośliwym aplikacjom działającym w tle (np. narzędziom do nagrywania ekranu, oprogramowaniu szpiegującemu) przechwycenie klatek kodu QR w trakcie parowania.
+2. **ChatScreen (Aktywna konwersacja):**
+   - `FLAG_SECURE` blokuje robienie zrzutów ekranu oraz ukrywa podgląd czatu na liście ostatnio używanych aplikacji systemowych (*Recent Apps Task Switcher*), chroniąc przed wyciekiem treści w przypadku chwilowego odblokowania telefonu przez osobę trzecią.
+
+### 7.5. Higiena Pamięci i Eliminacja Wrażliwych Danych z Logów
+
+Zgodnie z `AGENTS.md §8.1`:
+- Z modułów diagnostycznych (`MessageDebugLogger`, `ChatViewModel`, `ChatRepository`) usunięto jakiekolwiek logowanie jawnych tekstów wiadomości (`text`), prywatnych ziaren Ed25519 (`edPrivateKeySeed`), sekretnych ziaren handshaku (`seedInit`) oraz symetrycznych kluczy sesyjnych (`msgKey`, `kHs`).
+- Logi diagnostyczne zawierają wyłącznie metadane protokołu (identyfikatory zdarzeń, typy ramek, liczniki sekwencji, rozmiary ładunków i publiczne hasze docelowe).
+- W kompilacjach produkcyjnych (`release`) logger diagnostyczny jest całkowicie wyłączony w fazie kompilacji (`BuildConfig.DEBUG == false`).
+
+---
+
+## 8. Podsumowanie
 
 Wdrożona wielowarstwowa architektura ochrony metadanych (*Ephemeral Key Hopping*, *Lookahead Window Dispersion*, *Decoy GETs* do puli aktywnych slotów, nieskoordynowane rekordy maskujące *Poisson Cover Traffic* wypełnione kryptograficznym szumem CSPRNG oraz *Delayed PUTs*) redukuje skuteczność korelacji czasowo-adresowej przez złośliwe węzły BitTorrent DHT z poziomu **100.0%** do poziomu zbliżonego do **losowego zgadywania ($5.2\% - 9.7\%$ wobec teoretycznego baseline $1/N = 4.0\%$)**.
 
-Rozwiązanie to zachowuje pełną zgodność z ograniczeniami systemu Android (zawieszenie ruchu maskującego w trybie Doze), gwarantując minimalny narzut na baterię i pakiet danych komórkowych.
+Dodatkowe wzmocnienia lokalne (sprzętowy Keystore StrongBox, `setUnlockedDeviceRequired`, blokada biometryczna, `FLAG_SECURE`, ścisłe `ro=1` per BEP 43 oraz czyszczenie logów) zapewniają kompleksowe bezpieczeństwo end-to-end zarówno na poziomie sieci transportowej, jak i lokalnego urządzenia końcowego.
+

@@ -214,7 +214,8 @@ sealed class KrpcMessage {
             if (cas != null) {
                 args["cas"] = cas
             }
-            return Query(txId, "put", args, readOnly = false)
+            // Enforce ro=1 (BEP 43) for all leaf node queries, including put
+            return Query(txId, "put", args, readOnly = true)
         }
     }
 }

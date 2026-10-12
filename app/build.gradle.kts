@@ -23,7 +23,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -128,6 +128,9 @@ dependencies {
 
     // QR Code Engine (Generation & ZXing Core)
     implementation("com.google.zxing:core:3.5.4")
+
+    // Biometric Authentication (Optional App Lock)
+    implementation("androidx.biometric:biometric:1.2.0-alpha05")
 
 
     // CameraX (16 KB page-size aligned since 1.4.0+)
