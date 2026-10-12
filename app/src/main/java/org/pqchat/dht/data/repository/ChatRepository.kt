@@ -379,11 +379,10 @@ class ChatRepository(
 
             org.pqchat.dht.debug.MessageDebugLogger.logOutgoingTextMessage(
                 contactId = contactId,
-                text = text,
+                textLength = text.toByteArray(Charsets.UTF_8).size,
                 slot = slot,
                 seqNum = contact.counterOut,
                 ackNum = contact.counterIn,
-                plaintext = plaintext,
                 frame = frame
             )
 
@@ -601,9 +600,9 @@ class ChatRepository(
                     transferId = c.transferId,
                     chunkIndex = c.chunkIndex,
                     totalChunks = c.totalChunks,
+                    dataSize = c.frame.size,
                     target = c.target,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    slotMsgKey = slot.msgKey,
                     frame = c.frame
                 )
                 val ok = dhtLeafNode.putMutable(
@@ -826,7 +825,7 @@ class ChatRepository(
             slot = slot,
             seqNum = contact.counterOut,
             ackNum = contact.counterIn,
-            mlKemPublicKey = pendingOffer.pkNew,
+            mlKemPublicKeySize = pendingOffer.pkNew.size,
             frame = offerFrame
         )
 
@@ -1090,8 +1089,7 @@ class ChatRepository(
                 senderEdPublicKey = item.k,
                 senderSignature = item.sig,
                 frame = item.v,
-                frameMsg = frameMsg,
-                slotMsgKey = slot.msgKey
+                frameMsg = frameMsg
             )
 
             val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)

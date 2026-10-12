@@ -5,8 +5,6 @@ import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.protocol.RatchetChain
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -14,16 +12,16 @@ import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Diagnostic & Cryptographic Debug Logger for PQChat DHT.
+ * Diagnostic & Cryptographic Metadata Logger for PQChat DHT.
  *
- * Formats outgoing and incoming messages into structured, readable JSON-like logs,
- * clearly decomposing and distinguishing:
- * - Post-Quantum Cryptography (PQC: ML-KEM-512 / Kyber)
- * - Symmetric Cryptography (AES-256-GCM: IV, Tag, Ciphertext)
- * - DHT / BEP 44 Transport Metadata (Target, Ed25519 signature & keys)
+ * Formats outgoing and incoming message metadata into structured, readable JSON logs.
+ * Strictly complies with AGENTS.md §8.1:
+ * - NO plaintext messages or decrypted payloads.
+ * - NO private key seeds (edPrivateKeySeed), initial seeds (seedInit), or symmetric keys (msgKey).
+ * - ONLY protocol metadata, frame sizes, offsets, sequence counters, and public routing identifiers.
  *
  * Prints to stdout (console) and logs to Android Logcat under tag "PQChat-Debug".
- * STRICTLY DISABLED in release builds or when isEnabled is false (AGENTS.md §8).
+ * STRICTLY DISABLED in release builds or when isEnabled is false.
  */
 object MessageDebugLogger {
 
@@ -36,53 +34,51 @@ object MessageDebugLogger {
 
     fun logOutgoingTextMessage(
         contactId: String,
-        text: String,
+        textLength: Int,
         slot: RatchetChain.SlotParameters,
         seqNum: Int,
         ackNum: Int,
-        plaintext: ByteArray,
         frame: ByteArray
     ) {
         if (!isEnabled) return
 
-        val headerMap = extractHeaderMap(plaintext).toMutableMap().apply {
-            put("explicitSeqNum", seqNum)
-            put("explicitAckNum", ackNum)
-        }
-        val textBytes = text.toByteArray(Charsets.UTF_8)
-        val paddingCount = BinaryFrameCodec.INNER_PAYLOAD_SIZE - 2 - textBytes.size
+        val paddingCount = BinaryFrameCodec.INNER_PAYLOAD_SIZE - 2 - textLength
+        val now = System.currentTimeMillis()
 
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_SENT_TO_DHT_SERVER",
             "direction" to "OUTGOING",
             "context" to "Wiadomość tekstowa wysyłana do kontaktu",
             "contactId" to contactId,
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
                 "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
-                "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey),
-                "ed25519SeedPreview" to toHexPreview(slot.edPrivateKeySeed, 16)
+                "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey)
             ),
-            "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "${plaintext.size} bajtów (rozmiar stały)",
-                "header" to headerMap,
+            "beforeEncryption_Metadata" to linkedMapOf(
+                "totalPlaintextSize" to "${BinaryFrameCodec.CIPHERTEXT_SIZE} bajtów (rozmiar stały)",
+                "header" to linkedMapOf(
+                    "messageType" to "0x02 (TYPE_TEXT_MESSAGE)",
+                    "seqNum" to seqNum,
+                    "ackNum" to ackNum,
+                    "timestampUTC" to now,
+                    "timestampIso" to formatIsoTimestamp(now)
+                ),
                 "payload" to linkedMapOf(
                     "type" to "TextMessage (0x02)",
-                    "text" to text,
-                    "textByteLength" to textBytes.size,
+                    "textByteLength" to textLength,
                     "paddingBytesCount" to maxOf(0, paddingCount),
-                    "description" to "Jawna treść wiadomości przed nałożeniem szyfrowania AES-256-GCM"
+                    "description" to "Ładunek tekstowy chroniony szyfrowaniem AES-256-GCM (treść jawna pominięta zgodnie z AGENTS.md §8.1)"
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
                 frame = frame,
-                slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
                     "pqcAlgorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
                     "relation" to "Wyprowadzanie klucza ratchetu z KDF zainicjalizowanego wymianą post-kwantową",
-                    "description" to "Wiadomość jest chroniona symetrycznie AES-256-GCM kluczem MsgKey_${slot.counter}. Klucz ten pochodzi z łańcucha KDF (Ratchet), którego źródłem entropii jest post-kwantowa wymiana ML-KEM-512."
+                    "description" to "Wiadomość chroniona symetrycznie AES-256-GCM kluczem slotu ${slot.counter} z łańcucha KDF (Ratchet)."
                 ),
                 dhtTarget = slot.target,
                 dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -99,24 +95,25 @@ object MessageDebugLogger {
         slot: RatchetChain.SlotParameters,
         seqNum: Int,
         ackNum: Int,
-        mlKemPublicKey: ByteArray,
+        mlKemPublicKeySize: Int,
         frame: ByteArray
     ) {
         if (!isEnabled) return
 
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_SENT_TO_DHT_SERVER",
             "direction" to "OUTGOING",
             "context" to "Oferta rotacji kluczy PQC (Rekey Offer)",
             "contactId" to contactId,
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
                 "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
                 "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey)
             ),
-            "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "872 bajtów",
+            "beforeEncryption_Metadata" to linkedMapOf(
+                "totalPlaintextSize" to "${BinaryFrameCodec.CIPHERTEXT_SIZE} bajtów",
                 "header" to linkedMapOf(
                     "messageType" to "0x03 (TYPE_REKEY_OFFER)",
                     "seqNum" to seqNum,
@@ -127,23 +124,21 @@ object MessageDebugLogger {
                     "type" to "RekeyOffer",
                     "rekeyEpoch" to epoch,
                     "pqcPublicKey_MLKEM512" to linkedMapOf(
-                        "algorithm" to "ML-KEM-512 (Kyber-512)",
+                        "algorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
                         "role" to "Nowy klucz publiczny PQC (pk_new)",
-                        "sizeBytes" to mlKemPublicKey.size,
-                        "hexPreview" to toHexPreview(mlKemPublicKey, 32),
-                        "description" to "Nowo wygenerowany klucz publiczny post-kwantowy do odświeżenia łańcucha KDF (Forward Secrecy)"
+                        "sizeBytes" to mlKemPublicKeySize,
+                        "description" to "Klucz publiczny post-kwantowy do okresowej rotacji łańcucha KDF"
                     ),
                     "paddingBytesCount" to BinaryFrameCodec.T3_PADDING_SIZE
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
                 frame = frame,
-                slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
                     "isPqcPublicKeyInPayload" to true,
                     "pqcAlgorithm" to "ML-KEM-512",
-                    "description" to "Ładunek przenosi nowy klucz publiczny ML-KEM-512 (800 B) opakowany w szyfrowanie symetryczne AES-256-GCM."
+                    "description" to "Ładunek przenosi nowy klucz publiczny ML-KEM-512 opakowany w szyfrowanie symetryczne AES-256-GCM."
                 ),
                 dhtTarget = slot.target,
                 dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -164,19 +159,20 @@ object MessageDebugLogger {
     ) {
         if (!isEnabled) return
 
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_SENT_TO_DHT_SERVER",
             "direction" to "OUTGOING",
             "context" to "Odpowiedź na rotację kluczy PQC (Rekey Response)",
             "contactId" to contactId,
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(slot.target),
                 "bep44Seq" to DhtClient.DEFAULT_MUTABLE_SEQ,
                 "ed25519PublicKeyHex" to CryptoUtils.toHex(slot.edPublicKey)
             ),
-            "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "872 bajtów",
+            "beforeEncryption_Metadata" to linkedMapOf(
+                "totalPlaintextSize" to "${BinaryFrameCodec.CIPHERTEXT_SIZE} bajtów",
                 "header" to linkedMapOf(
                     "messageType" to "0x04 (TYPE_REKEY_RESPONSE)",
                     "seqNum" to seqNum,
@@ -187,7 +183,7 @@ object MessageDebugLogger {
                     "type" to "RekeyResponse",
                     "rekeyEpoch" to epoch,
                     "pqcCiphertext_MLKEM512" to linkedMapOf(
-                        "algorithm" to "ML-KEM-512 (Kyber-512)",
+                        "algorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
                         "role" to "Zaszyfrowany post-kwantowo nowy sekret rotacji (ct_new)",
                         "sizeBytes" to BinaryFrameCodec.T4_CIPHERTEXT_SIZE,
                         "description" to "Kapsuła klucza wygenerowana przez ML-KEM-512 w odpowiedzi na Rekey Offer"
@@ -197,12 +193,11 @@ object MessageDebugLogger {
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
                 frame = frame,
-                slotMsgKey = slot.msgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
                     "pqcAlgorithm" to "ML-KEM-512",
                     "pqcCiphertextSize" to BinaryFrameCodec.T4_CIPHERTEXT_SIZE,
-                    "description" to "BEZPOŚREDNIE SZYFROWANIE POST-KWANTOWE: Kapsuła ML-KEM-512 (768 B) znajduje się wewnątrz ramki AES-256-GCM."
+                    "description" to "BEZPOŚREDNIE SZYFROWANIE POST-KWANTOWE: Kapsuła ML-KEM-512 (768 B) wewnątrz ramki AES-256-GCM."
                 ),
                 dhtTarget = slot.target,
                 dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -218,25 +213,26 @@ object MessageDebugLogger {
         transferId: ByteArray,
         chunkIndex: Int,
         totalChunks: Int,
+        dataSize: Int,
         target: ByteArray,
         seq: Long,
-        slotMsgKey: ByteArray?,
         frame: ByteArray
     ) {
         if (!isEnabled) return
 
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_SENT_TO_DHT_SERVER",
             "direction" to "OUTGOING",
             "context" to "Fragment danych binarnych (plik / obraz PNG)",
             "contactId" to contactId,
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(target),
                 "bep44Seq" to seq
             ),
-            "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "872 bajtów",
+            "beforeEncryption_Metadata" to linkedMapOf(
+                "totalPlaintextSize" to "${BinaryFrameCodec.CIPHERTEXT_SIZE} bajtów",
                 "header" to linkedMapOf(
                     "messageType" to "0x05 (TYPE_CHUNK_DATA)",
                     "chunkIndex" to chunkIndex,
@@ -248,12 +244,12 @@ object MessageDebugLogger {
                     "chunkIndex" to chunkIndex,
                     "totalChunks" to totalChunks,
                     "transferId" to CryptoUtils.toHex(transferId),
+                    "chunkPayloadBytes" to dataSize,
                     "description" to "Fragment wieloczęściowego transferu binarnego"
                 )
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
                 frame = frame,
-                slotMsgKey = slotMsgKey,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to false,
                     "pqcAlgorithm" to "ML-KEM-512",
@@ -271,23 +267,22 @@ object MessageDebugLogger {
     fun logOutgoingBobHandshake(
         target: ByteArray,
         seq: Long,
-        edPrivateKeySeed: ByteArray,
         frame: ByteArray
     ) {
         if (!isEnabled) return
 
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_SENT_TO_DHT_SERVER",
             "direction" to "OUTGOING",
             "context" to "Bob -> Alice Handshake Finalize (Inicjalizacja tunelu post-kwantowego)",
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(target),
-                "bep44Seq" to seq,
-                "edPrivateKeySeedPreview" to toHexPreview(edPrivateKeySeed, 16)
+                "bep44Seq" to seq
             ),
-            "beforeEncryption_Plaintext" to linkedMapOf(
-                "totalPlaintextSize" to "872 bajtów",
+            "beforeEncryption_Metadata" to linkedMapOf(
+                "totalPlaintextSize" to "${BinaryFrameCodec.CIPHERTEXT_SIZE} bajtów",
                 "header" to linkedMapOf(
                     "messageType" to "0x01 (TYPE_HANDSHAKE_FINALIZE)",
                     "seqNum" to 0,
@@ -307,7 +302,6 @@ object MessageDebugLogger {
             ),
             "afterEncryption_Structure" to buildEncryptedStructureMap(
                 frame = frame,
-                slotMsgKey = null,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
                     "pqcAlgorithm" to "ML-KEM-512",
@@ -334,28 +328,24 @@ object MessageDebugLogger {
         senderEdPublicKey: ByteArray?,
         senderSignature: ByteArray?,
         frame: ByteArray,
-        frameMsg: BinaryFrameCodec.FrameMessage,
-        slotMsgKey: ByteArray? = null
+        frameMsg: BinaryFrameCodec.FrameMessage
     ) {
         if (!isEnabled) return
-
-        val (iv, tag, ciphertext) = extractAesComponents(frame)
 
         val payloadMap = when (val p = frameMsg.payload) {
             is BinaryFrameCodec.DecodedPayload.TextMessage -> linkedMapOf<String, Any?>(
                 "type" to "TextMessage (0x02)",
-                "text" to p.text,
-                "textByteLength" to p.text.toByteArray(Charsets.UTF_8).size
+                "textByteLength" to p.text.toByteArray(Charsets.UTF_8).size,
+                "description" to "Zdekodowany ładunek wiadomości (tekst jawny pominięty per AGENTS.md §8.1)"
             )
             is BinaryFrameCodec.DecodedPayload.HandshakeFinalize -> linkedMapOf<String, Any?>(
                 "type" to "HandshakeFinalize (0x01)",
                 "pqcCiphertext_MLKEM512" to linkedMapOf(
                     "algorithm" to "ML-KEM-512",
                     "sizeBytes" to p.mlKemCiphertext.size,
-                    "hexPreview" to toHexPreview(p.mlKemCiphertext, 32),
                     "description" to "Zaszyfrowany post-kwantowo wspólny sekret SS_init"
                 ),
-                "saltHex" to CryptoUtils.toHex(p.saltParameter)
+                "saltBytesCount" to p.saltParameter.size
             )
             is BinaryFrameCodec.DecodedPayload.RekeyOffer -> linkedMapOf<String, Any?>(
                 "type" to "RekeyOffer (0x03)",
@@ -363,7 +353,6 @@ object MessageDebugLogger {
                 "pqcPublicKey_MLKEM512" to linkedMapOf(
                     "algorithm" to "ML-KEM-512",
                     "sizeBytes" to p.mlKemPublicKey.size,
-                    "hexPreview" to toHexPreview(p.mlKemPublicKey, 32),
                     "description" to "Nowy klucz publiczny nadawcy do rotacji KDF"
                 )
             )
@@ -373,7 +362,6 @@ object MessageDebugLogger {
                 "pqcCiphertext_MLKEM512" to linkedMapOf(
                     "algorithm" to "ML-KEM-512",
                     "sizeBytes" to p.mlKemCiphertext.size,
-                    "hexPreview" to toHexPreview(p.mlKemCiphertext, 32),
                     "description" to "Zaszyfrowany post-kwantowo nowy sekret rotacji SS_rekey"
                 )
             )
@@ -382,8 +370,7 @@ object MessageDebugLogger {
                 "transferIdHex" to CryptoUtils.toHex(p.transferId),
                 "chunkIndex" to p.chunkIndex,
                 "totalChunks" to p.totalChunks,
-                "dataSizeBytes" to p.data.size,
-                "dataHexPreview" to toHexPreview(p.data, 32)
+                "dataSizeBytes" to p.data.size
             )
         }
 
@@ -420,43 +407,42 @@ object MessageDebugLogger {
             else -> "TYP 0x%02X".format(frameMsg.msgType)
         }
 
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_RECEIVED_FROM_DHT_SERVER",
             "direction" to "INCOMING",
             "context" to "Odebrano wiadomość z serwera DHT ($typeLabel)",
             "contactId" to contactId,
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(target),
                 "bep44Seq" to seq,
                 "senderEd25519PublicKeyHex" to (senderEdPublicKey?.let { CryptoUtils.toHex(it) } ?: "nieznany"),
-                "ed25519SignatureHex" to (senderSignature?.let { toHexPreview(it, 32) } ?: "nieznany"),
-                "signatureVerified" to (senderSignature != null)
+                "hasSignature" to (senderSignature != null)
             ),
             "beforeDecryption_EncryptedStructure" to linkedMapOf(
                 "totalFrameSize" to "${frame.size} bajtów (surowe dane pobrane z DHT)",
                 "layer1_Symmetric_AES_GCM" to linkedMapOf(
                     "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
-                    "derivedKeyPreview" to (slotMsgKey?.let { toHexPreview(it, 16) } ?: "klucz sesyjny slotu"),
+                    "symmetricKeyRole" to "AES-256-GCM key derived from Ratchet KDF",
                     "iv" to linkedMapOf(
                         "offset" to "Bajty 0..11 (12 bajtów)",
                         "role" to "Initialization Vector (IV)",
-                        "hex" to CryptoUtils.toHex(iv)
+                        "sizeBytes" to BinaryFrameCodec.IV_SIZE
                     ),
                     "authenticationTag" to linkedMapOf(
                         "offset" to "Bajty 12..27 (16 bajtów)",
                         "role" to "Tag Uwierzytelniający GMAC",
-                        "hex" to CryptoUtils.toHex(tag)
+                        "sizeBytes" to BinaryFrameCodec.TAG_SIZE
                     ),
                     "ciphertext" to linkedMapOf(
                         "offset" to "Bajty 28..899 (872 bajty)",
-                        "role" to "Zaszyfrowana treść AES-256-GCM (przed odszyfrowaniem)",
-                        "sizeBytes" to ciphertext.size,
-                        "hexPreview" to toHexPreview(ciphertext, 32)
+                        "role" to "Zaszyfrowana treść AES-256-GCM",
+                        "sizeBytes" to BinaryFrameCodec.CIPHERTEXT_SIZE
                     )
                 )
             ),
-            "afterDecryption_Plaintext" to linkedMapOf(
+            "afterDecryption_Metadata" to linkedMapOf(
                 "decryptionStatus" to "SUCCESS (Tag integralności AES-GCM zweryfikowany pomyślnie)",
                 "header" to linkedMapOf(
                     "messageType" to "0x%02X".format(frameMsg.msgType),
@@ -479,46 +465,33 @@ object MessageDebugLogger {
         senderEdPublicKey: ByteArray?,
         senderSignature: ByteArray?,
         frame: ByteArray,
-        seedInit: ByteArray,
         decapsulationSuccess: Boolean
     ) {
         if (!isEnabled) return
 
-        val (iv, tag, ciphertext) = extractAesComponents(frame)
-
+        val now = System.currentTimeMillis()
         val jsonMap = linkedMapOf<String, Any?>(
             "event" to "MESSAGE_RECEIVED_FROM_DHT_SERVER",
             "direction" to "INCOMING",
             "context" to "Alice otrzymuje Handshake Finalize (od Boba przez Target_0)",
-            "timestampIso" to formatIsoTimestamp(System.currentTimeMillis()),
+            "timestampIso" to formatIsoTimestamp(now),
             "dhtServerNetwork" to linkedMapOf(
                 "targetHex" to CryptoUtils.toHex(target),
                 "bep44Seq" to seq,
                 "senderEd25519PublicKeyHex" to (senderEdPublicKey?.let { CryptoUtils.toHex(it) } ?: "nieznany"),
-                "senderSignatureHex" to (senderSignature?.let { toHexPreview(it, 32) } ?: "nieznany"),
-                "seedInitHex" to CryptoUtils.toHex(seedInit)
+                "hasSignature" to (senderSignature != null)
             ),
             "beforeDecryption_EncryptedStructure" to linkedMapOf(
                 "totalFrameSize" to "${frame.size} bajtów (surowe dane pobrane z Target_0)",
                 "layer1_Symmetric_AES_GCM" to linkedMapOf(
                     "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
                     "symmetricKeyRole" to "kHs (klucz wyprowadzony z seedInit)",
-                    "iv" to linkedMapOf(
-                        "offset" to "Bajty 0..11 (12 bajtów)",
-                        "hex" to CryptoUtils.toHex(iv)
-                    ),
-                    "authenticationTag" to linkedMapOf(
-                        "offset" to "Bajty 12..27 (16 bajtów)",
-                        "hex" to CryptoUtils.toHex(tag)
-                    ),
-                    "ciphertext" to linkedMapOf(
-                        "offset" to "Bajty 28..899 (872 bajty)",
-                        "sizeBytes" to ciphertext.size,
-                        "hexPreview" to toHexPreview(ciphertext, 32)
-                    )
+                    "ivSizeBytes" to BinaryFrameCodec.IV_SIZE,
+                    "authenticationTagSizeBytes" to BinaryFrameCodec.TAG_SIZE,
+                    "ciphertextSizeBytes" to BinaryFrameCodec.CIPHERTEXT_SIZE
                 )
             ),
-            "afterDecryption_Plaintext" to linkedMapOf(
+            "afterDecryption_Metadata" to linkedMapOf(
                 "decryptionStatus" to "SUCCESS (Odszyfrowano ramkę kluczem kHs)",
                 "header" to linkedMapOf(
                     "messageType" to "0x01 (TYPE_HANDSHAKE_FINALIZE)",
@@ -532,7 +505,7 @@ object MessageDebugLogger {
                         "sizeBytes" to BinaryFrameCodec.T1_CIPHERTEXT_SIZE,
                         "description" to "Zaszyfrowany post-kwantowo sekret SS_init wygenerowany przez Boba"
                     ),
-                    "saltBytes" to BinaryFrameCodec.T1_SALT_SIZE
+                    "saltBytesCount" to BinaryFrameCodec.T1_SALT_SIZE
                 ),
                 "postQuantumAnalysis" to linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
@@ -551,73 +524,35 @@ object MessageDebugLogger {
     // STRUCTURAL HELPERS
     // ==========================================
 
-    private fun extractAesComponents(frame: ByteArray): Triple<ByteArray, ByteArray, ByteArray> {
-        val iv = frame.copyOfRange(0, BinaryFrameCodec.IV_SIZE)
-        val tag = frame.copyOfRange(BinaryFrameCodec.IV_SIZE, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE)
-        val ciphertext = frame.copyOfRange(
-            BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE,
-            minOf(frame.size, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE + BinaryFrameCodec.CIPHERTEXT_SIZE)
-        )
-        return Triple(iv, tag, ciphertext)
-    }
-
-    private fun extractHeaderMap(plaintext: ByteArray): Map<String, Any?> {
-        val buf = ByteBuffer.wrap(plaintext).order(ByteOrder.BIG_ENDIAN)
-        val msgType = buf.get()
-        val seqNum = buf.short.toInt() and 0xFFFF
-        val ackNum = buf.short.toInt() and 0xFFFF
-        val timestampUTC = buf.long
-
-        val typeName = when (msgType) {
-            BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE -> "0x01 (TYPE_HANDSHAKE_FINALIZE)"
-            BinaryFrameCodec.TYPE_TEXT_MESSAGE -> "0x02 (TYPE_TEXT_MESSAGE)"
-            BinaryFrameCodec.TYPE_REKEY_OFFER -> "0x03 (TYPE_REKEY_OFFER)"
-            BinaryFrameCodec.TYPE_REKEY_RESPONSE -> "0x04 (TYPE_REKEY_RESPONSE)"
-            BinaryFrameCodec.TYPE_CHUNK_DATA -> "0x05 (TYPE_CHUNK_DATA)"
-            else -> "0x%02X".format(msgType)
-        }
-
-        return linkedMapOf(
-            "messageType" to typeName,
-            "seqNum" to seqNum,
-            "ackNum" to ackNum,
-            "timestampUTC" to timestampUTC,
-            "timestampIso" to formatIsoTimestamp(timestampUTC)
-        )
-    }
-
     private fun buildEncryptedStructureMap(
         frame: ByteArray,
-        slotMsgKey: ByteArray?,
         pqcLayerInfo: Map<String, Any?>,
         dhtTarget: ByteArray,
         dhtSeq: Long,
         edPublicKey: ByteArray?
     ): Map<String, Any?> {
-        val (iv, tag, ciphertext) = extractAesComponents(frame)
-
         return linkedMapOf(
             "totalFrameSize" to "${frame.size} bajtów (standard ramki BEP 44)",
             "layer1_Symmetric_AES_GCM" to linkedMapOf(
                 "algorithm" to "AES-256-GCM (NIST SP 800-38D)",
-                "derivedKeyPreview" to (slotMsgKey?.let { toHexPreview(it, 16) } ?: "klucz sesyjny slotu"),
+                "symmetricKeyRole" to "AES-256-GCM session key derived from Ratchet KDF",
+                "keySizeBytes" to 32,
                 "iv" to linkedMapOf(
                     "offset" to "Bajty 0..11 (12 bajtów)",
                     "role" to "Initialization Vector (IV / Nonce)",
-                    "hex" to CryptoUtils.toHex(iv),
+                    "sizeBytes" to BinaryFrameCodec.IV_SIZE,
                     "description" to "Losowy wektor inicjalizujący zapewniający unikalność szyfrogramu"
                 ),
                 "authenticationTag" to linkedMapOf(
                     "offset" to "Bajty 12..27 (16 bajtów)",
                     "role" to "GMAC Authentication Tag (MAC)",
-                    "hex" to CryptoUtils.toHex(tag),
+                    "sizeBytes" to BinaryFrameCodec.TAG_SIZE,
                     "description" to "Kryptograficzny tag integralności i autentyczności wiadomości"
                 ),
                 "ciphertext" to linkedMapOf(
                     "offset" to "Bajty 28..899 (872 bajty)",
                     "role" to "AES-256-GCM Ciphertext",
-                    "sizeBytes" to ciphertext.size,
-                    "hexPreview" to toHexPreview(ciphertext, 32),
+                    "sizeBytes" to BinaryFrameCodec.CIPHERTEXT_SIZE,
                     "description" to "Zaszyfrowana treść obejmująca nagłówek ramki i ładunek"
                 )
             ),
@@ -629,15 +564,6 @@ object MessageDebugLogger {
                 "ed25519PublicKeyHex" to (edPublicKey?.let { CryptoUtils.toHex(it) } ?: "generowany z seeda")
             )
         )
-    }
-
-    private fun toHexPreview(bytes: ByteArray, maxBytes: Int = 32): String {
-        return if (bytes.size <= maxBytes) {
-            CryptoUtils.toHex(bytes)
-        } else {
-            val preview = CryptoUtils.toHex(bytes.copyOfRange(0, maxBytes))
-            "$preview... [łącznie ${bytes.size} bajtów]"
-        }
     }
 
     private fun formatIsoTimestamp(millis: Long): String {

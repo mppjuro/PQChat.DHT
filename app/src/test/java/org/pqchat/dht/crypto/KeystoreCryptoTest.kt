@@ -173,4 +173,62 @@ class KeystoreCryptoTest {
         assertEquals("messages", restoredText.boundTable)
         assertEquals("contact_seq_42", restoredText.boundId)
     }
+
+    @Test
+    fun testMasterKeyConfigConfiguration() {
+        val configStrongBox = KeystoreCrypto.getMasterKeyConfig(useStrongBox = true, unlockedDeviceRequired = true)
+        assertEquals("pqchat_db_master_key", configStrongBox.alias)
+        assertEquals(256, configStrongBox.keySize)
+        assertTrue(configStrongBox.useStrongBox)
+        assertTrue(configStrongBox.unlockedDeviceRequired)
+        assertEquals(listOf("GCM"), configStrongBox.blockModes)
+        assertEquals(listOf("NoPadding"), configStrongBox.encryptionPaddings)
+
+        val configStandard = KeystoreCrypto.getMasterKeyConfig(useStrongBox = false, unlockedDeviceRequired = false)
+        assertEquals("pqchat_db_master_key", configStandard.alias)
+        assertEquals(256, configStandard.keySize)
+        assertFalse(configStandard.useStrongBox)
+        assertFalse(configStandard.unlockedDeviceRequired)
+    }
+
+    @Test
+    fun testGenerateMasterKeyStrongBoxAndFallbackSequence() {
+        // 1. Success on StrongBox
+        val attempts1 = mutableListOf<Pair<Boolean, Boolean>>()
+        val key1 = KeystoreCrypto.generateMasterKey(sdkInt = 28) { sb, udr ->
+            attempts1.add(sb to udr)
+            testMasterKey
+        }
+        assertEquals(testMasterKey, key1)
+        assertEquals(listOf(true to true), attempts1)
+
+        // 2. StrongBox fails -> falls back to TEE with unlockedDeviceRequired
+        val attempts2 = mutableListOf<Pair<Boolean, Boolean>>()
+        val key2 = KeystoreCrypto.generateMasterKey(sdkInt = 28) { sb, udr ->
+            attempts2.add(sb to udr)
+            if (sb) throw IllegalStateException("StrongBox unavailable")
+            testMasterKey
+        }
+        assertEquals(testMasterKey, key2)
+        assertEquals(listOf(true to true, false to true), attempts2)
+
+        // 3. StrongBox and unlockedDeviceRequired fail -> falls back to standard key
+        val attempts3 = mutableListOf<Pair<Boolean, Boolean>>()
+        val key3 = KeystoreCrypto.generateMasterKey(sdkInt = 28) { sb, udr ->
+            attempts3.add(sb to udr)
+            if (sb || udr) throw IllegalStateException("Hardware feature unsupported")
+            testMasterKey
+        }
+        assertEquals(testMasterKey, key3)
+        assertEquals(listOf(true to true, false to true, false to false), attempts3)
+
+        // 4. Legacy SDK (< 28) directly generates standard key
+        val attempts4 = mutableListOf<Pair<Boolean, Boolean>>()
+        val key4 = KeystoreCrypto.generateMasterKey(sdkInt = 26) { sb, udr ->
+            attempts4.add(sb to udr)
+            testMasterKey
+        }
+        assertEquals(testMasterKey, key4)
+        assertEquals(listOf(false to false), attempts4)
+    }
 }

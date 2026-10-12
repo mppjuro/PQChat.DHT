@@ -37,6 +37,8 @@ import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.util.QrCodeUtil
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
+import org.pqchat.dht.ui.util.SecureScreenEffect
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HandshakeScreen(
@@ -45,6 +47,8 @@ fun HandshakeScreen(
     onBack: () -> Unit,
     onSuccess: (String) -> Unit
 ) {
+    SecureScreenEffect()
+
     val context = LocalContext.current
     var selectedTab by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) 1 else 0) }
     var contactName by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) "Alice" else "Bob") }

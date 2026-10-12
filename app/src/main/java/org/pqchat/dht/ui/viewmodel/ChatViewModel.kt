@@ -100,11 +100,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = settingsManager.isCrowdsourcedRepublishEnabled
     val isTorEnabled: StateFlow<Boolean> = settingsManager.isTorEnabled
+    val isBiometricLockEnabled: StateFlow<Boolean> = settingsManager.isBiometricLockEnabled
     val torState: StateFlow<org.pqchat.dht.network.tor.TorState> =
         app?.embeddedTorManager?.state ?: MutableStateFlow(org.pqchat.dht.network.tor.TorState.Disconnected)
 
     fun setTorEnabled(enabled: Boolean) {
         settingsManager.setTorEnabled(enabled)
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        settingsManager.setBiometricLockEnabled(enabled)
     }
 
     init {
@@ -288,7 +293,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             senderEdPublicKey = item.k,
                             senderSignature = item.sig,
                             frame = item.v,
-                            seedInit = aliceInit.seedInit,
                             decapsulationSuccess = true
                         )
 
@@ -346,7 +350,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
                     target = bobResult.target0,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    edPrivateKeySeed = bobResult.edPrivateKeySeed,
                     frame = bobResult.frame
                 )
 

@@ -62,17 +62,7 @@ object KeystoreCrypto {
             if (keyStore.containsAlias(KEY_ALIAS)) {
                 (keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
             } else {
-                val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-                val spec = KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build()
-                keyGen.init(spec)
-                keyGen.generateKey()
+                generateMasterKey()
             }
         } catch (_: Throwable) {
             // AndroidKeyStore unavailable — check injected test provider (JVM unit tests only)
@@ -81,6 +71,90 @@ object KeystoreCrypto {
                     "AndroidKeyStore is unavailable and no test key provider was registered. Fail-closed."
                 )
         }
+    }
+
+    data class MasterKeyConfig(
+        val alias: String,
+        val keySize: Int,
+        val blockModes: List<String>,
+        val encryptionPaddings: List<String>,
+        val useStrongBox: Boolean,
+        val unlockedDeviceRequired: Boolean
+    )
+
+    fun getMasterKeyConfig(useStrongBox: Boolean, unlockedDeviceRequired: Boolean): MasterKeyConfig {
+        return MasterKeyConfig(
+            alias = KEY_ALIAS,
+            keySize = 256,
+            blockModes = listOf(KeyProperties.BLOCK_MODE_GCM),
+            encryptionPaddings = listOf(KeyProperties.ENCRYPTION_PADDING_NONE),
+            useStrongBox = useStrongBox,
+            unlockedDeviceRequired = unlockedDeviceRequired
+        )
+    }
+
+    /**
+     * Generates AES-256 master key in hardware AndroidKeyStore:
+     * 1. Attempts StrongBox HSM with setUnlockedDeviceRequired(true) on API 28+
+     * 2. Falls back to standard TEE with setUnlockedDeviceRequired(true) if StrongBox is unavailable
+     * 3. Falls back to standard TEE without unlocked requirement for legacy / unsupported devices
+     */
+    fun generateMasterKey(
+        sdkInt: Int = android.os.Build.VERSION.SDK_INT,
+        generator: (useStrongBox: Boolean, unlockedDeviceRequired: Boolean) -> SecretKey = { sb, udr ->
+            generateKeyWithSpec(sb, udr)
+        }
+    ): SecretKey {
+        if (sdkInt >= android.os.Build.VERSION_CODES.P) {
+            // 1. Try hardware StrongBox HSM (Dedicated Security Chip / Titan M)
+            try {
+                return generator(true, true)
+            } catch (_: Throwable) {
+                // StrongBox not available on device hardware: proceed to standard TEE fallback
+            }
+
+            // 2. Try standard hardware TEE Keymaster with Unlocked Device requirement
+            try {
+                return generator(false, true)
+            } catch (_: Throwable) {
+                // If unlocked device required is not supported by OEM TEE implementation
+            }
+        }
+
+        // 3. Fallback to standard hardware key without API 28+ constraints
+        return generator(false, false)
+    }
+
+    private fun generateKeyWithSpec(useStrongBox: Boolean, unlockedDeviceRequired: Boolean): SecretKey {
+        val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        val spec = buildKeyGenParameterSpec(useStrongBox, unlockedDeviceRequired)
+        keyGen.init(spec)
+        return keyGen.generateKey()
+    }
+
+    /**
+     * Builds KeyGenParameterSpec with StrongBox and UnlockedDevice options.
+     */
+    fun buildKeyGenParameterSpec(useStrongBox: Boolean, unlockedDeviceRequired: Boolean): KeyGenParameterSpec {
+        val config = getMasterKeyConfig(useStrongBox, unlockedDeviceRequired)
+        val builder = KeyGenParameterSpec.Builder(
+            config.alias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(config.keySize)
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            if (config.useStrongBox) {
+                builder.setIsStrongBoxBacked(true)
+            }
+            if (config.unlockedDeviceRequired) {
+                builder.setUnlockedDeviceRequired(true)
+            }
+        }
+
+        return builder.build()
     }
 
     /**

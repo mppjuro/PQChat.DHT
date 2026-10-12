@@ -47,6 +47,7 @@ import java.util.*
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
 import org.pqchat.dht.data.repository.ChatRepository
+import org.pqchat.dht.ui.util.SecureScreenEffect
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +56,8 @@ fun ChatScreen(
     contactId: String,
     onBack: () -> Unit
 ) {
+    SecureScreenEffect()
+
     val context = LocalContext.current
     val appColors = LocalAppColors.current
 
