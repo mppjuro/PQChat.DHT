@@ -95,7 +95,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     // AndroidX Core & Lifecycle
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
@@ -103,7 +103,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.0")
 
     // Compose
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -115,7 +115,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Cryptography: Bouncy Castle (ML-KEM / Kyber-512, Ed25519, AES, HKDF)
-    implementation("org.bouncycastle:bcprov-jdk18on:1.79")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     // Room Database
     val roomVersion = "2.8.5"
@@ -124,7 +124,7 @@ dependencies {
     ksp("androidx.room:room-compiler:$roomVersion")
 
     // WorkManager (for deep sleep / doze mode polling)
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 
     // QR Code Engine (Generation & ZXing Core)
     implementation("com.google.zxing:core:3.5.4")
@@ -144,8 +144,8 @@ dependencies {
     testImplementation("androidx.room:room-testing:$roomVersion")
     testImplementation("com.code-intelligence:jazzer-api:0.30.0")
     testImplementation("com.code-intelligence:jazzer-junit:0.30.0")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }
 
 ksp {
