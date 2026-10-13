@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`51df96f`](https://github.com/mppjuro/PQChat.DHT/commit/51df96f431f825c20a1ffdcae612c2cb8b9d93ce) (2026-10-13) — **testbed**: add isolated BEP 5/44 traffic correlation testbed and nightly workflow
 - [`4631477`](https://github.com/mppjuro/PQChat.DHT/commit/4631477c2089cb020cdf46a497d84ee243885727) (2026-10-12) — **security**: implement security hardening, keystore strongbox, bep43 ro=1, flag_secure and minify
 - [`4d7b841`](https://github.com/mppjuro/PQChat.DHT/commit/4d7b841da32b973c734780eeaa09ab08833d8b5b) (2026-10-12) — GNU General Public License v3
 - [`2e4d976`](https://github.com/mppjuro/PQChat.DHT/commit/2e4d97631bc296780a21c2b36f6df27044a04598) (2026-10-11) — **tor**: add embedded Tor engine with SOCKS5 KRPC routing and UI integration
@@ -94,6 +95,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`f9d5f87`](https://github.com/mppjuro/PQChat.DHT/commit/f9d5f87defb26c98dde91d02419917cd1b1012d9) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`99b7e21`](https://github.com/mppjuro/PQChat.DHT/commit/99b7e21e2a9e5c08e69fc274cca4f91aaff467c4) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`ea2f14e`](https://github.com/mppjuro/PQChat.DHT/commit/ea2f14e61a67c94a7e24114f3b1ab194f11854f1) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`e532ff7`](https://github.com/mppjuro/PQChat.DHT/commit/e532ff732a58a7243392851d7d653cf325dc30ad) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
