@@ -1,0 +1,73 @@
+name: Nightly DHT Correlation Testbed
+
+on:
+  schedule:
+    # Uruchamiane co noc o 01:00 UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'Liczba powtórzeń Monte Carlo (domyślnie: 100)'
+        required: false
+        default: '100'
+      nodes:
+        description: 'Liczba węzłów Kademlia w lokalnym klastrze (100-300)'
+        required: false
+        default: '150'
+      quick:
+        description: 'Tryb szybki (smoke test, 3 powtórzenia)'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  run-testbed:
+    name: Run BEP 5/44 Real Traffic Testbed & Threat Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/threat_sim/requirements.txt
+
+      - name: Run Real Traffic Testbed (150 Isolated DHT Nodes)
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            python -m tools.testbed.testbed_runner --quick
+          else
+            RUNS=${{ inputs.runs || '100' }}
+            NODES=${{ inputs.nodes || '150' }}
+            python -m tools.testbed.testbed_runner --runs "${RUNS}" --nodes "${NODES}"
+          fi
+
+      - name: Run Threat Simulator & Generate SIMULATED vs MEASURED Comparison
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            python tools/threat_sim/threat_simulator.py --quick
+          else
+            RUNS=${{ inputs.runs || '100' }}
+            python tools/threat_sim/threat_simulator.py --runs "${RUNS}"
+          fi
+
+      - name: Upload Testbed Telemetry & Reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dht-testbed-correlation-artifacts
+          path: |
+            tools/testbed/metrics_testbed_correlation.csv
+            tools/testbed/testbed_correlation_measured.png
+            tools/threat_sim/metrics_threat_sim.csv
+            tools/threat_sim/tradeoff_anonymity_bandwidth_battery.png
+            docs/testbed_correlation_measured.png
+            docs/tradeoff_anonymity_bandwidth_battery.png
