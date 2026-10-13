@@ -144,10 +144,18 @@ Dla każdej wiadomości $i$:
 ## 6. Cykle Odpytywania i Ruch Maskujący (Anti-Traffic Analysis)
 
 ### Adaptacyjny Harmonogram Odpytywania (Polling):
-1. **10 sekund:** Aktywne okno czatu z danym rozmówcą (`Activity` w stanie `RESUMED` dla danej konwersacji).
-2. **1 minuta:** Aplikacja otwarta na pierwszym planie, ale otwarta jest inna rozmowa lub lista kontaktów.
-3. **5 minut:** Urządzenie jest w użyciu (ekran włączony), ale aplikacja działa w tle.
-4. **15 minut:** Urządzenie zablokowane / uśpione (tryb Doze; realizowane przez `WorkManager` oraz `AlarmManager.setAndAllowWhileIdle`).
+1. **10 sekund:** Aktywne okno czatu z danym rozmówcą (`FOREGROUND_CHAT` — ekran włączony, aplikacja na pierwszym planie, wybrana konwersacja).
+2. **1 minuta:** Aplikacja otwarta na pierwszym planie (`APP_ACTIVE_OTHER` — ekran włączony, lista kontaktów, diagnostyka lub ustawienia).
+3. **5 minut:** Urządzenie jest w użyciu (`BACKGROUND_IDLE` — ekran włączony, ale aplikacja działa w tle / zminimalizowana).
+4. **15 minut:** Urządzenie zablokowane / uśpione (`DOZE_SLEEP` — ekran wyłączony; realizowane przez `WorkManager` oraz `AlarmManager.setAndAllowWhileIdle`).
+
+Szczegółowy model maszyny stanów, obsługa Android 12+ Cached App Freezer (CAF), limity Android 15 `dataSync` FGS (targetSdk 35) oraz mechanizm `BOOT_COMPLETED` opisane są w [docs/android_lifecycle_background_execution.md](file:///c:/Users/PJURO/PQChat.DHT/docs/android_lifecycle_background_execution.md).
+
+### Spójne Przejścia Cyklu Życia (PollingLifecycleCoordinator):
+Przejścia pomiędzy 4 stanami pollingu są centralnie koordynowane przez `PollingLifecycleCoordinator`:
+* Wykorzystuje `ProcessLifecycleOwner` (śledzenie obecności procesu na pierwszym planie / w tle, niezależnie od rotacji i cyklu pojedynczych `Activity`).
+* Wykrywa rzeczywisty stan ekranu za pomocą dynamicznego `ScreenStateReceiver` (`ACTION_SCREEN_ON`, `ACTION_SCREEN_OFF`) i `PowerManager.isInteractive`.
+* Zdarzenie `ON_STOP` aktywności **nigdy nie jest tożsame z wyłączeniem ekranu**; minimalizacja aplikacji przy włączonym ekranie prowadzi do `BACKGROUND_IDLE` (5 min), a nie `DOZE_SLEEP`.
 
 ### Ruch Maskujący (Poisson Cover Traffic):
 * W tle działa niezależny proces wyznaczający czas do kolejnego fałszywego zapisu na podstawie rozkładu wykładniczego:
@@ -175,8 +183,8 @@ app/src/main/java/org/pqchat/dht/
 ├── network/
 │   └── tor/             # Obsługa embedded Tor i proxy SOCKS5
 ├── protocol/            # ProtocolEngine, CoverAckProtocol (potwierdzenia w szumie)
-├── service/             # PollingScheduler, DhtWorker, ChatHeadService
-├── traffic/             # AdaptivePollingManager, PoissonTrafficGenerator, BlindRepublishPool, DecoyTargetPool
+├── service/             # PollingScheduler, PollingLifecycleCoordinator, ScreenStateReceiver, BootReceiver, DhtAlarmReceiver, ChatHeadService
+├── traffic/             # AdaptivePollingManager, PoissonTrafficGenerator, BlindRepublishPool, DecoyTargetPool, PollingWorker
 └── ui/                  # ChatScreen, ContactsScreen, DiagnosticsScreen, SettingsScreen, motywy
 ```
 
