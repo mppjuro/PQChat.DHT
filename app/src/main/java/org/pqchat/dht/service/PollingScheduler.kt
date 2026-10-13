@@ -134,6 +134,21 @@ class PollingScheduler(
                 applyRepublishSchedule()
             }
         }
+        // Keep Doze alarm synchronized with state transitions
+        schedulerScope.launch {
+            pollingManager.currentState.collect { state ->
+                when (state) {
+                    AdaptivePollingManager.PollingState.FOREGROUND_CHAT,
+                    AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER -> {
+                        cancelDozeAlarm()
+                    }
+                    AdaptivePollingManager.PollingState.BACKGROUND_IDLE,
+                    AdaptivePollingManager.PollingState.DOZE_SLEEP -> {
+                        scheduleNextDozeAlarm()
+                    }
+                }
+            }
+        }
     }
 
     fun start() {
@@ -177,6 +192,17 @@ class PollingScheduler(
     fun onDeviceScreenOff() {
         pollingManager.onDeviceScreenOff()
         scheduleNextDozeAlarm()
+    }
+
+    fun onDeviceScreenOn(isAppForegrounded: Boolean? = null) {
+        if (isAppForegrounded != null) {
+            pollingManager.updateInputs(
+                isScreenInteractive = true,
+                isAppForeground = isAppForegrounded
+            )
+        } else {
+            pollingManager.onDeviceScreenOn()
+        }
     }
 
     fun triggerImmediatePoll() {

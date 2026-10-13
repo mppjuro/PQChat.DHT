@@ -154,6 +154,39 @@ class AdaptivePollingManager(
     var activeChatContactId: String? = null
         private set
 
+    @Volatile
+    var isScreenInteractive: Boolean = true
+        private set
+
+    @Volatile
+    var isAppForeground: Boolean = true
+        private set
+
+    companion object {
+        /**
+         * Resolves the target PollingState based on the triplet:
+         * (isScreenInteractive, isAppForeground, activeChatContactId).
+         *
+         * Pure function with deterministic resolution per AGENTS.md Section 6:
+         * 1. Screen OFF (!isScreenInteractive) -> DOZE_SLEEP (15m, device asleep/locked, loop paused).
+         * 2. Screen ON, App in background (!isAppForeground) -> BACKGROUND_IDLE (5m, device active, app minimized).
+         * 3. Screen ON, App in foreground, Chat selected (activeChatContactId != null) -> FOREGROUND_CHAT (10s).
+         * 4. Screen ON, App in foreground, No chat selected (activeChatContactId == null) -> APP_ACTIVE_OTHER (1m).
+         */
+        fun resolvePollingState(
+            isScreenInteractive: Boolean,
+            isAppForeground: Boolean,
+            activeChatContactId: String?
+        ): PollingState {
+            return when {
+                !isScreenInteractive -> PollingState.DOZE_SLEEP
+                !isAppForeground -> PollingState.BACKGROUND_IDLE
+                activeChatContactId != null -> PollingState.FOREGROUND_CHAT
+                else -> PollingState.APP_ACTIVE_OTHER
+            }
+        }
+    }
+
     fun updateIntervals(
         foreground: Long,
         appActive: Long,
@@ -184,30 +217,62 @@ class AdaptivePollingManager(
         }
     }
 
+    @Synchronized
+    fun evaluateState(): PollingState {
+        val target = resolvePollingState(isScreenInteractive, isAppForeground, activeChatContactId)
+        transitionTo(target)
+        return target
+    }
+
     fun onChatOpened(contactId: String) {
         activeChatContactId = contactId
-        transitionTo(PollingState.FOREGROUND_CHAT)
+        evaluateState()
     }
 
     fun onChatClosed() {
         activeChatContactId = null
-        transitionTo(PollingState.APP_ACTIVE_OTHER)
+        evaluateState()
     }
 
     fun onAppForegrounded() {
-        if (activeChatContactId != null) {
-            transitionTo(PollingState.FOREGROUND_CHAT)
-        } else {
-            transitionTo(PollingState.APP_ACTIVE_OTHER)
-        }
+        isAppForeground = true
+        evaluateState()
     }
 
     fun onAppMinimized() {
-        transitionTo(PollingState.BACKGROUND_IDLE)
+        isAppForeground = false
+        evaluateState()
     }
 
     fun onDeviceScreenOff() {
-        transitionTo(PollingState.DOZE_SLEEP)
+        isScreenInteractive = false
+        evaluateState()
+    }
+
+    fun onDeviceScreenOn() {
+        isScreenInteractive = true
+        evaluateState()
+    }
+
+    fun setScreenInteractive(interactive: Boolean) {
+        isScreenInteractive = interactive
+        evaluateState()
+    }
+
+    fun setAppForeground(foreground: Boolean) {
+        isAppForeground = foreground
+        evaluateState()
+    }
+
+    fun updateInputs(
+        isScreenInteractive: Boolean = this.isScreenInteractive,
+        isAppForeground: Boolean = this.isAppForeground,
+        activeChatContactId: String? = this.activeChatContactId
+    ): PollingState {
+        this.isScreenInteractive = isScreenInteractive
+        this.isAppForeground = isAppForeground
+        this.activeChatContactId = activeChatContactId
+        return evaluateState()
     }
 
     @Volatile

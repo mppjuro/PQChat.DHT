@@ -19,23 +19,37 @@ import androidx.lifecycle.ProcessLifecycleOwner
  */
 class ScreenStateReceiver(
     private val onScreenOffCallback: () -> Unit,
-    private val onScreenOnCallback: (isAppForegrounded: Boolean) -> Unit
+    private val onScreenOnCallback: (isAppForegrounded: Boolean) -> Unit,
+    private val isAppForegroundProvider: () -> Boolean = {
+        try {
+            ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to query ProcessLifecycleOwner state", e)
+            false
+        }
+    }
 ) : BroadcastReceiver() {
 
-    constructor(pollingScheduler: PollingScheduler) : this(
+    constructor(
+        pollingScheduler: PollingScheduler,
+        isAppForegroundProvider: () -> Boolean = {
+            try {
+                ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to query ProcessLifecycleOwner state", e)
+                false
+            }
+        }
+    ) : this(
         onScreenOffCallback = {
-            Log.i(TAG, "Screen turned OFF -> transitioning to DOZE_SLEEP and scheduling Doze alarm")
+            Log.i(TAG, "Screen turned OFF -> transitioning to DOZE_SLEEP")
             pollingScheduler.onDeviceScreenOff()
         },
         onScreenOnCallback = { isForegrounded ->
-            if (isForegrounded) {
-                Log.i(TAG, "Screen turned ON with app in foreground -> transitioning to app foreground")
-                pollingScheduler.onAppForegrounded()
-            } else {
-                Log.i(TAG, "Screen turned ON with app in background -> transitioning to BACKGROUND_IDLE")
-                pollingScheduler.onAppMinimized()
-            }
-        }
+            Log.i(TAG, "Screen turned ON (isForegrounded=$isForegrounded)")
+            pollingScheduler.onDeviceScreenOn(isForegrounded)
+        },
+        isAppForegroundProvider = isAppForegroundProvider
     )
 
     override fun onReceive(context: Context, intent: Intent?) {
@@ -47,12 +61,7 @@ class ScreenStateReceiver(
                 onScreenOffCallback()
             }
             Intent.ACTION_SCREEN_ON -> {
-                val isAppForegrounded = try {
-                    ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to query ProcessLifecycleOwner state", e)
-                    false
-                }
+                val isAppForegrounded = isAppForegroundProvider()
                 onScreenOnCallback(isAppForegrounded)
             }
         }

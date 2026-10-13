@@ -1,9 +1,6 @@
 package org.pqchat.dht
 
 import android.app.Application
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.ProcessLifecycleOwner
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.repository.ChatRepository
@@ -35,6 +32,8 @@ class PQChatApplication : Application() {
     lateinit var pollingScheduler: PollingScheduler
         private set
     lateinit var embeddedTorManager: org.pqchat.dht.network.tor.EmbeddedTorManager
+        private set
+    lateinit var lifecycleCoordinator: org.pqchat.dht.service.PollingLifecycleCoordinator
         private set
 
     override fun onCreate() {
@@ -89,39 +88,13 @@ class PQChatApplication : Application() {
             }
         }
 
-        // Screen-state observation: switches between BACKGROUND_IDLE and DOZE_SLEEP based on screen on/off
-        screenStateReceiver = org.pqchat.dht.service.ScreenStateReceiver(pollingScheduler)
-        try {
-            registerReceiver(screenStateReceiver, org.pqchat.dht.service.ScreenStateReceiver.createIntentFilter())
-        } catch (e: Exception) {
-            android.util.Log.e("PQChatApplication", "Failed to register ScreenStateReceiver", e)
-        }
-
-        // Process-level lifecycle observation: keeps background polling active across activity recreations
-        ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> pollingScheduler.onAppForegrounded()
-                Lifecycle.Event.ON_STOP -> {
-                    val isInteractive = org.pqchat.dht.service.ScreenStateReceiver.isScreenInteractive(this)
-                    if (!isInteractive) {
-                        pollingScheduler.onDeviceScreenOff()
-                    } else {
-                        pollingScheduler.onAppMinimized()
-                    }
-                    pollingScheduler.scheduleNextDozeAlarm()
-                }
-                else -> {}
-            }
-        })
+        // Unified Lifecycle and Screen State Coordinator for Adaptive Polling
+        lifecycleCoordinator = org.pqchat.dht.service.PollingLifecycleCoordinator(this, pollingScheduler).apply { start() }
     }
-
-    private var screenStateReceiver: org.pqchat.dht.service.ScreenStateReceiver? = null
 
     override fun onTerminate() {
         super.onTerminate()
-        try {
-            screenStateReceiver?.let { unregisterReceiver(it) }
-        } catch (_: Exception) {}
+        lifecycleCoordinator.stop()
         pollingScheduler.stop()
         trafficGenerator.stop()
         dhtLeafNode.stop()
