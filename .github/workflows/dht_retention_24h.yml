@@ -1,0 +1,154 @@
+name: BitTorrent DHT 24h Retention Measurement (Live Mainline DHT)
+
+on:
+  schedule:
+    # Odczyty i odświeżanie co godzinę
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Tryb wykonania: auto (retrieve jeśli istnieje stan, inaczej publish), publish (nowa seria), retrieve (odczyt), summary'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - publish
+          - retrieve
+          - summary
+      count:
+        description: 'Liczba rekordów (N >= 300, min 300 dla publish)'
+        required: false
+        default: '300'
+      mock:
+        description: 'Tryb symulowany mock (dla testów dymnych w izolacji)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  retention-measurement:
+    name: DHT Retention Hourly Probe & State Relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository code (main)
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: repo
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r repo/tools/threat_sim/requirements.txt
+          pip install cryptography>=41.0.0 || true
+
+      - name: Checkout metrics-retention branch (Persistent State Relay)
+        run: |
+          mkdir -p state
+          cd state
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          
+          # Pobierz gałąź metrics-retention jeśli istnieje
+          if git ls-remote --exit-code --heads origin metrics-retention; then
+            git fetch origin metrics-retention --depth=1
+            git checkout metrics-retention
+            echo "Znaleziono istniejącą gałąź metrics-retention. Stan załadowany."
+          else
+            git checkout --orphan metrics-retention
+            echo "Utworzono nową gałąź orphan metrics-retention."
+          fi
+
+      - name: Determine execution mode
+        id: determine_mode
+        run: |
+          REQUESTED_MODE="${{ inputs.mode || 'auto' }}"
+          STATE_FILE="state/dht_state.json"
+          
+          if [ "$REQUESTED_MODE" = "auto" ]; then
+            if [ -f "$STATE_FILE" ]; then
+              # Sprawdź czy stan nie jest przestarzały (> 48h)
+              AGE_HOURS=$(python3 -c "
+          import json, time
+          try:
+              with open('$STATE_FILE') as f:
+                  d = json.load(f)
+              created = d.get('created_at_epoch_ms', 0)
+              print((time.time() * 1000 - created) / 3600000.0)
+          except Exception:
+              print(999.0)
+          ")
+              echo "Elapsed age: $AGE_HOURS hours"
+              if (( $(echo "$AGE_HOURS > 48.0" | bc -l) )); then
+                echo "Stan ma > 48h. Rozpoczynanie nowej serii (publish)."
+                FINAL_MODE="publish"
+              else
+                echo "Stan aktywny. Kontynuacja odczytów (retrieve)."
+                FINAL_MODE="retrieve"
+              fi
+            else
+              echo "Brak pliku dht_state.json. Rozpoczynanie nowej serii (publish)."
+              FINAL_MODE="publish"
+            fi
+          else
+            FINAL_MODE="$REQUESTED_MODE"
+          fi
+          
+          echo "final_mode=$FINAL_MODE" >> $GITHUB_OUTPUT
+
+      - name: Execute DHT Retention Measurement CLI
+        run: |
+          MODE="${{ steps.determine_mode.outputs.final_mode }}"
+          MOCK_FLAG=""
+          if [ "${{ inputs.mock }}" = "true" ]; then
+            MOCK_FLAG="--mock"
+          fi
+          
+          COUNT="${{ inputs.count || 300 }}"
+          
+          echo "Uruchamianie dht_retention_cli.py w trybie: $MODE (count=$COUNT, mock=$MOCK_FLAG)..."
+          
+          python3 repo/tools/dht_harness/dht_retention_cli.py \
+            --mode "$MODE" \
+            --state state/dht_state.json \
+            --output state/metrics_dht_retention_measured.csv \
+            --count "$COUNT" \
+            $MOCK_FLAG
+
+      - name: Commit & Push Updated State and Telemetry to metrics-retention
+        run: |
+          cd state
+          git add dht_state.json metrics_dht_retention_measured.csv || true
+          
+          # Sprawdź czy są zmiany do zatwierdzenia
+          if git diff --staged --quiet; then
+            echo "Brak zmian do zatwierdzenia w stanie metryk."
+          else
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%SZ")
+            git commit -m "chore(metrics): update DHT retention state & telemetry at $TIMESTAMP [skip ci]"
+            git push -u origin metrics-retention
+            echo "[OK] Stan i telemetria zaktualizowane na gałęzi metrics-retention."
+          fi
+
+      - name: Upload Measured Retention Artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dht-retention-measured-telemetry
+          path: |
+            state/dht_state.json
+            state/metrics_dht_retention_measured.csv
