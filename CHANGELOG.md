@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`33e111d`](https://github.com/mppjuro/PQChat.DHT/commit/33e111db9e430f2658c63d0f9e2ef10addf0865f) (2026-10-13) — **retention**: implement live Mainline DHT retention measurement harness with state relay workflow
 - [`51df96f`](https://github.com/mppjuro/PQChat.DHT/commit/51df96f431f825c20a1ffdcae612c2cb8b9d93ce) (2026-10-13) — **testbed**: add isolated BEP 5/44 traffic correlation testbed and nightly workflow
 - [`4631477`](https://github.com/mppjuro/PQChat.DHT/commit/4631477c2089cb020cdf46a497d84ee243885727) (2026-10-12) — **security**: implement security hardening, keystore strongbox, bep43 ro=1, flag_secure and minify
 - [`4d7b841`](https://github.com/mppjuro/PQChat.DHT/commit/4d7b841da32b973c734780eeaa09ab08833d8b5b) (2026-10-12) — GNU General Public License v3
@@ -95,6 +96,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`dc86a0b`](https://github.com/mppjuro/PQChat.DHT/commit/dc86a0bc62e12b5b49e7c2a86363989cb768534b) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`f9d5f87`](https://github.com/mppjuro/PQChat.DHT/commit/f9d5f87defb26c98dde91d02419917cd1b1012d9) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`99b7e21`](https://github.com/mppjuro/PQChat.DHT/commit/99b7e21e2a9e5c08e69fc274cca4f91aaff467c4) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`ea2f14e`](https://github.com/mppjuro/PQChat.DHT/commit/ea2f14e61a67c94a7e24114f3b1ab194f11854f1) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
