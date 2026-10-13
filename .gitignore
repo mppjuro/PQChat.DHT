@@ -33,4 +33,5 @@ build/
 app/build/
 local.properties
 .idea/
+.vscode/
 *.iml
