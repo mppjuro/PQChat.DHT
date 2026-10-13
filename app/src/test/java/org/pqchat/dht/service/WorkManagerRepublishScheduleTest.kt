@@ -86,11 +86,11 @@ class WorkManagerRepublishScheduleTest {
         assertEquals(60 * 60 * 1000L, policy.getIntervalForAge(6 * 60 * 60 * 1000L))
         assertFalse(policy.isExpired(6 * 60 * 60 * 1000L))
 
-        // Tier 3: 12h to 48h (6h interval)
+        // Tier 3: 12h to 48h (1.5h / 90m interval calibrated to BEP 44 ~2h node TTL)
         assertEquals(RepublishTier.TIER3_LONG_TERM, policy.getTier(12 * 60 * 60 * 1000L))
         assertEquals(RepublishTier.TIER3_LONG_TERM, policy.getTier(24 * 60 * 60 * 1000L))
         assertEquals(RepublishTier.TIER3_LONG_TERM, policy.getTier(48 * 60 * 60 * 1000L - 1))
-        assertEquals(6 * 60 * 60 * 1000L, policy.getIntervalForAge(24 * 60 * 60 * 1000L))
+        assertEquals(90 * 60 * 1000L, policy.getIntervalForAge(24 * 60 * 60 * 1000L))
         assertFalse(policy.isExpired(24 * 60 * 60 * 1000L))
 
         // TTL Expiration: >= 48h
@@ -197,7 +197,7 @@ class WorkManagerRepublishScheduleTest {
         )
 
         assertTrue(decision.shouldSchedule)
-        assertEquals(360L, decision.intervalMinutes)
+        assertEquals(90L, decision.intervalMinutes)
         assertEquals(RepublishTier.TIER3_LONG_TERM, decision.tier)
         assertEquals(1, decision.activeTaskCount)
         assertTrue(decision.expiredTaskIds.isEmpty())
@@ -283,13 +283,13 @@ class WorkManagerRepublishScheduleTest {
         assertEquals(RepublishTier.TIER2_EXTENDED, decision2.tier)
         assertEquals(2, decision2.activeTaskCount)
 
-        // Once taskTier2 is ACKed/removed: earliest is Tier 3 (360m)
+        // Once taskTier2 is ACKed/removed: earliest is Tier 3 (90m)
         val decision3 = scheduler!!.evaluateRepublishSchedule(
             currentTimeMs = now,
             tasks = listOf(taskTier3)
         )
         assertTrue(decision3.shouldSchedule)
-        assertEquals(360L, decision3.intervalMinutes)
+        assertEquals(90L, decision3.intervalMinutes)
         assertEquals(RepublishTier.TIER3_LONG_TERM, decision3.tier)
         assertEquals(1, decision3.activeTaskCount)
 

@@ -40,4 +40,5 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
-
+# Ephemeral DHT measurement state (stored only in metrics-retention branch)
+*dht_state.json

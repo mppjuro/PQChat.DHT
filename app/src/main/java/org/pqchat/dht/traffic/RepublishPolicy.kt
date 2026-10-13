@@ -8,7 +8,7 @@ import org.pqchat.dht.data.settings.DefaultRepublishConfig
 enum class RepublishTier {
     TIER1_INITIAL,   // 0 - 2h (default 15m)
     TIER2_EXTENDED,  // 2h - 12h (default 1h)
-    TIER3_LONG_TERM, // 12h - 48h (default 6h)
+    TIER3_LONG_TERM, // 12h - 48h (default 1.5h / 90m, calibrated to prevent BEP 44 ~2h node eviction)
     EXPIRED          // >= 48h (TTL exceeded)
 }
 
@@ -18,7 +18,7 @@ enum class RepublishTier {
  * Implements Exponential Backoff and TTL limit per architecture requirements:
  * - 0 - 2h: 15 minutes (default)
  * - 2 - 12h: 1 hour (default)
- * - 12 - 48h: 6 hours (default)
+ * - 12 - 48h: 1.5 hours / 90 minutes (default, calibrated to prevent BEP 44 ~2h node TTL eviction)
  * - >= 48h: TTL expired -> EXPIRED_OFFLINE, stop radio wakeups.
  */
 data class RepublishPolicy(

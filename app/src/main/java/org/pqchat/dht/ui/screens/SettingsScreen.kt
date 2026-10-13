@@ -574,10 +574,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Tier 3: Powyżej 12h do TTL (Default: 6 godzin)
+                    // Tier 3: Powyżej 12h do TTL (Default: 1.5 godziny / 90 minut)
                     IntervalDropdownRow(
                         title = "3. Powyżej 12 godzin (Tier 3)",
-                        subtitle = "Rzadkie odświeżanie długoterminowe (domyślnie 6 godzin)",
+                        subtitle = "Odświeżanie długoterminowe (domyślnie 1.5 godziny / 90 minut, zabezpiecza przed wygaśnięciem BEP 44 ~2h)",
                         currentMillis = intervalRepublishTier3,
                         defaultMillis = DefaultRepublishConfig.TIER3_INTERVAL,
                         options = REPUBLISH_TIER3_OPTIONS,

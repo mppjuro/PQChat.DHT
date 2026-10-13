@@ -45,7 +45,7 @@ object DefaultRepublishConfig {
     const val TIER1_THRESHOLD = 2 * 60 * 60 * 1000L   // 2 godziny
     const val TIER2_INTERVAL = 60 * 60 * 1000L       // 1 godzina (do 12h)
     const val TIER2_THRESHOLD = 12 * 60 * 60 * 1000L  // 12 godzin
-    const val TIER3_INTERVAL = 6 * 60 * 60 * 1000L   // 6 godzin (powyżej 12h)
+    const val TIER3_INTERVAL = 90 * 60 * 1000L       // 1.5 godziny / 90 minut (skalibrowane pod natywny TTL BEP 44 ~2h)
     const val MAX_TTL = 48 * 60 * 60 * 1000L         // 48 godzin (maksymalny TTL)
 }
 
@@ -75,11 +75,12 @@ val REPUBLISH_TIER2_OPTIONS = listOf(
 )
 
 val REPUBLISH_TIER3_OPTIONS = listOf(
+    SyncIntervalOption("1 godzina", 60 * 60 * 1000L),
+    SyncIntervalOption("1.5 godziny", 90 * 60 * 1000L),
     SyncIntervalOption("2 godziny", 2 * 60 * 60 * 1000L),
+    SyncIntervalOption("3 godziny", 3 * 60 * 60 * 1000L),
     SyncIntervalOption("4 godziny", 4 * 60 * 60 * 1000L),
-    SyncIntervalOption("6 godzin", 6 * 60 * 60 * 1000L),
-    SyncIntervalOption("8 godzin", 8 * 60 * 60 * 1000L),
-    SyncIntervalOption("12 godzin", 12 * 60 * 60 * 1000L)
+    SyncIntervalOption("6 godzin", 6 * 60 * 60 * 1000L)
 )
 
 val REPUBLISH_TTL_OPTIONS = listOf(
