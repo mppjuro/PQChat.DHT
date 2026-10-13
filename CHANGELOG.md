@@ -41,6 +41,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`f95251f`](https://github.com/mppjuro/PQChat.DHT/commit/f95251f6f0175f5f0bc0d395ec67379fca733274) (2026-10-13) — **lifecycle**: centralize polling lifecycle with unified 4-state coordinator and true screen detection
 - [`1dc376c`](https://github.com/mppjuro/PQChat.DHT/commit/1dc376c94e232eda2cedde8a70ad678851175026) (2026-10-13) — **test**: fix instrumented tests execution, resolve toolchain provisioning and fragment request code limitation
 - [`09869d7`](https://github.com/mppjuro/PQChat.DHT/commit/09869d7a390ce3106c7e1c0ab743e4dfde6ce968) (2026-10-12) — **service**: fix background state machine, add boot receiver, fgs timeout, and battery optimization prompt
 - [`05146be`](https://github.com/mppjuro/PQChat.DHT/commit/05146be9cb058d10ebc5c80e8ddd45f2bc23bc59) (2026-10-12) — **crypto**: update ML-KEM KAT test for Bouncy Castle 1.86 and set compileSdk to 37
@@ -93,6 +94,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`99b7e21`](https://github.com/mppjuro/PQChat.DHT/commit/99b7e21e2a9e5c08e69fc274cca4f91aaff467c4) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`ea2f14e`](https://github.com/mppjuro/PQChat.DHT/commit/ea2f14e61a67c94a7e24114f3b1ab194f11854f1) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`e532ff7`](https://github.com/mppjuro/PQChat.DHT/commit/e532ff732a58a7243392851d7d653cf325dc30ad) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`5bb55f1`](https://github.com/mppjuro/PQChat.DHT/commit/5bb55f1914ca9001a28210d85da21cfd00868678) (2026-10-12) — **changelog**: auto-update CHANGELOG.md [skip ci]
