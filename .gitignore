@@ -33,5 +33,11 @@ build/
 app/build/
 local.properties
 .idea/
-.vscode/
 *.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+

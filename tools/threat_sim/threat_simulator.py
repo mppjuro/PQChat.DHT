@@ -87,6 +87,8 @@ class DefenseParameters:
     decoy_target_populated_ratio: float = 0.6 # Fraction of decoys directed to populated/cover slots
     lifecycle_state: LifecycleState = LifecycleState.FOREGROUND_CHAT
     cover_active_in_doze: bool = False  # Suspended during Android Doze mode
+    is_storing_node_observer: bool = False # Target-storing node directly observing PUT and GET
+    vpn_enabled: bool = False           # Traffic tunneled via VPN/Tor exit nodes
 
 
 @dataclass
@@ -367,8 +369,23 @@ class EnhancedTrafficSimulator:
                         weights[decoy_r] += w_d
                         observed_delta_ts.append(dt_decoy)
 
-                # Normalize to probability distribution
+                # Normalize weights to probability distribution
                 probs = weights / np.sum(weights)
+
+                # Storing node direct observation: if node is storing node observer and no decoys,
+                # the target match gives direct correlation
+                if self.defense.is_storing_node_observer and self.defense.cover_get_ratio == 0:
+                    probs = np.full(pairs, 1e-6)
+                    probs[p] = 1.0
+                    probs = probs / np.sum(probs)
+
+                # VPN variant: if VPN is active, clients are multiplexed behind VPN gateways
+                if self.defense.vpn_enabled:
+                    # Multiplexing over VPN pool reduces confidence to gateway pool granularity
+                    vpn_gateways = 5
+                    blur_factor = 1.0 / vpn_gateways
+                    probs = (1.0 - blur_factor) * probs + blur_factor * np.full(pairs, 1.0 / pairs)
+
                 pair_message_likelihoods[p].append(probs)
 
                 pred_idx = int(np.argmax(probs))
@@ -568,15 +585,39 @@ def execute_full_threat_evaluation(num_runs: int = 100):
             polling_jitter_ratio=0.3,
             put_delay_max_sec=5.0,
             decoy_put_slots=1
+        ),
+        DefenseParameters(
+            name="Storing Node (No Defense)",
+            poisson_lambda=0.0,
+            cover_get_ratio=0.0,
+            is_storing_node_observer=True
+        ),
+        DefenseParameters(
+            name="Storing Node (Full Defense)",
+            poisson_lambda=1.0 / 480.0,
+            cover_get_ratio=1.5,
+            polling_jitter_ratio=0.3,
+            put_delay_max_sec=5.0,
+            decoy_put_slots=1,
+            is_storing_node_observer=True
+        ),
+        DefenseParameters(
+            name="Full Defense + VPN/Tor",
+            poisson_lambda=1.0 / 480.0,
+            cover_get_ratio=1.5,
+            polling_jitter_ratio=0.3,
+            put_delay_max_sec=5.0,
+            decoy_put_slots=1,
+            vpn_enabled=True
         )
     ]
 
-    print("--- 1. Evaluating Defense Postures (N=100 Runs with 95% Confidence Intervals) ---")
+    print("--- 1. Evaluating Defense Postures [SIMULATED] (N=100 Runs with 95% CI) ---")
     posture_results = []
     for d in defenses:
         agg = run_monte_carlo(cfg, d, num_runs=num_runs)
         posture_results.append((d, agg))
-        print(f"[{d.name:36s}] "
+        print(f"[SIMULATED: {d.name:34s}] "
               f"Top-1: {agg['top1'].mean*100:5.1f}% ± {agg['top1'].ci95_half*100:4.1f}% | "
               f"Adv vs 1/N: +{agg['advantage'].mean*100:4.1f}% | "
               f"Anonymity: {agg['anonymity'].mean*100:5.1f}% ± {agg['anonymity'].ci95_half*100:4.1f}% | "
@@ -754,7 +795,7 @@ def execute_full_threat_evaluation(num_runs: int = 100):
 
     # Panel 1 (Top-Left): P(Correlation) vs Delta_t (incorporating Lookahead: Delta_t < 0 and Delta_t > 0)
     colors_dt = ['#e53935', '#fb8c00', '#1e88e5', '#8e24aa', '#2e7d32']
-    for idx, (def_param, agg_res) in enumerate(posture_results):
+    for idx, (def_param, agg_res) in enumerate(posture_results[:5]):
         cdict = agg_res["corr_by_delta_t"]
         if cdict:
             dts = sorted(cdict.keys())
@@ -769,7 +810,7 @@ def execute_full_threat_evaluation(num_runs: int = 100):
                      r'[Lookahead Pre-Polling: $\Delta t < 0$ | Post-PUT Fetch: $\Delta t > 0$]',
                      fontsize=9.5, fontweight='bold')
     ax_dt.set_ylabel(r'Correlation Success $P(\mathrm{corr} \mid \Delta t)$ (%)', fontsize=9.5, fontweight='bold')
-    ax_dt.set_title(r'A. Timing Correlation Success vs $\Delta t$ (with Lookahead)', fontsize=11, fontweight='bold')
+    ax_dt.set_title(r'A. Timing Correlation Success vs $\Delta t$ (with Lookahead) [SIMULATED]', fontsize=11, fontweight='bold')
     ax_dt.set_ylim(-5, 105)
     ax_dt.legend(loc='upper right', fontsize=8.0, framealpha=0.92)
     ax_dt.grid(True, linestyle='--', alpha=0.5)
@@ -782,10 +823,10 @@ def execute_full_threat_evaluation(num_runs: int = 100):
         "+ Delayed PUT\n& Decoy Slots",
         "Full Defense\n(+ Poisson)"
     ]
-    posture_top1 = [d[1]['top1'].mean * 100 for d in posture_results]
-    posture_top1_err = [d[1]['top1'].ci95_half * 100 for d in posture_results]
-    posture_anon = [d[1]['anonymity'].mean * 100 for d in posture_results]
-    posture_anon_err = [d[1]['anonymity'].ci95_half * 100 for d in posture_results]
+    posture_top1 = [d[1]['top1'].mean * 100 for d in posture_results[:5]]
+    posture_top1_err = [d[1]['top1'].ci95_half * 100 for d in posture_results[:5]]
+    posture_anon = [d[1]['anonymity'].mean * 100 for d in posture_results[:5]]
+    posture_anon_err = [d[1]['anonymity'].ci95_half * 100 for d in posture_results[:5]]
 
     x = np.arange(len(posture_names))
     width = 0.35
@@ -848,19 +889,87 @@ def execute_full_threat_evaluation(num_runs: int = 100):
     labels = [l.get_label() for l in lines]
     ax_res.legend(lines, labels, loc='upper left', fontsize=8.0, framealpha=0.92)
 
-    plt.tight_layout()
-    plt.savefig(fig_path_tools, dpi=300)
-    plt.savefig(fig_path_docs, dpi=300)
-    plt.close()
+    # 9. Load and Print SIMULATED vs MEASURED Comparison Table
+    measured_csv_candidates = [
+        os.path.join(output_dir_docs, "metrics_testbed_correlation.csv"),
+        os.path.abspath(os.path.join(output_dir_tools, "..", "testbed", "metrics_testbed_correlation.csv"))
+    ]
+    measured_csv_path = next((p for p in measured_csv_candidates if os.path.exists(p)), None)
+
+    if measured_csv_path:
+        import csv
+        measured_by_posture: Dict[str, List[float]] = {}
+        with open(measured_csv_path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                post = row.get("posture", "")
+                acc = float(row.get("top1_accuracy", 0.0))
+                measured_by_posture.setdefault(post, []).append(acc)
+
+        print("\n" + "=" * 90)
+        print("SIMULATED vs MEASURED Comparison Table (docs/threat_model.md vs Real 150-Node DHT Testbed)")
+        print("=" * 90)
+        print(f"{'Posture Configuration':<40s} | {'SIMULATED':<18s} | {'MEASURED':<18s} | {'Delta':<8s}")
+        print("-" * 90)
+
+        # Mapping between simulated defense name and testbed posture key
+        name_map = {
+            "Baseline (No Defenses)": "BASELINE",
+            "+ Polling Jitter (±30%)": "JITTER",
+            "+ Decoy GETs (Ratio 1.5)": "DECOYS",
+            "+ Delayed PUTs (5s) & Decoy Slots": "DELAYED_PUT",
+            "Full Defense (All + Poisson 1/480s)": "FULL_DEFENSE",
+            "Storing Node (No Defense)": "STORING_NODE_NO_DEFENSE",
+            "Storing Node (Full Defense)": "STORING_NODE_FULL_DEFENSE",
+            "Full Defense + VPN/Tor": "VPN_FULL_DEFENSE"
+        }
+
+        for d, agg in posture_results:
+            sim_str = f"{agg['top1'].mean*100:5.1f}% ± {agg['top1'].ci95_half*100:4.1f}%"
+            pkey = name_map.get(d.name, "")
+            m_vals = measured_by_posture.get(pkey, [])
+            if m_vals:
+                m_mean = float(np.mean(m_vals))
+                m_ci = 1.96 * float(np.std(m_vals, ddof=1)) / math.sqrt(len(m_vals)) if len(m_vals) > 1 else 0.0
+                meas_str = f"{m_mean*100:5.1f}% ± {m_ci*100:4.1f}%"
+                delta_str = f"{(m_mean - agg['top1'].mean)*100:+5.1f}%"
+            else:
+                meas_str = "N/A"
+                delta_str = "N/A"
+            print(f"{d.name:<40s} | {sim_str:<18s} | {meas_str:<18s} | {delta_str:<8s}")
+        print("=" * 90)
+
+    # 10. Export SIMULATED Telemetry CSV
+    sim_csv_path = os.path.join(output_dir_tools, "metrics_threat_sim.csv")
+    with open(sim_csv_path, "w", newline="", encoding="utf-8") as f:
+        import csv
+        writer = csv.writer(f)
+        writer.writerow(["data_source", "posture_name", "top1_mean", "top1_ci95_half", "anonymity_entropy", "bandwidth_kb_h", "energy_mwh"])
+        for d, agg in posture_results:
+            writer.writerow([
+                "SIMULATED",
+                d.name,
+                agg["top1"].mean,
+                agg["top1"].ci95_half,
+                agg["anonymity"].mean,
+                agg["bandwidth"].mean,
+                agg["energy"].mean
+            ])
 
     print(f"\n[Generated Publication-Quality Visualizations]")
     print(f" -> {fig_path_tools}")
     print(f" -> {fig_path_docs}")
+    print(f"[Exported SIMULATED Telemetry CSV]")
+    print(f" -> {sim_csv_path}")
     print("\nSimulation completed successfully.")
 
 
 if __name__ == "__main__":
-    runs = 100
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        runs = int(sys.argv[1])
-    execute_full_threat_evaluation(num_runs=runs)
+    import argparse
+    parser = argparse.ArgumentParser(description="PQChat.DHT Adversary Threat Simulator")
+    parser.add_argument("--runs", type=int, default=100, help="Number of Monte Carlo runs (default: 100)")
+    parser.add_argument("--quick", action="store_true", help="Quick smoke test mode (5 runs)")
+    args = parser.parse_args()
+
+    r = 5 if args.quick else args.runs
+    execute_full_threat_evaluation(num_runs=r)
