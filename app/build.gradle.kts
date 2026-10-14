@@ -99,7 +99,7 @@ dependencies {
 
     // AndroidX Core & Lifecycle
     implementation("androidx.core:core-ktx:1.19.1")
-    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    implementation("androidx.fragment:fragment-ktx:1.9.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
@@ -134,7 +134,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.4")
 
     // Biometric Authentication (Optional App Lock)
-    implementation("androidx.biometric:biometric:1.2.0-alpha05")
+    implementation("androidx.biometric:biometric:1.4.0-alpha07")
 
 
     // CameraX (16 KB page-size aligned since 1.4.0+)
