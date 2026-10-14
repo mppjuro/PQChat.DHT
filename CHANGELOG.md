@@ -48,6 +48,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`2086f9e`](https://github.com/mppjuro/PQChat.DHT/commit/2086f9e7e8080ddcc03de2235b7ca35a1b05ab46) (2026-10-14) — **dht**: avoid public bootstrap calls and loosen timing assertion in FastTerminationTest
 - [`5c8011e`](https://github.com/mppjuro/PQChat.DHT/commit/5c8011e99ca96cadee9091e554d2dc35122335ab) (2026-10-14) — **tor**: enforce fail-closed transport, block silent simulation on Android, and add SOCKS5 TCP tunnel fallback for BEP 44
 - [`f95251f`](https://github.com/mppjuro/PQChat.DHT/commit/f95251f6f0175f5f0bc0d395ec67379fca733274) (2026-10-13) — **lifecycle**: centralize polling lifecycle with unified 4-state coordinator and true screen detection
 - [`1dc376c`](https://github.com/mppjuro/PQChat.DHT/commit/1dc376c94e232eda2cedde8a70ad678851175026) (2026-10-13) — **test**: fix instrumented tests execution, resolve toolchain provisioning and fragment request code limitation
@@ -108,6 +109,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`2a3a203`](https://github.com/mppjuro/PQChat.DHT/commit/2a3a203ae2e340ec27cae30ad19d771653b9d470) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`0cffb12`](https://github.com/mppjuro/PQChat.DHT/commit/0cffb123f9e838d9bb1f07184c1d99365c727647) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`4cb4061`](https://github.com/mppjuro/PQChat.DHT/commit/4cb40610fd5d25421b8513a5c9f4f8b73155bfca) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`8369eef`](https://github.com/mppjuro/PQChat.DHT/commit/8369eefd3c1f2c37fcaeb147c241b8a424eddf38) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
