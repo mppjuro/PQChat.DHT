@@ -5,18 +5,21 @@ import java.util.Arrays
 
 object HandshakeManager {
 
-    const val QR_DATA_SIZE = 832 // 800 bytes pk_A + 32 bytes Seed_init
+    const val QR_DATA_SIZE = 864 // 832 bytes combinedPublicKey + 32 bytes Seed_init
     private val RENDEZVOUS_INFO = "handshake_rendezvous".toByteArray(Charsets.UTF_8)
     private val HS_ENC_INFO = "hs_enc".toByteArray(Charsets.UTF_8)
     private val HS_ED_INFO = "hs_ed25519".toByteArray(Charsets.UTF_8)
 
     data class AliceInitResult(
         val qrBytes: ByteArray,
-        val skA: ByteArray,
-        val pkA: ByteArray,
-        val seedInit: ByteArray,
+        val skA: ByteArray,      // Combined private keys (1632 B ML-KEM + 32 B X25519 = 1664 B)
+        val pkA: ByteArray,      // Combined public key (800 B ML-KEM + 32 B X25519 = 832 B)
+        val seedInit: ByteArray, // 32 bytes
         val target0: ByteArray
     ) {
+        val mlKemPrivateKey: ByteArray get() = if (skA.size >= 1632) skA.copyOfRange(0, 1632) else skA
+        val x25519PrivateKey: ByteArray get() = if (skA.size >= 1664) skA.copyOfRange(1632, 1664) else ByteArray(0)
+
         fun destroySensitiveKeys() {
             Arrays.fill(skA, 0.toByte())
         }
@@ -64,7 +67,7 @@ object HandshakeManager {
 
     /**
      * Computes the cryptographic anti-grinding commitment over the handshake transcript.
-     * Binds the initiator's Seed_init, ephemeral ML-KEM public key, Bob's ciphertext, and salt.
+     * Binds the initiator's Seed_init, ephemeral ML-KEM + X25519 public key, Bob's hybrid ciphertext, and salt.
      */
     fun computeAntiGrindCommitment(seedInit: ByteArray, transcript: ByteArray): ByteArray {
         val label = "PQChat_AntiGrind_v2".toByteArray(Charsets.UTF_8)
@@ -112,23 +115,31 @@ object HandshakeManager {
     }
 
     /**
-     * Step 1 (Alice): Generates ML-KEM-512 key pair and random 32-byte seed.
-     * Returns 832-byte QR payload (800B pk + 32B seed).
+     * Step 1 (Alice): Generates Hybrid ML-KEM-512 + X25519 key pair and random 32-byte seed.
+     * Returns 864-byte QR payload (832B combined pk + 32B seed).
      */
     fun aliceCreateHandshake(): AliceInitResult {
-        val kemPair = MLKemEngine.generateKeyPair()
+        val hybridPair = HybridKemEngine.generateKeyPair()
         val seedInit = CryptoUtils.secureRandomBytes(32)
 
+        val combinedPk = hybridPair.combinedPublicKey
         val qrBytes = ByteArray(QR_DATA_SIZE)
-        System.arraycopy(kemPair.publicKey, 0, qrBytes, 0, MLKemEngine.PUBLIC_KEY_SIZE)
-        System.arraycopy(seedInit, 0, qrBytes, MLKemEngine.PUBLIC_KEY_SIZE, 32)
+        System.arraycopy(combinedPk, 0, qrBytes, 0, HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
+        System.arraycopy(seedInit, 0, qrBytes, HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE, 32)
 
         val target0 = computeTarget0(seedInit)
 
+        val skA = ByteArray(1632 + 32)
+        System.arraycopy(hybridPair.mlKemPrivateKey, 0, skA, 0, 1632)
+        System.arraycopy(hybridPair.x25519PrivateKey, 0, skA, 1632, 32)
+
+        // Zero original key pair fields
+        hybridPair.wipe()
+
         return AliceInitResult(
             qrBytes = qrBytes,
-            skA = kemPair.privateKey,
-            pkA = kemPair.publicKey,
+            skA = skA,
+            pkA = combinedPk,
             seedInit = seedInit,
             target0 = target0
         )
@@ -143,18 +154,21 @@ object HandshakeManager {
     }
 
     /**
-     * Step 2 (Bob): Scans 832-byte QR code from Alice, encapsulates ML-KEM shared secret,
+     * Step 2 (Bob): Scans 864-byte QR code from Alice, encapsulates hybrid shared secret,
      * binds transcript (pkA, ctB, seedInit, salt), generates key confirmation tag,
      * and creates Type 0x01 BEP 44 frame with AAD to PUT to DHT at Target_0.
      */
     fun bobProcessQr(qrBytes: ByteArray): BobHandshakeResult {
         require(qrBytes.size == QR_DATA_SIZE) { "Invalid QR code data size: ${qrBytes.size}, expected $QR_DATA_SIZE" }
 
-        val pkA = qrBytes.copyOfRange(0, MLKemEngine.PUBLIC_KEY_SIZE)
-        val seedInit = qrBytes.copyOfRange(MLKemEngine.PUBLIC_KEY_SIZE, QR_DATA_SIZE)
+        val pkA = qrBytes.copyOfRange(0, HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
+        val seedInit = qrBytes.copyOfRange(HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE, QR_DATA_SIZE)
 
-        // 1. Encapsulate post-quantum shared secret
-        val (ssInit, ctB) = MLKemEngine.encapsulate(pkA)
+        // 1. Encapsulate hybrid post-quantum + classical shared secret
+        val encResult = HybridKemEngine.encapsulate(pkA)
+        val ssInit = encResult.sharedSecret.copyOf()
+        val ctB = encResult.combinedCiphertext
+        encResult.wipe()
 
         // 2. Compute Target_0
         val target0 = computeTarget0(seedInit)
@@ -163,8 +177,8 @@ object HandshakeManager {
         val kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
         val edSeed = HkdfSha512.derive(null, seedInit, HS_ED_INFO, 32)
 
-        // 4. Generate salt and bind transcript: (pkA, ctB, seedInit, salt)
-        val salt = CryptoUtils.secureRandomBytes(32)
+        // 4. Generate salt (24 B per T1_SALT_SIZE) and bind transcript: (pkA, ctB, seedInit, salt)
+        val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
         val transcript = buildTranscript(pkA, ctB, seedInit, salt)
         val transcriptHash = CryptoUtils.sha512(transcript)
 
@@ -176,6 +190,9 @@ object HandshakeManager {
         System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
         val masterKey = HkdfSha512.expand(prk, info, 64)
 
+        // Zero sensitive ephemeral ssInit
+        ssInit.fill(0)
+
         // 6. Compute key confirmation tag
         val confirmationTag = computeConfirmationTag(masterKey)
 
@@ -184,7 +201,7 @@ object HandshakeManager {
             seqNum = 0,
             ackNum = 0,
             timestampUTC = System.currentTimeMillis(),
-            mlKemCiphertext = ctB,
+            hybridCiphertext = ctB,
             saltParameter = salt,
             confirmationTag = confirmationTag
         )
@@ -218,9 +235,9 @@ object HandshakeManager {
 
     /**
      * Step 3 (Alice): On receiving Type 0x01 frame from Target_0:
-     * Decrypts frame with AAD, decapsulates ct_B to recover SS_init,
+     * Decrypts frame with AAD, decapsulates ct_B to recover SS_init using hybrid private keys,
      * binds transcript, verifies Key Confirmation tag.
-     * Only on verified confirmation is sk_A securely wiped and session established.
+     * Only on verified confirmation are ephemeral private keys securely wiped and session established.
      */
     fun aliceFinalize(
         skA: ByteArray,
@@ -243,11 +260,21 @@ object HandshakeManager {
 
         val handshakePayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.HandshakeFinalize
 
-        // Decapsulate SS_init using Alice's ML-KEM private key
-        val ssInit = MLKemEngine.decapsulate(skA, handshakePayload.mlKemCiphertext)
+        require(skA.size == 1664) {
+            "Invalid private key parameters for hybrid decapsulation: skA size must be 1664 (got ${skA.size})"
+        }
+        val mlKemSk = skA.copyOfRange(0, 1632)
+        val x25519Sk = skA.copyOfRange(1632, 1664)
+
+        // Decapsulate SS_init using Alice's hybrid private keys (ML-KEM-512 + X25519)
+        val ssInit = HybridKemEngine.decapsulate(
+            mlKemPrivateKey = mlKemSk,
+            x25519PrivateKey = x25519Sk,
+            combinedCiphertext = handshakePayload.hybridCiphertext
+        )
 
         // Bind transcript: (pkA, ctB, seedInit, salt)
-        val transcript = buildTranscript(pkA, handshakePayload.mlKemCiphertext, seedInit, handshakePayload.saltParameter)
+        val transcript = buildTranscript(pkA, handshakePayload.hybridCiphertext, seedInit, handshakePayload.saltParameter)
         val transcriptHash = CryptoUtils.sha512(transcript)
         val prk = HkdfSha512.extract(handshakePayload.saltParameter, ssInit)
         val label = "PQChat_MasterKey_Transcript".toByteArray(Charsets.UTF_8)
@@ -256,15 +283,21 @@ object HandshakeManager {
         System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
         val masterKey = HkdfSha512.expand(prk, info, 64)
 
-        // Verify Key Confirmation Tag: protects against ML-KEM implicit rejection silent desync
+        // Verify Key Confirmation Tag: protects against ML-KEM/Hybrid implicit rejection silent desync
         val expectedConfirmationTag = computeConfirmationTag(masterKey)
         if (!java.security.MessageDigest.isEqual(handshakePayload.confirmationTag, expectedConfirmationTag)) {
             // DO NOT wipe skA on failure: allows Alice to keep waiting for legitimate Bob packet
-            throw SecurityException("ML-KEM key confirmation failed: invalid ciphertext or desync detected")
+            mlKemSk.fill(0)
+            x25519Sk.fill(0)
+            ssInit.fill(0)
+            throw SecurityException("ML-KEM/Hybrid key confirmation failed: invalid ciphertext or desync detected")
         }
 
-        // Wipe Alice's ephemeral private key ONLY after verified key confirmation
+        // Wipe Alice's ephemeral private keys ONLY after verified key confirmation
         Arrays.fill(skA, 0.toByte())
+        mlKemSk.fill(0)
+        x25519Sk.fill(0)
+        ssInit.fill(0)
 
         // Derive working chains
         val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
@@ -286,15 +319,35 @@ object HandshakeManager {
         )
     }
 
+    fun extractCombinedPublicKey(skA: ByteArray): ByteArray {
+        require(skA.size == 1664) {
+            "Cannot extract combined public key without full hybrid private key (1664 bytes, was ${skA.size})"
+        }
+        val mlKemSk = skA.copyOfRange(0, 1632)
+        val x25519Sk = skA.copyOfRange(1632, 1664)
+
+        val mlKemPk = MLKemEngine.extractPublicKey(mlKemSk)
+        val xKeyGenParams = org.bouncycastle.crypto.params.X25519PrivateKeyParameters(x25519Sk, 0)
+        val x25519Pk = (xKeyGenParams.generatePublicKey() as org.bouncycastle.crypto.params.X25519PublicKeyParameters).encoded
+
+        val combinedPk = ByteArray(HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
+        System.arraycopy(mlKemPk, 0, combinedPk, 0, 800)
+        System.arraycopy(x25519Pk, 0, combinedPk, 800, 32)
+
+        mlKemSk.fill(0)
+        x25519Sk.fill(0)
+        return combinedPk
+    }
+
     /**
-     * Backward-compatible overload extracting pkA directly from skA.
+     * Backward-compatible overload extracting combined pkA directly from hybrid skA.
      */
     fun aliceFinalize(
         skA: ByteArray,
         seedInit: ByteArray,
         frame: ByteArray
     ): EstablishedSession {
-        val pkA = MLKemEngine.extractPublicKey(skA)
+        val pkA = extractCombinedPublicKey(skA)
         return aliceFinalize(skA, pkA, seedInit, frame)
     }
 }

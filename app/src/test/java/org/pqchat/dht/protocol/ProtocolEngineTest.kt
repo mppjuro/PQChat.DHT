@@ -23,7 +23,7 @@ class ProtocolEngineTest {
     fun testAliceBobHandshakeFlow() {
         // 1. Alice creates handshake (displays QR)
         val aliceInit = HandshakeManager.aliceCreateHandshake()
-        assertEquals(832, aliceInit.qrBytes.size)
+        assertEquals(HandshakeManager.QR_DATA_SIZE, aliceInit.qrBytes.size)
 
         // 2. Bob scans QR and creates Type 0x01 frame for DHT
         val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
@@ -196,8 +196,11 @@ class ProtocolEngineTest {
         assertEquals("SAS must match between Alice and Bob", bobHandshake.sas, aliceSession.sas)
         assertEquals("Fingerprint must match between Alice and Bob", bobHandshake.fingerprint, aliceSession.fingerprint)
 
-        // skA must be securely zeroized after verified confirmation
+        // skA (1664 B) must be securely zeroized (both ML-KEM 1632 B and X25519 32 B parts)
+        assertEquals(1664, aliceInit.skA.size)
         assertTrue("skA must be wiped with zeroes after confirmation", aliceInit.skA.all { it == 0.toByte() })
+        assertTrue("ML-KEM private key portion must be wiped with zeroes", aliceInit.skA.sliceArray(0 until 1632).all { it == 0.toByte() })
+        assertTrue("X25519 private key portion must be wiped with zeroes", aliceInit.skA.sliceArray(1632 until 1664).all { it == 0.toByte() })
         assertFalse("Original skA was not all zeroes", skACopy.all { it == 0.toByte() })
     }
 
@@ -205,7 +208,7 @@ class ProtocolEngineTest {
     fun testAntiGrindingCommitmentChangesSasOnAnyTranscriptTamper() {
         val masterKey = ByteArray(64) { 0x42 }
         val seedInit = ByteArray(32) { 0x11 }
-        val transcript = ByteArray(800 + 768 + 32 + 32) { 0x22 }
+        val transcript = ByteArray(832 + 800 + 32 + 24) { 0x22 }
 
         val commitment1 = HandshakeManager.computeAntiGrindCommitment(seedInit, transcript)
         val sas1 = HandshakeManager.computeSas(masterKey, commitment1)
@@ -231,9 +234,7 @@ class ProtocolEngineTest {
         // Bob performs legitimate encapsulation
         val bobHandshake = HandshakeManager.bobProcessQr(aliceInit.qrBytes)
 
-        // Attacker tampers with the ML-KEM ciphertext:
-        // In ML-KEM, modifying ciphertext doesn't throw on decapsulate (implicit rejection),
-        // but results in a different pseudorandom shared secret!
+        // Attacker tampers with the ciphertext:
         val forgedCt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_CIPHERTEXT_SIZE)
         val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
         val kHs = org.pqchat.dht.crypto.HkdfSha512.derive(null, seedInit, "hs_enc".toByteArray(Charsets.UTF_8), 32)
@@ -244,7 +245,7 @@ class ProtocolEngineTest {
             seqNum = 0,
             ackNum = 0,
             timestampUTC = System.currentTimeMillis(),
-            mlKemCiphertext = forgedCt,
+            hybridCiphertext = forgedCt,
             saltParameter = salt,
             confirmationTag = forgedConfirmationTag
         )

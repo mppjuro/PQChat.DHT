@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import org.pqchat.dht.crypto.CryptoUtils
+import org.pqchat.dht.protocol.HandshakeManager
 import org.pqchat.dht.ui.components.CameraQrScanner
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.util.QrCodeUtil
@@ -405,7 +406,7 @@ fun HandshakeScreen(
                             if (qrBase64Input.isBlank()) false
                             else {
                                 val bytes = QrCodeUtil.decodeQrString(qrBase64Input)
-                                bytes.size == 832 // ED25519_PK(32) + MLKEM512_PK(800)
+                                bytes.size == HandshakeManager.QR_DATA_SIZE // Combined PK (832) + Seed_init (32) = 864 B
                             }
                         } catch (_: Exception) {
                             false
@@ -430,7 +431,7 @@ fun HandshakeScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (isPayloadValid) "Valid ML-KEM-512 Handshake Key (832 bytes verified)" else "Invalid QR code payload format",
+                                    text = if (isPayloadValid) "Valid Hybrid Handshake Key (${HandshakeManager.QR_DATA_SIZE} bytes verified)" else "Invalid QR code payload format",
                                     color = if (isPayloadValid) ElectricGreen else Color.Red,
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Medium
@@ -504,7 +505,7 @@ fun HandshakeScreen(
                                 focusedLabelColor = NeonCyan
                             ),
                             placeholder = {
-                                Text("Paste Alice's 832-byte QR Base64 data here...", color = TextSecondary)
+                                Text("Paste Alice's ${HandshakeManager.QR_DATA_SIZE}-byte QR Base64 data here...", color = TextSecondary)
                             }
                         )
                     }
