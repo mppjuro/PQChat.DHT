@@ -97,6 +97,44 @@ class ChatRepository(
     private val _rekeyInProgressContacts = MutableStateFlow<Set<String>>(emptySet())
     val rekeyInProgressContacts: StateFlow<Set<String>> = _rekeyInProgressContacts.asStateFlow()
 
+    data class ImageDownloadProgress(
+        val transferId: String,
+        val contactId: String,
+        val seqNum: Int,
+        val receivedChunks: Int,
+        val totalChunks: Int
+    ) {
+        val progressFraction: Float get() = if (totalChunks > 0) receivedChunks.toFloat() / totalChunks else 0f
+        val progressPercent: Int get() = (progressFraction * 100).toInt()
+    }
+
+    private val _imageDownloadProgress = MutableStateFlow<Map<String, ImageDownloadProgress>>(emptyMap())
+    val imageDownloadProgress: StateFlow<Map<String, ImageDownloadProgress>> = _imageDownloadProgress.asStateFlow()
+
+    init {
+        repositoryScope.launch {
+            loadPendingTransfersProgress()
+        }
+    }
+
+    suspend fun loadPendingTransfersProgress() {
+        try {
+            val pending = chunkDao.getAllPendingTransfers()
+            val map = mutableMapOf<String, ImageDownloadProgress>()
+            for (p in pending) {
+                val count = chunkDao.countChunks(p.transferId)
+                map[p.transferId] = ImageDownloadProgress(
+                    transferId = p.transferId,
+                    contactId = p.contactId,
+                    seqNum = p.seqNum,
+                    receivedChunks = count,
+                    totalChunks = p.totalChunks
+                )
+            }
+            _imageDownloadProgress.value = map
+        } catch (_: Exception) {}
+    }
+
     fun isRekeyPendingFlow(contactId: String): Flow<Boolean> {
         val dbFlow = pendingRekeyOfferDao?.isRekeyPendingFlow(contactId) ?: flowOf(false)
         return combine(dbFlow, _rekeyInProgressContacts) { inDb, inMem ->
@@ -984,17 +1022,72 @@ class ChatRepository(
             contact = contactDao.getContactById(contactId) ?: return true
         }
 
+        // 1b. Check and resume any pending partial chunk transfers for this contact
+        if (resumePendingChunkTransfers(contactId)) {
+            anyProcessed = true
+            contact = contactDao.getContactById(contactId) ?: return true
+        }
+
         // 2. Process all available consecutive messages starting at counterIn
         while (true) {
             val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
-            val item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf) ?: break
+            var item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf)
+            var isChunkTransfer = false
+            var initialChunkPayload: BinaryFrameCodec.DecodedPayload.ChunkData? = null
+            var initialChunkIndex = -1
+            var initialFrameMsg: BinaryFrameCodec.FrameMessage? = null
 
-            val processed = processIncomingItem(contactId, currentSlot, item, isSelf)
-            if (!processed) {
-                harvestUndecryptableItem(currentSlot.target, item)
-                break
+            if (item == null) {
+                // If single message target is empty, probe chunk targets for this slot (probe 0 and 1)
+                for (probeIdx in 0..1) {
+                    val chunkTarget = ChunkingEngine.deriveChunkTarget(currentSlot.edPrivateKeySeed, probeIdx)
+                    val chunkItem = dhtLeafNode.getMutable(chunkTarget, skipLocalStore = isSelf)
+                    if (chunkItem != null) {
+                        val chunkKey = ChunkingEngine.deriveChunkMsgKey(currentSlot.msgKey, probeIdx)
+                        try {
+                            val decoded = BinaryFrameCodec.unpackAeadFrame(
+                                key = chunkKey,
+                                frame = chunkItem.v,
+                                target = chunkTarget,
+                                direction = contact.inboundDirection
+                            )
+                            if (decoded.msgType == BinaryFrameCodec.TYPE_CHUNK_DATA) {
+                                item = chunkItem
+                                isChunkTransfer = true
+                                initialChunkPayload = decoded.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                                initialChunkIndex = probeIdx
+                                initialFrameMsg = decoded
+                                break
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
             }
-            anyProcessed = true
+
+            if (item == null) break
+
+            if (isChunkTransfer && initialChunkPayload != null && initialFrameMsg != null) {
+                val completed = processIncomingChunkTransfer(
+                    contactId = contactId,
+                    slot = currentSlot,
+                    chunkPayload = initialChunkPayload,
+                    initialChunkIndex = initialChunkIndex,
+                    frameMsg = initialFrameMsg,
+                    isSelf = isSelf,
+                    contact = contact
+                )
+                anyProcessed = true
+                if (!completed) {
+                    break
+                }
+            } else {
+                val processed = processIncomingItem(contactId, currentSlot, item, isSelf)
+                if (!processed) {
+                    harvestUndecryptableItem(currentSlot.target, item)
+                    break
+                }
+                anyProcessed = true
+            }
             contact = contactDao.getContactById(contactId) ?: break
         }
 
@@ -1270,120 +1363,309 @@ class ChatRepository(
 
                 BinaryFrameCodec.TYPE_CHUNK_DATA -> {
                     val chunkPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.ChunkData
-                    val transferIdHex = CryptoUtils.toHex(chunkPayload.transferId)
-                    bitmap.markReceived(slot.counter)
-
-                    chunkDao.insertChunk(
-                        ChunkEntity(
-                            transferId = transferIdHex,
-                            chunkIndex = chunkPayload.chunkIndex,
-                            totalChunks = chunkPayload.totalChunks,
-                            data = chunkPayload.data
-                        )
+                    processIncomingChunkTransfer(
+                        contactId = contactId,
+                        slot = slot,
+                        chunkPayload = chunkPayload,
+                        initialChunkIndex = chunkPayload.chunkIndex,
+                        frameMsg = frameMsg,
+                        isSelf = isSelf,
+                        contact = contact
                     )
-
-                    for (j in 1 until chunkPayload.totalChunks) {
-                        val subEdSeed = ChunkingEngine.deriveChunkEdSeed(slot.edPrivateKeySeed, chunkPayload.transferId, j)
-                        val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
-                        val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
-                        val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
-
-                        val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
-                        if (subItem != null) {
-                            try {
-                                val subFrame = BinaryFrameCodec.unpackAeadFrame(
-                                    key = subMsgKey,
-                                    frame = subItem.v,
-                                    target = subTarget,
-                                    direction = contact.inboundDirection
-                                )
-                                val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
-                                chunkDao.insertChunk(
-                                    ChunkEntity(
-                                        transferId = transferIdHex,
-                                        chunkIndex = subChunk.chunkIndex,
-                                        totalChunks = subChunk.totalChunks,
-                                        data = subChunk.data
-                                    )
-                                )
-                            } catch (_: Exception) {}
-                        }
-                    }
-
-                    val count = chunkDao.countChunks(transferIdHex)
-                    if (count == chunkPayload.totalChunks) {
-                        val allChunks = chunkDao.getChunksForTransfer(transferIdHex)
-                        val decodedList = allChunks.map {
-                            BinaryFrameCodec.DecodedPayload.ChunkData(
-                                transferId = chunkPayload.transferId,
-                                chunkIndex = it.chunkIndex,
-                                totalChunks = it.totalChunks,
-                                data = it.rawData
-                            )
-                        }
-                        val fullData = ChunkingEngine.assembleChunks(decodedList)
-                        chunkDao.deleteChunks(transferIdHex)
-
-                        if (isSelf) {
-                            messageDao.updateMessageStatusAndDirection(
-                                contactId = contactId,
-                                seqNum = slot.counter,
-                                isOutgoing = false,
-                                status = "CONFIRMED_DHT"
-                            )
-                            contactDao.updateIncomingStateWithBitmap(
-                                id = contactId,
-                                counterIn = slot.counter + 1,
-                                chainKeyIn = slot.nextChainKey,
-                                bitmapBase = bitmap.windowBase,
-                                bitmap = bitmap.toByteArray()
-                            )
-                            preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
-                        } else {
-                            val seqEpoch = slot.counter / 65536
-                            messageDao.insertMessage(
-                                MessageEntity(
-                                    contactId = contactId,
-                                    isOutgoing = false,
-                                    seqEpoch = seqEpoch,
-                                    seqNum = slot.counter,
-                                    ackNum = frameMsg.ackNum,
-                                    timestamp = frameMsg.timestampUTC,
-                                    textContent = "[Image File - ${fullData.size} bytes]",
-                                    imageBytes = fullData,
-                                    status = "DELIVERED"
-                                )
-                            )
-
-                            contactDao.updateIncomingStateWithBitmap(
-                                id = contactId,
-                                counterIn = slot.counter + 1,
-                                chainKeyIn = slot.nextChainKey,
-                                bitmapBase = bitmap.windowBase,
-                                bitmap = bitmap.toByteArray()
-                            )
-                            preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
-                            onIncomingMessageDelivered?.invoke(contactId, "[Image File - ${fullData.size} bytes]", true)
-
-                            if (!isSelf) {
-                                pendingAckQueue.enqueue(
-                                    org.pqchat.dht.traffic.PendingAck(
-                                        contactId = contactId,
-                                        messageId = "${slot.counter}",
-                                        ratchetKey = slot.msgKey,
-                                        seqNum = slot.counter
-                                    )
-                                )
-                            }
-                        }
-                    }
-                    true
                 }
                 else -> false
             }
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Processes an incoming chunked payload (e.g. PNG image), retrieving parallel/remaining chunks,
+     * maintaining pending partial transfer state with 72h TTL, and reporting download progress.
+     */
+    private suspend fun processIncomingChunkTransfer(
+        contactId: String,
+        slot: RatchetChain.SlotParameters,
+        chunkPayload: BinaryFrameCodec.DecodedPayload.ChunkData,
+        initialChunkIndex: Int,
+        frameMsg: BinaryFrameCodec.FrameMessage,
+        isSelf: Boolean,
+        contact: ContactEntity
+    ): Boolean {
+        val transferIdHex = CryptoUtils.toHex(chunkPayload.transferId)
+        val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
+
+        chunkDao.insertChunk(
+            transferId = transferIdHex,
+            chunkIndex = chunkPayload.chunkIndex,
+            totalChunks = chunkPayload.totalChunks,
+            data = chunkPayload.data
+        )
+
+        // Query all other chunks 0 until totalChunks
+        for (j in 0 until chunkPayload.totalChunks) {
+            if (j == initialChunkIndex) continue
+            val subTarget = ChunkingEngine.deriveChunkTarget(slot.edPrivateKeySeed, j)
+            val subMsgKey = ChunkingEngine.deriveChunkMsgKey(slot.msgKey, j)
+
+            val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = isSelf)
+            if (subItem != null) {
+                try {
+                    val subFrame = BinaryFrameCodec.unpackAeadFrame(
+                        key = subMsgKey,
+                        frame = subItem.v,
+                        target = subTarget,
+                        direction = contact.inboundDirection
+                    )
+                    if (subFrame.msgType == BinaryFrameCodec.TYPE_CHUNK_DATA) {
+                        val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                        chunkDao.insertChunk(
+                            transferId = transferIdHex,
+                            chunkIndex = subChunk.chunkIndex,
+                            totalChunks = subChunk.totalChunks,
+                            data = subChunk.data
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        val count = chunkDao.countChunks(transferIdHex)
+        if (count == chunkPayload.totalChunks) {
+            val allChunks = chunkDao.getChunksForTransfer(transferIdHex)
+            val decodedList = allChunks.map {
+                BinaryFrameCodec.DecodedPayload.ChunkData(
+                    transferId = chunkPayload.transferId,
+                    chunkIndex = it.chunkIndex,
+                    totalChunks = it.totalChunks,
+                    data = it.rawData
+                )
+            }
+            val fullData = ChunkingEngine.assembleChunks(decodedList)
+            chunkDao.deleteChunks(transferIdHex)
+            chunkDao.deletePendingTransfer(transferIdHex)
+            _imageDownloadProgress.update { it - transferIdHex }
+
+            bitmap.markReceived(slot.counter)
+
+            if (isSelf) {
+                messageDao.updateMessageStatusAndDirection(
+                    contactId = contactId,
+                    seqNum = slot.counter,
+                    isOutgoing = false,
+                    status = "CONFIRMED_DHT"
+                )
+                contactDao.updateIncomingStateWithBitmap(
+                    id = contactId,
+                    counterIn = slot.counter + 1,
+                    chainKeyIn = slot.nextChainKey,
+                    bitmapBase = bitmap.windowBase,
+                    bitmap = bitmap.toByteArray()
+                )
+                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+            } else {
+                val seqEpoch = slot.counter / 65536
+                messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = false,
+                        seqEpoch = seqEpoch,
+                        seqNum = slot.counter,
+                        ackNum = frameMsg.ackNum,
+                        timestamp = frameMsg.timestampUTC,
+                        textContent = "[Image File - ${fullData.size} bytes]",
+                        imageBytes = fullData,
+                        status = "DELIVERED"
+                    )
+                )
+
+                contactDao.updateIncomingStateWithBitmap(
+                    id = contactId,
+                    counterIn = slot.counter + 1,
+                    chainKeyIn = slot.nextChainKey,
+                    bitmapBase = bitmap.windowBase,
+                    bitmap = bitmap.toByteArray()
+                )
+                preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                onIncomingMessageDelivered?.invoke(contactId, "[Image File - ${fullData.size} bytes]", true)
+
+                pendingAckQueue.enqueue(
+                    org.pqchat.dht.traffic.PendingAck(
+                        contactId = contactId,
+                        messageId = "${slot.counter}",
+                        ratchetKey = slot.msgKey,
+                        seqNum = slot.counter
+                    )
+                )
+            }
+            return true
+        } else {
+            // Partial transfer: record missing chunk indices and save pending state (72h TTL)
+            val existingIndices = chunkDao.getExistingChunkIndices(transferIdHex).toSet()
+            val missingIndices = (0 until chunkPayload.totalChunks).filter { it !in existingIndices }
+
+            val pendingTransfer = PendingChunkTransferEntity(
+                transferId = transferIdHex,
+                contactId = contactId,
+                seqNum = slot.counter,
+                totalChunks = chunkPayload.totalChunks,
+                missingIndices = missingIndices,
+                baseEdSeed = slot.edPrivateKeySeed,
+                baseMsgKey = slot.msgKey,
+                direction = contact.inboundDirection,
+                isSelf = isSelf,
+                ackNum = frameMsg.ackNum,
+                timestampUTC = frameMsg.timestampUTC,
+                createdAt = System.currentTimeMillis(),
+                expiresAt = System.currentTimeMillis() + 72 * 3600 * 1000L
+            )
+            chunkDao.insertPendingTransfer(pendingTransfer)
+
+            _imageDownloadProgress.update {
+                it + (transferIdHex to ImageDownloadProgress(
+                    transferId = transferIdHex,
+                    contactId = contactId,
+                    seqNum = slot.counter,
+                    receivedChunks = count,
+                    totalChunks = chunkPayload.totalChunks
+                ))
+            }
+            return false
+        }
+    }
+
+    /**
+     * Resumes any in-flight partial chunk transfers for this contact, querying DHT for missing chunks.
+     * Enforces a 72h TTL by deleting expired orphaned transfers and chunks.
+     */
+    suspend fun resumePendingChunkTransfers(contactId: String): Boolean = withContext(Dispatchers.IO) {
+        chunkDao.purgeExpiredTransfers()
+        val pendingList = chunkDao.getPendingTransfersForContact(contactId)
+        if (pendingList.isEmpty()) return@withContext false
+
+        var anyCompleted = false
+        val contact = contactDao.getContactById(contactId) ?: return@withContext false
+        val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
+
+        for (pending in pendingList) {
+            val missing = pending.parseMissingIndices()
+            if (missing.isEmpty()) continue
+
+            for (chunkIdx in missing) {
+                val subTarget = ChunkingEngine.deriveChunkTarget(pending.rawBaseEdSeed, chunkIdx)
+                val subKey = ChunkingEngine.deriveChunkMsgKey(pending.rawBaseMsgKey, chunkIdx)
+                val subItem = dhtLeafNode.getMutable(subTarget, skipLocalStore = pending.isSelf) ?: continue
+                try {
+                    val subFrame = BinaryFrameCodec.unpackAeadFrame(
+                        key = subKey,
+                        frame = subItem.v,
+                        target = subTarget,
+                        direction = pending.direction
+                    )
+                    if (subFrame.msgType == BinaryFrameCodec.TYPE_CHUNK_DATA) {
+                        val subChunk = subFrame.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                        chunkDao.insertChunk(
+                            transferId = pending.transferId,
+                            chunkIndex = subChunk.chunkIndex,
+                            totalChunks = pending.totalChunks,
+                            data = subChunk.data
+                        )
+                    }
+                } catch (_: Exception) {}
+            }
+
+            val count = chunkDao.countChunks(pending.transferId)
+            if (count == pending.totalChunks) {
+                // Completed!
+                val allChunks = chunkDao.getChunksForTransfer(pending.transferId)
+                val decodedList = allChunks.map {
+                    BinaryFrameCodec.DecodedPayload.ChunkData(
+                        transferId = CryptoUtils.fromHex(pending.transferId),
+                        chunkIndex = it.chunkIndex,
+                        totalChunks = it.totalChunks,
+                        data = it.rawData
+                    )
+                }
+                val fullData = ChunkingEngine.assembleChunks(decodedList)
+                chunkDao.deleteChunks(pending.transferId)
+                chunkDao.deletePendingTransfer(pending.transferId)
+                _imageDownloadProgress.update { it - pending.transferId }
+
+                bitmap.markReceived(pending.seqNum)
+
+                if (pending.isSelf) {
+                    messageDao.updateMessageStatusAndDirection(
+                        contactId = contactId,
+                        seqNum = pending.seqNum,
+                        isOutgoing = false,
+                        status = "CONFIRMED_DHT"
+                    )
+                } else {
+                    val seqEpoch = pending.seqNum / 65536
+                    messageDao.insertMessage(
+                        MessageEntity(
+                            contactId = contactId,
+                            isOutgoing = false,
+                            seqEpoch = seqEpoch,
+                            seqNum = pending.seqNum,
+                            ackNum = pending.ackNum,
+                            timestamp = pending.timestampUTC,
+                            textContent = "[Image File - ${fullData.size} bytes]",
+                            imageBytes = fullData,
+                            status = "DELIVERED"
+                        )
+                    )
+                    onIncomingMessageDelivered?.invoke(contactId, "[Image File - ${fullData.size} bytes]", true)
+                    pendingAckQueue.enqueue(
+                        org.pqchat.dht.traffic.PendingAck(
+                            contactId = contactId,
+                            messageId = "${pending.seqNum}",
+                            ratchetKey = pending.rawBaseMsgKey,
+                            seqNum = pending.seqNum
+                        )
+                    )
+                }
+
+                // If this completed transfer is at counterIn, advance counterIn
+                val currentContact = contactDao.getContactById(contactId) ?: contact
+                if (pending.seqNum == currentContact.counterIn) {
+                    val completedSlot = RatchetChain.deriveSlot(currentContact.chainKeyIn, currentContact.counterIn)
+                    contactDao.updateIncomingStateWithBitmap(
+                        id = contactId,
+                        counterIn = completedSlot.counter + 1,
+                        chainKeyIn = completedSlot.nextChainKey,
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+                    preWarmNextIncomingTarget(completedSlot.nextChainKey, completedSlot.counter + 1)
+                } else {
+                    contactDao.updateIncomingStateWithBitmap(
+                        id = contactId,
+                        counterIn = currentContact.counterIn,
+                        chainKeyIn = currentContact.chainKeyIn,
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+                }
+                anyCompleted = true
+            } else {
+                // Still incomplete: update missing indices & progress
+                val existing = chunkDao.getExistingChunkIndices(pending.transferId).toSet()
+                val remaining = (0 until pending.totalChunks).filter { it !in existing }
+                chunkDao.updateMissingIndices(pending.transferId, remaining.joinToString(","))
+                _imageDownloadProgress.update {
+                    it + (pending.transferId to ImageDownloadProgress(
+                        transferId = pending.transferId,
+                        contactId = contactId,
+                        seqNum = pending.seqNum,
+                        receivedChunks = count,
+                        totalChunks = pending.totalChunks
+                    ))
+                }
+            }
+        }
+        return@withContext anyCompleted
     }
 
     /**
@@ -1530,6 +1812,9 @@ class ChatRepository(
     private fun preWarmNextIncomingTarget(chainKeyIn: ByteArray, counterIn: Int) {
         val nextTarget = RatchetChain.getNextExpectedTarget(chainKeyIn, counterIn)
         dhtLeafNode.preWarmTargetAsync(nextTarget)
+        val nextSlot = RatchetChain.deriveSlot(chainKeyIn, counterIn)
+        val chunk0Target = ChunkingEngine.deriveChunkTarget(nextSlot.edPrivateKeySeed, 0)
+        dhtLeafNode.preWarmTargetAsync(chunk0Target)
     }
 
     /**

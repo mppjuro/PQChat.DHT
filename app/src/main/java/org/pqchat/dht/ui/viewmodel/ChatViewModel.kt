@@ -65,6 +65,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, false)
 
+    val imageDownloadProgress: StateFlow<Map<String, ChatRepository.ImageDownloadProgress>> = repository.imageDownloadProgress
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val currentContactDownloadProgress: StateFlow<List<ChatRepository.ImageDownloadProgress>> = _selectedContactId
+        .flatMapLatest { contactId ->
+            if (contactId == null) flowOf(emptyList())
+            else repository.imageDownloadProgress.map { map ->
+                map.values.filter { it.contactId == contactId }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
     private val _dhtPeerCount = MutableStateFlow(0)
     val dhtPeerCount: StateFlow<Int> = _dhtPeerCount.asStateFlow()
 

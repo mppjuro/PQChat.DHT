@@ -47,7 +47,7 @@ object ChunkingEngine {
             val len = minOf(CHUNK_SIZE, data.size - offset)
             val chunkBytes = data.copyOfRange(offset, offset + len)
 
-            val subEdSeed = deriveChunkEdSeed(currentEdSeed, transferId, j)
+            val subEdSeed = deriveChunkEdSeed(currentEdSeed, j)
             val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
             val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
 
@@ -110,23 +110,31 @@ object ChunkingEngine {
                 data[3] == PNG_MAGIC[3]
     }
 
-    fun deriveChunkEdSeed(baseEdSeed: ByteArray, transferId: ByteArray, chunkIndex: Int): ByteArray {
-        if (chunkIndex == 0) return baseEdSeed
-        val buffer = ByteBuffer.allocate(5 + 16 + 4).order(ByteOrder.BIG_ENDIAN)
-        buffer.put("chunk".toByteArray(Charsets.UTF_8))
-        buffer.put(transferId)
+    fun deriveChunkEdSeed(baseEdSeed: ByteArray, chunkIndex: Int): ByteArray {
+        val buffer = ByteBuffer.allocate(10 + 4).order(ByteOrder.BIG_ENDIAN)
+        buffer.put("chunk_seed".toByteArray(Charsets.UTF_8))
         buffer.putInt(chunkIndex)
 
         val hmac64 = CryptoUtils.hmacSha512(baseEdSeed, buffer.array())
         return hmac64.copyOfRange(0, 32)
     }
 
+    @Deprecated("Use deriveChunkEdSeed without transferId", ReplaceWith("deriveChunkEdSeed(baseEdSeed, chunkIndex)"))
+    fun deriveChunkEdSeed(baseEdSeed: ByteArray, transferId: ByteArray, chunkIndex: Int): ByteArray {
+        return deriveChunkEdSeed(baseEdSeed, chunkIndex)
+    }
+
     fun deriveChunkMsgKey(baseMsgKey: ByteArray, chunkIndex: Int): ByteArray {
-        if (chunkIndex == 0) return baseMsgKey
         val buffer = ByteBuffer.allocate(9 + 4).order(ByteOrder.BIG_ENDIAN)
         buffer.put("chunk_key".toByteArray(Charsets.UTF_8))
         buffer.putInt(chunkIndex)
 
         return HkdfSha512.expand(baseMsgKey, buffer.array(), 32)
+    }
+
+    fun deriveChunkTarget(baseEdSeed: ByteArray, chunkIndex: Int): ByteArray {
+        val subEdSeed = deriveChunkEdSeed(baseEdSeed, chunkIndex)
+        val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
+        return Ed25519Engine.computeTarget(subKeyPair.publicKey)
     }
 }

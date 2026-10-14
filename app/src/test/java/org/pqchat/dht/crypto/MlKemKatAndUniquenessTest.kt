@@ -153,7 +153,7 @@ class MlKemKatAndUniquenessTest {
 
         for (j in 0 until totalChunks) {
             val subMsgKey = ChunkingEngine.deriveChunkMsgKey(currentMsgKey, j)
-            val subEdSeed = ChunkingEngine.deriveChunkEdSeed(currentEdSeed, transferId, j)
+            val subEdSeed = ChunkingEngine.deriveChunkEdSeed(currentEdSeed, j)
             val subKeyPair = Ed25519Engine.generateKeyPairFromSeed(subEdSeed)
             val subTarget = Ed25519Engine.computeTarget(subKeyPair.publicKey)
 
