@@ -71,6 +71,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`5fc983a`](https://github.com/mppjuro/PQChat.DHT/commit/5fc983a2d79c8780183c550c546e1e6229ed6a6f) (2026-10-14) — **deps**: bump org.junit.jupiter:junit-jupiter from 5.10.2 to 6.1.3
 - [`6567d93`](https://github.com/mppjuro/PQChat.DHT/commit/6567d934be9a03e6182bf6724beaa591be0b67a3) (2026-10-14) — **deps**: bump org.robolectric:robolectric from 4.14.1 to 4.17
 - [`9c34354`](https://github.com/mppjuro/PQChat.DHT/commit/9c34354f117fdff5c004859da974df96b8b67876) (2026-10-14) — **deps**: bump the androidx-and-compose group with 2 updates
 - [`5772490`](https://github.com/mppjuro/PQChat.DHT/commit/57724905f2868ace963bc0ec1d40f6e4056c4b90) (2026-10-14) — **deps**: bump softprops/action-gh-release from 2 to 3
@@ -102,6 +103,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`2253862`](https://github.com/mppjuro/PQChat.DHT/commit/2253862c4db6e3b732969e7a14cfd861caea18b9) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`ef122c3`](https://github.com/mppjuro/PQChat.DHT/commit/ef122c3d13d39dc5b789499bf88389ba04584eaa) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`98dff72`](https://github.com/mppjuro/PQChat.DHT/commit/98dff72e2258f9a74f917adc51a29758cfdc0244) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`7a9048d`](https://github.com/mppjuro/PQChat.DHT/commit/7a9048d5dbe27c59a58c5617b6b1f06bff6af2c7) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
