@@ -1,0 +1,193 @@
+name: Nightly Tests & Release
+
+on:
+  schedule:
+    # Uruchamiane codziennie w nocy o 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: 'Pomiń publikację Nightly Release (tylko uruchom testy)'
+        type: boolean
+        required: false
+        default: false
+      quick:
+        description: 'Tryb szybki (smoke test dla testbed)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  slow-unit-tests:
+    name: Slow Unit & Repository Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Slow & Nightly Unit Tests (@Tag("slow") & Repository Tests)
+        run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true
+        env:
+          RUN_SLOW_TESTS: "true"
+          RUN_NIGHTLY_TESTS: "true"
+
+      - name: Upload Slow Test Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slow-test-results
+          path: app/build/reports/tests/testDebugUnitTest/
+
+  remote-dht-tests:
+    name: Real BEP 44 Remote Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Real BEP 44 Remote Integration Tests (with retry)
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 2
+          command: ./gradlew testDebugUnitTest -DrunRealDhtTests=true -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --tests "org.pqchat.dht.dht.integration.RealBep44RemoteIntegrationTest*" --info
+
+      - name: Upload Remote Test Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-bep44-test-results
+          path: app/build/reports/tests/testDebugUnitTest/
+
+  dht-testbed:
+    name: BEP 5/44 Real Traffic Testbed & Threat Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/threat_sim/requirements.txt
+
+      - name: Run Real Traffic Testbed (150 Isolated DHT Nodes)
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            python -m tools.testbed.testbed_runner --quick
+          else
+            python -m tools.testbed.testbed_runner --runs 100 --nodes 150
+          fi
+
+      - name: Run Threat Simulator & Generate Comparison
+        run: |
+          if [ "${{ inputs.quick }}" = "true" ]; then
+            python tools/threat_sim/threat_simulator.py --quick
+          else
+            python tools/threat_sim/threat_simulator.py --runs 100
+          fi
+
+      - name: Upload Testbed Telemetry & Reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dht-testbed-correlation-artifacts
+          path: |
+            tools/testbed/metrics_testbed_correlation.csv
+            tools/testbed/testbed_correlation_measured.png
+            tools/threat_sim/metrics_threat_sim.csv
+            tools/threat_sim/tradeoff_anonymity_bandwidth_battery.png
+            docs/testbed_correlation_measured.png
+            docs/tradeoff_anonymity_bandwidth_battery.png
+
+  nightly-release:
+    name: Build & Publish Nightly Release
+    runs-on: ubuntu-latest
+    needs: [slow-unit-tests, remote-dht-tests, dht-testbed]
+    if: success() && (inputs.skip_release != true)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Prepare Nightly APK
+        id: prepare_apk
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          APK_NAME="PQChat.DHT-nightly-${SHORT_SHA}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "${APK_NAME}"
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
+          echo "APK_NAME=${APK_NAME}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_NAME }}
+
+      - name: Publish Nightly Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          target_commitish: ${{ github.sha }}
+          name: "Nightly Build (${{ env.SHORT_SHA }})"
+          body: |
+            ## 🌙 PQChat.DHT Nightly Build
+
+            Automatyczna codzienna kompilacja wersji deweloperskiej (`app-debug.apk`) po pomyślnym zaliczeniu pełnego pakietu testów nocnych:
+            - **Slow Unit & Repository Tests:** Zaliczone (@Tag("slow"), Monte Carlo)
+            - **Real BEP 44 Remote Integration Tests:** Zaliczone (Live Mainline DHT)
+            - **DHT Real Traffic Testbed & Threat Analysis:** Zaliczone (150 węzłów Kademlia)
+
+            ### Metadane kompilacji:
+            - **Commit:** [`${{ env.SHORT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            - **Data wydania:** ${{ env.BUILD_DATE }}
+            - **Pakiet APK:** `${{ env.APK_NAME }}`
+
+            > [!NOTE]
+            > Niniejszy pakiet APK jest wersją deweloperską z publicznym kluczem debugowania. Wymaga włączenia instalacji z nieznanych źródeł w systemie Android.
+          prerelease: true
+          files: ${{ env.APK_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
