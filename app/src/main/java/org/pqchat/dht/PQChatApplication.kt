@@ -35,6 +35,8 @@ class PQChatApplication : Application() {
         private set
     lateinit var lifecycleCoordinator: org.pqchat.dht.service.PollingLifecycleCoordinator
         private set
+    lateinit var resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -90,10 +92,19 @@ class PQChatApplication : Application() {
 
         // Unified Lifecycle and Screen State Coordinator for Adaptive Polling
         lifecycleCoordinator = org.pqchat.dht.service.PollingLifecycleCoordinator(this, pollingScheduler).apply { start() }
+
+        // Empirical Android Resource Telemetry Profiler (for research / thesis telemetry)
+        resourceProfiler = org.pqchat.dht.debug.AndroidResourceProfiler(
+            context = this,
+            dhtClient = dhtLeafNode,
+            lifecycleCoordinator = lifecycleCoordinator,
+            trafficGenerator = trafficGenerator
+        )
     }
 
     override fun onTerminate() {
         super.onTerminate()
+        resourceProfiler.stopSession()
         lifecycleCoordinator.stop()
         pollingScheduler.stop()
         trafficGenerator.stop()

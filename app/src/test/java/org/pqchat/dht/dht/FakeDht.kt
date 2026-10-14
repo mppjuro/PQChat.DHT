@@ -42,6 +42,13 @@ class FakeDht(
     val putCalls = AtomicInteger(0)
     val getCalls = AtomicInteger(0)
     val coverTrafficCalls = AtomicInteger(0)
+    val bytesSent = java.util.concurrent.atomic.AtomicLong(0L)
+    val bytesReceived = java.util.concurrent.atomic.AtomicLong(0L)
+
+    override val totalGetCalls: Long get() = getCalls.get().toLong()
+    override val totalPutCalls: Long get() = putCalls.get().toLong()
+    override val totalBytesSent: Long get() = bytesSent.get()
+    override val totalBytesReceived: Long get() = bytesReceived.get()
 
     @Volatile
     private var isRunning = false
@@ -85,6 +92,7 @@ class FakeDht(
         timeoutMs: Long
     ): DhtLeafNode.MutableItem? {
         getCalls.incrementAndGet()
+        bytesSent.addAndGet(100L)
         simulateDelay()
 
         if (shouldDrop()) {
@@ -99,6 +107,7 @@ class FakeDht(
             return null
         }
 
+        bytesReceived.addAndGet(entry.item.v.size.toLong() + 100L)
         return entry.item
     }
 
@@ -112,6 +121,8 @@ class FakeDht(
         skipLocalStore: Boolean
     ): Boolean {
         putCalls.incrementAndGet()
+        bytesSent.addAndGet(v.size.toLong() + 100L)
+        bytesReceived.addAndGet(50L)
         simulateDelay()
 
         if (shouldDrop()) {
@@ -159,6 +170,8 @@ class FakeDht(
 
     override suspend fun sendCoverTrafficDummy(): ByteArray? {
         coverTrafficCalls.incrementAndGet()
+        bytesSent.addAndGet(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES.toLong() + 100L)
+        bytesReceived.addAndGet(50L)
         simulateDelay()
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
