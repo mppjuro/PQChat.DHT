@@ -19,7 +19,7 @@ import kotlin.math.ln
  */
 class PoissonTrafficGenerator(
     private val dhtLeafNode: DhtClient,
-    private val lambda: Double = 1.0 / 480.0, // average once every 8 minutes (480s)
+    val lambda: Double = 1.0 / 480.0, // average once every 8 minutes (480s)
     val pendingAckQueue: PendingAckQueue = PendingAckQueue(),
     val decoyTargetPool: DecoyTargetPool = DecoyTargetPool.defaultInstance,
     val blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance,

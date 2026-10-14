@@ -157,6 +157,18 @@ class DhtLeafNode(
     private val pendingTransactions = ConcurrentHashMap<String, CompletableDeferred<KrpcMessage.Response>>()
     private val routingTable = CopyOnWriteArrayList<DhtPeer>()
     private val fastestNodesCache = CopyOnWriteArrayList<DhtPeer>()
+    private val _totalGetCalls = java.util.concurrent.atomic.AtomicLong(0L)
+    override val totalGetCalls: Long get() = _totalGetCalls.get()
+
+    private val _totalPutCalls = java.util.concurrent.atomic.AtomicLong(0L)
+    override val totalPutCalls: Long get() = _totalPutCalls.get()
+
+    private val _totalBytesSent = java.util.concurrent.atomic.AtomicLong(0L)
+    override val totalBytesSent: Long get() = _totalBytesSent.get()
+
+    private val _totalBytesReceived = java.util.concurrent.atomic.AtomicLong(0L)
+    override val totalBytesReceived: Long get() = _totalBytesReceived.get()
+
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
     val targetRouteCache = TargetRouteCache()
@@ -238,6 +250,7 @@ class DhtLeafNode(
             while (isRunning && !assoc.isClosed && isTorRoutingActive) {
                 try {
                     val packet = assoc.receive(buffer) ?: continue
+                    _totalBytesReceived.addAndGet(packet.data.size.toLong())
                     handleIncomingPacket(packet.data, packet.sender)
                 } catch (e: Exception) {
                     if (!isRunning || assoc.isClosed) break
@@ -411,6 +424,7 @@ class DhtLeafNode(
             try {
                 val packet = DatagramPacket(buffer, buffer.size)
                 socket?.receive(packet) ?: break
+                _totalBytesReceived.addAndGet(packet.length.toLong())
                 val data = packet.data.copyOf(packet.length)
                 handleIncomingPacket(data, packet.socketAddress as InetSocketAddress)
             } catch (e: Exception) {
@@ -527,6 +541,7 @@ class DhtLeafNode(
     }
 
     private fun sendKrpcResponse(bencoded: ByteArray, recipient: InetSocketAddress) {
+        _totalBytesSent.addAndGet(bencoded.size.toLong())
         if (torProxyConfig?.enabled == true) {
             if (torTransportMode == TorTransportMode.SOCKS5_UDP) {
                 torUdpAssociation?.send(bencoded, recipient)
@@ -686,6 +701,7 @@ class DhtLeafNode(
         val startTime = System.currentTimeMillis()
         try {
             val bytes = query.toBencoded()
+            _totalBytesSent.addAndGet(bytes.size.toLong())
 
             // FAIL-CLOSED PROTECTION: If Tor is enabled in settings, NEVER emit to clearnet UDP!
             if (torProxyConfig?.enabled == true) {
@@ -706,6 +722,7 @@ class DhtLeafNode(
                         }
                         return@withContext try {
                             val respBytes = tcpClient.sendQuery(targetAddress, bytes, timeoutMs)
+                            _totalBytesReceived.addAndGet(respBytes.size.toLong())
                             val parsed = KrpcMessage.parse(respBytes) as? KrpcMessage.Response
                             if (parsed != null) {
                                 val rtt = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
@@ -895,6 +912,7 @@ class DhtLeafNode(
         skipLocalStore: Boolean,
         timeoutMs: Long
     ): MutableItem? = withContext(Dispatchers.IO) {
+        _totalGetCalls.incrementAndGet()
         val targetHex = CryptoUtils.toHex(target)
         if (!skipLocalStore) {
             val localItem = localMutableStore[targetHex]
@@ -1057,6 +1075,7 @@ class DhtLeafNode(
         sig: ByteArray,
         skipLocalStore: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
+        _totalPutCalls.incrementAndGet()
         require(v.size <= BinaryFrameCodec.MAX_DHT_VALUE_BYTES) {
             "BEP 44 payload cannot exceed ${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes (got ${v.size})"
         }

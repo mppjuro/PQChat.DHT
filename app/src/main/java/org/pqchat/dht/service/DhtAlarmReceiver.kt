@@ -21,8 +21,10 @@ class DhtAlarmReceiver : BroadcastReceiver() {
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
         val wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pqchat:dht_doze_poll")
+        var lockStartTime = 0L
         try {
             wakeLock?.acquire(30_000L) // Max 30s safety timeout
+            lockStartTime = org.pqchat.dht.debug.AndroidResourceProfiler.onWakeLockAcquired("pqchat:dht_doze_poll")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to acquire wake lock for Doze poll", e)
         }
@@ -54,6 +56,10 @@ class DhtAlarmReceiver : BroadcastReceiver() {
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to release wake lock", e)
+                } finally {
+                    if (lockStartTime > 0L) {
+                        org.pqchat.dht.debug.AndroidResourceProfiler.onWakeLockReleased(lockStartTime, "pqchat:dht_doze_poll")
+                    }
                 }
                 pendingResult.finish()
             }

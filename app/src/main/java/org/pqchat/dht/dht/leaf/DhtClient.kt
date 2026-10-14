@@ -54,6 +54,26 @@ interface DhtClient {
     val torDiagnosticMessage: String? get() = null
 
     /**
+     * Empirical telemetry: cumulative count of BEP 44 GET queries executed.
+     */
+    val totalGetCalls: Long get() = 0L
+
+    /**
+     * Empirical telemetry: cumulative count of BEP 44 PUT queries executed.
+     */
+    val totalPutCalls: Long get() = 0L
+
+    /**
+     * Empirical telemetry: cumulative number of bytes sent via the UDP / KRPC socket.
+     */
+    val totalBytesSent: Long get() = 0L
+
+    /**
+     * Empirical telemetry: cumulative number of bytes received via the UDP / KRPC socket.
+     */
+    val totalBytesReceived: Long get() = 0L
+
+    /**
      * Start DHT client background loops, listeners or workers.
      */
     fun start()

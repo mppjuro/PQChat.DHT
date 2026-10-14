@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.ui.theme.*
@@ -25,11 +27,18 @@ fun DiagnosticsScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val appColors = LocalAppColors.current
 
     val dhtPeers by viewModel.dhtPeerCount.collectAsState()
     val pollingState by viewModel.pollingState.collectAsState()
     val contacts by viewModel.contacts.collectAsState()
+
+    val isProfiling by viewModel.isProfiling.collectAsState()
+    val sampleCount by viewModel.profileSampleCount.collectAsState()
+    val latestSample by viewModel.latestResourceSample.collectAsState()
+    var sessionLabelInput by remember { mutableStateOf("thesis_run_1") }
+    var lastExportStatus by remember { mutableStateOf<String?>(null) }
 
     var coverEvents by remember { mutableStateOf<List<String>>(emptyList()) }
 
@@ -163,6 +172,165 @@ fun DiagnosticsScreen(
                                 fontSize = 10.sp
                             )
                         }
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+
+            item {
+                SectionCard(title = "Empirical Resource Telemetry (Android Profiler)") {
+                    Text(
+                        text = "Master's Thesis Empirical Measurement Module (data_source = MEASURED_ANDROID_DEVICE)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = appColors.primary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (isProfiling) "● ACTIVE SESSION" else "○ IDLE",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isProfiling) ElectricGreen else appColors.textSecondary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "Samples: $sampleCount",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = appColors.textPrimary,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (latestSample != null) {
+                        val sample = latestSample!!
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Battery: ${sample.batteryCurrentNowUa} µA | ${sample.batteryChargeCounterUah} µAh | ${sample.batteryLevelPercent}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = appColors.textPrimary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "WakeLock: ${sample.wakeLockDurationMs} ms (Active: ${sample.activeWakeLocks})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberWarning,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "KRPC Cycles: GET=${sample.dhtGetCalls}, PUT=${sample.dhtPutCalls}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ElectricGreen,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "UDP Traffic: TX=${sample.dhtBytesSent} B, RX=${sample.dhtBytesReceived} B",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = appColors.textSecondary,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = "State: ${sample.pollingState} | λ=${String.format(Locale.US, "%.5f", sample.poissonLambda)} s⁻¹",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CryptoPurple,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "No active samples recorded yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (!isProfiling) {
+                        OutlinedTextField(
+                            value = sessionLabelInput,
+                            onValueChange = { sessionLabelInput = it },
+                            label = { Text("Session Label") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = appColors.primary,
+                                unfocusedBorderColor = appColors.border,
+                                focusedTextColor = appColors.textPrimary,
+                                unfocusedTextColor = appColors.textPrimary,
+                                focusedLabelColor = appColors.primary,
+                                unfocusedLabelColor = appColors.textSecondary
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (!isProfiling) {
+                            Button(
+                                onClick = {
+                                    lastExportStatus = null
+                                    viewModel.startProfilingSession(sessionLabelInput.ifBlank { "thesis_eval" })
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Start Session", color = appColors.surface)
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    viewModel.stopProfilingSession()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AmberWarning),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Stop Session", color = appColors.surface)
+                            }
+                        }
+
+                        if (sampleCount > 0 && !isProfiling) {
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        val file = viewModel.exportProfilingCsvFile()
+                                        lastExportStatus = "Exported: ${file.name} (${file.length()} B)"
+                                        Toast.makeText(context, "Saved to: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+                                    } catch (e: Exception) {
+                                        lastExportStatus = "Export error: ${e.message}"
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Export CSV", color = appColors.primary)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.clearProfilingSamples()
+                                    lastExportStatus = null
+                                }
+                            ) {
+                                Text("Clear", color = appColors.textSecondary)
+                            }
+                        }
+                    }
+
+                    if (lastExportStatus != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = lastExportStatus!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ElectricGreen,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }

@@ -43,6 +43,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     )
     val pollingManager = pollingScheduler.pollingManager
 
+    val resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler =
+        app?.resourceProfiler ?: org.pqchat.dht.debug.AndroidResourceProfiler(
+            context = application,
+            dhtClient = dhtLeafNode,
+            pollingManager = pollingManager,
+            trafficGenerator = trafficGenerator
+        )
+
+    val isProfiling: StateFlow<Boolean> = resourceProfiler.isProfiling
+    val profileSampleCount: StateFlow<Int> = resourceProfiler.sampleCount
+    val latestResourceSample: StateFlow<org.pqchat.dht.debug.AndroidResourceProfiler.ResourceSample?> = resourceProfiler.latestSample
+
+    fun startProfilingSession(label: String) {
+        resourceProfiler.startSession(label)
+    }
+
+    fun stopProfilingSession() {
+        resourceProfiler.stopSession()
+    }
+
+    fun clearProfilingSamples() {
+        resourceProfiler.clearSamples()
+    }
+
+    fun exportProfilingCsvFile(): java.io.File {
+        return resourceProfiler.exportToCsvFile()
+    }
+
     val contacts: StateFlow<List<ContactEntity>> = repository.getAllContactsFlow()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 

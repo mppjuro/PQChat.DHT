@@ -33,6 +33,9 @@ class PollingLifecycleCoordinator(
         private set
     private var isRegistered = false
 
+    val currentState: org.pqchat.dht.traffic.AdaptivePollingManager.PollingState
+        get() = pollingScheduler.pollingManager.currentState.value
+
     companion object {
         private const val TAG = "PollingLifecycleCoordinator"
     }
