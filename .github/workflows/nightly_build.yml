@@ -47,7 +47,7 @@ jobs:
           path: ${{ env.APK_NAME }}
 
       - name: Publish Nightly Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}
