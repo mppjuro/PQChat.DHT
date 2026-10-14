@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`cbe46a1`](https://github.com/mppjuro/PQChat.DHT/commit/cbe46a1a1f7d485d0a29854034300a0088d9e53e) (2026-10-14) — **telemetry**: add empirical Android resource profiler and CSV export for research evaluation
 - [`ce08ac2`](https://github.com/mppjuro/PQChat.DHT/commit/ce08ac2312fccbfa4fb2182785f9ef98cb55929c) (2026-10-14) — **media**: eliminate chunk 0 key reuse, enable deterministic subTarget derivation and partial transfer resuming
 - [`7be993b`](https://github.com/mppjuro/PQChat.DHT/commit/7be993bdff87213be0276b65aaca912fc03ff140) (2026-10-14) — **crypto**: integrate hybrid X25519 + ML-KEM-512 into handshake, rekey, and BEP 44 frames
 - [`9bd1321`](https://github.com/mppjuro/PQChat.DHT/commit/9bd132145f4c743b358fe1cdac72c637617a71dd) (2026-10-14) — **rekey**: integrate ML-KEM rekey cycle with ChatViewModel, UI banner and nightly integration tests
@@ -106,6 +107,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`4cb4061`](https://github.com/mppjuro/PQChat.DHT/commit/4cb40610fd5d25421b8513a5c9f4f8b73155bfca) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`8369eef`](https://github.com/mppjuro/PQChat.DHT/commit/8369eefd3c1f2c37fcaeb147c241b8a424eddf38) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`0d4b973`](https://github.com/mppjuro/PQChat.DHT/commit/0d4b973559c1916bb6411210f84b7dd16dbfbda4) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`110ef8c`](https://github.com/mppjuro/PQChat.DHT/commit/110ef8cf1c477dc3b6ed411477ae16ae2ad9a178) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
