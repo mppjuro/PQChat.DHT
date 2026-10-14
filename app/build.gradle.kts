@@ -58,6 +58,12 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
+                if (System.getProperty("runSlowTests") != null) {
+                    it.systemProperty("runSlowTests", System.getProperty("runSlowTests")!!)
+                }
+                if (System.getProperty("runNightlyTests") != null) {
+                    it.systemProperty("runNightlyTests", System.getProperty("runNightlyTests")!!)
+                }
                 it.useJUnitPlatform {
                     if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
                         excludeTags("slow")

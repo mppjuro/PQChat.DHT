@@ -29,7 +29,8 @@ typealias PeerContact = DhtLeafNode.DhtPeer
 class DhtLeafNode(
     override val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
     private val port: Int = 0, // 0 means ephemeral port
-    private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null
+    private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null,
+    val autoBootstrap: Boolean = true
 ) : DhtClient {
     companion object {
         const val DEFAULT_DHT_PORT = 49160
@@ -239,8 +240,10 @@ class DhtLeafNode(
             listenLoop()
         }
 
-        scope.launch {
-            bootstrap()
+        if (autoBootstrap) {
+            scope.launch {
+                bootstrap()
+            }
         }
     }
 
@@ -411,6 +414,22 @@ class DhtLeafNode(
                             socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
                         }
 
+                        "find_node" -> {
+                            val target = msg.arguments["target"] as? ByteArray
+                            val closest = if (target != null && target.size == 20) {
+                                findClosestNodes(target, count = 8)
+                            } else {
+                                routingTable.take(8)
+                            }
+                            val compactNodes = serializeCompactNodes(closest)
+                            val resp = KrpcMessage.Response(
+                                msg.transactionId,
+                                mapOf("id" to myNodeId, "nodes" to compactNodes)
+                            )
+                            val bencoded = resp.toBencoded()
+                            socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                        }
+
                         "get" -> {
                             val target = msg.arguments["target"] as? ByteArray
                             if (target != null) {
@@ -484,6 +503,21 @@ class DhtLeafNode(
 
     private fun parseCompactNodes(bytes: ByteArray) {
         parseCompactNodesList(bytes)
+    }
+
+    fun serializeCompactNodes(nodes: List<DhtPeer>): ByteArray {
+        val baos = java.io.ByteArrayOutputStream(nodes.size * 26)
+        for (node in nodes) {
+            val ip = node.address.address ?: continue
+            if (ip !is java.net.Inet4Address) continue
+            val id = if (node.nodeId.size == 20) node.nodeId else node.nodeId.copyOf(20)
+            baos.write(id)
+            baos.write(ip.address)
+            val port = node.address.port
+            baos.write((port ushr 8) and 0xFF)
+            baos.write(port and 0xFF)
+        }
+        return baos.toByteArray()
     }
 
     fun getLocalPeers(): List<DhtPeer> {
@@ -666,12 +700,11 @@ class DhtLeafNode(
         }
 
         val localPeers = getLocalPeers()
-        val candidates = (localPeers + findClosestNodes(target, count = 16) + getCachedFastestNodes())
-            .distinctBy { it.address }
-            .take(20)
-
-        val queryPeers = if (candidates.isNotEmpty()) {
-            candidates
+        val swarmPeers = (findClosestNodes(target, count = 16) + getCachedFastestNodes()).distinctBy { it.address }
+        val queryPeers = if (swarmPeers.isNotEmpty()) {
+            swarmPeers.take(20)
+        } else if (localPeers.isNotEmpty()) {
+            localPeers.take(20)
         } else {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }
@@ -797,8 +830,10 @@ class DhtLeafNode(
                 compareBytes(distA, distB)
             }
 
-        val nodesToQuery = if (localPeers.isNotEmpty() || remoteCandidates.isNotEmpty()) {
-            (localPeers + remoteCandidates).distinctBy { it.address }.take(20)
+        val nodesToQuery = if (remoteCandidates.isNotEmpty()) {
+            remoteCandidates.take(20)
+        } else if (localPeers.isNotEmpty()) {
+            localPeers.take(20)
         } else {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }
@@ -954,9 +989,11 @@ class DhtLeafNode(
         val candidates = findClosestNodes(target, count = 24)
         val cachedFastest = getCachedFastestNodes()
         val localPeers = getLocalPeers()
-        val primaryCandidates = (localPeers + prewarmed + candidates + cachedFastest).distinctBy { it.address }
-        val nodesToQuery = if (primaryCandidates.isNotEmpty()) {
-            primaryCandidates
+        val swarmPeers = (prewarmed + candidates + cachedFastest).distinctBy { it.address }
+        val nodesToQuery = if (swarmPeers.isNotEmpty()) {
+            swarmPeers.take(20)
+        } else if (localPeers.isNotEmpty()) {
+            localPeers.take(20)
         } else {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         }

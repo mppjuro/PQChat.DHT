@@ -3,6 +3,7 @@ package org.pqchat.dht.data.repository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.*
 import org.junit.jupiter.api.BeforeAll
@@ -207,6 +208,9 @@ class ChatRepositoryConcurrencyTest {
 
         override suspend fun getPendingOffer(contactId: String): PendingRekeyOfferEntity? =
             offers[contactId]
+
+        override fun getPendingOfferFlow(contactId: String): Flow<PendingRekeyOfferEntity?> =
+            flowOf(offers[contactId])
 
         override suspend fun insertOrUpdate(offer: PendingRekeyOfferEntity) {
             offers[offer.contactId] = offer

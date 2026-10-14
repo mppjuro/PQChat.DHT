@@ -57,6 +57,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val isRekeyInProgress: StateFlow<Boolean> = _selectedContactId
+        .flatMapLatest { id ->
+            if (id != null) repository.isRekeyPendingFlow(id)
+            else flowOf(false)
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, false)
+
     private val _dhtPeerCount = MutableStateFlow(0)
     val dhtPeerCount: StateFlow<Int> = _dhtPeerCount.asStateFlow()
 
@@ -225,6 +233,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             repository.sendTextMessage(contactId, text)
+        }
+    }
+
+    fun initiateRekey() {
+        val contactId = _selectedContactId.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Inicjowanie wymiany klucza ML-KEM..."
+            val success = repository.initiateRekey(contactId)
+            if (success) {
+                _statusNotification.value = "Wysłano ofertę wymiany klucza ML-KEM (Type 0x03)"
+            }
         }
     }
 
