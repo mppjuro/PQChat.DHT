@@ -281,8 +281,8 @@ Poniższy wykres (wygenerowany na klastrze 150 węzłów przez `tools/testbed/te
 
 #### D. Ciągła Weryfikacja w GitHub Actions (Nightly & Workflow Dispatch)
 Aby zapewnić ciągłą weryfikację odporności na korelacje bez wydłużania lokalnego cyklu deweloperskiego, pełny pakiet testbedu został zintegrowany jako automatyczny przepływ pracy:
-- Plik workflow: [`.github/workflows/nightly_testbed.yml`](../.github/workflows/nightly_testbed.yml)
-- Harmonogram: uruchamiany co noc o **01:00 UTC** (`cron: '0 1 * * *'`).
+- Plik workflow: [`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)
+- Harmonogram: uruchamiany co noc o **02:00 UTC** (`cron: '0 2 * * *'`).
 - Uruchamianie ręczne: `workflow_dispatch` z możliwością wyboru liczby powtórzeń Monte Carlo (`runs`), wielkości klastra (`nodes`) oraz trybu szybkiego (`quick: true`).
 - Artefakty: automatyczna publikacja raportów CSV (`metrics_testbed_correlation.csv`, `metrics_threat_sim.csv`) oraz wykresów PNG jako artefaktów GitHub Actions.
 

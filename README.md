@@ -9,11 +9,8 @@
   <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml">
     <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml/badge.svg" alt="Android CI" />
   </a>
-  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly_slow_tests.yml">
-    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly_slow_tests.yml/badge.svg" alt="Nightly Tests" />
-  </a>
-  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/remote_dht_test.yml">
-    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/remote_dht_test.yml/badge.svg" alt="Remote DHT Tests" />
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly.yml/badge.svg" alt="Nightly Tests &amp; Release" />
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" />

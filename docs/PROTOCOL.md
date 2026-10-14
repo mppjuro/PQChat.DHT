@@ -334,7 +334,7 @@ Zgodnie z wytycznymi projektu testy podzielono na dwie kategorie:
    * Wykonują się w kilkadziesiąt sekund, automatycznie pomijając testy oznaczone adnotacją `@Tag("slow")`.
 2. **Czasochłonne testy integracyjne i statystyczne (Slow Tests):**
    * Testy repozytorium (`org.pqchat.dht.data.repository.*`), testy statystyczne Monte Carlo (`TrafficThreatModelStatisticalTest`) oraz pomiary loopback (`LoopbackMeasurementHarnessTest`) są oznaczone `@Tag("slow")`.
-   * Wykonywane w dedykowanym zadaniu nocnym GitHub Actions (`.github/workflows/nightly_slow_tests.yml`) o 02:00 UTC lub lokalnie:
+   * Wykonywane w dedykowanym zadaniu nocnym GitHub Actions (`.github/workflows/nightly.yml`) o 02:00 UTC lub lokalnie:
      ```bash
      .\gradlew.bat testDebugUnitTest -DrunSlowTests=true
      # lub
