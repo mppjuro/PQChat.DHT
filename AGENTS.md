@@ -31,7 +31,7 @@ Projekt to w pełni zdecentralizowany (serverless), odporny na cenzurę i chroni
 
 | Komponent | Standard / Algorytm | Zastosowanie |
 | :--- | :--- | :--- |
-| **KEM (Handshake & Rekey)** | ML-KEM-512 (FIPS 203 / Kyber-512) | Asymetryczne uzgadnianie wspólnego sekretu ($pk=800\text{ B}$, $ct=768\text{ B}$, $SS=32\text{ B}$) |
+| **KEM (Handshake & Rekey)** | Hybrydowy X25519 + ML-KEM-512 (FIPS 203 + RFC 7748) | Asymetryczne uzgadnianie wspólnego sekretu ($pk=832\text{ B}$, $ct=800\text{ B}$, $SS=32\text{ B}$) |
 | **Szyfrowanie ładunku (AEAD)** | AES-256-GCM | Szyfrowanie symetryczne wiadomości (Klucz: 32 B, IV: 12 B, Tag: 16 B) |
 | **Wyprowadzanie kluczy (KDF)** | HKDF-SHA512 (RFC 5869) | Derywacja łańcuchów kluczy, ziaren slotów i kluczy AES |
 | **Wymóg transportowy DHT** | Ed25519 (RFC 8032) | Wymagany przez BEP 44 podpis węzła (używany wyłącznie jako **jednorazowy token efemeryczny**) |
@@ -80,22 +80,22 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
 ### Dedykowane formaty wewnętrzne (przestrzeń 859 bajtów po odliczeniu nagłówka 872 - 13):
 
 * **Typ 0x01 (Handshake Finalize):**
-  * `ML-KEM-512 Ciphertext`: 768 bajtów
-  * `Salt`: 32 bajty
+  * `Hybrid Ciphertext`: 800 bajtów (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
+  * `Salt`: 24 bajty
   * `Key Confirmation Tag`: 32 bajty
-  * `CSPRNG Padding`: 27 bajtów (859 - 832)
+  * `CSPRNG Padding`: 3 bajty (859 - 856)
 * **Typ 0x02 (Tekst):**
   * `TextLength` ($L$): 2 bajty (UInt16, wartość $\le 857$)
   * `UTF-8 Payload`: $L$ bajtów (maksymalnie 857 bajtów tekstu)
   * `CSPRNG Padding`: $857 - L$ bajtów
 * **Typ 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 bajty (UInt32)
-  * `ML-KEM-512 PublicKey`: 800 bajtów
-  * `CSPRNG Padding`: 55 bajtów (859 - 804)
+  * `Combined PublicKey`: 832 bajty (800 B ML-KEM-512 + 32 B X25519)
+  * `CSPRNG Padding`: 23 bajty (859 - 836)
 * **Typ 0x04 (PQC Rekey Response):**
   * `RekeyEpoch`: 4 bajty (UInt32)
-  * `ML-KEM-512 Ciphertext`: 768 bajtów
-  * `CSPRNG Padding`: 87 bajtów (859 - 772)
+  * `Hybrid Ciphertext`: 800 bajtów (768 B ML-KEM-512 ct + 32 B X25519)
+  * `CSPRNG Padding`: 55 bajtów (859 - 804)
 * **Typ 0x05 (Chunk Transfer – np. PNG):**
   * `TransferID`: 16 bajtów (UUID transferu)
   * `ChunkIndex`: 2 bajty (UInt16)
@@ -114,8 +114,8 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
 ## 5. Przebiegi Procesów (Workflows)
 
 ### A. Handshake (Skanowanie QR + Zakończenie Online):
-1. **Alice (QR):** Generuje parę ML-KEM-512 $(pk_A, sk_A)$ oraz losowe $Seed_{init}$ (32 B). Prezentuje kod QR zawierający $pk_A \parallel Seed_{init}$ (łącznie 832 bajty).
-2. **Bob (Scan & Put):** Skanuje kod, wykonuje `Encapsulate(pk_A)` $\to (SS_{init}, ct_B)$. Wylicza adres docelowy:
+1. **Alice (QR):** Generuje parę hybrydową X25519 + ML-KEM-512 $(pk_A, sk_A)$ oraz losowe $Seed_{init}$ (32 B). Prezentuje kod QR zawierający $pk_A \parallel Seed_{init}$ (łącznie 864 bajty).
+2. **Bob (Scan & Put):** Skanuje kod, wykonuje `Encapsulate(pk_A)` $\to (SS_{init}, ct_B)$ (gdzie $ct_B$ ma 800 B: 768 B ML-KEM-512 + 32 B X25519 eph pk). Wylicza adres docelowy:
    $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
    Wysyła pakiet Typu `0x01` pod $\text{Target}_0$ za pomocą efemerycznego rekordu BEP 44 (900 B).
 3. **Alice (Get & Derive):** Odpytuje DHT o $\text{Target}_0$. Po pobraniu odszyfrowuje pakiet, wykonuje `Decapsulate(sk_A, ct_B)` i odzyskuje $SS_{init}$.
@@ -134,8 +134,8 @@ Dla każdej wiadomości $i$:
 
 ### C. Rotacja PQC (Re-keying co 50 wiadomości):
 * Gdy $Counter_{out} \equiv 0 \pmod{50}$ i $Counter_{out} > 0$:
-  * Nadawca dołącza nowy efemeryczny klucz publiczny ML-KEM-512 w pakiecie Typu `0x03`.
-  * Odbiorca odpowiada w swoim kanale wyjściowym kryptogramem KEM w pakiecie Typu `0x04`.
+  * Nadawca dołącza nowy efemeryczny hybrydowy klucz publiczny X25519 + ML-KEM-512 (832 B) w pakiecie Typu `0x03`.
+  * Odbiorca odpowiada w swoim kanale wyjściowym hybrydowym kryptogramem KEM (800 B) w pakiecie Typu `0x04`.
   * Po skonsumowaniu obu stron nowy sekret $SS_{rekey}$ jest wstrzykiwany do głównego stanu:
     $$ChainKey \leftarrow \text{HKDF-Extract}(ChainKey, SS_{rekey})$$
 

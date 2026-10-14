@@ -98,7 +98,7 @@ class HandshakeVerificationTest {
         // 1. Alice creates handshake
         val aliceInit = HandshakeManager.aliceCreateHandshake()
         assertNotNull(aliceInit.qrBytes)
-        assertEquals(832, aliceInit.qrBytes.size)
+        assertEquals(HandshakeManager.QR_DATA_SIZE, aliceInit.qrBytes.size)
 
         // 2. Bob processes Alice's QR code
         val bobResult = HandshakeManager.bobProcessQr(aliceInit.qrBytes)

@@ -139,7 +139,7 @@ class CryptoEngineTest {
             seqNum = 0,
             ackNum = 0,
             timestampUTC = 1700000000000L,
-            mlKemCiphertext = ct,
+            hybridCiphertext = ct,
             saltParameter = salt
         )
         assertEquals(BinaryFrameCodec.CIPHERTEXT_SIZE, encoded.size)
@@ -150,6 +150,7 @@ class CryptoEngineTest {
         val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction)
         assertEquals(BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE, decoded.msgType)
         val payload = decoded.payload as BinaryFrameCodec.DecodedPayload.HandshakeFinalize
+        assertArrayEquals(ct, payload.hybridCiphertext)
         assertArrayEquals(ct, payload.mlKemCiphertext)
         assertArrayEquals(salt, payload.saltParameter)
     }
@@ -170,6 +171,7 @@ class CryptoEngineTest {
         assertEquals(BinaryFrameCodec.TYPE_REKEY_OFFER, decodedOffer.msgType)
         val offerPayload = decodedOffer.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
         assertEquals(1L, offerPayload.rekeyEpoch)
+        assertArrayEquals(pk, offerPayload.hybridPublicKey)
         assertArrayEquals(pk, offerPayload.mlKemPublicKey)
 
         // Type 0x04: Response
@@ -184,6 +186,7 @@ class CryptoEngineTest {
         assertEquals(BinaryFrameCodec.TYPE_REKEY_RESPONSE, decodedResp.msgType)
         val respPayload = decodedResp.payload as BinaryFrameCodec.DecodedPayload.RekeyResponse
         assertEquals(1L, respPayload.rekeyEpoch)
+        assertArrayEquals(ct, respPayload.hybridCiphertext)
         assertArrayEquals(ct, respPayload.mlKemCiphertext)
     }
 

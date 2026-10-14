@@ -28,22 +28,22 @@ object BinaryFrameCodec {
     const val TYPE_REKEY_RESPONSE: Byte = 0x04
     const val TYPE_CHUNK_DATA: Byte = 0x05
 
-    // Type 0x01 limits (768 + 32 + 32 = 832 <= 859)
-    const val T1_CIPHERTEXT_SIZE = 768
-    const val T1_SALT_SIZE = 32
+    // Type 0x01 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + Salt (24 B) + Tag (32 B) = 856 <= 859
+    const val T1_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
+    const val T1_SALT_SIZE = 24
     const val T1_CONFIRMATION_TAG_SIZE = 32
-    const val T1_PADDING_SIZE = 27 // 859 - 832
+    const val T1_PADDING_SIZE = 3 // 859 - 856
 
     // Type 0x02 limits
     const val T2_MAX_TEXT_SIZE = 857 // 859 - 2
 
-    // Type 0x03 limits (800 + 4 = 804 <= 859)
-    const val T3_PUBLIC_KEY_SIZE = 800
-    const val T3_PADDING_SIZE = 55 // 859 - 804
+    // Type 0x03 limits: Combined pk (832 B: 800 B ML-KEM + 32 B X25519) + RekeyEpoch (4 B) = 836 <= 859
+    const val T3_PUBLIC_KEY_SIZE = HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE // 832
+    const val T3_PADDING_SIZE = 23 // 859 - 836
 
-    // Type 0x04 limits (768 + 4 = 772 <= 859)
-    const val T4_CIPHERTEXT_SIZE = 768
-    const val T4_PADDING_SIZE = 87 // 859 - 772
+    // Type 0x04 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + RekeyEpoch (4 B) = 804 <= 859
+    const val T4_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
+    const val T4_PADDING_SIZE = 55 // 859 - 804
 
     // Type 0x05 limits
     const val T5_TRANSFER_ID_SIZE = 16
@@ -51,19 +51,22 @@ object BinaryFrameCodec {
 
     sealed class DecodedPayload {
         data class HandshakeFinalize(
-            val mlKemCiphertext: ByteArray,
+            val hybridCiphertext: ByteArray,
             val saltParameter: ByteArray,
             val confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE)
         ) : DecodedPayload() {
+            // Backward-compatible alias
+            val mlKemCiphertext: ByteArray get() = hybridCiphertext
+
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
                 if (other !is HandshakeFinalize) return false
-                return mlKemCiphertext.contentEquals(other.mlKemCiphertext) &&
+                return hybridCiphertext.contentEquals(other.hybridCiphertext) &&
                         saltParameter.contentEquals(other.saltParameter) &&
                         confirmationTag.contentEquals(other.confirmationTag)
             }
             override fun hashCode(): Int {
-                var result = mlKemCiphertext.contentHashCode()
+                var result = hybridCiphertext.contentHashCode()
                 result = 31 * result + saltParameter.contentHashCode()
                 result = 31 * result + confirmationTag.contentHashCode()
                 return result
@@ -76,30 +79,36 @@ object BinaryFrameCodec {
 
         data class RekeyOffer(
             val rekeyEpoch: Long,
-            val mlKemPublicKey: ByteArray
+            val hybridPublicKey: ByteArray
         ) : DecodedPayload() {
+            // Backward-compatible alias
+            val mlKemPublicKey: ByteArray get() = hybridPublicKey
+
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
                 if (other !is RekeyOffer) return false
                 return rekeyEpoch == other.rekeyEpoch &&
-                        mlKemPublicKey.contentEquals(other.mlKemPublicKey)
+                        hybridPublicKey.contentEquals(other.hybridPublicKey)
             }
             override fun hashCode(): Int =
-                31 * rekeyEpoch.hashCode() + mlKemPublicKey.contentHashCode()
+                31 * rekeyEpoch.hashCode() + hybridPublicKey.contentHashCode()
         }
 
         data class RekeyResponse(
             val rekeyEpoch: Long,
-            val mlKemCiphertext: ByteArray
+            val hybridCiphertext: ByteArray
         ) : DecodedPayload() {
+            // Backward-compatible alias
+            val mlKemCiphertext: ByteArray get() = hybridCiphertext
+
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
                 if (other !is RekeyResponse) return false
                 return rekeyEpoch == other.rekeyEpoch &&
-                        mlKemCiphertext.contentEquals(other.mlKemCiphertext)
+                        hybridCiphertext.contentEquals(other.hybridCiphertext)
             }
             override fun hashCode(): Int =
-                31 * rekeyEpoch.hashCode() + mlKemCiphertext.contentHashCode()
+                31 * rekeyEpoch.hashCode() + hybridCiphertext.contentHashCode()
         }
 
         data class ChunkData(
@@ -145,16 +154,16 @@ object BinaryFrameCodec {
         seqNum: Int,
         ackNum: Int,
         timestampUTC: Long,
-        mlKemCiphertext: ByteArray,
+        hybridCiphertext: ByteArray,
         saltParameter: ByteArray,
         confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE)
     ): ByteArray {
-        require(mlKemCiphertext.size == T1_CIPHERTEXT_SIZE)
+        require(hybridCiphertext.size == T1_CIPHERTEXT_SIZE)
         require(saltParameter.size == T1_SALT_SIZE)
         require(confirmationTag.size == T1_CONFIRMATION_TAG_SIZE)
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE)
-        buffer.put(mlKemCiphertext)
+        buffer.put(hybridCiphertext)
         buffer.put(saltParameter)
         buffer.put(confirmationTag)
         buffer.put(CryptoUtils.secureRandomBytes(T1_PADDING_SIZE))
@@ -189,13 +198,13 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         rekeyEpoch: Long,
-        mlKemPublicKey: ByteArray
+        hybridPublicKey: ByteArray
     ): ByteArray {
-        require(mlKemPublicKey.size == T3_PUBLIC_KEY_SIZE)
+        require(hybridPublicKey.size == T3_PUBLIC_KEY_SIZE)
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.putInt(rekeyEpoch.toInt())
-        buffer.put(mlKemPublicKey)
+        buffer.put(hybridPublicKey)
         buffer.put(CryptoUtils.secureRandomBytes(T3_PADDING_SIZE))
 
         return packPlaintext(TYPE_REKEY_OFFER, seqNum, ackNum, timestampUTC, buffer.array())
@@ -206,13 +215,13 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         rekeyEpoch: Long,
-        mlKemCiphertext: ByteArray
+        hybridCiphertext: ByteArray
     ): ByteArray {
-        require(mlKemCiphertext.size == T4_CIPHERTEXT_SIZE)
+        require(hybridCiphertext.size == T4_CIPHERTEXT_SIZE)
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.putInt(rekeyEpoch.toInt())
-        buffer.put(mlKemCiphertext)
+        buffer.put(hybridCiphertext)
         buffer.put(CryptoUtils.secureRandomBytes(T4_PADDING_SIZE))
 
         return packPlaintext(TYPE_REKEY_RESPONSE, seqNum, ackNum, timestampUTC, buffer.array())

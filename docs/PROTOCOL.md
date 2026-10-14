@@ -18,12 +18,12 @@ Niniejszy dokument stanowi pełną specyfikację techniczną protokołu komunika
 > [!IMPORTANT]
 > **Założenie 1: Jawność ziarna w kodzie QR ($Seed_{init}$ jest jawny)**
 > Kod QR prezentowany podczas parowania (Handshake) zawiera:
-> $$QR = pk_A \ (800\text{ B}) \parallel Seed_{init} \ (32\text{ B}) \quad (\text{łącznie } 832\text{ bajty})$$
+> $$QR = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B}) \quad (\text{łącznie } 864\text{ bajty})$$
 > Protokół **nie zakłada poufności** kodu QR przed obserwatorem fizycznym (np. osobą patrzącą zza pleców lub kamerą monitoringu).
 > * $Seed_{init}$ służy wyłącznie do jednorazowego deterministycznego wyznaczenia punktu spotkania w sieci DHT:
 >   $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
 >   oraz do powiązania transkryptu (transcript binding) i ochrony przed kolizjami.
-> * Nawet jeśli adwersarz pozna $pk_A$ oraz $Seed_{init}$, **nie jest w stanie odszyfrować wiadomości ani poznać wspólnego sekretu**, ponieważ poufność wynika wprost z trudności problemu ML-KEM-512 (Module Learning With Errors — M-LWE).
+> * Nawet jeśli adwersarz pozna $pk_A$ oraz $Seed_{init}$, **nie jest w stanie odszyfrować wiadomości ani poznać wspólnego sekretu**, ponieważ poufność wynika wprost z trudności problemów ML-KEM-512 (Module Learning With Errors — M-LWE) oraz ECDH X25519 (DLP).
 > * Przed atakiem typu Man-in-the-Middle (podmiana odpowiedzi na DHT) chroni **Key Confirmation Tag** oraz **Short Authentication String (SAS)**.
 
 > [!WARNING]
@@ -50,7 +50,7 @@ Proces parowania składa się z 3 kroków: generacji QR przez Alice, przetworzen
          | ---------------- Skanowanie QR (OOB) ------------> |
          |                                                    |
          |                                            2. Encapsulate(pk_A) -> (SS_init, ct_B)
-         |                                               Generuje salt (32 B)
+         |                                               Generuje salt (24 B)
          |                                               Transcript = pk_A || ct_B || Seed_init || salt
          |                                               Commitment = SHA-256("PQChat_AntiGrind_v2" || Seed_init || Transcript)
          |                                               PRK = HKDF-Extract(salt, SS_init)
@@ -73,22 +73,22 @@ Proces parowania składa się z 3 kroków: generacji QR przez Alice, przetworzen
 ```
 
 ### 2.1. Krok 1 (Alice): Inicjalizacja i Prezentacja QR
-1. Generacja pary kluczy: $(pk_A, sk_A) \leftarrow \text{ML-KEM-512.KeyGen}()$.
+1. Generacja pary kluczy: $(pk_A, sk_A) \leftarrow \text{Hybrid-KEM.KeyGen}()$ (832 B klucz publiczny: 800 B ML-KEM-512 + 32 B X25519).
 2. Generacja losowego ziarna: $Seed_{init} \leftarrow \text{CSPRNG}(32\text{ bajty})$.
 3. Wyznaczenie punktu rendezvous $Target_0$:
    $$HMAC_0 = \text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"})$$
    $$Target_0 = \text{SHA-1}(HMAC_0)$$
-4. Prezentacja ładunku QR o sztywnym rozmiarze 832 bajtów:
-   $$QR_{payload} = pk_A \ (800\text{ B}) \parallel Seed_{init} \ (32\text{ B})$$
+4. Prezentacja ładunku QR o sztywnym rozmiarze 864 bajtów:
+   $$QR_{payload} = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B})$$
 
 ### 2.2. Krok 2 (Bob): Skanowanie, Enkapsulacja i Publikacja BEP 44
 1. Rozpakowanie QR: odzyskanie $pk_A$ i $Seed_{init}$.
-2. Enkapsulacja sekretu post-kwantowego:
-   $$(SS_{init}, ct_B) \leftarrow \text{ML-KEM-512.Encapsulate}(pk_A)$$
-   gdzie $SS_{init} \in \{0,1\}^{256}$, $ct_B \in \{0,1\}^{6144}$ ($768\text{ bajtów}$).
-3. Wygenerowanie 32-bajtowej soli kryptograficznej: $salt \leftarrow \text{CSPRNG}(32\text{ B})$.
+2. Enkapsulacja sekretu hybrydowego:
+   $$(SS_{init}, ct_B) \leftarrow \text{Hybrid-KEM.Encapsulate}(pk_A)$$
+   gdzie $SS_{init} \in \{0,1\}^{256}$, $ct_B \in \{0,1\}^{6400}$ ($800\text{ bajtów}$: 768 B ML-KEM + 32 B X25519 eph pk).
+3. Wygenerowanie 24-bajtowej soli kryptograficznej: $salt \leftarrow \text{CSPRNG}(24\text{ B})$.
 4. Związanie transkryptu (Transcript Binding):
-   $$Transcript = pk_A \parallel ct_B \parallel Seed_{init} \parallel salt \quad (1632\text{ bajty})$$
+   $$Transcript = pk_A \parallel ct_B \parallel Seed_{init} \parallel salt \quad (1688\text{ bajtów})$$
    $$TranscriptHash = \text{SHA-512}(Transcript) \quad (64\text{ bajty})$$
 5. Wyprowadzenie klucza głównego ($MasterKey$):
    $$PRK = \text{HKDF-Extract}(salt, SS_{init})$$
@@ -100,10 +100,10 @@ Proces parowania składa się z 3 kroków: generacji QR przez Alice, przetworzen
    $$EdSeed_{hs} = \text{HKDF-Derive}(null, Seed_{init}, \text{"hs\_ed25519"}, 32)$$
 8. Skonstruowanie ładunku wewnętrznego (Typ `0x01` — Handshake Finalize):
    * Nagłówek (13 B): $MsgType = 0x01$, $SeqNum = 0$, $AckNum = 0$, $TimestampUTC$.
-   * $ct_B$ (768 B).
-   * $salt$ (32 B).
+   * $ct_B$ (800 B).
+   * $salt$ (24 B).
    * $ConfirmTag$ (32 B).
-   * Padding CSPRNG (127 B).
+   * Padding CSPRNG (3 B).
    Szyfrowanie AEAD z kluczem $k_{hs}$ i $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
 9. Zapis w sieci DHT operacją `putMutable` pod $Target_0$ z użyciem podpisu z $EdSeed_{hs}$.
 10. Wyprowadzenie torów komunikacji i SAS:
@@ -115,12 +115,12 @@ Proces parowania składa się z 3 kroków: generacji QR przez Alice, przetworzen
 ### 2.3. Krok 3 (Alice): Pobranie z DHT, Deszyfrowanie i Weryfikacja
 1. Alice cyklicznie odpytuje DHT pod adresem $Target_0$.
 2. Po odebraniu pakietu deszyfruje ramkę kluczem $k_{hs}$ z $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
-3. Dekapsuluje sekret post-kwantowy:
-   $$SS_{init} \leftarrow \text{ML-KEM-512.Decapsulate}(sk_A, ct_B)$$
+3. Dekapsuluje sekret hybrydowy:
+   $$SS_{init} \leftarrow \text{Hybrid-KEM.Decapsulate}(sk_A, ct_B)$$
 4. Odtwarza $Transcript$, oblicza $TranscriptHash$, $PRK$ oraz $MasterKey$.
 5. Weryfikuje $ConfirmTag$ w czasie stałym (`MessageDigest.isEqual`):
    * **Brak zgodności:** błąd autentyczności (np. nieprawidłowy kryptogram lub próba ataku). Alice **nie niszczy** $sk_A$, co pozwala jej nadal oczekiwać na poprawny pakiet Boba.
-   * **Zgodność potwierdzona:** Alice bezzwłocznie zeruje pamięć klucza prywatnego $sk_A$ (`Arrays.fill(skA, 0)`), inicjalizuje tory $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ i oblicza identyczny kod $SAS$.
+   * **Zgodność potwierdzona:** Alice bezzwłocznie zeruje pamięć kluczy prywatnych $sk_A$ (ML-KEM oraz X25519), inicjalizuje tory $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ i oblicza identyczny kod $SAS$.
 
 ---
 
@@ -210,22 +210,22 @@ W celu zapewnienia właściwości **Post-Compromise Security (PCS)** (samoleczen
 
 ### 6.1. Typ 0x03: PQC Rekey Offer
 Gdy $Counter_{out} > 0$ oraz $Counter_{out} \equiv 0 \pmod{50}$:
-* Nadawca generuje świeżą parę $(pk_{new}, sk_{new}) \leftarrow \text{ML-KEM-512.KeyGen}()$.
+* Nadawca generuje świeżą parę $(pk_{new}, sk_{new}) \leftarrow \text{Hybrid-KEM.KeyGen}()$.
 * Zapisuje bezpiecznie $sk_{new}$ w bazie (zaszyfrowany Android Keystore) jako `PendingRekeyOfferEntity`.
-* Nadaje pakiet Typu `0x03` zawierający $RekeyEpoch$ oraz $pk_{new}$ ($800\text{ B}$).
+* Nadaje pakiet Typu `0x03` zawierający $RekeyEpoch$ oraz $pk_{new}$ ($832\text{ B}$: 800 B ML-KEM-512 + 32 B X25519).
 
 ### 6.2. Typ 0x04: PQC Rekey Response
 * Odbiorca po odebraniu oferty wykonuje `Encapsulate(pk_new)`, uzyskując $(SS_{rekey}, ct_{rekey})$.
 * Natychmiast aplikuje nowy sekret do swojego łańcucha wejściowego:
   $$ChainKey_{in} \leftarrow \text{HKDF-Extract}(ChainKey_{in}, SS_{rekey})$$
-* W swoim kanale wyjściowym nadaje pakiet Typu `0x04` zawierający $RekeyEpoch$ oraz $ct_{rekey}$ ($768\text{ B}$).
+* W swoim kanale wyjściowym nadaje pakiet Typu `0x04` zawierający $RekeyEpoch$ oraz $ct_{rekey}$ ($800\text{ B}$: 768 B ML-KEM-512 + 32 B X25519 eph pk).
 
 ### 6.3. Konsumpcja Odpowiedzi przez Inicjatora
 * Inicjator odbiera pakiet Typu `0x04` i dekapsuluje sekret:
-  $$SS_{rekey} \leftarrow \text{ML-KEM-512.Decapsulate}(sk_{new}, ct_{rekey})$$
+  $$SS_{rekey} \leftarrow \text{Hybrid-KEM.Decapsulate}(sk_{new}, ct_{rekey})$$
 * Wstrzykuje sekret do łańcucha wyjściowego:
   $$ChainKey_{out} \leftarrow \text{HKDF-Extract}(ChainKey_{out}, SS_{rekey})$$
-* Niszczy $sk_{new}$ i usuwa wpis z bazy danych.
+* Niszczy $sk_{new}$ (zerując pamięć klucza ML-KEM i X25519) i usuwa wpis z bazy danych.
 
 ---
 
@@ -264,22 +264,22 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
 
 ### 7.4. Typy Wiadomości i Struktury Ładunku (859 bajtów po odliczeniu nagłówka 872 - 13)
 * **Typ 0x01 (Handshake Finalize):**
-  * `ML-KEM-512 Ciphertext`: 768 B
-  * `Salt`: 32 B
+  * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
+  * `Salt`: 24 B
   * `Key Confirmation Tag`: 32 B
-  * `CSPRNG Padding`: 27 B (859 - 832)
+  * `CSPRNG Padding`: 3 B (859 - 856)
 * **Typ 0x02 (Wiadomość Tekstowa):**
   * `TextLength` ($L$): 2 B (UInt16, wartość $\le 857$)
   * `UTF-8 Payload`: $L$ bajtów (maksymalnie 857 B czystego tekstu)
   * `CSPRNG Padding`: $857 - L$ bajtów
 * **Typ 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
-  * `ML-KEM-512 PublicKey`: 800 B
-  * `CSPRNG Padding`: 55 B (859 - 804)
+  * `Combined PublicKey`: 832 B (800 B ML-KEM-512 + 32 B X25519)
+  * `CSPRNG Padding`: 23 B (859 - 836)
 * **Typ 0x04 (PQC Rekey Response):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
-  * `ML-KEM-512 Ciphertext`: 768 B
-  * `CSPRNG Padding`: 87 B (859 - 772)
+  * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519)
+  * `CSPRNG Padding`: 55 B (859 - 804)
 * **Typ 0x05 (Segment Transferu Blokowego — Chunk):**
   * `TransferID`: 16 B (UUID)
   * `ChunkIndex`: 2 B (UInt16 BE)

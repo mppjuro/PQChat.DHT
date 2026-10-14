@@ -182,11 +182,11 @@ object MessageDebugLogger {
                 "payload" to linkedMapOf(
                     "type" to "RekeyResponse",
                     "rekeyEpoch" to epoch,
-                    "pqcCiphertext_MLKEM512" to linkedMapOf(
-                        "algorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
-                        "role" to "Zaszyfrowany post-kwantowo nowy sekret rotacji (ct_new)",
+                    "pqcCiphertext_Hybrid" to linkedMapOf(
+                        "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
+                        "role" to "Zaszyfrowany hybrydowo nowy sekret rotacji (ct_new)",
                         "sizeBytes" to BinaryFrameCodec.T4_CIPHERTEXT_SIZE,
-                        "description" to "Kapsuła klucza wygenerowana przez ML-KEM-512 w odpowiedzi na Rekey Offer"
+                        "description" to "Hybrydowy szyfrogram wygenerowany przez HybridKem w odpowiedzi na Rekey Offer"
                     ),
                     "paddingBytesCount" to BinaryFrameCodec.T4_PADDING_SIZE
                 )
@@ -195,9 +195,9 @@ object MessageDebugLogger {
                 frame = frame,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
-                    "pqcAlgorithm" to "ML-KEM-512",
+                    "pqcAlgorithm" to "Hybrid (ML-KEM-512 + X25519)",
                     "pqcCiphertextSize" to BinaryFrameCodec.T4_CIPHERTEXT_SIZE,
-                    "description" to "BEZPOŚREDNIE SZYFROWANIE POST-KWANTOWE: Kapsuła ML-KEM-512 (768 B) wewnątrz ramki AES-256-GCM."
+                    "description" to "BEZPOŚREDNIE SZYFROWANIE POST-KWANTOWE I KLASYCZNE: Kapsuła hybrydowa (800 B) wewnątrz ramki AES-256-GCM."
                 ),
                 dhtTarget = slot.target,
                 dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -290,11 +290,11 @@ object MessageDebugLogger {
                 ),
                 "payload" to linkedMapOf(
                     "type" to "HandshakeFinalize",
-                    "pqcCiphertext_MLKEM512" to linkedMapOf(
-                        "algorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
-                        "role" to "Post-Quantum KEM Ciphertext (ct_B)",
+                    "pqcCiphertext_Hybrid" to linkedMapOf(
+                        "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
+                        "role" to "Hybrid KEM Ciphertext (ct_B)",
                         "sizeBytes" to BinaryFrameCodec.T1_CIPHERTEXT_SIZE,
-                        "description" to "Zaszyfrowany post-kwantowo kluczem publicznym Alice wspólny sekret SS_init"
+                        "description" to "Zaszyfrowany hybrydowo kluczem publicznym Alice wspólny sekret SS_init"
                     ),
                     "saltBytes" to BinaryFrameCodec.T1_SALT_SIZE,
                     "paddingBytes" to BinaryFrameCodec.T1_PADDING_SIZE
@@ -304,9 +304,9 @@ object MessageDebugLogger {
                 frame = frame,
                 pqcLayerInfo = linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
-                    "pqcAlgorithm" to "ML-KEM-512",
+                    "pqcAlgorithm" to "Hybrid (ML-KEM-512 + X25519)",
                     "pqcCiphertextSize" to BinaryFrameCodec.T1_CIPHERTEXT_SIZE,
-                    "description" to "BEZPOŚREDNIE SZYFROWANIE PQC: Szyfrogram ML-KEM-512 (768 B) opakowany w symetryczną ramkę AES-256-GCM."
+                    "description" to "BEZPOŚREDNIE SZYFROWANIE HYBRYDOWE: Szyfrogram hybrydowy (800 B) opakowany w symetryczną ramkę AES-256-GCM."
                 ),
                 dhtTarget = target,
                 dhtSeq = seq,
@@ -340,29 +340,29 @@ object MessageDebugLogger {
             )
             is BinaryFrameCodec.DecodedPayload.HandshakeFinalize -> linkedMapOf<String, Any?>(
                 "type" to "HandshakeFinalize (0x01)",
-                "pqcCiphertext_MLKEM512" to linkedMapOf(
-                    "algorithm" to "ML-KEM-512",
-                    "sizeBytes" to p.mlKemCiphertext.size,
-                    "description" to "Zaszyfrowany post-kwantowo wspólny sekret SS_init"
+                "pqcCiphertext_Hybrid" to linkedMapOf(
+                    "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
+                    "sizeBytes" to p.hybridCiphertext.size,
+                    "description" to "Zaszyfrowany hybrydowo wspólny sekret SS_init"
                 ),
                 "saltBytesCount" to p.saltParameter.size
             )
             is BinaryFrameCodec.DecodedPayload.RekeyOffer -> linkedMapOf<String, Any?>(
                 "type" to "RekeyOffer (0x03)",
                 "rekeyEpoch" to p.rekeyEpoch,
-                "pqcPublicKey_MLKEM512" to linkedMapOf(
-                    "algorithm" to "ML-KEM-512",
-                    "sizeBytes" to p.mlKemPublicKey.size,
+                "pqcPublicKey_Hybrid" to linkedMapOf(
+                    "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
+                    "sizeBytes" to p.hybridPublicKey.size,
                     "description" to "Nowy klucz publiczny nadawcy do rotacji KDF"
                 )
             )
             is BinaryFrameCodec.DecodedPayload.RekeyResponse -> linkedMapOf<String, Any?>(
                 "type" to "RekeyResponse (0x04)",
                 "rekeyEpoch" to p.rekeyEpoch,
-                "pqcCiphertext_MLKEM512" to linkedMapOf(
-                    "algorithm" to "ML-KEM-512",
-                    "sizeBytes" to p.mlKemCiphertext.size,
-                    "description" to "Zaszyfrowany post-kwantowo nowy sekret rotacji SS_rekey"
+                "pqcCiphertext_Hybrid" to linkedMapOf(
+                    "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
+                    "sizeBytes" to p.hybridCiphertext.size,
+                    "description" to "Zaszyfrowany hybrydowo nowy sekret rotacji SS_rekey"
                 )
             )
             is BinaryFrameCodec.DecodedPayload.ChunkData -> linkedMapOf<String, Any?>(
@@ -500,18 +500,18 @@ object MessageDebugLogger {
                 ),
                 "payload" to linkedMapOf(
                     "type" to "HandshakeFinalize",
-                    "pqcCiphertext_MLKEM512" to linkedMapOf(
-                        "algorithm" to "ML-KEM-512 (Kyber-512)",
+                    "pqcCiphertext_Hybrid" to linkedMapOf(
+                        "algorithm" to "Hybrid (ML-KEM-512 + X25519)",
                         "sizeBytes" to BinaryFrameCodec.T1_CIPHERTEXT_SIZE,
-                        "description" to "Zaszyfrowany post-kwantowo sekret SS_init wygenerowany przez Boba"
+                        "description" to "Zaszyfrowany hybrydowo sekret SS_init wygenerowany przez Boba"
                     ),
                     "saltBytesCount" to BinaryFrameCodec.T1_SALT_SIZE
                 ),
                 "postQuantumAnalysis" to linkedMapOf(
                     "isDirectPqcCiphertextInPayload" to true,
-                    "pqcAlgorithm" to "ML-KEM-512 (Kyber-512 / FIPS 203)",
+                    "pqcAlgorithm" to "Hybrid (ML-KEM-512 + X25519)",
                     "decapsulationStatus" to if (decapsulationSuccess)
-                        "SUKCES: Zdekapsulowano SS_init za pomocą klucza prywatnego sk_A Alice. Wygenerowano dwukierunkowe łańcuchy ratchetu!"
+                        "SUKCES: Zdekapsulowano SS_init za pomocą kluczy prywatnych Alice (ML-KEM-512 + X25519). Wygenerowano dwukierunkowe łańcuchy ratchetu!"
                     else "BŁĄD dekapsulacji"
                 )
             )

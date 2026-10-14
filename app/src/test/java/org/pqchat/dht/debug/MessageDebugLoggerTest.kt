@@ -47,7 +47,7 @@ class MessageDebugLoggerTest {
                 slot = slot,
                 seqNum = 0,
                 ackNum = 0,
-                mlKemPublicKeySize = 800,
+                mlKemPublicKeySize = 832,
                 frame = frame
             )
 
