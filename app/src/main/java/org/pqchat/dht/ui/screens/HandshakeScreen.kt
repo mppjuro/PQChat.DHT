@@ -161,7 +161,7 @@ fun HandshakeScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            TabRow(
+            PrimaryTabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = DarkSurface,
                 contentColor = NeonCyan
