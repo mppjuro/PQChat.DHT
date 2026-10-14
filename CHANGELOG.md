@@ -70,6 +70,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`5772490`](https://github.com/mppjuro/PQChat.DHT/commit/57724905f2868ace963bc0ec1d40f6e4056c4b90) (2026-10-14) — **deps**: bump softprops/action-gh-release from 2 to 3
 - [`237110b`](https://github.com/mppjuro/PQChat.DHT/commit/237110b29501bc22bdd58d7e49e212ef6089b733) (2026-10-14) — **deps**: update numpy requirement in /tools/threat_sim
 - [`d25675a`](https://github.com/mppjuro/PQChat.DHT/commit/d25675abc919592ae9470691b10476dbdcf8bd4d) (2026-10-14) — **deps**: bump actions/setup-python from 5 to 7
 - [`fd7e1d8`](https://github.com/mppjuro/PQChat.DHT/commit/fd7e1d8886ed59afd559960747647b274f2c11e5) (2026-10-12) — add issue and PR templates, nightly build and release workflows, and changelog automation
@@ -98,6 +99,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`03d285a`](https://github.com/mppjuro/PQChat.DHT/commit/03d285aa704e333ba2de261932c55945b78fef90) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`4e17ed3`](https://github.com/mppjuro/PQChat.DHT/commit/4e17ed3884770ec6d213e62e7dec0848bc4b8130) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`62733a7`](https://github.com/mppjuro/PQChat.DHT/commit/62733a79b65dd350753718cc1f0bcbb70bbf12e2) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`dc86a0b`](https://github.com/mppjuro/PQChat.DHT/commit/dc86a0bc62e12b5b49e7c2a86363989cb768534b) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
