@@ -70,6 +70,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`d25675a`](https://github.com/mppjuro/PQChat.DHT/commit/d25675abc919592ae9470691b10476dbdcf8bd4d) (2026-10-14) — **deps**: bump actions/setup-python from 5 to 7
 - [`fd7e1d8`](https://github.com/mppjuro/PQChat.DHT/commit/fd7e1d8886ed59afd559960747647b274f2c11e5) (2026-10-12) — add issue and PR templates, nightly build and release workflows, and changelog automation
 - [`44099a7`](https://github.com/mppjuro/PQChat.DHT/commit/44099a746e48e87813dc6e83e99e2227e458d6e3) (2026-10-12) — **dependencies**: updated dependencies in build.gradle.kts to last version
 - [`20ff6b5`](https://github.com/mppjuro/PQChat.DHT/commit/20ff6b5b08c45b318902ce610aea5f73171b3a79) (2026-10-12) — **deps**: bump org.jetbrains.kotlinx:kotlinx-coroutines-android
@@ -96,6 +97,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`62733a7`](https://github.com/mppjuro/PQChat.DHT/commit/62733a79b65dd350753718cc1f0bcbb70bbf12e2) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`dc86a0b`](https://github.com/mppjuro/PQChat.DHT/commit/dc86a0bc62e12b5b49e7c2a86363989cb768534b) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`f9d5f87`](https://github.com/mppjuro/PQChat.DHT/commit/f9d5f87defb26c98dde91d02419917cd1b1012d9) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`99b7e21`](https://github.com/mppjuro/PQChat.DHT/commit/99b7e21e2a9e5c08e69fc274cca4f91aaff467c4) (2026-10-13) — **changelog**: auto-update CHANGELOG.md [skip ci]
