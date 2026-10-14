@@ -12,12 +12,20 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 
+open class Socks5Exception(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+class Socks5CommandNotSupportedException(
+    val replyCode: Int,
+    message: String = "SOCKS5 UDP ASSOCIATE (CMD 0x03) rejected with reply code 0x%02X (Command not supported by Tor daemon)".format(replyCode)
+) : Socks5Exception(message)
+
 /**
  * High-performance, RFC 1928-compliant SOCKS5 proxy client.
  *
  * Implements:
  * - TCP CONNECT with remote domain name resolution (ATYP 0x03) preventing DNS leaks.
  * - UDP ASSOCIATE for routing datagrams (e.g. DHT KRPC packets) through SOCKS5 relay.
+ * - Proxy capability detection (standard Tor daemon vs full UDP relay).
  */
 class Socks5Client(
     val proxyHost: String = "127.0.0.1",
@@ -26,10 +34,64 @@ class Socks5Client(
     private val readTimeoutMs: Int = 10000
 ) {
 
+    data class Socks5Capabilities(
+        val supportsTcpConnect: Boolean,
+        val supportsUdpAssociate: Boolean,
+        val udpRejectionCode: Int? = null,
+        val description: String = ""
+    )
+
     data class Socks5UdpPacket(
         val data: ByteArray,
         val sender: InetSocketAddress
     )
+
+    /**
+     * Probes the SOCKS5 proxy to detect whether it supports TCP CONNECT, UDP ASSOCIATE,
+     * or is a standard Tor daemon that rejects UDP ASSOCIATE.
+     */
+    fun detectCapabilities(): Socks5Capabilities {
+        var tcpOk = false
+        var udpOk = false
+        var rejection: Int? = null
+
+        try {
+            val assoc = createUdpAssociation()
+            assoc.close()
+            udpOk = true
+        } catch (e: Socks5CommandNotSupportedException) {
+            rejection = e.replyCode
+        } catch (_: Exception) {
+        }
+
+        try {
+            Socket().use { s ->
+                s.soTimeout = connectTimeoutMs
+                s.connect(InetSocketAddress(proxyHost, proxyPort), connectTimeoutMs)
+                val out = DataOutputStream(s.getOutputStream())
+                val `in` = DataInputStream(s.getInputStream())
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val ver = `in`.readUnsignedByte()
+                val method = `in`.readUnsignedByte()
+                tcpOk = (ver == 0x05 && method == 0x00)
+            }
+        } catch (_: Exception) {
+        }
+
+        val desc = when {
+            udpOk -> "Full SOCKS5 (TCP + UDP ASSOCIATE)"
+            tcpOk -> "Standard Tor SOCKS5 (TCP CONNECT only, UDP rejected with code 0x%02X)".format(rejection ?: 0x07)
+            else -> "Proxy unreachable on $proxyHost:$proxyPort"
+        }
+
+        return Socks5Capabilities(
+            supportsTcpConnect = tcpOk,
+            supportsUdpAssociate = udpOk,
+            udpRejectionCode = rejection,
+            description = desc
+        )
+    }
 
     /**
      * Establishes a TCP connection to the destination through SOCKS5 proxy.
@@ -125,6 +187,12 @@ class Socks5Client(
 
         if (repVer != 0x05 || repCode != 0x00) {
             controlSocket.close()
+            if (repCode == 0x07 || repCode == 0x01) {
+                throw Socks5CommandNotSupportedException(
+                    replyCode = repCode,
+                    message = "SOCKS5 UDP ASSOCIATE (CMD 0x03) rejected with code 0x%02X (Command not supported by Tor daemon)".format(repCode)
+                )
+            }
             throw IOException("SOCKS5 UDP ASSOCIATE rejected with code $repCode")
         }
 
