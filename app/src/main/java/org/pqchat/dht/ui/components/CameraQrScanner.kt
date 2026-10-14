@@ -53,6 +53,8 @@ fun CameraQrScanner(
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var isTorchOn by remember { mutableStateOf(false) }
     var hasScanned by remember { mutableStateOf(false) }
+    val assembler = remember { org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler() }
+    var progressState by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     // Laser scan animation
     val infiniteTransition = rememberInfiniteTransition(label = "laser")
@@ -103,10 +105,33 @@ fun CameraQrScanner(
                         if (!hasScanned) {
                             val decodedText = decodeQrFromImage(imageProxy)
                             if (decodedText != null && decodedText.isNotBlank()) {
-                                hasScanned = true
-                                previewView.post {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onQrScanned(decodedText)
+                                val result = assembler.processScan(decodedText)
+                                when (result) {
+                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.SingleStatic -> {
+                                        hasScanned = true
+                                        previewView.post {
+                                            progressState = null
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onQrScanned(decodedText)
+                                        }
+                                    }
+                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Progress -> {
+                                        previewView.post {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            progressState = Pair(result.scannedCount, result.totalCount)
+                                        }
+                                    }
+                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Complete -> {
+                                        hasScanned = true
+                                        previewView.post {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            progressState = Pair(result.scannedCount, result.totalCount)
+                                            onQrScanned(result.rawBase64)
+                                        }
+                                    }
+                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Error -> {
+                                        // Ignore corrupted frame, keep scanning
+                                    }
                                 }
                             }
                         }
@@ -229,21 +254,46 @@ fun CameraQrScanner(
                 )
             }
 
-            // Bottom Guide Text
+            // Bottom Guide Text / Multipart Scanning Progress
             Surface(
-                color = DarkBackground.copy(alpha = 0.8f),
+                color = DarkBackground.copy(alpha = 0.85f),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 12.dp)
             ) {
-                Text(
-                    text = if (hasScanned) "✓ QR Code Captured" else "Align Alice's ML-KEM QR in frame",
-                    color = if (hasScanned) ElectricGreen else NeonCyan,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                )
+                if (progressState != null) {
+                    val (scanned, total) = progressState!!
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = if (scanned == total) "✓ Zeskanowano $scanned/$total części" else "Zeskanowano $scanned/$total części",
+                            color = if (scanned == total) ElectricGreen else NeonCyan,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { scanned.toFloat() / total.toFloat() },
+                            modifier = Modifier
+                                .width(160.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = if (scanned == total) ElectricGreen else NeonCyan,
+                            trackColor = Color.DarkGray
+                        )
+                    }
+                } else {
+                    Text(
+                        text = if (hasScanned) "✓ QR Code Captured" else "Align Alice's ML-KEM QR in frame",
+                        color = if (hasScanned) ElectricGreen else NeonCyan,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
             }
         }
     }

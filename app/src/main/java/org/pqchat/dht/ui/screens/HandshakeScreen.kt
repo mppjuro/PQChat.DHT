@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,7 +24,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -105,13 +109,32 @@ fun HandshakeScreen(
     }
 
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isAnimatedQr by remember { mutableStateOf(false) }
+    var animatedFrames by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var currentFrameIndex by remember { mutableStateOf(0) }
 
     LaunchedEffect(aliceInitState) {
         val state = aliceInitState
         if (state != null) {
             qrBitmap = QrCodeUtil.generateQrBitmap(state.qrBytes, 600)
+            try {
+                animatedFrames = QrCodeUtil.generateMultipartQrBitmaps(state.qrBytes, totalFrames = 4, size = 600)
+            } catch (_: Exception) {
+                animatedFrames = emptyList()
+            }
+            currentFrameIndex = 0
         } else {
             qrBitmap = null
+            animatedFrames = emptyList()
+        }
+    }
+
+    LaunchedEffect(isAnimatedQr, animatedFrames) {
+        if (isAnimatedQr && animatedFrames.isNotEmpty()) {
+            while (isActive) {
+                delay(350L) // Rotate animated multipart frames every 350 ms
+                currentFrameIndex = (currentFrameIndex + 1) % animatedFrames.size
+            }
         }
     }
 
@@ -220,9 +243,48 @@ fun HandshakeScreen(
                         ) {
                             Text("Generate ML-KEM-512 QR Code", fontWeight = FontWeight.Bold)
                         }
-                    } else {
-                        // Display generated QR
-                        qrBitmap?.let { bitmap ->
+                        // Mode Switch: Statyczny QR / Animowany QR
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Statyczny QR",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (!isAnimatedQr) NeonCyan else TextSecondary,
+                                fontWeight = if (!isAnimatedQr) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Switch(
+                                checked = isAnimatedQr,
+                                onCheckedChange = { isAnimatedQr = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = NeonCyan,
+                                    checkedTrackColor = DarkSurfaceVariant,
+                                    uncheckedThumbColor = TextSecondary,
+                                    uncheckedTrackColor = DarkSurface
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Animowany QR",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isAnimatedQr) NeonCyan else TextSecondary,
+                                fontWeight = if (isAnimatedQr) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+
+                        // Display generated QR (Static or Animated Multipart)
+                        val activeBitmap = if (isAnimatedQr && animatedFrames.isNotEmpty()) {
+                            animatedFrames[currentFrameIndex]
+                        } else {
+                            qrBitmap
+                        }
+
+                        activeBitmap?.let { bitmap ->
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = Color.White,
@@ -232,8 +294,41 @@ fun HandshakeScreen(
                             ) {
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "ML-KEM-512 QR Code",
+                                    contentDescription = if (isAnimatedQr) "Animated Multipart QR" else "ML-KEM-512 QR Code",
                                     modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            if (isAnimatedQr && animatedFrames.isNotEmpty()) {
+                                Row(
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    for (i in animatedFrames.indices) {
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(horizontal = 4.dp)
+                                                .size(if (i == currentFrameIndex) 10.dp else 6.dp)
+                                                .clip(CircleShape)
+                                                .background(if (i == currentFrameIndex) NeonCyan else Color.DarkGray)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Część ${currentFrameIndex + 1}/${animatedFrames.size} (350 ms)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NeonCyan,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            } else {
+                                Text(
+                                    text = "Gęsty statyczny kod QR (${HandshakeManager.QR_DATA_SIZE} B)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
                                 )
                             }
                         }
