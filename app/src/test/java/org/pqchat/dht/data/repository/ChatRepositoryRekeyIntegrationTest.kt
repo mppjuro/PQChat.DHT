@@ -187,23 +187,7 @@ class ChatRepositoryRekeyIntegrationTest {
         }
     }
 
-    private class TestChunkDao : ChunkDao {
-        val chunks = CopyOnWriteArrayList<ChunkEntity>()
-
-        override suspend fun insertChunk(chunk: ChunkEntity) {
-            chunks.add(chunk)
-        }
-
-        override suspend fun getChunksForTransfer(transferId: String): List<ChunkEntity> =
-            chunks.filter { it.transferId == transferId }.sortedBy { it.chunkIndex }
-
-        override suspend fun countChunks(transferId: String): Int =
-            chunks.count { it.transferId == transferId }
-
-        override suspend fun deleteChunks(transferId: String) {
-            chunks.removeIf { it.transferId == transferId }
-        }
-    }
+    private class TestChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 
     private class TestPendingRekeyOfferDao : PendingRekeyOfferDao {
         val offers = ConcurrentHashMap<String, PendingRekeyOfferEntity>()

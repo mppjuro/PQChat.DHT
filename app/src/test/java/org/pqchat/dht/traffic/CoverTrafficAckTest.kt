@@ -247,12 +247,7 @@ class CoverTrafficAckTest {
                 .sortedBy { it.id }
     }
 
-    private class FakeChunkDao : ChunkDao {
-        override suspend fun insertChunk(chunk: ChunkEntity) {}
-        override suspend fun getChunksForTransfer(transferId: String): List<ChunkEntity> = emptyList()
-        override suspend fun countChunks(transferId: String): Int = 0
-        override suspend fun deleteChunks(transferId: String) {}
-    }
+    private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 
     @Test
     fun testCoverAckProtocol_PayloadCreationAndVerification() {

@@ -154,6 +154,14 @@ class ProtocolEngineTest {
         )
         assertEquals(45, chunks.size) // 36000 / 800 = 45 chunks
 
+        // Verify domain separation: chunk 0 keys MUST NOT be identical to base keys
+        val subKey0 = ChunkingEngine.deriveChunkMsgKey(msgKey, 0)
+        assertFalse("chunk 0 key must not equal baseMsgKey", subKey0.contentEquals(msgKey))
+        val subSeed0 = ChunkingEngine.deriveChunkEdSeed(edSeed, 0)
+        assertFalse("chunk 0 edSeed must not equal baseEdSeed", subSeed0.contentEquals(edSeed))
+        val subSeed1 = ChunkingEngine.deriveChunkEdSeed(edSeed, 1)
+        assertFalse("chunk 0 edSeed must not equal chunk 1 edSeed", subSeed0.contentEquals(subSeed1))
+
         // Decrypt each chunk and verify
         val decodedChunks = ArrayList<BinaryFrameCodec.DecodedPayload.ChunkData>()
         for (chunkItem in chunks) {

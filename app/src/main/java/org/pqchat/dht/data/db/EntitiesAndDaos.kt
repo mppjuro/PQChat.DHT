@@ -376,6 +376,68 @@ data class ChunkEntity(
     override fun hashCode(): Int = 31 * transferId.hashCode() + chunkIndex
 }
 
+@Entity(
+    tableName = "pending_chunk_transfers",
+    indices = [
+        Index("contactId"),
+        Index("expiresAt")
+    ]
+)
+data class PendingChunkTransferEntity(
+    @PrimaryKey val transferId: String,
+    val contactId: String,
+    val seqNum: Int,
+    val totalChunks: Int,
+    val missingIndices: String,
+    val baseEdSeed: EncryptedBlob,
+    val baseMsgKey: EncryptedBlob,
+    val direction: String,
+    val isSelf: Boolean = false,
+    val ackNum: Int = 0,
+    val timestampUTC: Long = System.currentTimeMillis(),
+    val createdAt: Long = System.currentTimeMillis(),
+    val expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+) {
+    @Ignore
+    constructor(
+        transferId: String,
+        contactId: String,
+        seqNum: Int,
+        totalChunks: Int,
+        missingIndices: List<Int>,
+        baseEdSeed: ByteArray,
+        baseMsgKey: ByteArray,
+        direction: String,
+        isSelf: Boolean = false,
+        ackNum: Int = 0,
+        timestampUTC: Long = System.currentTimeMillis(),
+        createdAt: Long = System.currentTimeMillis(),
+        expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+    ) : this(
+        transferId = transferId,
+        contactId = contactId,
+        seqNum = seqNum,
+        totalChunks = totalChunks,
+        missingIndices = missingIndices.joinToString(","),
+        baseEdSeed = EncryptedBlob(baseEdSeed, "pending_chunk_transfers", "${transferId}_seed"),
+        baseMsgKey = EncryptedBlob(baseMsgKey, "pending_chunk_transfers", "${transferId}_key"),
+        direction = direction,
+        isSelf = isSelf,
+        ackNum = ackNum,
+        timestampUTC = timestampUTC,
+        createdAt = createdAt,
+        expiresAt = expiresAt
+    )
+
+    val rawBaseEdSeed: ByteArray get() = baseEdSeed.raw
+    val rawBaseMsgKey: ByteArray get() = baseMsgKey.raw
+
+    fun parseMissingIndices(): List<Int> {
+        if (missingIndices.isBlank()) return emptyList()
+        return missingIndices.split(",").mapNotNull { it.trim().toIntOrNull() }
+    }
+}
+
 @Dao
 interface ChunkDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -405,6 +467,38 @@ interface ChunkDao {
 
     @Query("DELETE FROM chunks WHERE transferId = :transferId")
     suspend fun deleteChunks(transferId: String)
+
+    @Query("SELECT chunkIndex FROM chunks WHERE transferId = :transferId ORDER BY chunkIndex ASC")
+    suspend fun getExistingChunkIndices(transferId: String): List<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPendingTransfer(transfer: PendingChunkTransferEntity)
+
+    @Query("SELECT * FROM pending_chunk_transfers WHERE transferId = :transferId LIMIT 1")
+    suspend fun getPendingTransfer(transferId: String): PendingChunkTransferEntity?
+
+    @Query("SELECT * FROM pending_chunk_transfers WHERE contactId = :contactId ORDER BY createdAt ASC")
+    suspend fun getPendingTransfersForContact(contactId: String): List<PendingChunkTransferEntity>
+
+    @Query("SELECT * FROM pending_chunk_transfers ORDER BY createdAt ASC")
+    suspend fun getAllPendingTransfers(): List<PendingChunkTransferEntity>
+
+    @Query("UPDATE pending_chunk_transfers SET missingIndices = :missingIndices WHERE transferId = :transferId")
+    suspend fun updateMissingIndices(transferId: String, missingIndices: String)
+
+    @Query("DELETE FROM pending_chunk_transfers WHERE transferId = :transferId")
+    suspend fun deletePendingTransfer(transferId: String)
+
+    @Query("DELETE FROM chunks WHERE transferId IN (SELECT transferId FROM pending_chunk_transfers WHERE expiresAt < :now)")
+    suspend fun deleteExpiredChunks(now: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM pending_chunk_transfers WHERE expiresAt < :now")
+    suspend fun deleteExpiredPendingTransfers(now: Long = System.currentTimeMillis())
+
+    suspend fun purgeExpiredTransfers(now: Long = System.currentTimeMillis()) {
+        deleteExpiredChunks(now)
+        deleteExpiredPendingTransfers(now)
+    }
 }
 
 @Dao

@@ -66,6 +66,7 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsState()
     val nextPollInMs by viewModel.nextPollInMs.collectAsState()
     val isRekeyInProgress by viewModel.isRekeyInProgress.collectAsState()
+    val downloadingTransfers by viewModel.currentContactDownloadProgress.collectAsState()
 
     var textInput by remember { mutableStateOf("") }
     var showSasDialog by remember { mutableStateOf(false) }
@@ -366,6 +367,50 @@ fun ChatScreen(
                             color = AmberWarning,
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+                }
+            }
+
+            if (downloadingTransfers.isNotEmpty()) {
+                for (progress in downloadingTransfers) {
+                    Surface(
+                        color = appColors.surfaceVariant.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = "Pobieranie obrazu",
+                                    tint = appColors.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Pobieranie obrazu: ${progress.receivedChunks}/${progress.totalChunks} segmentów (${progress.progressPercent}%)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = appColors.textPrimary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { progress.progressFraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = appColors.primary,
+                                trackColor = appColors.surface
+                            )
+                        }
                     }
                 }
             }

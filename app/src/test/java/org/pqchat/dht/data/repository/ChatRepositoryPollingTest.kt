@@ -169,23 +169,7 @@ class ChatRepositoryPollingTest {
         }
     }
 
-    private class FakeChunkDao : ChunkDao {
-        val chunks = mutableListOf<ChunkEntity>()
-
-        override suspend fun insertChunk(chunk: ChunkEntity) {
-            chunks.add(chunk)
-        }
-
-        override suspend fun getChunksForTransfer(transferId: String): List<ChunkEntity> =
-            chunks.filter { it.transferId == transferId }
-
-        override suspend fun countChunks(transferId: String): Int =
-            chunks.count { it.transferId == transferId }
-
-        override suspend fun deleteChunks(transferId: String) {
-            chunks.removeAll { it.transferId == transferId }
-        }
-    }
+    private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 
     @Test
     fun testRoutineCheckQueriesOnlyCounterInWhenEmpty() = runBlocking {

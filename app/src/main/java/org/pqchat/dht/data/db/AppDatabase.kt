@@ -13,11 +13,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ContactEntity::class,
         MessageEntity::class,
         ChunkEntity::class,
+        PendingChunkTransferEntity::class,
         DhtNodeCacheEntity::class,
         PendingRekeyOfferEntity::class,
         SkippedKeyEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -157,6 +158,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS pending_chunk_transfers (
+                        transferId TEXT NOT NULL PRIMARY KEY,
+                        contactId TEXT NOT NULL,
+                        seqNum INTEGER NOT NULL,
+                        totalChunks INTEGER NOT NULL,
+                        missingIndices TEXT NOT NULL,
+                        baseEdSeed BLOB NOT NULL,
+                        baseMsgKey BLOB NOT NULL,
+                        direction TEXT NOT NULL,
+                        isSelf INTEGER NOT NULL DEFAULT 0,
+                        ackNum INTEGER NOT NULL DEFAULT 0,
+                        timestampUTC INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_pending_chunk_transfers_contactId ON pending_chunk_transfers (contactId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_pending_chunk_transfers_expiresAt ON pending_chunk_transfers (expiresAt)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -164,7 +189,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                 INSTANCE = instance
