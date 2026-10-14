@@ -97,7 +97,7 @@ class AndroidResourceProfilerTest {
             sampleIntervalMs = 50L
         )
 
-        profiler.startSession("unit_test_session")
+        profiler.startSession("unit_test_session", autoSample = false)
         assertTrue(profiler.isProfiling.value)
         assertEquals("unit_test_session", profiler.currentSessionLabel)
 
@@ -189,5 +189,17 @@ class AndroidResourceProfilerTest {
         for (col in expectedCols) {
             assertTrue("Header must contain $col", header.contains(col))
         }
+    }
+
+    @Test
+    fun testPeriodicBackgroundSampling() {
+        val profiler = AndroidResourceProfiler(
+            dhtClient = fakeDht,
+            sampleIntervalMs = 20L
+        )
+        profiler.startSession("periodic_test", autoSample = true)
+        Thread.sleep(70)
+        profiler.stopSession()
+        assertTrue("Periodic sampling must collect at least one sample", profiler.samples.isNotEmpty())
     }
 }
