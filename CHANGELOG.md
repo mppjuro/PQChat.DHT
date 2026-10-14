@@ -48,6 +48,8 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`a5a60ae`](https://github.com/mppjuro/PQChat.DHT/commit/a5a60aeb1cbbaeee4c03f96aa0dd9135bcdbc980) (2026-10-14) — **profiler**: eliminate race condition between background sampler and manual snapshots in tests
+- [`4eb762e`](https://github.com/mppjuro/PQChat.DHT/commit/4eb762e94dc8feef1e42a166f06eec1b39127787) (2026-10-14) — **ui**: resolve Compose deprecations for LocalLifecycleOwner, TabRow, and menuAnchor
 - [`2086f9e`](https://github.com/mppjuro/PQChat.DHT/commit/2086f9e7e8080ddcc03de2235b7ca35a1b05ab46) (2026-10-14) — **dht**: avoid public bootstrap calls and loosen timing assertion in FastTerminationTest
 - [`5c8011e`](https://github.com/mppjuro/PQChat.DHT/commit/5c8011e99ca96cadee9091e554d2dc35122335ab) (2026-10-14) — **tor**: enforce fail-closed transport, block silent simulation on Android, and add SOCKS5 TCP tunnel fallback for BEP 44
 - [`f95251f`](https://github.com/mppjuro/PQChat.DHT/commit/f95251f6f0175f5f0bc0d395ec67379fca733274) (2026-10-13) — **lifecycle**: centralize polling lifecycle with unified 4-state coordinator and true screen detection
@@ -110,6 +112,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`c03dfa9`](https://github.com/mppjuro/PQChat.DHT/commit/c03dfa95b5f9185e57f1c92082e6466eca9a7b6d) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`784a470`](https://github.com/mppjuro/PQChat.DHT/commit/784a470653217e6fa7321b5e411c298b9429e16e) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`2a3a203`](https://github.com/mppjuro/PQChat.DHT/commit/2a3a203ae2e340ec27cae30ad19d771653b9d470) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`0cffb12`](https://github.com/mppjuro/PQChat.DHT/commit/0cffb123f9e838d9bb1f07184c1d99365c727647) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
