@@ -1132,7 +1132,7 @@ fun TorStatusCard(
                             )
                         }
                         Text(
-                            text = "Ruch DHT KRPC jest hermetyzowany i kierowany przez wbudowany proxy SOCKS5. Rozwiązywanie nazw domenowych (RFC 1928) następuje po stronie węzła wyjściowego.",
+                            text = "Ruch DHT KRPC jest hermetyzowany przez proxy SOCKS5 (UDP ASSOCIATE lub tunel strumieniowy TCP dla standardowych demonów Tor). Rozwiązywanie nazw domenowych (RFC 1928) następuje po stronie węzła wyjściowego.",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary,
                             fontSize = 11.sp,
@@ -1141,10 +1141,17 @@ fun TorStatusCard(
                     }
                     is TorState.Error -> {
                         Text(
-                            text = "Wystąpił błąd podczas pracy klienta Tor: ${torState.message}",
+                            text = "Błąd klienta Tor: ${torState.message}",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFE53935),
                             fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Zabezpieczenie Fail-Closed aktywne: bezpośrednia transmisja UDP przez sieć komórkową/Wi-Fi została wstrzymana, aby wykluczyć wyciek Twojego adresu IP (clearnet leak).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary,
+                            fontSize = 11.sp
                         )
                     }
                 }

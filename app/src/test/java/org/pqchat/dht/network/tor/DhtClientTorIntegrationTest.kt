@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.dht.krpc.KrpcMessage
+import org.pqchat.dht.dht.leaf.TorTransportMode
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.dht.leaf.TorProxyConfig
 import java.io.DataInputStream
@@ -85,7 +86,7 @@ class DhtClientTorIntegrationTest {
             }
 
             // 3. Initialize DhtLeafNode
-            val node = DhtLeafNode(port = 0)
+            val node = DhtLeafNode(port = 0, autoBootstrap = false)
             leafNode = node
             node.start()
 
@@ -145,6 +146,178 @@ class DhtClientTorIntegrationTest {
                 responderThread.interrupt()
                 node.stop()
                 socksServer.stop()
+            }
+        }
+    }
+
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    fun `Tor SOCKS5 proxy rejecting UDP ASSOCIATE falls back to length-prefixed TCP streaming tunnel`() = runBlocking {
+        withTimeout(15_000L) {
+            // Mock SOCKS5 proxy that rejects UDP ASSOCIATE with 0x07 (Command not supported)
+            val mockProxy = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")).apply { reuseAddress = true }
+            val proxyPort = mockProxy.localPort
+
+            // Mock DHT peer that speaks length-prefixed KRPC over TCP
+            val mockNodeServer = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")).apply { reuseAddress = true }
+            val dhtNodePort = mockNodeServer.localPort
+
+            val proxyJob = Thread {
+                while (!mockProxy.isClosed) {
+                    try {
+                        val client = mockProxy.accept()
+                        Thread {
+                            val `in` = DataInputStream(client.getInputStream())
+                            val out = DataOutputStream(client.getOutputStream())
+
+                            `in`.readUnsignedByte(); val n = `in`.readUnsignedByte(); `in`.readFully(ByteArray(n))
+                            out.write(byteArrayOf(0x05, 0x00)); out.flush()
+
+                            `in`.readUnsignedByte()
+                            val cmd = `in`.readUnsignedByte()
+                            `in`.readUnsignedByte()
+                            val atyp = `in`.readUnsignedByte()
+                            if (atyp == 0x01) `in`.skipBytes(4)
+                            else if (atyp == 0x03) { val len = `in`.readUnsignedByte(); `in`.skipBytes(len) }
+                            val port = `in`.readUnsignedShort()
+
+                            if (cmd == 0x03) { // UDP ASSOCIATE
+                                // Standard Tor daemon behavior: reject with 0x07
+                                out.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                                out.flush()
+                                client.close()
+                            } else if (cmd == 0x01) { // TCP CONNECT
+                                out.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, (port shr 8).toByte(), (port and 0xFF).toByte()))
+                                out.flush()
+
+                                val remote = java.net.Socket("127.0.0.1", port)
+                                val t1 = Thread {
+                                    val buf = ByteArray(4096)
+                                    val rIn = remote.getInputStream()
+                                    val cOut = client.getOutputStream()
+                                    while (true) {
+                                        val r = rIn.read(buf)
+                                        if (r == -1) break
+                                        cOut.write(buf, 0, r); cOut.flush()
+                                    }
+                                }.apply { isDaemon = true; start() }
+
+                                val cIn = client.getInputStream()
+                                val rOut = remote.getOutputStream()
+                                val buf = ByteArray(4096)
+                                while (true) {
+                                    val r = cIn.read(buf)
+                                    if (r == -1) break
+                                    rOut.write(buf, 0, r); rOut.flush()
+                                }
+                            }
+                        }.apply { isDaemon = true; start() }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+
+            val nodeJob = Thread {
+                while (!mockNodeServer.isClosed) {
+                    try {
+                        val client = mockNodeServer.accept()
+                        Thread {
+                            val `in` = DataInputStream(client.getInputStream())
+                            val out = DataOutputStream(client.getOutputStream())
+
+                            val len = `in`.readInt()
+                            val data = ByteArray(len)
+                            `in`.readFully(data)
+
+                            val query = KrpcMessage.parse(data)
+                            val resp = KrpcMessage.createPingResponse(CryptoUtils.secureRandomBytes(20), query.transactionId)
+                            val respBytes = resp.toBencoded()
+
+                            out.writeInt(respBytes.size)
+                            out.write(respBytes)
+                            out.flush()
+                            client.close()
+                        }.apply { isDaemon = true; start() }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+
+            val node = DhtLeafNode(port = 0, autoBootstrap = false)
+            leafNode = node
+            node.start()
+
+            try {
+                val config = TorProxyConfig(enabled = true, socksHost = "127.0.0.1", socksPort = proxyPort)
+                node.setTorProxy(config)
+
+                assertEquals(TorTransportMode.SOCKS5_TCP, node.torTransportMode)
+                assertTrue(node.isTorRoutingActive)
+                assertTrue(node.torDiagnosticMessage!!.contains("TCP SOCKS5"))
+
+                val ping = KrpcMessage.createPingQuery(node.myNodeId)
+                val targetAddr = InetSocketAddress("127.0.0.1", dhtNodePort)
+                val resp = node.sendQuery(targetAddr, ping, timeoutMs = 4000L)
+
+                assertNotNull("Query via SOCKS5 TCP tunnel must succeed", resp)
+                assertEquals(CryptoUtils.toHex(ping.transactionId), CryptoUtils.toHex(resp!!.transactionId))
+            } finally {
+                node.stop()
+                mockProxy.close()
+                mockNodeServer.close()
+            }
+        }
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    fun `Fail-closed behavior when Tor is enabled strictly blocks clearnet UDP leaks`() = runBlocking {
+        withTimeout(10_000L) {
+            val clearnetCatcher = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+            val catcherAddr = InetSocketAddress(clearnetCatcher.localAddress, clearnetCatcher.localPort)
+            val packetsReceived = AtomicInteger(0)
+
+            val catcherThread = Thread {
+                val buf = ByteArray(2048)
+                while (!clearnetCatcher.isClosed) {
+                    try {
+                        val pkt = DatagramPacket(buf, buf.size)
+                        clearnetCatcher.receive(pkt)
+                        packetsReceived.incrementAndGet()
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+
+            val node = DhtLeafNode(port = 0, autoBootstrap = false)
+            leafNode = node
+            node.start()
+
+            try {
+                // Find closed port
+                val tempSs = ServerSocket(0)
+                val closedPort = tempSs.localPort
+                tempSs.close()
+
+                val config = TorProxyConfig(enabled = true, socksHost = "127.0.0.1", socksPort = closedPort, timeoutMs = 300)
+                node.setTorProxy(config)
+
+                assertEquals(TorTransportMode.BLOCKED_ERROR, node.torTransportMode)
+                assertFalse(node.isTorRoutingActive)
+                assertTrue(node.torDiagnosticMessage!!.contains("Fail-Closed"))
+
+                val ping = KrpcMessage.createPingQuery(node.myNodeId)
+                val resp = node.sendQuery(catcherAddr, ping, timeoutMs = 500L)
+
+                assertNull("sendQuery must return null when Tor proxy is in error", resp)
+                kotlinx.coroutines.delay(200)
+                assertEquals("Zero packets must leak over clearnet socket (Fail-Closed)", 0, packetsReceived.get())
+            } finally {
+                clearnetCatcher.close()
+                node.stop()
             }
         }
     }

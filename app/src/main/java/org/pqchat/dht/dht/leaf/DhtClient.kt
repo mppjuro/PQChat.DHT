@@ -5,8 +5,23 @@ import kotlinx.coroutines.Job
 data class TorProxyConfig(
     val enabled: Boolean = true,
     val socksHost: String = "127.0.0.1",
-    val socksPort: Int = 9050
+    val socksPort: Int = 9050,
+    val timeoutMs: Int = 3000
 )
+
+/**
+ * Operating transport mode for DHT packet transmission.
+ */
+enum class TorTransportMode {
+    /** Tor disabled in settings: raw direct UDP socket used. */
+    DIRECT_UDP,
+    /** Tor enabled: datagrams routed via RFC 1928 SOCKS5 UDP ASSOCIATE relay. */
+    SOCKS5_UDP,
+    /** Tor enabled: standard Tor daemon rejected UDP ASSOCIATE; tunneled via SOCKS5 TCP streaming socket (length-prefixed KRPC). */
+    SOCKS5_TCP,
+    /** Tor enabled in settings, but SOCKS5 proxy is offline or errored. Fail-closed: all direct UDP transmission is blocked. */
+    BLOCKED_ERROR
+}
 
 /**
  * Common abstraction for DHT client implementations (production leaf node, fake/mock nodes for testing).
@@ -27,6 +42,16 @@ interface DhtClient {
      * Whether KRPC queries are currently routed through Tor SOCKS5 proxy.
      */
     val isTorRoutingActive: Boolean get() = false
+
+    /**
+     * Current Tor transport mode.
+     */
+    val torTransportMode: TorTransportMode get() = TorTransportMode.DIRECT_UDP
+
+    /**
+     * Real-time diagnostic message about Tor proxy capabilities and transport state.
+     */
+    val torDiagnosticMessage: String? get() = null
 
     /**
      * Start DHT client background loops, listeners or workers.

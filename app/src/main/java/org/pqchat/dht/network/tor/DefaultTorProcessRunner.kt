@@ -35,7 +35,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DefaultTorProcessRunner(
     private val context: Context? = null,
     private val customBinary: File? = null,
-    val forceSimulation: Boolean = false
+    val forceSimulation: Boolean = false,
+    val isAndroidRuntimeOverride: Boolean? = null
 ) : TorProcessRunner {
 
     private val running = AtomicBoolean(false)
@@ -47,6 +48,22 @@ class DefaultTorProcessRunner(
     private var simServerSocket: ServerSocket? = null
     private var simUdpSocket: DatagramSocket? = null
     private val activeSimSockets = ConcurrentHashMap.newKeySet<Socket>()
+
+    companion object {
+        const val DEFAULT_TOR_SOCKS_PORT = 9050
+        const val ORBOT_SOCKS_PORT = 9150
+
+        /**
+         * Detects if the current execution is running inside the Android runtime (ART/Dalvik).
+         */
+        fun isAndroidRuntime(): Boolean {
+            val vmName = System.getProperty("java.vm.name") ?: ""
+            if (vmName.contains("Dalvik", ignoreCase = true)) return true
+            val vendor = System.getProperty("java.vendor") ?: ""
+            if (vendor.contains("Android", ignoreCase = true)) return true
+            return false
+        }
+    }
 
     override fun isRunning(): Boolean = running.get()
 
@@ -64,17 +81,80 @@ class DefaultTorProcessRunner(
         val scope = CoroutineScope(Dispatchers.IO)
         runnerScope = scope
 
+        val isAndroid = isAndroidRuntimeOverride ?: (isAndroidRuntime() || context != null)
         val binary = findTorBinary()
+
         if (binary != null && !forceSimulation) {
             startNativeProcess(binary, config, onBootstrapUpdate, onReady, onError, scope)
-        } else {
+        } else if (forceSimulation && !isAndroid) {
+            // Simulation is strictly restricted to JVM unit tests (forceSimulation=true on non-Android runtime)
             startSimulation(config, onBootstrapUpdate, onReady, onError, scope)
+        } else {
+            // Native binary not found and not a JVM test simulation.
+            // Check if an external Tor daemon or Orbot proxy is already listening on SOCKS5.
+            val candidatePorts = if (config.socksPort > 0) {
+                listOf(config.socksPort)
+            } else {
+                listOf(DEFAULT_TOR_SOCKS_PORT, ORBOT_SOCKS_PORT)
+            }
+
+            val activeExternalPort = candidatePorts.firstOrNull { port ->
+                probeSocks5Proxy("127.0.0.1", port)
+            }
+
+            if (activeExternalPort != null) {
+                // An active external Tor/Orbot daemon is responding on SOCKS5 port
+                onBootstrapUpdate(100, "Połączono z zewnętrznym proxy Tor/Orbot na porcie $activeExternalPort")
+                onReady(activeExternalPort, 0)
+
+                // Monitor external proxy liveness
+                runnerJob = scope.launch {
+                    while (isActive && running.get()) {
+                        delay(10000)
+                        if (!probeSocks5Proxy("127.0.0.1", activeExternalPort, 2000)) {
+                            if (running.get()) {
+                                onError(
+                                    "Zewnętrzny demon Tor/Orbot na porcie $activeExternalPort przestał odpowiadać",
+                                    null
+                                )
+                            }
+                            break
+                        }
+                    }
+                }
+            } else {
+                running.set(false)
+                val errorMessage = if (isAndroid && forceSimulation) {
+                    "Symulator Tor jest niedozwolony na urządzeniach Android. Wymagany natywny silnik libtor.so lub zewnętrzny Orbot na porcie 9050."
+                } else {
+                    "Natywny silnik Tor (libtor.so) nie jest dostępny i nie wykryto aktywnego proxy Tor/Orbot na porcie SOCKS5 (127.0.0.1:9050/9150)."
+                }
+                onError(errorMessage, java.io.FileNotFoundException("Native Tor binary (libtor.so) not found"))
+            }
+        }
+    }
+
+    private fun probeSocks5Proxy(host: String, port: Int, timeoutMs: Int = 1000): Boolean {
+        return try {
+            Socket().use { s ->
+                s.soTimeout = timeoutMs
+                s.connect(InetSocketAddress(host, port), timeoutMs)
+                val out = s.getOutputStream()
+                val `in` = s.getInputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val ver = `in`.read()
+                val method = `in`.read()
+                ver == 0x05 && method == 0x00
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
     private fun findTorBinary(): File? {
-        if (customBinary != null && customBinary.exists() && customBinary.canExecute()) {
-            return customBinary
+        if (customBinary != null) {
+            return if (customBinary.exists() && customBinary.canExecute()) customBinary else null
         }
         // 1. Android nativeLibraryDir (e.g., libtor.so)
         val nativeDir = context?.applicationInfo?.nativeLibraryDir

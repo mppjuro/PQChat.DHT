@@ -15,6 +15,9 @@ import java.nio.charset.StandardCharsets
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import org.pqchat.dht.network.tor.Socks5Client
+import org.pqchat.dht.network.tor.Socks5CommandNotSupportedException
+import org.pqchat.dht.network.tor.TorTcpTunnelClient
 
 typealias PeerContact = DhtLeafNode.DhtPeer
 
@@ -162,32 +165,69 @@ class DhtLeafNode(
     private var torProxyConfig: TorProxyConfig? = null
 
     @Volatile
-    private var torUdpAssociation: org.pqchat.dht.network.tor.Socks5Client.Socks5UdpAssociation? = null
+    private var torUdpAssociation: Socks5Client.Socks5UdpAssociation? = null
+
+    @Volatile
+    private var torTcpTunnelClient: TorTcpTunnelClient? = null
+
+    @Volatile
+    override var torTransportMode: TorTransportMode = TorTransportMode.DIRECT_UDP
+        private set
+
+    @Volatile
+    override var torDiagnosticMessage: String? = null
+        private set
 
     private var torListenerJob: Job? = null
 
     override val isTorRoutingActive: Boolean
-        get() = torProxyConfig?.enabled == true && torUdpAssociation?.isClosed == false
+        get() = torProxyConfig?.enabled == true &&
+                ((torTransportMode == TorTransportMode.SOCKS5_UDP && torUdpAssociation?.isClosed == false) ||
+                 torTransportMode == TorTransportMode.SOCKS5_TCP)
 
     @Synchronized
     override fun setTorProxy(config: TorProxyConfig?) {
         torProxyConfig = config
         torListenerJob?.cancel()
         torListenerJob = null
-        torUdpAssociation?.close()
+        try {
+            torUdpAssociation?.close()
+        } catch (_: Exception) {
+        }
         torUdpAssociation = null
+        torTcpTunnelClient = null
 
         if (config?.enabled == true) {
+            val client = Socks5Client(
+                proxyHost = config.socksHost,
+                proxyPort = config.socksPort,
+                connectTimeoutMs = config.timeoutMs,
+                readTimeoutMs = config.timeoutMs
+            )
             try {
-                val client = org.pqchat.dht.network.tor.Socks5Client(config.socksHost, config.socksPort)
                 val assoc = client.createUdpAssociation()
                 torUdpAssociation = assoc
+                torTransportMode = TorTransportMode.SOCKS5_UDP
                 startTorRelayListener(assoc)
-                println("[PQChat] DhtLeafNode: Tor SOCKS5 UDP association active on ${config.socksHost}:${config.socksPort}")
+                torDiagnosticMessage = "Tor SOCKS5 UDP ASSOCIATE aktywny (${config.socksHost}:${config.socksPort})"
+                println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
+            } catch (e: Socks5CommandNotSupportedException) {
+                // Standard Tor daemon: UDP ASSOCIATE is rejected (CMD 0x03 not supported)
+                // Switch to length-prefixed KRPC over streaming TCP SOCKS5 sockets!
+                torUdpAssociation = null
+                torTcpTunnelClient = TorTcpTunnelClient(client)
+                torTransportMode = TorTransportMode.SOCKS5_TCP
+                torDiagnosticMessage = "Standardowy demon Tor: UDP ASSOCIATE nieobsługiwane (kod 0x%02X). Aktywny tunel TCP SOCKS5 (length-prefixed KRPC).".format(e.replyCode)
+                println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             } catch (e: Exception) {
-                println("[PQChat] DhtLeafNode: Failed to establish Tor SOCKS5 association: $e")
+                torUdpAssociation = null
+                torTransportMode = TorTransportMode.BLOCKED_ERROR
+                torDiagnosticMessage = "Błąd połączenia z proxy Tor SOCKS5 (${config.socksHost}:${config.socksPort}): ${e.message}. Fail-Closed aktywny."
+                println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             }
         } else {
+            torTransportMode = TorTransportMode.DIRECT_UDP
+            torDiagnosticMessage = null
             println("[PQChat] DhtLeafNode: Tor routing disabled, returned to direct UDP transport")
         }
     }
@@ -256,6 +296,7 @@ class DhtLeafNode(
         } catch (_: Exception) {
         }
         torUdpAssociation = null
+        torTcpTunnelClient = null
         try {
             socket?.close()
         } catch (_: Exception) {
@@ -411,7 +452,7 @@ class DhtLeafNode(
                         "ping" -> {
                             val resp = KrpcMessage.createPingResponse(myNodeId, msg.transactionId)
                             val bencoded = resp.toBencoded()
-                            socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                            sendKrpcResponse(bencoded, sender)
                         }
 
                         "find_node" -> {
@@ -427,7 +468,7 @@ class DhtLeafNode(
                                 mapOf("id" to myNodeId, "nodes" to compactNodes)
                             )
                             val bencoded = resp.toBencoded()
-                            socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                            sendKrpcResponse(bencoded, sender)
                         }
 
                         "get" -> {
@@ -449,7 +490,7 @@ class DhtLeafNode(
                                 }
                                 val resp = KrpcMessage.Response(msg.transactionId, respMap)
                                 val bencoded = resp.toBencoded()
-                                socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                                sendKrpcResponse(bencoded, sender)
                             }
                         }
 
@@ -473,7 +514,7 @@ class DhtLeafNode(
                                     }
                                     val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to myNodeId))
                                     val bencoded = resp.toBencoded()
-                                    socket?.send(DatagramPacket(bencoded, bencoded.size, sender))
+                                    sendKrpcResponse(bencoded, sender)
                                 }
                             }
                         }
@@ -482,6 +523,17 @@ class DhtLeafNode(
             }
         } catch (_: Exception) {
             // Malformed packet, safely ignore
+        }
+    }
+
+    private fun sendKrpcResponse(bencoded: ByteArray, recipient: InetSocketAddress) {
+        if (torProxyConfig?.enabled == true) {
+            if (torTransportMode == TorTransportMode.SOCKS5_UDP) {
+                torUdpAssociation?.send(bencoded, recipient)
+            }
+            // In SOCKS5_TCP or BLOCKED_ERROR, never leak responses over direct clearnet socket.
+        } else {
+            socket?.send(DatagramPacket(bencoded, bencoded.size, recipient))
         }
     }
 
@@ -543,11 +595,13 @@ class DhtLeafNode(
 
     suspend fun resolveBootstrapNodes(): List<InetSocketAddress> = withContext(Dispatchers.IO) {
         val list = mutableListOf<InetSocketAddress>()
-        for (peer in getLocalPeers()) {
-            list.add(peer.address)
+        if (torProxyConfig?.enabled != true) {
+            for (peer in getLocalPeers()) {
+                list.add(peer.address)
+            }
         }
         for ((host, port) in BOOTSTRAP_HOSTS) {
-            if (isTorRoutingActive) {
+            if (torProxyConfig?.enabled == true) {
                 // Prevent DNS leaks: pass unresolved domain to be resolved by Tor exit node
                 list.add(InetSocketAddress.createUnresolved(host, port))
             } else {
@@ -632,13 +686,46 @@ class DhtLeafNode(
         val startTime = System.currentTimeMillis()
         try {
             val bytes = query.toBencoded()
-            val assoc = torUdpAssociation
 
-            if (isTorRoutingActive && assoc != null && !assoc.isClosed) {
-                // Route through Tor SOCKS5 UDP relay
-                assoc.send(bytes, targetAddress)
+            // FAIL-CLOSED PROTECTION: If Tor is enabled in settings, NEVER emit to clearnet UDP!
+            if (torProxyConfig?.enabled == true) {
+                when (torTransportMode) {
+                    TorTransportMode.SOCKS5_UDP -> {
+                        val assoc = torUdpAssociation
+                        if (assoc == null || assoc.isClosed) {
+                            println("[PQChat] DhtLeafNode: Tor UDP association unavailable. Dropping packet to prevent clearnet leak (Fail-Closed).")
+                            return@withContext null
+                        }
+                        assoc.send(bytes, targetAddress)
+                    }
+                    TorTransportMode.SOCKS5_TCP -> {
+                        val tcpClient = torTcpTunnelClient
+                        if (tcpClient == null) {
+                            println("[PQChat] DhtLeafNode: Tor TCP tunnel client unavailable. Dropping packet to prevent clearnet leak (Fail-Closed).")
+                            return@withContext null
+                        }
+                        return@withContext try {
+                            val respBytes = tcpClient.sendQuery(targetAddress, bytes, timeoutMs)
+                            val parsed = KrpcMessage.parse(respBytes) as? KrpcMessage.Response
+                            if (parsed != null) {
+                                val rtt = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                                val responderId = parsed.responseData["id"] as? ByteArray
+                                recordNodeSuccess(targetAddress, rtt, responderId)
+                            }
+                            parsed
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    else -> {
+                        // TorTransportMode.BLOCKED_ERROR or any inactive state:
+                        // FAIL-CLOSED! Strictly no raw UDP packet emission!
+                        println("[PQChat] DhtLeafNode: Clearnet transmission blocked: Tor is enabled but routing mode is $torTransportMode (Fail-Closed).")
+                        return@withContext null
+                    }
+                }
             } else {
-                // Direct UDP socket
+                // Direct clearnet UDP socket (only when Tor is explicitly disabled in settings)
                 val s = socket ?: return@withContext null
                 if (s.isClosed) return@withContext null
                 val packet = DatagramPacket(bytes, bytes.size, targetAddress)
