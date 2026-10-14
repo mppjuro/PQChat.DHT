@@ -942,7 +942,7 @@ fun IntervalDropdownRow(
                     fontWeight = if (currentOption.millis == defaultMillis) FontWeight.Bold else FontWeight.Normal
                 ),
                 modifier = Modifier
-                    .menuAnchor()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
                     .fillMaxWidth()
             )
 
