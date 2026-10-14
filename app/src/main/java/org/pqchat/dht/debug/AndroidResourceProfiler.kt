@@ -139,7 +139,10 @@ class AndroidResourceProfiler(
     val latestSample: StateFlow<ResourceSample?> = _latestSample.asStateFlow()
 
     @Synchronized
-    fun startSession(label: String = "session_${System.currentTimeMillis()}") {
+    fun startSession(
+        label: String = "session_${System.currentTimeMillis()}",
+        autoSample: Boolean = true
+    ) {
         if (_isProfiling.value) return
         currentSessionLabel = label.ifBlank { "session_${System.currentTimeMillis()}" }
         sessionStartWakeLockDurationMs = getCumulativeWakeLockDurationMs()
@@ -149,10 +152,14 @@ class AndroidResourceProfiler(
         _latestSample.value = null
         _isProfiling.value = true
 
-        samplingJob = profilerScope.launch {
-            while (isActive && _isProfiling.value) {
-                takeSnapshot(currentSessionLabel)
-                delay(sampleIntervalMs)
+        if (autoSample && sampleIntervalMs > 0L) {
+            samplingJob = profilerScope.launch {
+                while (isActive && _isProfiling.value) {
+                    delay(sampleIntervalMs)
+                    if (isActive && _isProfiling.value) {
+                        takeSnapshot(currentSessionLabel)
+                    }
+                }
             }
         }
     }
