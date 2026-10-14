@@ -2,6 +2,7 @@ package org.pqchat.dht.data.db
 
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 @Entity(tableName = "contacts")
 data class ContactEntity(
@@ -306,6 +307,12 @@ data class PendingRekeyOfferEntity(
 interface PendingRekeyOfferDao {
     @Query("SELECT * FROM pending_rekey_offers WHERE contactId = :contactId LIMIT 1")
     suspend fun getPendingOffer(contactId: String): PendingRekeyOfferEntity?
+
+    @Query("SELECT * FROM pending_rekey_offers WHERE contactId = :contactId LIMIT 1")
+    fun getPendingOfferFlow(contactId: String): Flow<PendingRekeyOfferEntity?>
+
+    fun isRekeyPendingFlow(contactId: String): Flow<Boolean> =
+        getPendingOfferFlow(contactId).map { it != null }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(offer: PendingRekeyOfferEntity)

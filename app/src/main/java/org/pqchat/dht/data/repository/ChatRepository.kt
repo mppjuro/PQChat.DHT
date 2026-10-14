@@ -1,8 +1,7 @@
 package org.pqchat.dht.data.repository
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.pqchat.dht.crypto.BinaryFrameCodec
@@ -95,6 +94,25 @@ class ChatRepository(
 
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
+    private val _rekeyInProgressContacts = MutableStateFlow<Set<String>>(emptySet())
+    val rekeyInProgressContacts: StateFlow<Set<String>> = _rekeyInProgressContacts.asStateFlow()
+
+    fun isRekeyPendingFlow(contactId: String): Flow<Boolean> {
+        val dbFlow = pendingRekeyOfferDao?.isRekeyPendingFlow(contactId) ?: flowOf(false)
+        return combine(dbFlow, _rekeyInProgressContacts) { inDb, inMem ->
+            inDb || inMem.contains(contactId)
+        }
+    }
+
+    suspend fun initiateRekey(contactId: String): Boolean = withContext(Dispatchers.IO) {
+        getContactMutex(contactId).withLock {
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            if (pendingRekeyOfferDao?.getPendingOffer(contactId) != null) {
+                return@withLock false
+            }
+            sendRekeyOfferInternal(contact)
+        }
+    }
 
     var onIncomingMessageDelivered: ((contactId: String, textContent: String, isImage: Boolean) -> Unit)? = null
     var onRepublishTaskUpdated: (() -> Unit)? = null
@@ -798,6 +816,8 @@ class ChatRepository(
     }
 
     private suspend fun sendRekeyOfferInternal(contact: ContactEntity): Boolean {
+        _rekeyInProgressContacts.value = _rekeyInProgressContacts.value + contact.id
+        val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyOut, contact.counterOut)
         val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
         val newEpoch = contact.rekeyEpoch + 1
         val (pendingOffer, offerFrame) = RekeyCoordinator.createRekeyOffer(
@@ -805,7 +825,7 @@ class ChatRepository(
             seqNum = contact.counterOut and 0xFFFF,
             ackNum = contact.counterIn and 0xFFFF,
             msgKey = slot.msgKey,
-            target = slot.target,
+            target = nextTarget,
             direction = contact.outboundDirection
         )
 
@@ -831,7 +851,7 @@ class ChatRepository(
 
         val isSelf = contact.id == SELF_CONTACT_ID
         val success = dhtLeafNode.putMutable(
-            target = slot.target,
+            target = nextTarget,
             v = offerFrame,
             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
             salt = null,
@@ -847,6 +867,7 @@ class ChatRepository(
             )
         } else {
             pendingRekeyOfferDao?.deletePendingOffer(contact.id)
+            _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contact.id
         }
         return success
     }
@@ -1165,8 +1186,18 @@ class ChatRepository(
                     val offerPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
                     bitmap.markReceived(slot.counter)
 
-                    // 1. Receiver encapsulates SS_rekey against sender's pk_new
-                    val (ssRekey, ctNew) = MLKemEngine.encapsulate(offerPayload.mlKemPublicKey)
+                    val currentContact = contactDao.getContactById(contactId) ?: contact
+                    val outSlot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
+
+                    // 1. Receiver encapsulates SS_rekey and creates Type 0x04 Response frame via RekeyCoordinator
+                    val (ssRekey, respFrame) = RekeyCoordinator.processOfferAndCreateResponse(
+                        offer = offerPayload,
+                        reverseSeqNum = currentContact.counterOut and 0xFFFF,
+                        reverseAckNum = frameMsg.seqNum and 0xFFFF,
+                        reverseMsgKey = outSlot.msgKey,
+                        reverseTarget = outSlot.target,
+                        direction = currentContact.outboundDirection
+                    )
 
                     // 2. Inject SS_rekey into receiver's chainKeyIn
                     val rekeyedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
@@ -1180,23 +1211,6 @@ class ChatRepository(
                     )
                     preWarmNextIncomingTarget(rekeyedChainIn, slot.counter + 1)
 
-                    // 3. Send Type 0x04 Response on receiver's outgoing channel (reverse direction)
-                    val currentContact = contactDao.getContactById(contactId) ?: contact
-                    val outSlot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
-                    val plaintext = BinaryFrameCodec.encodeRekeyResponse(
-                        seqNum = currentContact.counterOut and 0xFFFF,
-                        ackNum = frameMsg.seqNum and 0xFFFF,
-                        timestampUTC = System.currentTimeMillis(),
-                        rekeyEpoch = offerPayload.rekeyEpoch,
-                        mlKemCiphertext = ctNew
-                    )
-                    val respFrame = BinaryFrameCodec.packAeadFrame(
-                        key = outSlot.msgKey,
-                        plaintext = plaintext,
-                        target = outSlot.target,
-                        direction = currentContact.outboundDirection
-                    )
-
                     org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
                         contactId = contactId,
                         epoch = offerPayload.rekeyEpoch,
@@ -1206,6 +1220,7 @@ class ChatRepository(
                         frame = respFrame
                     )
 
+                    // 3. Publish Type 0x04 Response on receiver's outgoing channel (reverse direction)
                     dhtLeafNode.putMutable(
                         target = outSlot.target,
                         v = respFrame,
@@ -1222,13 +1237,19 @@ class ChatRepository(
 
                 BinaryFrameCodec.TYPE_REKEY_RESPONSE -> {
                     val respPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyResponse
-                    val pendingOffer = pendingRekeyOfferDao?.getPendingOffer(contactId)
+                    val pendingOfferEntity = pendingRekeyOfferDao?.getPendingOffer(contactId)
                     bitmap.markReceived(slot.counter)
 
-                    if (pendingOffer != null && pendingOffer.epoch == respPayload.rekeyEpoch) {
-                        val ssRekey = MLKemEngine.decapsulate(pendingOffer.rawSkNew, respPayload.mlKemCiphertext)
-                        pendingOffer.destroy()
+                    if (pendingOfferEntity != null && pendingOfferEntity.epoch == respPayload.rekeyEpoch) {
+                        val pendingOffer = RekeyCoordinator.PendingRekeyOffer(
+                            epoch = pendingOfferEntity.epoch,
+                            skNew = pendingOfferEntity.rawSkNew,
+                            pkNew = pendingOfferEntity.pkNew
+                        )
+                        val ssRekey = RekeyCoordinator.processResponse(respPayload, pendingOffer)
+                        pendingOfferEntity.destroy()
                         pendingRekeyOfferDao.deletePendingOffer(contactId)
+                        _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contactId
 
                         val latestContact = contactDao.getContactById(contactId) ?: contact
                         val rekeyedChainOut = RatchetChain.injectRekeySecret(latestContact.chainKeyOut, ssRekey)

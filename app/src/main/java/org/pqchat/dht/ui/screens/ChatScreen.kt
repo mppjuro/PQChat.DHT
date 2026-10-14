@@ -65,6 +65,7 @@ fun ChatScreen(
     val contact = contacts.firstOrNull { it.id == contactId }
     val messages by viewModel.messages.collectAsState()
     val nextPollInMs by viewModel.nextPollInMs.collectAsState()
+    val isRekeyInProgress by viewModel.isRekeyInProgress.collectAsState()
 
     var textInput by remember { mutableStateOf("") }
     var showSasDialog by remember { mutableStateOf(false) }
@@ -335,19 +336,53 @@ fun ChatScreen(
             }
         }
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            reverseLayout = false
         ) {
-            items(messages, key = { it.id }) { msg ->
-                MessageBubble(
-                    message = msg,
-                    onImageClick = { bytes -> fullscreenImageBytes = bytes }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+            if (isRekeyInProgress) {
+                Surface(
+                    color = AmberWarning.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            color = AmberWarning,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Wymiana klucza ML-KEM w toku...",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AmberWarning,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                reverseLayout = false
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    MessageBubble(
+                        message = msg,
+                        onImageClick = { bytes -> fullscreenImageBytes = bytes }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
         }
 
