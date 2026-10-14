@@ -70,6 +70,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`6567d93`](https://github.com/mppjuro/PQChat.DHT/commit/6567d934be9a03e6182bf6724beaa591be0b67a3) (2026-10-14) — **deps**: bump org.robolectric:robolectric from 4.14.1 to 4.17
 - [`9c34354`](https://github.com/mppjuro/PQChat.DHT/commit/9c34354f117fdff5c004859da974df96b8b67876) (2026-10-14) — **deps**: bump the androidx-and-compose group with 2 updates
 - [`5772490`](https://github.com/mppjuro/PQChat.DHT/commit/57724905f2868ace963bc0ec1d40f6e4056c4b90) (2026-10-14) — **deps**: bump softprops/action-gh-release from 2 to 3
 - [`237110b`](https://github.com/mppjuro/PQChat.DHT/commit/237110b29501bc22bdd58d7e49e212ef6089b733) (2026-10-14) — **deps**: update numpy requirement in /tools/threat_sim
@@ -100,6 +101,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`98dff72`](https://github.com/mppjuro/PQChat.DHT/commit/98dff72e2258f9a74f917adc51a29758cfdc0244) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`7a9048d`](https://github.com/mppjuro/PQChat.DHT/commit/7a9048d5dbe27c59a58c5617b6b1f06bff6af2c7) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`03d285a`](https://github.com/mppjuro/PQChat.DHT/commit/03d285aa704e333ba2de261932c55945b78fef90) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`4e17ed3`](https://github.com/mppjuro/PQChat.DHT/commit/4e17ed3884770ec6d213e62e7dec0848bc4b8130) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
