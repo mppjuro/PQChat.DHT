@@ -48,6 +48,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`dede0f9`](https://github.com/mppjuro/PQChat.DHT/commit/dede0f979615b9be40a0a15c157e2a751275db88) (2026-10-15) — **release**: fixed release description, deleted misused @ char
 - [`ac666d2`](https://github.com/mppjuro/PQChat.DHT/commit/ac666d267c99be3f9b78325cdc8a4c60b41efb69) (2026-10-15) — **service**: prevent unstarted PollingScheduler race condition and isolate WorkManagerRepublishScheduleTest
 - [`a5a60ae`](https://github.com/mppjuro/PQChat.DHT/commit/a5a60aeb1cbbaeee4c03f96aa0dd9135bcdbc980) (2026-10-14) — **profiler**: eliminate race condition between background sampler and manual snapshots in tests
 - [`4eb762e`](https://github.com/mppjuro/PQChat.DHT/commit/4eb762e94dc8feef1e42a166f06eec1b39127787) (2026-10-14) — **ui**: resolve Compose deprecations for LocalLifecycleOwner, TabRow, and menuAnchor
@@ -113,6 +114,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`b545080`](https://github.com/mppjuro/PQChat.DHT/commit/b54508011178e374aaab356bd8115a1cc763def3) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`52fec8c`](https://github.com/mppjuro/PQChat.DHT/commit/52fec8caed193dbff4494b468b78fc0d07ae9472) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c03dfa9`](https://github.com/mppjuro/PQChat.DHT/commit/c03dfa95b5f9185e57f1c92082e6466eca9a7b6d) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`784a470`](https://github.com/mppjuro/PQChat.DHT/commit/784a470653217e6fa7321b5e411c298b9429e16e) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
