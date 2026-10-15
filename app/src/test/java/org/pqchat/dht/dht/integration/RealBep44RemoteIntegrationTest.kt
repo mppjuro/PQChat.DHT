@@ -12,6 +12,7 @@ import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.Ed25519Engine
 import org.pqchat.dht.debug.LoopbackMeasurementHarness
 import org.pqchat.dht.dht.leaf.DhtLeafNode
+import org.junit.jupiter.api.Tag
 import java.security.Security
 
 /**
@@ -22,6 +23,7 @@ import java.security.Security
  * Set environment variable `RUN_REAL_DHT_TESTS=true` or system property `-DrunRealDhtTests=true`
  * to execute against live public BitTorrent DHT bootstrap nodes.
  */
+@Tag("real-dht")
 class RealBep44RemoteIntegrationTest {
 
     companion object {

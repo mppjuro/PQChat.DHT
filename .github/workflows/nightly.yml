@@ -82,6 +82,39 @@ jobs:
           name: real-bep44-test-results
           path: app/build/reports/tests/testDebugUnitTest/
 
+  real-dht-measurements:
+    name: Real DHT Loopback & Retention Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run Real DHT Integration Tests (./gradlew integrationTest)
+        run: ./gradlew integrationTest -DrunRealDhtTests=true -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --info
+        env:
+          RUN_REAL_DHT_TESTS: "true"
+
+      - name: Upload Real DHT Measurement CSVs and Reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-dht-measurements
+          path: |
+            docs/measurements/*.csv
+            docs/dht_retention_report.md
+            app/build/reports/tests/integrationTest/
+
   dht-testbed:
     name: BEP 5/44 Real Traffic Testbed & Threat Analysis
     runs-on: ubuntu-latest
@@ -132,7 +165,7 @@ jobs:
   nightly-release:
     name: Build & Publish Nightly Release
     runs-on: ubuntu-latest
-    needs: [slow-unit-tests, remote-dht-tests, dht-testbed]
+    needs: [slow-unit-tests, remote-dht-tests, real-dht-measurements, dht-testbed]
     if: success() && (inputs.skip_release != true)
     steps:
       - name: Checkout repository
@@ -178,6 +211,7 @@ jobs:
             Automatyczna codzienna kompilacja wersji deweloperskiej (`app-debug.apk`) po pomyślnym zaliczeniu pełnego pakietu testów nocnych:
             - **Slow Unit & Repository Tests:** Zaliczone (@Tag("slow"), Monte Carlo)
             - **Real BEP 44 Remote Integration Tests:** Zaliczone (Live Mainline DHT)
+            - **Real DHT Loopback & Retention Suite:** Zaliczone (100 iteracji per środowisko, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Zaliczone (150 węzłów Kademlia)
 
             ### Metadane kompilacji:

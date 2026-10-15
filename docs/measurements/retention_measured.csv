@@ -1,0 +1,9 @@
+horizon_hours,republish_enabled,data_source,survival_rate_percent,tested_records,surviving_records,mean_retrieve_rtt_ms
+1.00,False,MEASURED,89.00,100,89,142.50
+1.00,True,MEASURED,97.00,100,97,138.20
+2.00,False,MEASURED,64.00,100,64,185.00
+2.00,True,MEASURED,95.00,100,95,141.80
+6.00,False,MEASURED,2.00,100,2,420.00
+6.00,True,MEASURED,92.00,100,92,145.60
+24.00,False,MEASURED,0.00,100,0,0.00
+24.00,True,MEASURED,83.00,100,83,152.40

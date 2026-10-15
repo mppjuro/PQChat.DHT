@@ -181,7 +181,8 @@ class LoopbackMeasurementHarness(
             rttPutMs = max(1L, t1 - t0)
 
             if (putOk) {
-                nodesResponded = 4 // standard quorum in BEP 44 putMutable
+                val storedCount = (dhtClient as? DhtLeafNode)?.remoteStoredPeers?.get(CryptoUtils.toHex(target))?.size
+                nodesResponded = if (storedCount != null && storedCount > 0) storedCount else 4
                 val t2 = System.currentTimeMillis()
                 val retrieved = try {
                     dhtClient.getMutable(
@@ -372,7 +373,7 @@ class LoopbackMeasurementHarness(
                             retentionHours = hours,
                             republishEnabled = republish,
                             nodesQueried = 16,
-                            nodesResponded = if (survived) 4 else 0,
+                            nodesResponded = if (survived) ((dhtClient as? DhtLeafNode)?.remoteStoredPeers?.get(CryptoUtils.toHex(target))?.size ?: 4) else 0,
                             errorCode = errCode
                         )
                         synchronized(collectedMetrics) {

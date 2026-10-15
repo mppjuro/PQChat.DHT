@@ -64,9 +64,15 @@ android {
                 if (System.getProperty("runNightlyTests") != null) {
                     it.systemProperty("runNightlyTests", System.getProperty("runNightlyTests")!!)
                 }
+                if (System.getProperty("runRealDhtTests") != null) {
+                    it.systemProperty("runRealDhtTests", System.getProperty("runRealDhtTests")!!)
+                }
                 it.useJUnitPlatform {
                     if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
                         excludeTags("slow")
+                    }
+                    if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
+                        excludeTags("real-dht")
                     }
                 }
                 if (System.getenv("RUN_REAL_DHT_TESTS") != "true" && System.getProperty("runRealDhtTests") != "true") {
@@ -77,25 +83,30 @@ android {
     }
 }
 
-tasks.register<Test>("slowTest") {
-    description = "Runs the slow unit and integration tests tagged with @Tag(\"slow\")."
-    group = "verification"
-    val buildDir = layout.buildDirectory.asFile.get()
-    testClassesDirs = files(buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
-    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
-    useJUnitPlatform {
-        includeTags("slow")
+afterEvaluate {
+    val testDebugTask = tasks.named<Test>("testDebugUnitTest")
+    tasks.register<Test>("slowTest") {
+        description = "Runs the slow unit and integration tests tagged with @Tag(\"slow\")."
+        group = "verification"
+        testClassesDirs = testDebugTask.get().testClassesDirs
+        classpath = testDebugTask.get().classpath
+        systemProperty("runSlowTests", "true")
+        useJUnitPlatform {
+            includeTags("slow")
+        }
     }
-}
 
-tasks.register<Test>("integrationTest") {
-    description = "Runs the integration tests against real network / DHT."
-    group = "verification"
-    val buildDir = layout.buildDirectory.asFile.get()
-    testClassesDirs = files(buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
-    classpath = files(configurations.getByName("testDebugRuntimeClasspath"), buildDir.resolve("intermediates/javac/debugUnitTest/classes"), buildDir.resolve("tmp/kotlin-classes/debugUnitTest"))
-    include("**/integration/**")
-    shouldRunAfter("testDebugUnitTest")
+    tasks.register<Test>("integrationTest") {
+        description = "Runs the integration tests against real network / DHT."
+        group = "verification"
+        testClassesDirs = testDebugTask.get().testClassesDirs
+        classpath = testDebugTask.get().classpath
+        systemProperty("runRealDhtTests", "true")
+        useJUnitPlatform {
+            includeTags("real-dht")
+        }
+        shouldRunAfter("testDebugUnitTest")
+    }
 }
 
 dependencies {

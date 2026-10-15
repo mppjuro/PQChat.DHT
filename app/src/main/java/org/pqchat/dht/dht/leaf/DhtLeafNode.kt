@@ -1091,8 +1091,8 @@ class DhtLeafNode(
         }
 
         // Step 2: Push to external DHT swarm peers (prioritizing pre-warmed route cache & cached fastest nodes)
-        val prewarmed = targetRouteCache[target] ?: preWarmTarget(target)
         val candidates = findClosestNodes(target, count = 24)
+        val prewarmed = targetRouteCache[target] ?: if (candidates.size < 8) preWarmTarget(target) else emptyList()
         val cachedFastest = getCachedFastestNodes()
         val localPeers = getLocalPeers()
         val swarmPeers = (prewarmed + candidates + cachedFastest).distinctBy { it.address }
@@ -1108,41 +1108,72 @@ class DhtLeafNode(
 
         try {
             val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
-            val getJobs = nodesToQuery.map { peer ->
-                async {
-                    val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                    val resp = sendQuery(peer.address, getQuery, timeoutMs = 3500L)
-                    val token = resp?.responseData?.get("token") as? ByteArray
-                    if (token != null) {
-                        tokenMap[peer.address] = token
+            coroutineScope {
+                var getJobs: List<Job> = emptyList()
+                getJobs = nodesToQuery.map { peer ->
+                    launch {
+                        try {
+                            val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                            val resp = sendQuery(peer.address, getQuery, timeoutMs = 2000L)
+                            val token = resp?.responseData?.get("token") as? ByteArray
+                            if (token != null) {
+                                tokenMap[peer.address] = token
+                                if (tokenMap.size >= K) {
+                                    getJobs.forEach { if (it != coroutineContext.job) it.cancel() }
+                                }
+                            }
+                        } catch (_: Exception) {}
                     }
                 }
+                val startTime = System.currentTimeMillis()
+                while (tokenMap.size < K && (System.currentTimeMillis() - startTime) < 2000L) {
+                    if (tokenMap.size >= 4 && (System.currentTimeMillis() - startTime) > 600L) {
+                        getJobs.forEach { it.cancel() }
+                        break
+                    }
+                    delay(20)
+                }
+                getJobs.forEach { it.cancel() }
             }
-            getJobs.awaitAll()
 
             if (tokenMap.isNotEmpty()) {
-                val putJobs = tokenMap.map { (address, token) ->
-                    async {
-                        val putQuery = KrpcMessage.createBep44PutQuery(
-                            myNodeId = myNodeId,
-                            token = token,
-                            v = v,
-                            k = pk,
-                            sig = sig,
-                            seq = seq,
-                            salt = salt
-                        )
-                        val resp = sendQuery(address, putQuery, timeoutMs = 3500L)
-                        if (resp != null) {
-                            remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(address)
-                            true
-                        } else {
-                            false
+                val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
+                coroutineScope {
+                    var putJobs: List<Job> = emptyList()
+                    putJobs = tokenMap.map { (address, token) ->
+                        launch {
+                            try {
+                                val putQuery = KrpcMessage.createBep44PutQuery(
+                                    myNodeId = myNodeId,
+                                    token = token,
+                                    v = v,
+                                    k = pk,
+                                    sig = sig,
+                                    seq = seq,
+                                    salt = salt
+                                )
+                                val resp = sendQuery(address, putQuery, timeoutMs = 2000L)
+                                if (resp != null) {
+                                    remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(address)
+                                    val count = successfulPuts.incrementAndGet()
+                                    if (count >= K) {
+                                        putJobs.forEach { if (it != coroutineContext.job) it.cancel() }
+                                    }
+                                }
+                            } catch (_: Exception) {}
                         }
                     }
+                    val startPut = System.currentTimeMillis()
+                    while (successfulPuts.get() < K && (System.currentTimeMillis() - startPut) < 2000L) {
+                        if (successfulPuts.get() >= 4 && (System.currentTimeMillis() - startPut) > 600L) {
+                            putJobs.forEach { it.cancel() }
+                            break
+                        }
+                        delay(20)
+                    }
+                    putJobs.forEach { it.cancel() }
                 }
-                val putResults = putJobs.awaitAll()
-                if (putResults.any { it } || tokenMap.isNotEmpty()) {
+                if (successfulPuts.get() > 0 || tokenMap.isNotEmpty()) {
                     putSuccess = true
                 }
             }
