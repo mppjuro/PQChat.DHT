@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`06a00f6`](https://github.com/mppjuro/PQChat.DHT/commit/06a00f6f362082775302da1001421548e1ee2ec1) (2026-10-15) — **formal**: unify ProVerif models in docs/formal, update Hybrid KEM & 900B tombstones, add CI workflow
 - [`d65b4ab`](https://github.com/mppjuro/PQChat.DHT/commit/d65b4abdafbd2466b8af233f5a98be5b234d73b4) (2026-10-14) — **qr**: add animated multipart QR codes with out-of-order reassembly and live progress
 - [`cbe46a1`](https://github.com/mppjuro/PQChat.DHT/commit/cbe46a1a1f7d485d0a29854034300a0088d9e53e) (2026-10-14) — **telemetry**: add empirical Android resource profiler and CSV export for research evaluation
 - [`ce08ac2`](https://github.com/mppjuro/PQChat.DHT/commit/ce08ac2312fccbfa4fb2182785f9ef98cb55929c) (2026-10-14) — **media**: eliminate chunk 0 key reuse, enable deterministic subTarget derivation and partial transfer resuming
@@ -114,6 +115,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`cb8fd79`](https://github.com/mppjuro/PQChat.DHT/commit/cb8fd7942491097580f80efe16c12f2d1762c2df) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`b545080`](https://github.com/mppjuro/PQChat.DHT/commit/b54508011178e374aaab356bd8115a1cc763def3) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`52fec8c`](https://github.com/mppjuro/PQChat.DHT/commit/52fec8caed193dbff4494b468b78fc0d07ae9472) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c03dfa9`](https://github.com/mppjuro/PQChat.DHT/commit/c03dfa95b5f9185e57f1c92082e6466eca9a7b6d) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
