@@ -3,7 +3,8 @@
 (*                                                                                *)
 (* Proves that compromising a subsequent ratchet chain key (ChainKey_1)           *)
 (* does NOT compromise past message payloads (secret_msg_0).                      *)
-(* Primitives: HKDF-SHA512 one-way ratchet chain, AES-256-GCM, Ed25519            *)
+(* Primitives: HKDF-SHA512 one-way ratchet chain, AES-256-GCM, Ed25519,           *)
+(* 900-byte safe tombstone slot cleanup                                           *)
 (* ============================================================================== *)
 
 type ed_skey.
@@ -74,6 +75,10 @@ process
   
   (* Publish message 0 to DHT *)
   out(c_dht, (target_0, c_0, iv_0, sig_0));
+  
+  (* Recipient consumes message 0 and replaces slot with 900-byte Tombstone *)
+  new tombstone_0: bitstring;
+  out(c_dht, (target_0, tombstone_0));
   
   (* === STEP 1: Send Message 1 === *)
   let entropy_1 = hkdf_expand(chain_key_1, TAG_STEP_1) in

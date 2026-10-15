@@ -4,21 +4,24 @@
 (* Verified Properties:                                                           *)
 (* 1. Poufność (Secrecy): MasterKey, ChainKey_A2B, ChainKey_B2A, Message Payloads *)
 (* 2. Uwierzytelnienie (Authentication): Injective Agreement on Handshake & SAS   *)
-(* 3. Forward Secrecy: Past messages protected despite subsequent key compromise  *)
-(* 4. Post-Compromise Security (PCS): Healed secrecy after ML-KEM-512 rekey       *)
-(* 5. Replay Resistance: Injective correspondence preventing message replays       *)
+(* 3. Dual-Defense Hybrid KEM: ML-KEM-512 (FIPS 203) + X25519 (RFC 7748)          *)
+(* 4. Replay Resistance: Injective message correspondences                        *)
+(* 5. Safe Tombstone slot cleanup (900-byte CSPRNG noise overwrite)               *)
 (*                                                                                *)
 (* Cryptographic Primitives:                                                      *)
-(* - ML-KEM-512 (FIPS 203) Key Encapsulation Mechanism                           *)
+(* - Hybrid KEM: ML-KEM-512 IND-CCA2 + classical X25519 ECDH                       *)
 (* - HKDF-SHA512 (RFC 5869) Key Derivation & Dual Unidirectional Chains           *)
 (* - AES-256-GCM AEAD Authenticated Encryption with AAD Binding                   *)
 (* - SHA-256 Anti-Grinding Commitment & 8-Digit SAS Derivation                   *)
 (* - Ed25519 (BEP 44 Transport & Ephemeral Key Hopping Target Derivation)          *)
+(* - 900-byte CSPRNG noise tombstone slot invalidation                            *)
 (* ============================================================================== *)
 
 type kem_skey.
 type kem_pkey.
 type kem_ct.
+type x_skey.
+type x_pkey.
 type ed_skey.
 type ed_pkey.
 
@@ -27,6 +30,14 @@ fun kem_pk(kem_skey): kem_pkey.
 fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
 fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
 reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Classical X25519 Ephemeral Key Agreement --- *)
+fun x_pk(x_skey): x_pkey.
+fun x_ecdh(x_skey, x_pkey): bitstring.
+equation forall a: x_skey, b: x_skey; x_ecdh(a, x_pk(b)) = x_ecdh(b, x_pk(a)).
+
+(* --- Hybrid Secret Combiner (HKDF-Extract(ssEcdh, ssKem)) --- *)
+fun hybrid_combine(bitstring, bitstring): bitstring.
 
 (* --- Ed25519 Ephemeral Signature & BEP 44 Token --- *)
 fun ed_pk(ed_skey): ed_pkey.
@@ -68,7 +79,6 @@ const MSG_TYPE_REKEY_RESP: bitstring.
 (* --- Channels --- *)
 free c_dht: channel.             (* Public untrusted DHT transport (Dolev-Yao attacker) *)
 free c_qr: channel [private].    (* Visual QR Code channel (Authentic out-of-band scan) *)
-free c_leak: channel.            (* State compromise channel for Forward/PCS analysis *)
 
 (* --- Secret Terms to Prove Confidential --- *)
 free secret_master_key: bitstring [private].
@@ -78,9 +88,9 @@ free secret_msg_A2B: bitstring [private].
 free secret_msg_B2A: bitstring [private].
 
 (* --- Correspondence Events for Authentication & Replay Protection --- *)
-event AliceStarted(kem_pkey, bitstring).
-event BobFinished(kem_pkey, bitstring, bitstring, bitstring, bitstring).
-event AliceFinished(kem_pkey, bitstring, bitstring, bitstring, bitstring).
+event AliceStarted(kem_pkey, x_pkey, bitstring).
+event BobFinished(kem_pkey, x_pkey, bitstring, bitstring, bitstring, bitstring).
+event AliceFinished(kem_pkey, x_pkey, bitstring, bitstring, bitstring, bitstring).
 event AliceSentMsg(bitstring, bitstring, bitstring).
 event BobRecvMsg(bitstring, bitstring, bitstring).
 event BobSentReply(bitstring, bitstring, bitstring).
@@ -98,11 +108,11 @@ query attacker(secret_msg_A2B).
 query attacker(secret_msg_B2A).
 
 (* (2) Uwierzytelnienie & Zobowiązanie SAS (Mutual Authentication with Transcript & SAS Binding) *)
-query pkA: kem_pkey, seed: bitstring, ckA2B: bitstring, ckB2A: bitstring, sas: bitstring;
-  inj-event(AliceFinished(pkA, seed, ckA2B, ckB2A, sas)) ==> 
-  inj-event(BobFinished(pkA, seed, ckA2B, ckB2A, sas)).
+query pkA_kem: kem_pkey, pkA_x: x_pkey, seed: bitstring, ckA2B: bitstring, ckB2A: bitstring, sas: bitstring;
+  inj-event(AliceFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)) ==> 
+  inj-event(BobFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)).
 
-(* (5) Odporność na Replay (Replay Resistance): Injective message correspondences *)
+(* (3) Odporność na Replay (Replay Resistance): Injective message correspondences *)
 query target: bitstring, seq: bitstring, msg: bitstring;
   inj-event(BobRecvMsg(target, seq, msg)) ==> inj-event(AliceSentMsg(target, seq, msg)).
 
@@ -114,35 +124,39 @@ query target: bitstring, seq: bitstring, msg: bitstring;
 (* ============================================================================== *)
 
 let processAlice =
-  (* 1. Alice generates ML-KEM-512 keypair and Seed_init *)
-  new sk_A: kem_skey;
-  let pk_A = kem_pk(sk_A) in
+  (* 1. Alice generates Hybrid keypair (ML-KEM-512 + X25519) and Seed_init *)
+  new sk_kem_A: kem_skey;
+  let pk_kem_A = kem_pk(sk_kem_A) in
+  new sk_x_A: x_skey;
+  let pk_x_A = x_pk(sk_x_A) in
   new seed_init: bitstring;
-  event AliceStarted(pk_A, seed_init);
+  event AliceStarted(pk_kem_A, pk_x_A, seed_init);
   
-  (* 2. Alice presents authentic visual QR code (pk_A || Seed_init) *)
-  out(c_qr, (pk_A, seed_init));
+  (* 2. Alice presents authentic visual QR code (Combined pk || Seed_init) *)
+  out(c_qr, (pk_kem_A, pk_x_A, seed_init));
   
   (* 3. Alice derives rendezvous Target_0 *)
   let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
   
   (* 4. Alice receives Type 0x01 Handshake packet from DHT Target_0 *)
-  in(c_dht, (=target_0, ct_B: kem_ct, salt: bitstring, confirm_tag: bitstring));
+  in(c_dht, (=target_0, ct_kem_B: kem_ct, pk_x_B: x_pkey, salt: bitstring, confirm_tag: bitstring));
   
-  (* 5. Alice decapsulates and derives secrets with transcript binding *)
-  let ss_kem = kem_decap(sk_A, ct_B) in
-  let transcript = (pk_A, ct_B, seed_init, salt) in
+  (* 5. Alice decapsulates Hybrid KEM and derives secrets with transcript binding *)
+  let ss_kem = kem_decap(sk_kem_A, ct_kem_B) in
+  let ss_ecdh = x_ecdh(sk_x_A, pk_x_B) in
+  let ss_hybrid = hybrid_combine(ss_ecdh, ss_kem) in
+  let transcript = (pk_kem_A, pk_x_A, ct_kem_B, pk_x_B, seed_init, salt) in
   let commitment = sha256((TAG_ANTIGRIND, seed_init, transcript)) in
-  let prk = hkdf_extract(salt, ss_kem) in
+  let prk = hkdf_extract(salt, ss_hybrid) in
   let master_key = hkdf_expand(prk, sha512(transcript)) in
   let expected_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
   
-  (* 6. Verify Key Confirmation *)
+  (* 6. Verify Key Confirmation & SAS *)
   if confirm_tag = expected_tag then
   let sas = hkdf_expand(master_key, (TAG_SAS, commitment)) in
   let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
   let chain_key_B2A = hkdf_expand(master_key, TAG_B2A) in
-  event AliceFinished(pk_A, seed_init, chain_key_A2B, chain_key_B2A, sas);
+  event AliceFinished(pk_kem_A, pk_x_A, seed_init, chain_key_A2B, chain_key_B2A, sas);
   
   (* 7. Alice initiates Track A -> B: Message 0 (Seq = 0) *)
   let seq_0 = TAG_STEP_0 in
@@ -183,20 +197,29 @@ let processAlice =
   if ed_verify(ed_pk_B0, (target_B1, ciphertext_B0), sig_B0) = true then
   let aad_B0 = (target_B1, TAG_B2A) in
   let recv_reply = aead_dec(msg_key_B0, iv_B0, ciphertext_B0, aad_B0) in
-  event AliceRecvReply(target_B1, seq_B0, recv_reply).
+  event AliceRecvReply(target_B1, seq_B0, recv_reply);
+  
+  (* 9. Safe Tombstone Overwrite (900-byte CSPRNG noise) destroys consumed ciphertext *)
+  new tombstone_noise_A: bitstring;
+  out(c_dht, (target_B1, tombstone_noise_A)).
 
 let processBob =
   (* 1. Bob scans QR code *)
-  in(c_qr, (pk_A: kem_pkey, seed_init: bitstring));
+  in(c_qr, (pk_kem_A: kem_pkey, pk_x_A: x_pkey, seed_init: bitstring));
   
-  (* 2. Bob encapsulates ML-KEM-512 shared secret *)
+  (* 2. Bob encapsulates Hybrid KEM shared secret *)
   new r_kem: bitstring;
-  let ct_B = kem_encap_ct(pk_A, r_kem) in
-  let ss_kem = kem_encap_ss(pk_A, r_kem) in
+  let ct_kem_B = kem_encap_ct(pk_kem_A, r_kem) in
+  let ss_kem = kem_encap_ss(pk_kem_A, r_kem) in
+  new sk_x_B: x_skey;
+  let pk_x_B = x_pk(sk_x_B) in
+  let ss_ecdh = x_ecdh(sk_x_B, pk_x_A) in
+  let ss_hybrid = hybrid_combine(ss_ecdh, ss_kem) in
+  
   new salt: bitstring;
-  let transcript = (pk_A, ct_B, seed_init, salt) in
+  let transcript = (pk_kem_A, pk_x_A, ct_kem_B, pk_x_B, seed_init, salt) in
   let commitment = sha256((TAG_ANTIGRIND, seed_init, transcript)) in
-  let prk = hkdf_extract(salt, ss_kem) in
+  let prk = hkdf_extract(salt, ss_hybrid) in
   let master_key = hkdf_expand(prk, sha512(transcript)) in
   let confirm_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
   let sas = hkdf_expand(master_key, (TAG_SAS, commitment)) in
@@ -204,11 +227,11 @@ let processBob =
   (* 3. Bob derives dual chain keys and records completion *)
   let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
   let chain_key_B2A = hkdf_expand(master_key, TAG_B2A) in
-  event BobFinished(pk_A, seed_init, chain_key_A2B, chain_key_B2A, sas);
+  event BobFinished(pk_kem_A, pk_x_A, seed_init, chain_key_A2B, chain_key_B2A, sas);
 
   (* 4. Bob publishes Handshake packet to Target_0 *)
   let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
-  out(c_dht, (target_0, ct_B, salt, confirm_tag));
+  out(c_dht, (target_0, ct_kem_B, pk_x_B, salt, confirm_tag));
   
   (* 5. Bob receives Message 0 on Track A -> B *)
   let seq_0 = TAG_STEP_0 in
@@ -226,7 +249,11 @@ let processBob =
   let recv_msg = aead_dec(msg_key_0, iv_0, ciphertext_0, aad_0) in
   event BobRecvMsg(target_1, seq_0, recv_msg);
   
-  (* 6. Bob sends reply Message 0 on Track B -> A *)
+  (* 6. Safe Tombstone Overwrite (900-byte CSPRNG noise) *)
+  new tombstone_noise_B: bitstring;
+  out(c_dht, (target_1, tombstone_noise_B));
+  
+  (* 7. Bob sends reply Message 0 on Track B -> A *)
   let seq_B0 = TAG_STEP_0 in
   let entropy_B0 = hkdf_expand(chain_key_B2A, seq_B0) in
   let msg_key_B0 = get_msg_key(entropy_B0) in

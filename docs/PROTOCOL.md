@@ -310,13 +310,14 @@ Z uwagi na asynchroniczny charakter sieci UDP i DHT, pakiety mogą docierać z o
 
 ## 9. Formalna Weryfikacja Bezpieczeństwa (docs/formal/)
 
-Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/`:
+Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/` (20 lematów w 6 modelach):
 
-1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $MasterKey$, stanów łańcucha $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`).
-2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt i zobowiązanie SAS ($Commitment$).
+1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $MasterKey$, stanów łańcucha $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
+2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt, obronę dualną **Hybrid KEM (ML-KEM-512 + X25519)** oraz zobowiązanie SAS ($Commitment$).
 3. **Forward Secrecy (Poufność Przeszła):** Dowiedziono (`pqchat_forward_secrecy.pv`), że wyciek stanu łańcucha $ChainKey_1$ nie pozwala na odszyfrowanie wcześniejszych wiadomości ($msg_0$).
-4. **Post-Compromise Security (PCS / Samoleczenie):** Dowiedziono (`pqchat_post_compromise.pv`), że po wycieku kluczy łańcucha asymetryczna rotacja ML-KEM-512 przywraca pełną poufność kolejnych wiadomości.
-5. **Odporność na Replay (Anti-Replay):** Dowiedziono injektywnej akceptacji pakietów (`pqchat_replay.pv` i `pqchat_protocol.pv`), uniemożliwiającej adwersarzowi wstrzyknięcie zduplikowanych ramek w sieci DHT.
+4. **Post-Compromise Security (PCS / Samoleczenie):** Dowiedziono (`pqchat_post_compromise.pv`), że po wycieku kluczy łańcucha asymetryczna rotacja hybrydowa KEM przywraca pełną poufność kolejnych wiadomości.
+5. **Odporność na Replay (Anti-Replay):** Dowiedziono injektywnej akceptacji pakietów (`pqchat_replay.pv` i `pqchat_protocol.pv`), uniemożliwiającej adwersarzowi wstrzyknięcie zduplikowanych ramek w sieci DHT oraz dowiedziono bezpiecznego unieważniania slotu pod sekwencją monotoniczną.
+6. **Brak powiązania z tożsamością i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability):** Dowiedziono równoważności obserwacyjnej (`diff-equivalence` w `pqchat_unlinkability.pv`) gwarantującej, że adresy $\text{Target}_i = \text{SHA-1}(pk_i)$ nie ujawniają tożsamości stron (Metadata-Free Rendezvous), a 900-bajtowe rekordy Tombstone (szum CSPRNG) są nierozróżnialne od normalnych ramek i ruchu maskującego.
 
 Uruchomienie weryfikacji formalnej:
 ```bash

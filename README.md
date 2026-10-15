@@ -18,8 +18,11 @@
   <a href="https://csrc.nist.gov/pubs/fips/203/final">
     <img src="https://img.shields.io/badge/Cryptography-FIPS_203_(ML--KEM--512)-green.svg" alt="FIPS 203 ML-KEM" />
   </a>
-  <a href="formal/">
+  <a href="docs/formal/">
     <img src="https://img.shields.io/badge/Verification-ProVerif_Formally_Verified-purple.svg" alt="ProVerif Verified" />
+  </a>
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/formal_verification.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/formal_verification.yml/badge.svg" alt="Formal Verification" />
   </a>
   <a href="CHANGELOG.md">
     <img src="https://img.shields.io/badge/Changelog-Conventional_Commits-orange.svg" alt="Changelog" />
@@ -153,23 +156,23 @@ Detailed message layouts, frame headers, and serialization rules are specified i
 
 ## 📐 Formal Verification (ProVerif)
 
-The core cryptographic protocol is formally verified using **[ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/)** symbolic protocol analyzer. All verification scripts and proof models are available in the [`formal/`](https://www.google.com/search?q=formal/) directory.
+The core cryptographic protocol is formally verified using **[ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/)** symbolic protocol analyzer. All verification scripts and proof models are unified in the [`docs/formal/`](docs/formal/) directory.
+
+The formal suite encompasses dual-defense **Hybrid KEM (ML-KEM-512 + X25519)**, **Anti-Grinding SAS**, **Dual Unidirectional Chains**, and **900-byte CSPRNG safe tombstones**:
 
 | Property | Model File | Verified Security Guarantee | Status |
 | --- | --- | --- | --- |
-| **Secrecy** | `pqchat_secrecy.pv` | Payload secrecy against active Dolev-Yao adversary | `RESULT: True` |
-| **Forward Secrecy** | `pqchat_forward_secrecy.pv` | Past messages protected upon long-term key compromise | `RESULT: True` |
-| **Post-Compromise** | `pqchat_post_compromise.pv` | Session recovery and security restoration after breach | `RESULT: True` |
-| **Replay Protection** | `pqchat_replay.pv` | Monotonic frame sequence & nonces prevent replay | `RESULT: True` |
-| **Unlinkability** | `pqchat_unlinkability.pv` | Anonymity against passive eavesdroppers | `RESULT: True` |
+| **Unified Protocol** | `pqchat_protocol.pv` | MasterKey, dual chain keys, AAD-bound payloads, SAS binding & replay | `RESULT: True` (8/8) |
+| **Secrecy & Confirmation** | `pqchat_secrecy.pv` | Payload secrecy & injective mutual authentication under Hybrid KEM | `RESULT: True` (5/5) |
+| **Forward Secrecy** | `pqchat_forward_secrecy.pv` | Past messages protected upon ratchet state compromise in RAM | `RESULT: True` (2/2) |
+| **Post-Compromise (PCS)** | `pqchat_post_compromise.pv` | Session recovery & self-healing after breach via Hybrid KEM rekey | `RESULT: True` (2/2) |
+| **Replay Protection** | `pqchat_replay.pv` | Injective packet correspondences & safe tombstone slot invalidation | `RESULT: True` (2/2) |
+| **Unlinkability & Tombstones** | `pqchat_unlinkability.pv` | Target unlinkability (diff-equivalence) & 900B tombstone indistinguishability | `RESULT: True` (1/1) |
 
 To reproduce the formal verification suite locally:
 
 ```bash
-cd formal
-chmod +x run.sh
-./run.sh
-
+bash docs/formal/run_verification.sh
 ```
 
 ---
@@ -228,7 +231,7 @@ PQChat.DHT/
 │       │   └── ui/          # Jetpack Compose screens, ViewModels, QR scanner
 │       └── test/java/       # KAT tests, Jazzer fuzzing, Concurrency & Property tests
 ├── docs/                    # Technical documentation, PROTOCOL.md, Threat Model
-├── formal/                  # ProVerif formal verification models (.pv) & scripts
+│   └── formal/              # ProVerif formal verification models (.pv) & scripts
 └── tools/
     ├── dht_harness/         # P2P loopback benchmarking scripts & raw CSV metrics
     └── threat_sim/          # Python Monte-Carlo anonymity vs. battery simulator

@@ -1,14 +1,17 @@
 (* ============================================================================== *)
 (* PQChat.DHT Protocol — Replay Protection Formal Model (ProVerif 2.05)           *)
 (*                                                                                *)
-(* Proves that neither Handshake packets nor message data packets can be          *)
+(* Proves that neither Hybrid Handshake packets nor message data packets can be   *)
 (* accepted more than once (Anti-Replay / Injective Correspondence Agreement).    *)
-(* Primitives: Injective events, ephemeral Target derivation, unique sequence nums*)
+(* Primitives: Injective events, ephemeral Target derivation, unique sequence     *)
+(* numbers, and safe 900-byte Tombstone slot overwrite                            *)
 (* ============================================================================== *)
 
 type kem_skey.
 type kem_pkey.
 type kem_ct.
+type x_skey.
+type x_pkey.
 type ed_skey.
 type ed_pkey.
 
@@ -17,6 +20,14 @@ fun kem_pk(kem_skey): kem_pkey.
 fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
 fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
 reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Classical X25519 Ephemeral Key Agreement --- *)
+fun x_pk(x_skey): x_pkey.
+fun x_ecdh(x_skey, x_pkey): bitstring.
+equation forall a: x_skey, b: x_skey; x_ecdh(a, x_pk(b)) = x_ecdh(b, x_pk(a)).
+
+(* --- Hybrid Secret Combiner --- *)
+fun hybrid_combine(bitstring, bitstring): bitstring.
 
 (* --- Ed25519 Functions --- *)
 fun ed_pk(ed_skey): ed_pkey.
@@ -52,8 +63,8 @@ free c_dht: channel.             (* Public DHT network where Dolev-Yao attacker 
 free c_qr: channel [private].    (* Visual QR Code channel *)
 
 (* --- Replay Security Events --- *)
-event HandshakeSent(bitstring, kem_ct, bitstring).
-event HandshakeAccepted(bitstring, kem_ct, bitstring).
+event HandshakeSent(bitstring, kem_ct, x_pkey, bitstring).
+event HandshakeAccepted(bitstring, kem_ct, x_pkey, bitstring).
 event MessageSent(bitstring, bitstring, bitstring).
 event MessageAccepted(bitstring, bitstring, bitstring).
 
@@ -62,8 +73,8 @@ event MessageAccepted(bitstring, bitstring, bitstring).
 (* ============================================================================== *)
 
 (* 1. Injective Handshake Agreement (Replay Prevention on Handshake Type 0x01) *)
-query target: bitstring, ct: kem_ct, salt: bitstring;
-  inj-event(HandshakeAccepted(target, ct, salt)) ==> inj-event(HandshakeSent(target, ct, salt)).
+query target: bitstring, ct: kem_ct, pkx: x_pkey, salt: bitstring;
+  inj-event(HandshakeAccepted(target, ct, pkx, salt)) ==> inj-event(HandshakeSent(target, ct, pkx, salt)).
 
 (* 2. Injective Message Delivery (Replay Prevention on Data Message Track) *)
 query target: bitstring, seq: bitstring, msg: bitstring;
@@ -74,22 +85,26 @@ query target: bitstring, seq: bitstring, msg: bitstring;
 (* ============================================================================== *)
 
 let processAlice =
-  new sk_A: kem_skey;
-  let pk_A = kem_pk(sk_A) in
+  new sk_kem_A: kem_skey;
+  let pk_kem_A = kem_pk(sk_kem_A) in
+  new sk_x_A: x_skey;
+  let pk_x_A = x_pk(sk_x_A) in
   new seed_init: bitstring;
-  out(c_qr, (pk_A, seed_init));
+  out(c_qr, (pk_kem_A, pk_x_A, seed_init));
   
   let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
-  in(c_dht, (=target_0, ct_B: kem_ct, salt: bitstring, confirm_tag: bitstring));
+  in(c_dht, (=target_0, ct_kem_B: kem_ct, pk_x_B: x_pkey, salt: bitstring, confirm_tag: bitstring));
   
-  let ss_kem = kem_decap(sk_A, ct_B) in
-  let transcript = (pk_A, ct_B, seed_init, salt) in
-  let prk = hkdf_extract(salt, ss_kem) in
+  let ss_kem = kem_decap(sk_kem_A, ct_kem_B) in
+  let ss_ecdh = x_ecdh(sk_x_A, pk_x_B) in
+  let ss_hybrid = hybrid_combine(ss_ecdh, ss_kem) in
+  let transcript = (pk_kem_A, pk_x_A, ct_kem_B, pk_x_B, seed_init, salt) in
+  let prk = hkdf_extract(salt, ss_hybrid) in
   let master_key = hkdf_expand(prk, sha512(transcript)) in
   let expected_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
   
   if confirm_tag = expected_tag then
-  event HandshakeAccepted(target_0, ct_B, salt);
+  event HandshakeAccepted(target_0, ct_kem_B, pk_x_B, salt);
   
   let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
   
@@ -112,19 +127,24 @@ let processAlice =
   out(c_dht, (target_1, c_0, iv_0, sig_0)).
 
 let processBob =
-  in(c_qr, (pk_A: kem_pkey, seed_init: bitstring));
+  in(c_qr, (pk_kem_A: kem_pkey, pk_x_A: x_pkey, seed_init: bitstring));
   new r_kem: bitstring;
-  let ct_B = kem_encap_ct(pk_A, r_kem) in
-  let ss_kem = kem_encap_ss(pk_A, r_kem) in
+  let ct_kem_B = kem_encap_ct(pk_kem_A, r_kem) in
+  let ss_kem = kem_encap_ss(pk_kem_A, r_kem) in
+  new sk_x_B: x_skey;
+  let pk_x_B = x_pk(sk_x_B) in
+  let ss_ecdh = x_ecdh(sk_x_B, pk_x_A) in
+  let ss_hybrid = hybrid_combine(ss_ecdh, ss_kem) in
+  
   new salt: bitstring;
-  let transcript = (pk_A, ct_B, seed_init, salt) in
-  let prk = hkdf_extract(salt, ss_kem) in
+  let transcript = (pk_kem_A, pk_x_A, ct_kem_B, pk_x_B, seed_init, salt) in
+  let prk = hkdf_extract(salt, ss_hybrid) in
   let master_key = hkdf_expand(prk, sha512(transcript)) in
   let confirm_tag = hkdf_expand(master_key, TAG_KEY_CONFIRM) in
   
   let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
-  event HandshakeSent(target_0, ct_B, salt);
-  out(c_dht, (target_0, ct_B, salt, confirm_tag));
+  event HandshakeSent(target_0, ct_kem_B, pk_x_B, salt);
+  out(c_dht, (target_0, ct_kem_B, pk_x_B, salt, confirm_tag));
   
   let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
   
@@ -141,7 +161,11 @@ let processBob =
   if ed_verify(ed_pk_0, (target_1, c_0), sig_0) = true then
   let aad_0 = (target_1, TAG_A2B) in
   let recv_payload = aead_dec(msg_key_0, iv_0, c_0, aad_0) in
-  event MessageAccepted(target_1, seq_0, recv_payload).
+  event MessageAccepted(target_1, seq_0, recv_payload);
+  
+  (* Safe Tombstone Overwrite: replaces consumed slot with 900-byte noise under seq+1 *)
+  new tombstone_noise: bitstring;
+  out(c_dht, (target_1, tombstone_noise)).
 
 process
   (!processAlice) | (!processBob)
