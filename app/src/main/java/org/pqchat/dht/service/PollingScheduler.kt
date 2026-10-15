@@ -124,19 +124,24 @@ class PollingScheduler(
             ) { _, _, _, _ ->
                 settingsManager.getRepublishPolicy()
             }.collect { policy ->
-                applyRepublishSchedule(policy = policy)
+                if (isStarted.get()) {
+                    applyRepublishSchedule(policy = policy)
+                }
             }
         }
 
         // When a republish task is registered, unregistered, or updated in repository
         repository.onRepublishTaskUpdated = {
-            schedulerScope.launch {
-                applyRepublishSchedule()
+            if (isStarted.get()) {
+                schedulerScope.launch {
+                    applyRepublishSchedule()
+                }
             }
         }
         // Keep Doze alarm synchronized with state transitions
         schedulerScope.launch {
             pollingManager.currentState.collect { state ->
+                if (!isStarted.get()) return@collect
                 when (state) {
                     AdaptivePollingManager.PollingState.FOREGROUND_CHAT,
                     AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER -> {

@@ -59,8 +59,8 @@ class WorkManagerRepublishScheduleTest {
 
     @After
     fun tearDown() {
-        fakeDht.stop()
         scheduler?.stop()
+        fakeDht.stop()
         PollingWorker.clearRepublishTasks()
     }
 
@@ -434,17 +434,18 @@ class WorkManagerRepublishScheduleTest {
 
     @Test
     fun testExecuteRepublishPassRespectsIntervalsAndTtl() = runBlocking {
+        scheduler?.stop()
         PollingWorker.clearRepublishTasks()
         fakeDht.clear()
         fakeDht.start()
 
-        val now = 1_000_000_000L
+        val now = System.currentTimeMillis()
         val policy = RepublishPolicy()
 
         try {
             // Task 1: Tier 1, interval elapsed (last republished 20 min ago > 15 min interval)
             val task1 = PollingWorker.RepublishTask(
-                messageId = 1L,
+                messageId = 1001L,
                 contactId = "alice",
                 target = ByteArray(20),
                 payload = ByteArray(100),
@@ -455,7 +456,7 @@ class WorkManagerRepublishScheduleTest {
 
             // Task 2: Tier 1, interval NOT elapsed (last republished 5 min ago < 15 min interval)
             val task2 = PollingWorker.RepublishTask(
-                messageId = 2L,
+                messageId = 1002L,
                 contactId = "bob",
                 target = ByteArray(20),
                 payload = ByteArray(100),
@@ -466,7 +467,7 @@ class WorkManagerRepublishScheduleTest {
 
             // Task 3: TTL expired (50 hours old)
             val task3 = PollingWorker.RepublishTask(
-                messageId = 3L,
+                messageId = 1003L,
                 contactId = "charlie",
                 target = ByteArray(20),
                 payload = ByteArray(100),
@@ -494,10 +495,10 @@ class WorkManagerRepublishScheduleTest {
             assertEquals("Task 2 attempt count should remain 0", 0, task2.currentAttempts)
 
             // Task 3 must be expired and removed from tasks
-            assertEquals("Task 3 should be reported as expired", listOf(3L), expiredCallbackIds)
-            assertFalse("Task 3 should be unregistered from PollingWorker", PollingWorker.isRepublishTaskRegistered(3L))
-            assertTrue("Task 1 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(1L))
-            assertTrue("Task 2 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(2L))
+            assertEquals("Task 3 should be reported as expired", listOf(1003L), expiredCallbackIds)
+            assertFalse("Task 3 should be unregistered from PollingWorker", PollingWorker.isRepublishTaskRegistered(1003L))
+            assertTrue("Task 1 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(1001L))
+            assertTrue("Task 2 should remain registered in PollingWorker", PollingWorker.isRepublishTaskRegistered(1002L))
         } finally {
             PollingWorker.clearRepublishTasks()
         }
