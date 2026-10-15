@@ -2,13 +2,16 @@
 (* PQChat.DHT Protocol — Post-Compromise Security (PCS) Model (ProVerif 2.05)     *)
 (*                                                                                *)
 (* Proves that after an adversary completely compromises the ratchet state       *)
-(* (ChainKey_old), an ephemeral ML-KEM-512 rekey restores complete secrecy       *)
-(* (self-healing / post-compromise security).                                     *)
+(* (ChainKey_old), an ephemeral Hybrid KEM rekey (ML-KEM-512 + X25519)            *)
+(* restores complete secrecy (self-healing / post-compromise security).          *)
+(* Includes 900-byte safe tombstone slot cleanup.                                 *)
 (* ============================================================================== *)
 
 type kem_skey.
 type kem_pkey.
 type kem_ct.
+type x_skey.
+type x_pkey.
 type ed_skey.
 type ed_pkey.
 
@@ -17,6 +20,14 @@ fun kem_pk(kem_skey): kem_pkey.
 fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
 fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
 reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Classical X25519 Ephemeral Key Agreement --- *)
+fun x_pk(x_skey): x_pkey.
+fun x_ecdh(x_skey, x_pkey): bitstring.
+equation forall a: x_skey, b: x_skey; x_ecdh(a, x_pk(b)) = x_ecdh(b, x_pk(a)).
+
+(* --- Hybrid Secret Combiner --- *)
+fun hybrid_combine(bitstring, bitstring): bitstring.
 
 (* --- Ed25519 Functions --- *)
 fun ed_pk(ed_skey): ed_pkey.
@@ -59,7 +70,7 @@ free secret_msg_post_rekey: bitstring [private].
 (* Post-Compromise Security: New Chain Key is secret despite ChainKey_old leak *)
 query attacker(secret_new_chain_key).
 
-(* Post-Compromise Security: Messages sent after ML-KEM rekey are confidential *)
+(* Post-Compromise Security: Messages sent after Hybrid KEM rekey are confidential *)
 query attacker(secret_msg_post_rekey).
 
 (* ============================================================================== *)
@@ -73,31 +84,39 @@ process
   (* 2. ADVERSARY COMPROMISE: Attacker learns chain_key_old *)
   out(c_leak, chain_key_old);
   
-  (* 3. PQC REKEY EPOCH: Alice generates fresh ML-KEM-512 keypair *)
-  new sk_rekey: kem_skey;
-  let pk_rekey = kem_pk(sk_rekey) in
+  (* 3. PQC HYBRID REKEY EPOCH: Alice generates fresh Hybrid KEM keypair *)
+  new sk_kem_rekey: kem_skey;
+  let pk_kem_rekey = kem_pk(sk_kem_rekey) in
+  new sk_x_rekey: x_skey;
+  let pk_x_rekey = x_pk(sk_x_rekey) in
   
   (* Alice sends Rekey Offer (Type 0x03) over public DHT *)
-  out(c_dht, (MSG_TYPE_REKEY_OFFER, pk_rekey));
+  out(c_dht, (MSG_TYPE_REKEY_OFFER, pk_kem_rekey, pk_x_rekey));
   
-  (* 4. Bob receives Rekey Offer and encapsulates fresh shared secret *)
-  in(c_dht, (=MSG_TYPE_REKEY_OFFER, recv_pk_rekey: kem_pkey));
+  (* 4. Bob receives Rekey Offer and encapsulates fresh hybrid shared secret *)
+  in(c_dht, (=MSG_TYPE_REKEY_OFFER, recv_pk_kem_rekey: kem_pkey, recv_pk_x_rekey: x_pkey));
   new r_rekey: bitstring;
-  let ct_rekey = kem_encap_ct(recv_pk_rekey, r_rekey) in
-  let ss_rekey_bob = kem_encap_ss(recv_pk_rekey, r_rekey) in
+  let ct_kem_rekey = kem_encap_ct(recv_pk_kem_rekey, r_rekey) in
+  let ss_kem_rekey = kem_encap_ss(recv_pk_kem_rekey, r_rekey) in
+  new sk_x_bob: x_skey;
+  let pk_x_bob = x_pk(sk_x_bob) in
+  let ss_ecdh_rekey = x_ecdh(sk_x_bob, recv_pk_x_rekey) in
+  let ss_hybrid_rekey_bob = hybrid_combine(ss_ecdh_rekey, ss_kem_rekey) in
   
   (* Bob sends Rekey Response (Type 0x04) over DHT *)
-  out(c_dht, (MSG_TYPE_REKEY_RESP, ct_rekey));
+  out(c_dht, (MSG_TYPE_REKEY_RESP, ct_kem_rekey, pk_x_bob));
   
   (* Bob derives new healed chain key *)
-  let new_chain_key_bob = hkdf_extract(chain_key_old, ss_rekey_bob) in
+  let new_chain_key_bob = hkdf_extract(chain_key_old, ss_hybrid_rekey_bob) in
   
   (* 5. Alice receives Rekey Response and decapsulates *)
-  in(c_dht, (=MSG_TYPE_REKEY_RESP, recv_ct_rekey: kem_ct));
-  let ss_rekey_alice = kem_decap(sk_rekey, recv_ct_rekey) in
+  in(c_dht, (=MSG_TYPE_REKEY_RESP, recv_ct_kem_rekey: kem_ct, recv_pk_x_bob: x_pkey));
+  let ss_kem_alice = kem_decap(sk_kem_rekey, recv_ct_kem_rekey) in
+  let ss_ecdh_alice = x_ecdh(sk_x_rekey, recv_pk_x_bob) in
+  let ss_hybrid_rekey_alice = hybrid_combine(ss_ecdh_alice, ss_kem_alice) in
   
   (* Alice derives new healed chain key *)
-  let new_chain_key_alice = hkdf_extract(chain_key_old, ss_rekey_alice) in
+  let new_chain_key_alice = hkdf_extract(chain_key_old, ss_hybrid_rekey_alice) in
   
   (* 6. Alice sends post-rekey message *)
   let entropy_post = hkdf_expand(new_chain_key_alice, TAG_REKEY_STEP) in
@@ -113,6 +132,10 @@ process
   let sig_post = ed_sign(ed_sk_post, (target_post, c_post)) in
   
   out(c_dht, (target_post, c_post, iv_post, sig_post));
+  
+  (* Recipient consumes post-rekey message and replaces slot with 900-byte Tombstone *)
+  new tombstone_post: bitstring;
+  out(c_dht, (target_post, tombstone_post));
   
   (* Canary for new chain key *)
   new iv_canary: bitstring;

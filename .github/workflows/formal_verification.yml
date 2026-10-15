@@ -1,0 +1,39 @@
+name: Formal Verification (ProVerif)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proverif-verification:
+    name: ProVerif Protocol Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install OCaml & Build ProVerif 2.05
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ocaml
+          curl -s https://bblanche.gitlabpages.inria.fr/proverif/proverif2.05.tar.gz | tar -xzf -
+          cd proverif2.05
+          ./build -nointeract native
+          sudo cp proverif /usr/local/bin/proverif
+          sudo chmod +x /usr/local/bin/proverif
+
+      - name: Run Formal Verification Suite (20 Lemmas / 6 Models)
+        run: bash docs/formal/run_verification.sh
+
+      - name: Upload Formal Verification Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: proverif-verification-report
+          path: docs/formal/report.txt

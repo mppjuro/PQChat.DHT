@@ -1,0 +1,1196 @@
+==============================================================================
+PQChat.DHT Protocol Formal Verification Report
+Generated: 2026-10-15 20:46:14 UTC
+Verifier: ProVerif 2.05 (Symbolic Dolev-Yao Protocol Analyzer)
+==============================================================================
+
+Summary of Verified Security Lemmas:
+------------------------------------------------------------------------------
+(1) pqchat_protocol.pv (Unified Protocol & Hybrid KEM Model):
+    - Lemma 1.1: Secrecy of MasterKey
+    - Lemma 1.2: Secrecy of ChainKey A -> B
+    - Lemma 1.3: Secrecy of ChainKey B -> A
+    - Lemma 1.4: Secrecy of Message Payloads (Track A -> B)
+    - Lemma 1.5: Secrecy of Message Payloads (Track B -> A)
+    - Lemma 1.6: Mutual Authentication & SAS Anti-Grinding Binding
+    - Lemma 1.7: Injective Message Delivery (Track A -> B)
+    - Lemma 1.8: Injective Message Delivery (Track B -> A)
+(2) pqchat_secrecy.pv (Dedicated Secrecy & Confirmation):
+    - Lemma 2.1: Secrecy of ChainKey A -> B
+    - Lemma 2.2: Secrecy of ChainKey B -> A
+    - Lemma 2.3: Secrecy of Message Payloads (Track A -> B)
+    - Lemma 2.4: Secrecy of Message Payloads (Track B -> A)
+    - Lemma 2.5: Key Confirmation Agreement
+(3) pqchat_forward_secrecy.pv (Forward Secrecy Model):
+    - Lemma 3.1: Forward Secrecy of past messages (msg_0)
+    - Lemma 3.2: Soundness of state compromise (msg_1 compromised)
+(4) pqchat_post_compromise.pv (Post-Compromise Security Model):
+    - Lemma 4.1: Post-Compromise Security of healed ChainKey
+    - Lemma 4.2: Post-Compromise Security of post-rekey message payloads
+(5) pqchat_replay.pv (Anti-Replay Injective Agreement Model):
+    - Lemma 5.1: Injective Handshake Agreement (Type 0x01)
+    - Lemma 5.2: Injective Message Delivery (Type 0x02)
+(6) pqchat_unlinkability.pv (Target & 900B Tombstone Indistinguishability):
+    - Lemma 6.1: Observational Equivalence of Ephemeral Targets & 900B Tombstones
+------------------------------------------------------------------------------
+
+==============================================================================
+1. Unified Protocol Model (pqchat_protocol.pv)
+==============================================================================
+Linear part:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Completing equations...
+Completed equations:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Convergent part: No equation.
+Process 0 (that is, the initial process):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {4}new sk_x_A: x_skey;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {6}new seed_init: bitstring;
+    {7}event AliceStarted(pk_kem_A,pk_x_A,seed_init);
+    {8}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {9}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {10}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,confirm_tag: bitstring));
+    {11}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {12}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {13}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {14}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {15}let commitment: bitstring = sha256((TAG_ANTIGRIND,seed_init,transcript)) in
+    {16}let prk: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {17}let master_key: bitstring = hkdf_expand(prk,sha512(transcript)) in
+    {18}let expected_tag: bitstring = hkdf_expand(master_key,TAG_KEY_CONFIRM) in
+    {19}if (confirm_tag = expected_tag) then
+    {20}let sas: bitstring = hkdf_expand(master_key,(TAG_SAS,commitment)) in
+    {21}let chain_key_A2B: bitstring = hkdf_expand(master_key,TAG_A2B) in
+    {22}let chain_key_B2A: bitstring = hkdf_expand(master_key,TAG_B2A) in
+    {23}event AliceFinished(pk_kem_A,pk_x_A,seed_init,chain_key_A2B,chain_key_B2A,sas);
+    {24}let seq_0: bitstring = TAG_STEP_0 in
+    {25}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,seq_0) in
+    {26}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {27}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {28}let next_chain_A2B: bitstring = get_next_chain(entropy_0) in
+    {29}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {30}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {31}let target_1: bitstring = sha1(ed_pk_0) in
+    {32}new iv_0: bitstring;
+    {33}let aad_0: bitstring = (target_1,TAG_A2B) in
+    {34}let ciphertext_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_A2B,aad_0) in
+    {35}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,ciphertext_0)) in
+    {36}event AliceSentMsg(target_1,seq_0,secret_msg_A2B);
+    {37}out(c_dht, (target_1,ciphertext_0,iv_0,sig_0));
+    {38}new iv_canary_0: bitstring;
+    {39}new iv_canary_1: bitstring;
+    {40}new iv_canary_2: bitstring;
+    {41}out(c_dht, aead_enc(master_key,iv_canary_0,secret_master_key,TAG_KEY_CONFIRM));
+    {42}out(c_dht, aead_enc(chain_key_A2B,iv_canary_1,secret_chain_A2B,TAG_A2B));
+    {43}out(c_dht, aead_enc(chain_key_B2A,iv_canary_2,secret_chain_B2A,TAG_B2A));
+    {44}let seq_B0: bitstring = TAG_STEP_0 in
+    {45}let entropy_B0: bitstring = hkdf_expand(chain_key_B2A,seq_B0) in
+    {46}let msg_key_B0: bitstring = get_msg_key(entropy_B0) in
+    {47}let ed_seed_B0: bitstring = get_ed_seed(entropy_B0) in
+    {48}let ed_sk_B0: ed_skey = ed_derive_sk(ed_seed_B0) in
+    {49}let ed_pk_B0: ed_pkey = ed_pk(ed_sk_B0) in
+    {50}let target_B1: bitstring = sha1(ed_pk_B0) in
+    {51}in(c_dht, (=target_B1,ciphertext_B0: bitstring,iv_B0: bitstring,sig_B0: bitstring));
+    {52}if (ed_verify(ed_pk_B0,(target_B1,ciphertext_B0),sig_B0) = true) then
+    {53}let aad_B0: bitstring = (target_B1,TAG_B2A) in
+    {54}let recv_reply: bitstring = aead_dec(msg_key_B0,iv_B0,ciphertext_B0,aad_B0) in
+    {55}event AliceRecvReply(target_B1,seq_B0,recv_reply);
+    {56}new tombstone_noise_A: bitstring;
+    {57}out(c_dht, (target_B1,tombstone_noise_A))
+) | (
+    {58}!
+    {59}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {60}new r_kem: bitstring;
+    {61}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {62}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {63}new sk_x_B: x_skey;
+    {64}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {65}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {66}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {67}new salt_1: bitstring;
+    {68}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {69}let commitment_1: bitstring = sha256((TAG_ANTIGRIND,seed_init_1,transcript_1)) in
+    {70}let prk_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {71}let master_key_1: bitstring = hkdf_expand(prk_1,sha512(transcript_1)) in
+    {72}let confirm_tag_1: bitstring = hkdf_expand(master_key_1,TAG_KEY_CONFIRM) in
+    {73}let sas_1: bitstring = hkdf_expand(master_key_1,(TAG_SAS,commitment_1)) in
+    {74}let chain_key_A2B_1: bitstring = hkdf_expand(master_key_1,TAG_A2B) in
+    {75}let chain_key_B2A_1: bitstring = hkdf_expand(master_key_1,TAG_B2A) in
+    {76}event BobFinished(pk_kem_A_1,pk_x_A_1,seed_init_1,chain_key_A2B_1,chain_key_B2A_1,sas_1);
+    {77}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {78}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,confirm_tag_1));
+    {79}let seq_0_1: bitstring = TAG_STEP_0 in
+    {80}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,seq_0_1) in
+    {81}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {82}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {83}let next_chain_A2B_1: bitstring = get_next_chain(entropy_0_1) in
+    {84}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {85}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {86}let target: bitstring = sha1(ed_pk_0_1) in
+    {87}in(c_dht, (=target,ciphertext_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {88}if (ed_verify(ed_pk_0_1,(target,ciphertext_0_1),sig_0_1) = true) then
+    {89}let aad_0_1: bitstring = (target,TAG_A2B) in
+    {90}let recv_msg: bitstring = aead_dec(msg_key_0_1,iv_0_1,ciphertext_0_1,aad_0_1) in
+    {91}event BobRecvMsg(target,seq_0_1,recv_msg);
+    {92}new tombstone_noise_B: bitstring;
+    {93}out(c_dht, (target,tombstone_noise_B));
+    {94}let seq_B0_1: bitstring = TAG_STEP_0 in
+    {95}let entropy_B0_1: bitstring = hkdf_expand(chain_key_B2A_1,seq_B0_1) in
+    {96}let msg_key_B0_1: bitstring = get_msg_key(entropy_B0_1) in
+    {97}let ed_seed_B0_1: bitstring = get_ed_seed(entropy_B0_1) in
+    {98}let ed_sk_B0_1: ed_skey = ed_derive_sk(ed_seed_B0_1) in
+    {99}let ed_pk_B0_1: ed_pkey = ed_pk(ed_sk_B0_1) in
+    {100}let target_B1_1: bitstring = sha1(ed_pk_B0_1) in
+    {101}new iv_B0_1: bitstring;
+    {102}let aad_B0_1: bitstring = (target_B1_1,TAG_B2A) in
+    {103}let ciphertext_B0_1: bitstring = aead_enc(msg_key_B0_1,iv_B0_1,secret_msg_B2A,aad_B0_1) in
+    {104}let sig_B0_1: bitstring = ed_sign(ed_sk_B0_1,(target_B1_1,ciphertext_B0_1)) in
+    {105}event BobSentReply(target_B1_1,seq_B0_1,secret_msg_B2A);
+    {106}out(c_dht, (target_B1_1,ciphertext_B0_1,iv_B0_1,sig_B0_1))
+)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {4}new sk_x_A: x_skey;
+    {6}new seed_init: bitstring;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {7}event AliceStarted(pk_kem_A,pk_x_A,seed_init);
+    {8}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {9}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {10}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,confirm_tag: bitstring));
+    {11}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {12}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {13}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {16}let prk: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {14}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {17}let master_key: bitstring = hkdf_expand(prk,sha512(transcript)) in
+    {18}let expected_tag: bitstring = hkdf_expand(master_key,TAG_KEY_CONFIRM) in
+    {19}if (confirm_tag = expected_tag) then
+    {22}let chain_key_B2A: bitstring = hkdf_expand(master_key,TAG_B2A) in
+    {21}let chain_key_A2B: bitstring = hkdf_expand(master_key,TAG_A2B) in
+    {15}let commitment: bitstring = sha256((TAG_ANTIGRIND,seed_init,transcript)) in
+    {20}let sas: bitstring = hkdf_expand(master_key,(TAG_SAS,commitment)) in
+    {23}event AliceFinished(pk_kem_A,pk_x_A,seed_init,chain_key_A2B,chain_key_B2A,sas);
+    {32}new iv_0: bitstring;
+    {24}let seq_0: bitstring = TAG_STEP_0 in
+    {25}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,seq_0) in
+    {27}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {29}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {30}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {31}let target_1: bitstring = sha1(ed_pk_0) in
+    {36}event AliceSentMsg(target_1,seq_0,secret_msg_A2B);
+    {33}let aad_0: bitstring = (target_1,TAG_A2B) in
+    {26}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {34}let ciphertext_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_A2B,aad_0) in
+    {35}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,ciphertext_0)) in
+    {37}out(c_dht, (target_1,ciphertext_0,iv_0,sig_0));
+    {38}new iv_canary_0: bitstring;
+    {39}new iv_canary_1: bitstring;
+    {40}new iv_canary_2: bitstring;
+    {41}out(c_dht, aead_enc(master_key,iv_canary_0,secret_master_key,TAG_KEY_CONFIRM));
+    {42}out(c_dht, aead_enc(chain_key_A2B,iv_canary_1,secret_chain_A2B,TAG_A2B));
+    {43}out(c_dht, aead_enc(chain_key_B2A,iv_canary_2,secret_chain_B2A,TAG_B2A));
+    {44}let seq_B0: bitstring = TAG_STEP_0 in
+    {45}let entropy_B0: bitstring = hkdf_expand(chain_key_B2A,seq_B0) in
+    {47}let ed_seed_B0: bitstring = get_ed_seed(entropy_B0) in
+    {48}let ed_sk_B0: ed_skey = ed_derive_sk(ed_seed_B0) in
+    {49}let ed_pk_B0: ed_pkey = ed_pk(ed_sk_B0) in
+    {50}let target_B1: bitstring = sha1(ed_pk_B0) in
+    {51}in(c_dht, (=target_B1,ciphertext_B0: bitstring,iv_B0: bitstring,sig_B0: bitstring));
+    {52}if (ed_verify(ed_pk_B0,(target_B1,ciphertext_B0),sig_B0) = true) then
+    {53}let aad_B0: bitstring = (target_B1,TAG_B2A) in
+    {46}let msg_key_B0: bitstring = get_msg_key(entropy_B0) in
+    {54}let recv_reply: bitstring = aead_dec(msg_key_B0,iv_B0,ciphertext_B0,aad_B0) in
+    {55}event AliceRecvReply(target_B1,seq_B0,recv_reply);
+    {56}new tombstone_noise_A: bitstring;
+    {57}out(c_dht, (target_B1,tombstone_noise_A))
+) | (
+    {58}!
+    {59}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {60}new r_kem: bitstring;
+    {63}new sk_x_B: x_skey;
+    {67}new salt_1: bitstring;
+    {65}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {62}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {66}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {70}let prk_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {64}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {61}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {68}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {71}let master_key_1: bitstring = hkdf_expand(prk_1,sha512(transcript_1)) in
+    {75}let chain_key_B2A_1: bitstring = hkdf_expand(master_key_1,TAG_B2A) in
+    {74}let chain_key_A2B_1: bitstring = hkdf_expand(master_key_1,TAG_A2B) in
+    {69}let commitment_1: bitstring = sha256((TAG_ANTIGRIND,seed_init_1,transcript_1)) in
+    {73}let sas_1: bitstring = hkdf_expand(master_key_1,(TAG_SAS,commitment_1)) in
+    {76}event BobFinished(pk_kem_A_1,pk_x_A_1,seed_init_1,chain_key_A2B_1,chain_key_B2A_1,sas_1);
+    {77}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {72}let confirm_tag_1: bitstring = hkdf_expand(master_key_1,TAG_KEY_CONFIRM) in
+    {78}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,confirm_tag_1));
+    {79}let seq_0_1: bitstring = TAG_STEP_0 in
+    {80}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,seq_0_1) in
+    {82}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {84}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {85}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {86}let target: bitstring = sha1(ed_pk_0_1) in
+    {87}in(c_dht, (=target,ciphertext_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {88}if (ed_verify(ed_pk_0_1,(target,ciphertext_0_1),sig_0_1) = true) then
+    {89}let aad_0_1: bitstring = (target,TAG_A2B) in
+    {81}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {90}let recv_msg: bitstring = aead_dec(msg_key_0_1,iv_0_1,ciphertext_0_1,aad_0_1) in
+    {91}event BobRecvMsg(target,seq_0_1,recv_msg);
+    {92}new tombstone_noise_B: bitstring;
+    {93}out(c_dht, (target,tombstone_noise_B));
+    {101}new iv_B0_1: bitstring;
+    {94}let seq_B0_1: bitstring = TAG_STEP_0 in
+    {95}let entropy_B0_1: bitstring = hkdf_expand(chain_key_B2A_1,seq_B0_1) in
+    {97}let ed_seed_B0_1: bitstring = get_ed_seed(entropy_B0_1) in
+    {98}let ed_sk_B0_1: ed_skey = ed_derive_sk(ed_seed_B0_1) in
+    {99}let ed_pk_B0_1: ed_pkey = ed_pk(ed_sk_B0_1) in
+    {100}let target_B1_1: bitstring = sha1(ed_pk_B0_1) in
+    {105}event BobSentReply(target_B1_1,seq_B0_1,secret_msg_B2A);
+    {102}let aad_B0_1: bitstring = (target_B1_1,TAG_B2A) in
+    {96}let msg_key_B0_1: bitstring = get_msg_key(entropy_B0_1) in
+    {103}let ciphertext_B0_1: bitstring = aead_enc(msg_key_B0_1,iv_B0_1,secret_msg_B2A,aad_B0_1) in
+    {104}let sig_B0_1: bitstring = ed_sign(ed_sk_B0_1,(target_B1_1,ciphertext_B0_1)) in
+    {106}out(c_dht, (target_B1_1,ciphertext_B0_1,iv_B0_1,sig_B0_1))
+)
+
+-- Query not attacker(secret_master_key[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 182 rules (53 with conclusion selected). Queue: 40 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 45 rules.
+600 rules inserted. Base: 379 rules (77 with conclusion selected). Queue: 18 rules.
+800 rules inserted. Base: 503 rules (79 with conclusion selected). Queue: 1 rules.
+Starting query not attacker(secret_master_key[])
+RESULT not attacker(secret_master_key[]) is true.
+-- Query not attacker(secret_chain_A2B[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 182 rules (53 with conclusion selected). Queue: 40 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 45 rules.
+600 rules inserted. Base: 379 rules (77 with conclusion selected). Queue: 18 rules.
+800 rules inserted. Base: 503 rules (79 with conclusion selected). Queue: 1 rules.
+Starting query not attacker(secret_chain_A2B[])
+RESULT not attacker(secret_chain_A2B[]) is true.
+-- Query not attacker(secret_chain_B2A[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 182 rules (53 with conclusion selected). Queue: 40 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 45 rules.
+600 rules inserted. Base: 379 rules (77 with conclusion selected). Queue: 18 rules.
+800 rules inserted. Base: 503 rules (79 with conclusion selected). Queue: 1 rules.
+Starting query not attacker(secret_chain_B2A[])
+RESULT not attacker(secret_chain_B2A[]) is true.
+-- Query not attacker(secret_msg_A2B[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 182 rules (53 with conclusion selected). Queue: 40 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 45 rules.
+600 rules inserted. Base: 379 rules (77 with conclusion selected). Queue: 18 rules.
+800 rules inserted. Base: 503 rules (79 with conclusion selected). Queue: 1 rules.
+Starting query not attacker(secret_msg_A2B[])
+RESULT not attacker(secret_msg_A2B[]) is true.
+-- Query not attacker(secret_msg_B2A[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 182 rules (53 with conclusion selected). Queue: 40 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 45 rules.
+600 rules inserted. Base: 379 rules (77 with conclusion selected). Queue: 18 rules.
+800 rules inserted. Base: 503 rules (79 with conclusion selected). Queue: 1 rules.
+Starting query not attacker(secret_msg_B2A[])
+RESULT not attacker(secret_msg_B2A[]) is true.
+-- Query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 187 rules (58 with conclusion selected). Queue: 44 rules.
+400 rules inserted. Base: 309 rules (58 with conclusion selected). Queue: 108 rules.
+600 rules inserted. Base: 374 rules (74 with conclusion selected). Queue: 104 rules.
+800 rules inserted. Base: 383 rules (74 with conclusion selected). Queue: 120 rules.
+1000 rules inserted. Base: 442 rules (84 with conclusion selected). Queue: 79 rules.
+1200 rules inserted. Base: 498 rules (84 with conclusion selected). Queue: 44 rules.
+1400 rules inserted. Base: 585 rules (84 with conclusion selected). Queue: 19 rules.
+Starting query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2))
+goal reachable: b-inj-event(BobFinished(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),seed_init_2,hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),(TAG_SAS,sha256((TAG_ANTIGRIND,seed_init_2,(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2)))))),@occ76_1) -> inj-event(AliceFinished(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),seed_init_2,hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),(TAG_SAS,sha256((TAG_ANTIGRIND,seed_init_2,(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2)))))),@occ23_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+seed_init_2 = seed_init[!1 = @sid]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ23_1 = @occ23[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ76_1 = @occ76[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+RESULT inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) is true.
+-- Query inj-event(BobRecvMsg(target_2,seq,msg)) ==> inj-event(AliceSentMsg(target_2,seq,msg)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 184 rules (53 with conclusion selected). Queue: 42 rules.
+400 rules inserted. Base: 265 rules (67 with conclusion selected). Queue: 58 rules.
+600 rules inserted. Base: 369 rules (73 with conclusion selected). Queue: 32 rules.
+800 rules inserted. Base: 492 rules (79 with conclusion selected). Queue: 46 rules.
+Starting query inj-event(BobRecvMsg(target_2,seq,msg)) ==> inj-event(AliceSentMsg(target_2,seq,msg))
+goal reachable: b-inj-event(AliceSentMsg(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_STEP_0,secret_msg_A2B[]),@occ36_1) -> inj-event(BobRecvMsg(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_STEP_0,secret_msg_A2B[]),@occ91_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+seed_init_2 = seed_init[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+iv_0_2 = iv_0[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ91_1 = @occ91[sig_0_1 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)))),iv_0_1 = iv_0_2,ciphertext_0_1 = aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)),seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ36_1 = @occ36[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+RESULT inj-event(BobRecvMsg(target_2,seq,msg)) ==> inj-event(AliceSentMsg(target_2,seq,msg)) is true.
+-- Query inj-event(AliceRecvReply(target_2,seq,msg)) ==> inj-event(BobSentReply(target_2,seq,msg)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 184 rules (53 with conclusion selected). Queue: 42 rules.
+400 rules inserted. Base: 266 rules (67 with conclusion selected). Queue: 55 rules.
+600 rules inserted. Base: 375 rules (77 with conclusion selected). Queue: 33 rules.
+800 rules inserted. Base: 486 rules (77 with conclusion selected). Queue: 44 rules.
+Starting query inj-event(AliceRecvReply(target_2,seq,msg)) ==> inj-event(BobSentReply(target_2,seq,msg))
+goal reachable: b-inj-event(BobSentReply(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))))),TAG_STEP_0,secret_msg_B2A[]),@occ105_1) -> inj-event(AliceRecvReply(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))))),TAG_STEP_0,secret_msg_B2A[]),@occ55_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+seed_init_2 = seed_init[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+iv_0_2 = iv_0[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+iv_B0_2 = iv_B0_1[sig_0_1 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)))),iv_0_1 = iv_0_2,ciphertext_0_1 = aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)),seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ55_1 = @occ55[sig_B0 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0)),iv_B0_2,secret_msg_B2A[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))))),TAG_B2A)))),iv_B0 = iv_B0_2,ciphertext_B0 = aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0)),iv_B0_2,secret_msg_B2A[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_B2A),TAG_STEP_0))))),TAG_B2A)),confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ105_1 = @occ105[sig_0_1 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)))),iv_0_1 = iv_0_2,ciphertext_0_1 = aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,secret_msg_A2B[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)),seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+RESULT inj-event(AliceRecvReply(target_2,seq,msg)) ==> inj-event(BobSentReply(target_2,seq,msg)) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(secret_master_key[]) is true.
+
+Query not attacker(secret_chain_A2B[]) is true.
+
+Query not attacker(secret_chain_B2A[]) is true.
+
+Query not attacker(secret_msg_A2B[]) is true.
+
+Query not attacker(secret_msg_B2A[]) is true.
+
+Query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A,sas_2)) is true.
+
+Query inj-event(BobRecvMsg(target_2,seq,msg)) ==> inj-event(AliceSentMsg(target_2,seq,msg)) is true.
+
+Query inj-event(AliceRecvReply(target_2,seq,msg)) ==> inj-event(BobSentReply(target_2,seq,msg)) is true.
+
+--------------------------------------------------------------
+
+==============================================================================
+2. Secrecy & Confirmation Model (pqchat_secrecy.pv)
+==============================================================================
+Linear part:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Completing equations...
+Completed equations:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Convergent part: No equation.
+Process 0 (that is, the initial process):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {4}new sk_x_A: x_skey;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {6}new seed_init: bitstring;
+    {7}event AliceStarted(pk_kem_A,pk_x_A,seed_init);
+    {8}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {9}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {10}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,auth_tag: bitstring));
+    {11}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {12}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {13}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {14}let ss_init: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {15}let conf_key: bitstring = hkdf_expand(ss_init,TAG_KEY_CONFIRM) in
+    {16}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {17}if (auth_tag = hmac(conf_key,transcript)) then
+    {18}let chain_key_A2B: bitstring = hkdf_expand(ss_init,TAG_A2B) in
+    {19}let chain_key_B2A: bitstring = hkdf_expand(ss_init,TAG_B2A) in
+    {20}event AliceFinished(pk_kem_A,pk_x_A,seed_init,chain_key_A2B,chain_key_B2A);
+    {21}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,TAG_STEP_0) in
+    {22}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {23}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {24}let next_chain_A2B: bitstring = get_next_chain(entropy_0) in
+    {25}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {26}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {27}let target_1: bitstring = sha1(ed_pk_0) in
+    {28}new iv_0: bitstring;
+    {29}let aad_0: bitstring = (target_1,MSG_TYPE_TXT) in
+    {30}let ciphertext_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_A2B,aad_0) in
+    {31}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,ciphertext_0)) in
+    {32}event AliceSentMsg(target_1,secret_msg_A2B);
+    {33}out(c_dht, (target_1,ciphertext_0,iv_0,sig_0));
+    {34}new iv_canary_1: bitstring;
+    {35}new iv_canary_2: bitstring;
+    {36}out(c_dht, aead_enc(chain_key_A2B,iv_canary_1,secret_chain_A2B,TAG_A2B));
+    {37}out(c_dht, aead_enc(chain_key_B2A,iv_canary_2,secret_chain_B2A,TAG_B2A))
+) | (
+    {38}!
+    {39}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {40}new r_kem: bitstring;
+    {41}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {42}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {43}new sk_x_B: x_skey;
+    {44}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {45}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {46}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {47}new salt_1: bitstring;
+    {48}let ss_init_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {49}let conf_key_1: bitstring = hkdf_expand(ss_init_1,TAG_KEY_CONFIRM) in
+    {50}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {51}let auth_tag_1: bitstring = hmac(conf_key_1,transcript_1) in
+    {52}let chain_key_A2B_1: bitstring = hkdf_expand(ss_init_1,TAG_A2B) in
+    {53}let chain_key_B2A_1: bitstring = hkdf_expand(ss_init_1,TAG_B2A) in
+    {54}event BobFinished(pk_kem_A_1,pk_x_A_1,seed_init_1,chain_key_A2B_1,chain_key_B2A_1);
+    {55}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {56}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,auth_tag_1));
+    {57}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,TAG_STEP_0) in
+    {58}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {59}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {60}let next_chain_A2B_1: bitstring = get_next_chain(entropy_0_1) in
+    {61}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {62}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {63}let target: bitstring = sha1(ed_pk_0_1) in
+    {64}in(c_dht, (=target,ciphertext_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {65}if (ed_verify(ed_pk_0_1,(target,ciphertext_0_1),sig_0_1) = true) then
+    {66}let aad_0_1: bitstring = (target,MSG_TYPE_TXT) in
+    {67}let recv_msg: bitstring = aead_dec(msg_key_0_1,iv_0_1,ciphertext_0_1,aad_0_1) in
+    {68}event BobRecvMsg(target,recv_msg);
+    {69}new tombstone_noise_1: bitstring;
+    {70}out(c_dht, (target,tombstone_noise_1));
+    {71}let entropy_B0: bitstring = hkdf_expand(chain_key_B2A_1,TAG_STEP_0) in
+    {72}let msg_key_B0: bitstring = get_msg_key(entropy_B0) in
+    {73}let ed_seed_B0: bitstring = get_ed_seed(entropy_B0) in
+    {74}let ed_sk_B0: ed_skey = ed_derive_sk(ed_seed_B0) in
+    {75}let ed_pk_B0: ed_pkey = ed_pk(ed_sk_B0) in
+    {76}let target_B1: bitstring = sha1(ed_pk_B0) in
+    {77}new iv_B0: bitstring;
+    {78}let aad_B0: bitstring = (target_B1,MSG_TYPE_TXT) in
+    {79}let ciphertext_B0: bitstring = aead_enc(msg_key_B0,iv_B0,secret_msg_B2A,aad_B0) in
+    {80}let sig_B0: bitstring = ed_sign(ed_sk_B0,(target_B1,ciphertext_B0)) in
+    {81}out(c_dht, (target_B1,ciphertext_B0,iv_B0,sig_B0))
+)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {4}new sk_x_A: x_skey;
+    {6}new seed_init: bitstring;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {7}event AliceStarted(pk_kem_A,pk_x_A,seed_init);
+    {8}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {9}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {10}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,auth_tag: bitstring));
+    {11}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {16}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {12}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {13}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {14}let ss_init: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {15}let conf_key: bitstring = hkdf_expand(ss_init,TAG_KEY_CONFIRM) in
+    {17}if (auth_tag = hmac(conf_key,transcript)) then
+    {19}let chain_key_B2A: bitstring = hkdf_expand(ss_init,TAG_B2A) in
+    {18}let chain_key_A2B: bitstring = hkdf_expand(ss_init,TAG_A2B) in
+    {20}event AliceFinished(pk_kem_A,pk_x_A,seed_init,chain_key_A2B,chain_key_B2A);
+    {28}new iv_0: bitstring;
+    {21}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,TAG_STEP_0) in
+    {23}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {25}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {26}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {27}let target_1: bitstring = sha1(ed_pk_0) in
+    {32}event AliceSentMsg(target_1,secret_msg_A2B);
+    {29}let aad_0: bitstring = (target_1,MSG_TYPE_TXT) in
+    {22}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {30}let ciphertext_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_A2B,aad_0) in
+    {31}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,ciphertext_0)) in
+    {33}out(c_dht, (target_1,ciphertext_0,iv_0,sig_0));
+    {34}new iv_canary_1: bitstring;
+    {35}new iv_canary_2: bitstring;
+    {36}out(c_dht, aead_enc(chain_key_A2B,iv_canary_1,secret_chain_A2B,TAG_A2B));
+    {37}out(c_dht, aead_enc(chain_key_B2A,iv_canary_2,secret_chain_B2A,TAG_B2A))
+) | (
+    {38}!
+    {39}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {40}new r_kem: bitstring;
+    {43}new sk_x_B: x_skey;
+    {47}new salt_1: bitstring;
+    {45}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {42}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {46}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {48}let ss_init_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {53}let chain_key_B2A_1: bitstring = hkdf_expand(ss_init_1,TAG_B2A) in
+    {52}let chain_key_A2B_1: bitstring = hkdf_expand(ss_init_1,TAG_A2B) in
+    {54}event BobFinished(pk_kem_A_1,pk_x_A_1,seed_init_1,chain_key_A2B_1,chain_key_B2A_1);
+    {55}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {44}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {41}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {50}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {49}let conf_key_1: bitstring = hkdf_expand(ss_init_1,TAG_KEY_CONFIRM) in
+    {51}let auth_tag_1: bitstring = hmac(conf_key_1,transcript_1) in
+    {56}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,auth_tag_1));
+    {57}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,TAG_STEP_0) in
+    {59}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {61}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {62}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {63}let target: bitstring = sha1(ed_pk_0_1) in
+    {64}in(c_dht, (=target,ciphertext_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {65}if (ed_verify(ed_pk_0_1,(target,ciphertext_0_1),sig_0_1) = true) then
+    {66}let aad_0_1: bitstring = (target,MSG_TYPE_TXT) in
+    {58}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {67}let recv_msg: bitstring = aead_dec(msg_key_0_1,iv_0_1,ciphertext_0_1,aad_0_1) in
+    {68}event BobRecvMsg(target,recv_msg);
+    {69}new tombstone_noise_1: bitstring;
+    {70}out(c_dht, (target,tombstone_noise_1));
+    {77}new iv_B0: bitstring;
+    {71}let entropy_B0: bitstring = hkdf_expand(chain_key_B2A_1,TAG_STEP_0) in
+    {73}let ed_seed_B0: bitstring = get_ed_seed(entropy_B0) in
+    {74}let ed_sk_B0: ed_skey = ed_derive_sk(ed_seed_B0) in
+    {75}let ed_pk_B0: ed_pkey = ed_pk(ed_sk_B0) in
+    {76}let target_B1: bitstring = sha1(ed_pk_B0) in
+    {78}let aad_B0: bitstring = (target_B1,MSG_TYPE_TXT) in
+    {72}let msg_key_B0: bitstring = get_msg_key(entropy_B0) in
+    {79}let ciphertext_B0: bitstring = aead_enc(msg_key_B0,iv_B0,secret_msg_B2A,aad_B0) in
+    {80}let sig_B0: bitstring = ed_sign(ed_sk_B0,(target_B1,ciphertext_B0)) in
+    {81}out(c_dht, (target_B1,ciphertext_B0,iv_B0,sig_B0))
+)
+
+-- Query not attacker(secret_chain_A2B[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 148 rules (45 with conclusion selected). Queue: 34 rules.
+400 rules inserted. Base: 246 rules (57 with conclusion selected). Queue: 40 rules.
+600 rules inserted. Base: 386 rules (67 with conclusion selected). Queue: 10 rules.
+Starting query not attacker(secret_chain_A2B[])
+RESULT not attacker(secret_chain_A2B[]) is true.
+-- Query not attacker(secret_chain_B2A[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 148 rules (45 with conclusion selected). Queue: 34 rules.
+400 rules inserted. Base: 246 rules (57 with conclusion selected). Queue: 40 rules.
+600 rules inserted. Base: 386 rules (67 with conclusion selected). Queue: 10 rules.
+Starting query not attacker(secret_chain_B2A[])
+RESULT not attacker(secret_chain_B2A[]) is true.
+-- Query not attacker(secret_msg_A2B[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 148 rules (45 with conclusion selected). Queue: 34 rules.
+400 rules inserted. Base: 246 rules (57 with conclusion selected). Queue: 40 rules.
+600 rules inserted. Base: 386 rules (67 with conclusion selected). Queue: 10 rules.
+Starting query not attacker(secret_msg_A2B[])
+RESULT not attacker(secret_msg_A2B[]) is true.
+-- Query not attacker(secret_msg_B2A[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 148 rules (45 with conclusion selected). Queue: 34 rules.
+400 rules inserted. Base: 246 rules (57 with conclusion selected). Queue: 40 rules.
+600 rules inserted. Base: 386 rules (67 with conclusion selected). Queue: 10 rules.
+Starting query not attacker(secret_msg_B2A[])
+RESULT not attacker(secret_msg_B2A[]) is true.
+-- Query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 184 rules (50 with conclusion selected). Queue: 48 rules.
+400 rules inserted. Base: 289 rules (50 with conclusion selected). Queue: 94 rules.
+600 rules inserted. Base: 313 rules (64 with conclusion selected). Queue: 106 rules.
+800 rules inserted. Base: 321 rules (64 with conclusion selected). Queue: 88 rules.
+1000 rules inserted. Base: 390 rules (74 with conclusion selected). Queue: 49 rules.
+Starting query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A))
+goal reachable: b-inj-event(BobFinished(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),seed_init_2,hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),TAG_A2B),hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),TAG_B2A)),@occ54_1) -> inj-event(AliceFinished(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),seed_init_2,hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),TAG_A2B),hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),TAG_B2A)),@occ20_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+seed_init_2 = seed_init[!1 = @sid]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ20_1 = @occ20[auth_tag = hmac(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),TAG_KEY_CONFIRM),(kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2)),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ54_1 = @occ54[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+RESULT inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(secret_chain_A2B[]) is true.
+
+Query not attacker(secret_chain_B2A[]) is true.
+
+Query not attacker(secret_msg_A2B[]) is true.
+
+Query not attacker(secret_msg_B2A[]) is true.
+
+Query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) ==> inj-event(BobFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) is true.
+
+--------------------------------------------------------------
+
+==============================================================================
+3. Forward Secrecy Model (pqchat_forward_secrecy.pv)
+==============================================================================
+Process 0 (that is, the initial process):
+{1}new chain_key_0: bitstring;
+{2}let entropy_0: bitstring = hkdf_expand(chain_key_0,TAG_STEP_0) in
+{3}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+{4}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+{5}let chain_key_1: bitstring = get_next_chain(entropy_0) in
+{6}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+{7}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+{8}let target_0: bitstring = sha1(ed_pk_0) in
+{9}new iv_0: bitstring;
+{10}let aad_0: bitstring = (target_0,TAG_DIRECTION) in
+{11}let c_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_0,aad_0) in
+{12}let sig_0: bitstring = ed_sign(ed_sk_0,(target_0,c_0)) in
+{13}out(c_dht, (target_0,c_0,iv_0,sig_0));
+{14}new tombstone_0: bitstring;
+{15}out(c_dht, (target_0,tombstone_0));
+{16}let entropy_1: bitstring = hkdf_expand(chain_key_1,TAG_STEP_1) in
+{17}let msg_key_1: bitstring = get_msg_key(entropy_1) in
+{18}let ed_seed_1: bitstring = get_ed_seed(entropy_1) in
+{19}let chain_key_2: bitstring = get_next_chain(entropy_1) in
+{20}let ed_sk_1: ed_skey = ed_derive_sk(ed_seed_1) in
+{21}let ed_pk_1: ed_pkey = ed_pk(ed_sk_1) in
+{22}let target_1: bitstring = sha1(ed_pk_1) in
+{23}new iv_1: bitstring;
+{24}let aad_1: bitstring = (target_1,TAG_DIRECTION) in
+{25}let c_1: bitstring = aead_enc(msg_key_1,iv_1,secret_msg_1,aad_1) in
+{26}let sig_1: bitstring = ed_sign(ed_sk_1,(target_1,c_1)) in
+{27}out(c_dht, (target_1,c_1,iv_1,sig_1));
+{28}out(c_leak, chain_key_1)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+{1}new chain_key_0: bitstring;
+{9}new iv_0: bitstring;
+{2}let entropy_0: bitstring = hkdf_expand(chain_key_0,TAG_STEP_0) in
+{4}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+{6}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+{7}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+{8}let target_0: bitstring = sha1(ed_pk_0) in
+{10}let aad_0: bitstring = (target_0,TAG_DIRECTION) in
+{3}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+{11}let c_0: bitstring = aead_enc(msg_key_0,iv_0,secret_msg_0,aad_0) in
+{12}let sig_0: bitstring = ed_sign(ed_sk_0,(target_0,c_0)) in
+{13}out(c_dht, (target_0,c_0,iv_0,sig_0));
+{14}new tombstone_0: bitstring;
+{15}out(c_dht, (target_0,tombstone_0));
+{23}new iv_1: bitstring;
+{5}let chain_key_1: bitstring = get_next_chain(entropy_0) in
+{16}let entropy_1: bitstring = hkdf_expand(chain_key_1,TAG_STEP_1) in
+{18}let ed_seed_1: bitstring = get_ed_seed(entropy_1) in
+{20}let ed_sk_1: ed_skey = ed_derive_sk(ed_seed_1) in
+{21}let ed_pk_1: ed_pkey = ed_pk(ed_sk_1) in
+{22}let target_1: bitstring = sha1(ed_pk_1) in
+{24}let aad_1: bitstring = (target_1,TAG_DIRECTION) in
+{17}let msg_key_1: bitstring = get_msg_key(entropy_1) in
+{25}let c_1: bitstring = aead_enc(msg_key_1,iv_1,secret_msg_1,aad_1) in
+{26}let sig_1: bitstring = ed_sign(ed_sk_1,(target_1,c_1)) in
+{27}out(c_dht, (target_1,c_1,iv_1,sig_1));
+{28}out(c_leak, chain_key_1)
+
+-- Query not attacker(secret_msg_0[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not attacker(secret_msg_0[])
+RESULT not attacker(secret_msg_0[]) is true.
+-- Query not attacker(secret_msg_1[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not attacker(secret_msg_1[])
+goal reachable: attacker(secret_msg_1[])
+
+Derivation:
+
+1. Using the function TAG_DIRECTION the attacker may obtain TAG_DIRECTION.
+attacker(TAG_DIRECTION).
+
+2. The message (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)),iv_1[],ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION))))) may be sent to the attacker at output {27}.
+attacker((sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)),iv_1[],ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)))))).
+
+3. By 2, the attacker may know (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)),iv_1[],ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION))))).
+Using the function 1-proj-4-tuple the attacker may obtain sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))).
+attacker(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)))))).
+
+4. By 3, the attacker may know sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))).
+By 1, the attacker may know TAG_DIRECTION.
+Using the function 2-tuple the attacker may obtain (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION).
+attacker((sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)).
+
+5. By 2, the attacker may know (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)),iv_1[],ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION))))).
+Using the function 2-proj-4-tuple the attacker may obtain aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)).
+attacker(aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION))).
+
+6. By 2, the attacker may know (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)),iv_1[],ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION))))).
+Using the function 3-proj-4-tuple the attacker may obtain iv_1[].
+attacker(iv_1[]).
+
+7. Using the function TAG_STEP_1 the attacker may obtain TAG_STEP_1.
+attacker(TAG_STEP_1).
+
+8. The message get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)) may be sent to the attacker at output {28}.
+attacker(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0))).
+
+9. By 8, the attacker may know get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)).
+By 7, the attacker may know TAG_STEP_1.
+Using the function hkdf_expand the attacker may obtain hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1).
+attacker(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)).
+
+10. By 9, the attacker may know hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1).
+Using the function get_msg_key the attacker may obtain get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)).
+attacker(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))).
+
+11. By 10, the attacker may know get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)).
+By 6, the attacker may know iv_1[].
+By 5, the attacker may know aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1)),iv_1[],secret_msg_1[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)).
+By 4, the attacker may know (sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0[],TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION).
+Using the function aead_dec the attacker may obtain secret_msg_1[].
+attacker(secret_msg_1[]).
+
+12. By 11, attacker(secret_msg_1[]).
+The goal is reached, represented in the following fact:
+attacker(secret_msg_1[]).
+
+
+A more detailed output of the traces is available with
+  set traceDisplay = long.
+
+new chain_key_0: bitstring creating chain_key_0_1 at {1}
+
+new iv_0: bitstring creating iv_0_1 at {9}
+
+out(c_dht, (~M,~M_1,~M_2,~M_3)) with ~M = sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))))), ~M_1 = aead_enc(get_msg_key(hkdf_expand(chain_key_0_1,TAG_STEP_0)),iv_0_1,secret_msg_0,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))))),TAG_DIRECTION)), ~M_2 = iv_0_1, ~M_3 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(chain_key_0_1,TAG_STEP_0)),iv_0_1,secret_msg_0,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))))),TAG_DIRECTION)))) at {13}
+
+new tombstone_0: bitstring creating tombstone_0_1 at {14}
+
+out(c_dht, (~M_4,~M_5)) with ~M_4 = sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(chain_key_0_1,TAG_STEP_0))))), ~M_5 = tombstone_0_1 at {15}
+
+new iv_1: bitstring creating iv at {23}
+
+out(c_dht, (~M_6,~M_7,~M_8,~M_9)) with ~M_6 = sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1))))), ~M_7 = aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1)),iv,secret_msg_1,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)), ~M_8 = iv, ~M_9 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1))))),aead_enc(get_msg_key(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1)),iv,secret_msg_1,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)),TAG_STEP_1))))),TAG_DIRECTION)))) at {27}
+
+out(c_leak, ~M_10) with ~M_10 = get_next_chain(hkdf_expand(chain_key_0_1,TAG_STEP_0)) at {28}
+
+The attacker has the message aead_dec(get_msg_key(hkdf_expand(~M_10,TAG_STEP_1)),~M_8,~M_7,(~M_6,TAG_DIRECTION)) = secret_msg_1.
+A trace has been found.
+RESULT not attacker(secret_msg_1[]) is false.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(secret_msg_0[]) is true.
+
+Query not attacker(secret_msg_1[]) is false.
+
+--------------------------------------------------------------
+
+==============================================================================
+4. Post-Compromise Security Model (pqchat_post_compromise.pv)
+==============================================================================
+Linear part:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Completing equations...
+Completed equations:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Convergent part: No equation.
+Process 0 (that is, the initial process):
+{1}new chain_key_old: bitstring;
+{2}out(c_leak, chain_key_old);
+{3}new sk_kem_rekey: kem_skey;
+{4}let pk_kem_rekey: kem_pkey = kem_pk(sk_kem_rekey) in
+{5}new sk_x_rekey: x_skey;
+{6}let pk_x_rekey: x_pkey = x_pk(sk_x_rekey) in
+{7}out(c_dht, (MSG_TYPE_REKEY_OFFER,pk_kem_rekey,pk_x_rekey));
+{8}in(c_dht, (=MSG_TYPE_REKEY_OFFER,recv_pk_kem_rekey: kem_pkey,recv_pk_x_rekey: x_pkey));
+{9}new r_rekey: bitstring;
+{10}let ct_kem_rekey: kem_ct = kem_encap_ct(recv_pk_kem_rekey,r_rekey) in
+{11}let ss_kem_rekey: bitstring = kem_encap_ss(recv_pk_kem_rekey,r_rekey) in
+{12}new sk_x_bob: x_skey;
+{13}let pk_x_bob: x_pkey = x_pk(sk_x_bob) in
+{14}let ss_ecdh_rekey: bitstring = x_ecdh(sk_x_bob,recv_pk_x_rekey) in
+{15}let ss_hybrid_rekey_bob: bitstring = hybrid_combine(ss_ecdh_rekey,ss_kem_rekey) in
+{16}out(c_dht, (MSG_TYPE_REKEY_RESP,ct_kem_rekey,pk_x_bob));
+{17}let new_chain_key_bob: bitstring = hkdf_extract(chain_key_old,ss_hybrid_rekey_bob) in
+{18}in(c_dht, (=MSG_TYPE_REKEY_RESP,recv_ct_kem_rekey: kem_ct,recv_pk_x_bob: x_pkey));
+{19}let ss_kem_alice: bitstring = kem_decap(sk_kem_rekey,recv_ct_kem_rekey) in
+{20}let ss_ecdh_alice: bitstring = x_ecdh(sk_x_rekey,recv_pk_x_bob) in
+{21}let ss_hybrid_rekey_alice: bitstring = hybrid_combine(ss_ecdh_alice,ss_kem_alice) in
+{22}let new_chain_key_alice: bitstring = hkdf_extract(chain_key_old,ss_hybrid_rekey_alice) in
+{23}let entropy_post: bitstring = hkdf_expand(new_chain_key_alice,TAG_REKEY_STEP) in
+{24}let msg_key_post: bitstring = get_msg_key(entropy_post) in
+{25}let ed_seed_post: bitstring = get_ed_seed(entropy_post) in
+{26}let ed_sk_post: ed_skey = ed_derive_sk(ed_seed_post) in
+{27}let ed_pk_post: ed_pkey = ed_pk(ed_sk_post) in
+{28}let target_post: bitstring = sha1(ed_pk_post) in
+{29}new iv_post: bitstring;
+{30}let aad_post: bitstring = (target_post,TAG_DIRECTION) in
+{31}let c_post: bitstring = aead_enc(msg_key_post,iv_post,secret_msg_post_rekey,aad_post) in
+{32}let sig_post: bitstring = ed_sign(ed_sk_post,(target_post,c_post)) in
+{33}out(c_dht, (target_post,c_post,iv_post,sig_post));
+{34}new tombstone_post: bitstring;
+{35}out(c_dht, (target_post,tombstone_post));
+{36}new iv_canary: bitstring;
+{37}out(c_dht, aead_enc(new_chain_key_alice,iv_canary,secret_new_chain_key,TAG_DIRECTION))
+
+--  Process 1 (that is, process 0, with let moved downwards):
+{1}new chain_key_old: bitstring;
+{2}out(c_leak, chain_key_old);
+{3}new sk_kem_rekey: kem_skey;
+{5}new sk_x_rekey: x_skey;
+{6}let pk_x_rekey: x_pkey = x_pk(sk_x_rekey) in
+{4}let pk_kem_rekey: kem_pkey = kem_pk(sk_kem_rekey) in
+{7}out(c_dht, (MSG_TYPE_REKEY_OFFER,pk_kem_rekey,pk_x_rekey));
+{8}in(c_dht, (=MSG_TYPE_REKEY_OFFER,recv_pk_kem_rekey: kem_pkey,recv_pk_x_rekey: x_pkey));
+{9}new r_rekey: bitstring;
+{12}new sk_x_bob: x_skey;
+{13}let pk_x_bob: x_pkey = x_pk(sk_x_bob) in
+{10}let ct_kem_rekey: kem_ct = kem_encap_ct(recv_pk_kem_rekey,r_rekey) in
+{16}out(c_dht, (MSG_TYPE_REKEY_RESP,ct_kem_rekey,pk_x_bob));
+{18}in(c_dht, (=MSG_TYPE_REKEY_RESP,recv_ct_kem_rekey: kem_ct,recv_pk_x_bob: x_pkey));
+{19}let ss_kem_alice: bitstring = kem_decap(sk_kem_rekey,recv_ct_kem_rekey) in
+{29}new iv_post: bitstring;
+{20}let ss_ecdh_alice: bitstring = x_ecdh(sk_x_rekey,recv_pk_x_bob) in
+{21}let ss_hybrid_rekey_alice: bitstring = hybrid_combine(ss_ecdh_alice,ss_kem_alice) in
+{22}let new_chain_key_alice: bitstring = hkdf_extract(chain_key_old,ss_hybrid_rekey_alice) in
+{23}let entropy_post: bitstring = hkdf_expand(new_chain_key_alice,TAG_REKEY_STEP) in
+{25}let ed_seed_post: bitstring = get_ed_seed(entropy_post) in
+{26}let ed_sk_post: ed_skey = ed_derive_sk(ed_seed_post) in
+{27}let ed_pk_post: ed_pkey = ed_pk(ed_sk_post) in
+{28}let target_post: bitstring = sha1(ed_pk_post) in
+{30}let aad_post: bitstring = (target_post,TAG_DIRECTION) in
+{24}let msg_key_post: bitstring = get_msg_key(entropy_post) in
+{31}let c_post: bitstring = aead_enc(msg_key_post,iv_post,secret_msg_post_rekey,aad_post) in
+{32}let sig_post: bitstring = ed_sign(ed_sk_post,(target_post,c_post)) in
+{33}out(c_dht, (target_post,c_post,iv_post,sig_post));
+{34}new tombstone_post: bitstring;
+{35}out(c_dht, (target_post,tombstone_post));
+{36}new iv_canary: bitstring;
+{37}out(c_dht, aead_enc(new_chain_key_alice,iv_canary,secret_new_chain_key,TAG_DIRECTION))
+
+-- Query not attacker(secret_new_chain_key[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 159 rules (70 with conclusion selected). Queue: 2 rules.
+Starting query not attacker(secret_new_chain_key[])
+RESULT not attacker(secret_new_chain_key[]) is true.
+-- Query not attacker(secret_msg_post_rekey[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 159 rules (70 with conclusion selected). Queue: 2 rules.
+Starting query not attacker(secret_msg_post_rekey[])
+RESULT not attacker(secret_msg_post_rekey[]) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(secret_new_chain_key[]) is true.
+
+Query not attacker(secret_msg_post_rekey[]) is true.
+
+--------------------------------------------------------------
+
+==============================================================================
+5. Anti-Replay Model (pqchat_replay.pv)
+==============================================================================
+Linear part:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Completing equations...
+Completed equations:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Convergent part: No equation.
+Process 0 (that is, the initial process):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {4}new sk_x_A: x_skey;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {6}new seed_init: bitstring;
+    {7}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {8}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {9}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,confirm_tag: bitstring));
+    {10}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {11}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {12}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {13}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {14}let prk: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {15}let master_key: bitstring = hkdf_expand(prk,sha512(transcript)) in
+    {16}let expected_tag: bitstring = hkdf_expand(master_key,TAG_KEY_CONFIRM) in
+    {17}if (confirm_tag = expected_tag) then
+    {18}event HandshakeAccepted(target_0,ct_kem_B,pk_x_B,salt);
+    {19}let chain_key_A2B: bitstring = hkdf_expand(master_key,TAG_A2B) in
+    {20}let seq_0: bitstring = TAG_STEP_0 in
+    {21}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,seq_0) in
+    {22}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {23}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {24}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {25}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {26}let target_1: bitstring = sha1(ed_pk_0) in
+    {27}new payload_0: bitstring;
+    {28}new iv_0: bitstring;
+    {29}let aad_0: bitstring = (target_1,TAG_A2B) in
+    {30}let c_0: bitstring = aead_enc(msg_key_0,iv_0,payload_0,aad_0) in
+    {31}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,c_0)) in
+    {32}event MessageSent(target_1,seq_0,payload_0);
+    {33}out(c_dht, (target_1,c_0,iv_0,sig_0))
+) | (
+    {34}!
+    {35}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {36}new r_kem: bitstring;
+    {37}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {38}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {39}new sk_x_B: x_skey;
+    {40}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {41}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {42}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {43}new salt_1: bitstring;
+    {44}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {45}let prk_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {46}let master_key_1: bitstring = hkdf_expand(prk_1,sha512(transcript_1)) in
+    {47}let confirm_tag_1: bitstring = hkdf_expand(master_key_1,TAG_KEY_CONFIRM) in
+    {48}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {49}event HandshakeSent(target_0_1,ct_kem_B_1,pk_x_B_1,salt_1);
+    {50}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,confirm_tag_1));
+    {51}let chain_key_A2B_1: bitstring = hkdf_expand(master_key_1,TAG_A2B) in
+    {52}let seq_0_1: bitstring = TAG_STEP_0 in
+    {53}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,seq_0_1) in
+    {54}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {55}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {56}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {57}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {58}let target: bitstring = sha1(ed_pk_0_1) in
+    {59}in(c_dht, (=target,c_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {60}if (ed_verify(ed_pk_0_1,(target,c_0_1),sig_0_1) = true) then
+    {61}let aad_0_1: bitstring = (target,TAG_A2B) in
+    {62}let recv_payload: bitstring = aead_dec(msg_key_0_1,iv_0_1,c_0_1,aad_0_1) in
+    {63}event MessageAccepted(target,seq_0_1,recv_payload);
+    {64}new tombstone_noise: bitstring;
+    {65}out(c_dht, (target,tombstone_noise))
+)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+(
+    {1}!
+    {2}new sk_kem_A: kem_skey;
+    {4}new sk_x_A: x_skey;
+    {6}new seed_init: bitstring;
+    {5}let pk_x_A: x_pkey = x_pk(sk_x_A) in
+    {3}let pk_kem_A: kem_pkey = kem_pk(sk_kem_A) in
+    {7}out(c_qr, (pk_kem_A,pk_x_A,seed_init));
+    {8}let target_0: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init,TAG_RENDEZVOUS)))) in
+    {9}in(c_dht, (=target_0,ct_kem_B: kem_ct,pk_x_B: x_pkey,salt: bitstring,confirm_tag: bitstring));
+    {10}let ss_kem: bitstring = kem_decap(sk_kem_A,ct_kem_B) in
+    {11}let ss_ecdh: bitstring = x_ecdh(sk_x_A,pk_x_B) in
+    {12}let ss_hybrid: bitstring = hybrid_combine(ss_ecdh,ss_kem) in
+    {14}let prk: bitstring = hkdf_extract(salt,ss_hybrid) in
+    {13}let transcript: bitstring = (pk_kem_A,pk_x_A,ct_kem_B,pk_x_B,seed_init,salt) in
+    {15}let master_key: bitstring = hkdf_expand(prk,sha512(transcript)) in
+    {16}let expected_tag: bitstring = hkdf_expand(master_key,TAG_KEY_CONFIRM) in
+    {17}if (confirm_tag = expected_tag) then
+    {18}event HandshakeAccepted(target_0,ct_kem_B,pk_x_B,salt);
+    {27}new payload_0: bitstring;
+    {28}new iv_0: bitstring;
+    {20}let seq_0: bitstring = TAG_STEP_0 in
+    {19}let chain_key_A2B: bitstring = hkdf_expand(master_key,TAG_A2B) in
+    {21}let entropy_0: bitstring = hkdf_expand(chain_key_A2B,seq_0) in
+    {23}let ed_seed_0: bitstring = get_ed_seed(entropy_0) in
+    {24}let ed_sk_0: ed_skey = ed_derive_sk(ed_seed_0) in
+    {25}let ed_pk_0: ed_pkey = ed_pk(ed_sk_0) in
+    {26}let target_1: bitstring = sha1(ed_pk_0) in
+    {32}event MessageSent(target_1,seq_0,payload_0);
+    {29}let aad_0: bitstring = (target_1,TAG_A2B) in
+    {22}let msg_key_0: bitstring = get_msg_key(entropy_0) in
+    {30}let c_0: bitstring = aead_enc(msg_key_0,iv_0,payload_0,aad_0) in
+    {31}let sig_0: bitstring = ed_sign(ed_sk_0,(target_1,c_0)) in
+    {33}out(c_dht, (target_1,c_0,iv_0,sig_0))
+) | (
+    {34}!
+    {35}in(c_qr, (pk_kem_A_1: kem_pkey,pk_x_A_1: x_pkey,seed_init_1: bitstring));
+    {36}new r_kem: bitstring;
+    {39}new sk_x_B: x_skey;
+    {43}new salt_1: bitstring;
+    {48}let target_0_1: bitstring = sha1(ed_pk(ed_derive_sk(hmac(seed_init_1,TAG_RENDEZVOUS)))) in
+    {40}let pk_x_B_1: x_pkey = x_pk(sk_x_B) in
+    {37}let ct_kem_B_1: kem_ct = kem_encap_ct(pk_kem_A_1,r_kem) in
+    {49}event HandshakeSent(target_0_1,ct_kem_B_1,pk_x_B_1,salt_1);
+    {41}let ss_ecdh_1: bitstring = x_ecdh(sk_x_B,pk_x_A_1) in
+    {38}let ss_kem_1: bitstring = kem_encap_ss(pk_kem_A_1,r_kem) in
+    {42}let ss_hybrid_1: bitstring = hybrid_combine(ss_ecdh_1,ss_kem_1) in
+    {45}let prk_1: bitstring = hkdf_extract(salt_1,ss_hybrid_1) in
+    {44}let transcript_1: bitstring = (pk_kem_A_1,pk_x_A_1,ct_kem_B_1,pk_x_B_1,seed_init_1,salt_1) in
+    {46}let master_key_1: bitstring = hkdf_expand(prk_1,sha512(transcript_1)) in
+    {47}let confirm_tag_1: bitstring = hkdf_expand(master_key_1,TAG_KEY_CONFIRM) in
+    {50}out(c_dht, (target_0_1,ct_kem_B_1,pk_x_B_1,salt_1,confirm_tag_1));
+    {52}let seq_0_1: bitstring = TAG_STEP_0 in
+    {51}let chain_key_A2B_1: bitstring = hkdf_expand(master_key_1,TAG_A2B) in
+    {53}let entropy_0_1: bitstring = hkdf_expand(chain_key_A2B_1,seq_0_1) in
+    {55}let ed_seed_0_1: bitstring = get_ed_seed(entropy_0_1) in
+    {56}let ed_sk_0_1: ed_skey = ed_derive_sk(ed_seed_0_1) in
+    {57}let ed_pk_0_1: ed_pkey = ed_pk(ed_sk_0_1) in
+    {58}let target: bitstring = sha1(ed_pk_0_1) in
+    {59}in(c_dht, (=target,c_0_1: bitstring,iv_0_1: bitstring,sig_0_1: bitstring));
+    {60}if (ed_verify(ed_pk_0_1,(target,c_0_1),sig_0_1) = true) then
+    {61}let aad_0_1: bitstring = (target,TAG_A2B) in
+    {54}let msg_key_0_1: bitstring = get_msg_key(entropy_0_1) in
+    {62}let recv_payload: bitstring = aead_dec(msg_key_0_1,iv_0_1,c_0_1,aad_0_1) in
+    {63}event MessageAccepted(target,seq_0_1,recv_payload);
+    {64}new tombstone_noise: bitstring;
+    {65}out(c_dht, (target,tombstone_noise))
+)
+
+-- Query inj-event(HandshakeAccepted(target_2,ct,pkx,salt_2)) ==> inj-event(HandshakeSent(target_2,ct,pkx,salt_2)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 159 rules (46 with conclusion selected). Queue: 32 rules.
+400 rules inserted. Base: 215 rules (57 with conclusion selected). Queue: 25 rules.
+Starting query inj-event(HandshakeAccepted(target_2,ct,pkx,salt_2)) ==> inj-event(HandshakeSent(target_2,ct,pkx,salt_2))
+goal reachable: b-inj-event(HandshakeSent(sha1(ed_pk(ed_derive_sk(hmac(seed_init_2,TAG_RENDEZVOUS)))),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),salt_2),@occ49_1) -> inj-event(HandshakeAccepted(sha1(ed_pk(ed_derive_sk(hmac(seed_init_2,TAG_RENDEZVOUS)))),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),salt_2),@occ18_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+seed_init_2 = seed_init[!1 = @sid]
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ18_1 = @occ18[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ49_1 = @occ49[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+RESULT inj-event(HandshakeAccepted(target_2,ct,pkx,salt_2)) ==> inj-event(HandshakeSent(target_2,ct,pkx,salt_2)) is true.
+-- Query inj-event(MessageAccepted(target_2,seq,msg)) ==> inj-event(MessageSent(target_2,seq,msg)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 150 rules (46 with conclusion selected). Queue: 24 rules.
+400 rules inserted. Base: 266 rules (58 with conclusion selected). Queue: 3 rules.
+Starting query inj-event(MessageAccepted(target_2,seq,msg)) ==> inj-event(MessageSent(target_2,seq,msg))
+goal reachable: b-inj-event(MessageSent(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_STEP_0,payload_0_1),@occ32_1) -> inj-event(MessageAccepted(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_STEP_0,payload_0_1),@occ63_1)
+The hypothesis occurs strictly before the conclusion.
+Abbreviations:
+seed_init_2 = seed_init[!1 = @sid]
+sk_x_A_1 = sk_x_A[!1 = @sid]
+sk_kem_A_1 = sk_kem_A[!1 = @sid]
+salt_2 = salt_1[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+sk_x_B_1 = sk_x_B[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+r_kem_1 = r_kem[seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+payload_0_1 = payload_0[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+iv_0_2 = iv_0[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+@occ63_1 = @occ63[sig_0_1 = ed_sign(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))),(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,payload_0_1,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)))),iv_0_1 = iv_0_2,c_0_1 = aead_enc(get_msg_key(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0)),iv_0_2,payload_0_1,(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_A2B),TAG_STEP_0))))),TAG_A2B)),seed_init_1 = seed_init_2,pk_x_A_1 = x_pk(sk_x_A_1),pk_kem_A_1 = kem_pk(sk_kem_A_1),!1 = @sid_1]
+@occ32_1 = @occ32[confirm_tag = hkdf_expand(hkdf_expand(hkdf_extract(salt_2,hybrid_combine(x_ecdh(sk_x_B_1,x_pk(sk_x_A_1)),kem_encap_ss(kem_pk(sk_kem_A_1),r_kem_1))),sha512((kem_pk(sk_kem_A_1),x_pk(sk_x_A_1),kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),x_pk(sk_x_B_1),seed_init_2,salt_2))),TAG_KEY_CONFIRM),salt = salt_2,pk_x_B = x_pk(sk_x_B_1),ct_kem_B = kem_encap_ct(kem_pk(sk_kem_A_1),r_kem_1),!1 = @sid]
+RESULT inj-event(MessageAccepted(target_2,seq,msg)) ==> inj-event(MessageSent(target_2,seq,msg)) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query inj-event(HandshakeAccepted(target_2,ct,pkx,salt_2)) ==> inj-event(HandshakeSent(target_2,ct,pkx,salt_2)) is true.
+
+Query inj-event(MessageAccepted(target_2,seq,msg)) ==> inj-event(MessageSent(target_2,seq,msg)) is true.
+
+--------------------------------------------------------------
+
+==============================================================================
+6. Target Unlinkability & Tombstone Indistinguishability (pqchat_unlinkability.pv)
+==============================================================================
+Biprocess 0 (that is, the initial process):
+{1}new chain_key_AB: bitstring;
+{2}new chain_key_CD: bitstring;
+{3}let entropy_AB_0: bitstring = hkdf_expand(chain_key_AB,TAG_STEP_0) in
+{4}let ed_seed_AB_0: bitstring = get_ed_seed(entropy_AB_0) in
+{5}let target_AB_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_AB_0))) in
+{6}let next_chain_AB: bitstring = get_next_chain(entropy_AB_0) in
+{7}let entropy_CD_0: bitstring = hkdf_expand(chain_key_CD,TAG_STEP_0) in
+{8}let ed_seed_CD_0: bitstring = get_ed_seed(entropy_CD_0) in
+{9}let target_CD_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_CD_0))) in
+{10}let next_chain_CD: bitstring = get_next_chain(entropy_CD_0) in
+{11}let entropy_AB_1: bitstring = hkdf_expand(next_chain_AB,TAG_STEP_1) in
+{12}let ed_seed_AB_1: bitstring = get_ed_seed(entropy_AB_1) in
+{13}let target_AB_1: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_AB_1))) in
+{14}let entropy_CD_1: bitstring = hkdf_expand(next_chain_CD,TAG_STEP_1) in
+{15}let ed_seed_CD_1: bitstring = get_ed_seed(entropy_CD_1) in
+{16}let target_CD_1: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_CD_1))) in
+{17}out(c_pub, (Alice,Bob,Charlie,Dave));
+{18}out(c_pub, choice[target_AB_0,target_CD_0]);
+{19}out(c_pub, choice[target_AB_1,target_CD_1]);
+{20}new k_payload: bitstring;
+{21}new iv_frame: bitstring;
+{22}new secret_payload: bitstring;
+{23}new r_tombstone: bitstring;
+{24}new r_cover: bitstring;
+{25}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
+{26}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
+{27}let cover_slot: frame_t = cover_frame(r_cover) in
+{28}out(c_pub, choice[valid_frame,tombstone_slot]);
+{29}out(c_pub, choice[tombstone_slot,cover_slot])
+
+-- Observational equivalence in biprocess 1 (that is, biprocess 0, with let moved downwards):
+{1}new chain_key_AB: bitstring;
+{2}new chain_key_CD: bitstring;
+{17}out(c_pub, (Alice,Bob,Charlie,Dave));
+{7}let entropy_CD_0: bitstring = hkdf_expand(chain_key_CD,TAG_STEP_0) in
+{8}let ed_seed_CD_0: bitstring = get_ed_seed(entropy_CD_0) in
+{9}let target_CD_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_CD_0))) in
+{3}let entropy_AB_0: bitstring = hkdf_expand(chain_key_AB,TAG_STEP_0) in
+{4}let ed_seed_AB_0: bitstring = get_ed_seed(entropy_AB_0) in
+{5}let target_AB_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_AB_0))) in
+{18}out(c_pub, choice[target_AB_0,target_CD_0]);
+{10}let next_chain_CD: bitstring = get_next_chain(entropy_CD_0) in
+{14}let entropy_CD_1: bitstring = hkdf_expand(next_chain_CD,TAG_STEP_1) in
+{15}let ed_seed_CD_1: bitstring = get_ed_seed(entropy_CD_1) in
+{16}let target_CD_1: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_CD_1))) in
+{6}let next_chain_AB: bitstring = get_next_chain(entropy_AB_0) in
+{11}let entropy_AB_1: bitstring = hkdf_expand(next_chain_AB,TAG_STEP_1) in
+{12}let ed_seed_AB_1: bitstring = get_ed_seed(entropy_AB_1) in
+{13}let target_AB_1: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_AB_1))) in
+{19}out(c_pub, choice[target_AB_1,target_CD_1]);
+{20}new k_payload: bitstring;
+{21}new iv_frame: bitstring;
+{22}new secret_payload: bitstring;
+{23}new r_tombstone: bitstring;
+{24}new r_cover: bitstring;
+{26}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
+{25}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
+{28}out(c_pub, choice[valid_frame,tombstone_slot]);
+{27}let cover_slot: frame_t = cover_frame(r_cover) in
+{29}out(c_pub, choice[tombstone_slot,cover_slot])
+
+Translating the process into Horn clauses...
+Termination warning: v ≠ v_1 && attacker2(v_2,v) && attacker2(v_2,v_1) -> bad
+Selecting 0
+Termination warning: v ≠ v_1 && attacker2(v,v_2) && attacker2(v_1,v_2) -> bad
+Selecting 0
+Completing...
+Termination warning: v ≠ v_1 && attacker2(v_2,v) && attacker2(v_2,v_1) -> bad
+Selecting 0
+Termination warning: v ≠ v_1 && attacker2(v,v_2) && attacker2(v_1,v_2) -> bad
+Selecting 0
+RESULT Observational equivalence is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Observational equivalence is true.
+
+--------------------------------------------------------------
+
+==============================================================================
+FINAL AUDIT VERDICT:
+==============================================================================
+STATUS: ALL LEMMAS FORMALLY PROVED (PASS)
+Total Lemmas Tested: 20
+Failed: 0
+==============================================================================
