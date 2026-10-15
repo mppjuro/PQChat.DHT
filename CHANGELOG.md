@@ -49,6 +49,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`81d1a6e`](https://github.com/mppjuro/PQChat.DHT/commit/81d1a6efb71b28bc5d6a4bd22ce28fddc3b0340d) (2026-10-15) — **docs**: formatting of Anti-Grinding & SAS section in README
 - [`dede0f9`](https://github.com/mppjuro/PQChat.DHT/commit/dede0f979615b9be40a0a15c157e2a751275db88) (2026-10-15) — **release**: fixed release description, deleted misused @ char
 - [`ac666d2`](https://github.com/mppjuro/PQChat.DHT/commit/ac666d267c99be3f9b78325cdc8a4c60b41efb69) (2026-10-15) — **service**: prevent unstarted PollingScheduler race condition and isolate WorkManagerRepublishScheduleTest
 - [`a5a60ae`](https://github.com/mppjuro/PQChat.DHT/commit/a5a60aeb1cbbaeee4c03f96aa0dd9135bcdbc980) (2026-10-14) — **profiler**: eliminate race condition between background sampler and manual snapshots in tests
@@ -115,6 +116,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`813904f`](https://github.com/mppjuro/PQChat.DHT/commit/813904fc1ac3856bb9552347a80a2cdfe59c73a1) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`cb8fd79`](https://github.com/mppjuro/PQChat.DHT/commit/cb8fd7942491097580f80efe16c12f2d1762c2df) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`b545080`](https://github.com/mppjuro/PQChat.DHT/commit/b54508011178e374aaab356bd8115a1cc763def3) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`52fec8c`](https://github.com/mppjuro/PQChat.DHT/commit/52fec8caed193dbff4494b468b78fc0d07ae9472) (2026-10-14) — **changelog**: auto-update CHANGELOG.md [skip ci]
