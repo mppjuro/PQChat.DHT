@@ -10,7 +10,7 @@ Protokół łączy:
 * **Hybrydowy mechanizm hermetyzacji kluczy (Hybrid KEM):** Połączenie post-kwantowego **ML-KEM-512** (FIPS 203) oraz klasycznego **X25519 ECDH** (RFC 7748) dla obrony dualnej (*Dual-Defense / IND-CCA2*).
 * **Jednostronne podwójne łańcuchy (Dual Unidirectional Chains):** Oparte na **HKDF-SHA512** (RFC 5869), gdzie tor $A \to B$ i tor $B \to A$ są całkowicie odseparowane numerycznie i adresowo.
 * **Szyfrowanie ładunków z dowiązanym kontekstem (AEAD):** **AES-256-GCM** z dowiązaniem AAD do adresu target i kierunku transmisji.
-* **Zobowiązanie przeciw mieleniu i SAS (Anti-Grinding & SAS):** Skrót **SHA-256** ze zobowiązaniem transkryptu $Commitment = \text{SHA-256}(\text{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)$ oraz 8-cyfrowy kod **Short Authentication String (SAS)**.
+* **Zobowiązanie przeciw mieleniu i SAS (Anti-Grinding & SAS):** Skrót **SHA-256** ze zobowiązaniem transkryptu $`Commitment = \text{SHA-256}(\text{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)`$ oraz 8-cyfrowy kod **Short Authentication String (SAS)**.
 * **Jednorazowe podpisy transportowe Ed25519 (BEP 44):** Wykorzystywane jako jednorazowy token efemeryczny do zapisu w sieci DHT.
 * **Skakanie po slotach (Key Hopping):** Efemeryczny adres docelowy $\text{Target}_i = \text{SHA-1}(pk_i)$.
 * **Bezpieczne czyszczenie slotu (900-bajtowy Tombstone):** Nadpisanie skonsumowanego rekordu w DHT sztywną 900-bajtową ramką szumu CSPRNG pod numerem sekwencji $\text{seq} + 1$, co uniemożliwia węzłom DHT oraz podsłuchiwaczom wykrycie momentu odbioru wiadomości.
