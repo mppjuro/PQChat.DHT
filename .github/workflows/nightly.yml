@@ -37,7 +37,7 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Run Slow & Nightly Unit Tests (@Tag("slow") & Repository Tests)
+      - name: Run Slow & Nightly Unit Tests (`@Tag("slow")` & Repository Tests)
         run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true
         env:
           RUN_SLOW_TESTS: "true"
