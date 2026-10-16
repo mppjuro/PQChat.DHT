@@ -50,6 +50,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`2dd2fdb`](https://github.com/mppjuro/PQChat.DHT/commit/2dd2fdb0de819622adff33f512290a2a888dd329) (2026-10-16) — **dht**: resolve BEP 44 remote integration and loopback measurement failures
 - [`b70370f`](https://github.com/mppjuro/PQChat.DHT/commit/b70370fa39a12d0baa7c19a6bd4a09939b22811b) (2026-10-15) — **guide**: Update AGENTS.md with math inline Github formatting guidelines
 - [`81d1a6e`](https://github.com/mppjuro/PQChat.DHT/commit/81d1a6efb71b28bc5d6a4bd22ce28fddc3b0340d) (2026-10-15) — **docs**: formatting of Anti-Grinding & SAS section in README
 - [`dede0f9`](https://github.com/mppjuro/PQChat.DHT/commit/dede0f979615b9be40a0a15c157e2a751275db88) (2026-10-15) — **release**: fixed release description, deleted misused @ char
@@ -118,6 +119,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`629af73`](https://github.com/mppjuro/PQChat.DHT/commit/629af7333709ce42122b6928c718b0321da75167) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`1bff255`](https://github.com/mppjuro/PQChat.DHT/commit/1bff255c2466fbf15f0e95178651ae80199bcf9e) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`bba0e2e`](https://github.com/mppjuro/PQChat.DHT/commit/bba0e2eb37bc71ad6c105628e0e33b2936c202c9) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`813904f`](https://github.com/mppjuro/PQChat.DHT/commit/813904fc1ac3856bb9552347a80a2cdfe59c73a1) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
