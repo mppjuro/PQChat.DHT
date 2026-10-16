@@ -165,7 +165,7 @@ class LoopbackMeasurementHarness(
             dataSource = DataSource.MEASURED
             val t0 = System.currentTimeMillis()
             putOk = try {
-                dhtClient.putMutable(
+                var ok = dhtClient.putMutable(
                     target = target,
                     v = testPayload,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -173,6 +173,18 @@ class LoopbackMeasurementHarness(
                     sk = probeSeed,
                     skipLocalStore = true
                 )
+                if (!ok) {
+                    retransmissions = 1
+                    ok = dhtClient.putMutable(
+                        target = target,
+                        v = testPayload,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = probeSeed,
+                        skipLocalStore = true
+                    )
+                }
+                ok
             } catch (e: Exception) {
                 errCode = "PUT_EXCEPTION_${e.javaClass.simpleName}"
                 false
@@ -184,16 +196,34 @@ class LoopbackMeasurementHarness(
                 val storedCount = (dhtClient as? DhtLeafNode)?.remoteStoredPeers?.get(CryptoUtils.toHex(target))?.size
                 nodesResponded = if (storedCount != null && storedCount > 0) storedCount else 4
                 val t2 = System.currentTimeMillis()
-                val retrieved = try {
+                val getTimeout = when (networkEnv) {
+                    NetworkEnvironment.WIFI -> DhtLeafNode.TIMEOUT_MS
+                    NetworkEnvironment.LTE -> 4500L
+                    NetworkEnvironment.RESTRICTIVE_NAT -> 5000L
+                }
+                var retrieved = try {
                     dhtClient.getMutable(
                         target = target,
                         salt = null,
                         skipLocalStore = true,
-                        timeoutMs = DhtLeafNode.FAST_GET_TIMEOUT_MS
+                        timeoutMs = getTimeout
                     )
                 } catch (e: Exception) {
                     errCode = "GET_EXCEPTION_${e.javaClass.simpleName}"
                     null
+                }
+                if (retrieved == null) {
+                    retransmissions = 1
+                    retrieved = try {
+                        dhtClient.getMutable(
+                            target = target,
+                            salt = null,
+                            skipLocalStore = true,
+                            timeoutMs = getTimeout
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
                 }
                 val t3 = System.currentTimeMillis()
                 rttGetMs = max(1L, t3 - t2)
@@ -308,7 +338,7 @@ class LoopbackMeasurementHarness(
                         // 1. Initial PUT
                         val t0 = System.currentTimeMillis()
                         val putOk = try {
-                            dhtClient.putMutable(
+                            var ok = dhtClient.putMutable(
                                 target = target,
                                 v = payload,
                                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
@@ -316,6 +346,17 @@ class LoopbackMeasurementHarness(
                                 sk = probeSeed,
                                 skipLocalStore = true
                             )
+                            if (!ok) {
+                                ok = dhtClient.putMutable(
+                                    target = target,
+                                    v = payload,
+                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                    salt = null,
+                                    sk = probeSeed,
+                                    skipLocalStore = true
+                                )
+                            }
+                            ok
                         } catch (e: Exception) {
                             false
                         }
@@ -343,15 +384,32 @@ class LoopbackMeasurementHarness(
 
                         // 4. Retrieve record via GET
                         val t2 = System.currentTimeMillis()
-                        val retrieved = try {
+                        val getTimeout = when (networkEnv) {
+                            NetworkEnvironment.WIFI -> DhtLeafNode.TIMEOUT_MS
+                            NetworkEnvironment.LTE -> 4500L
+                            NetworkEnvironment.RESTRICTIVE_NAT -> 5000L
+                        }
+                        var retrieved = try {
                             dhtClient.getMutable(
                                 target = target,
                                 salt = null,
                                 skipLocalStore = true,
-                                timeoutMs = DhtLeafNode.FAST_GET_TIMEOUT_MS
+                                timeoutMs = getTimeout
                             )
                         } catch (e: Exception) {
                             null
+                        }
+                        if (retrieved == null) {
+                            retrieved = try {
+                                dhtClient.getMutable(
+                                    target = target,
+                                    salt = null,
+                                    skipLocalStore = true,
+                                    timeoutMs = getTimeout
+                                )
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
                         val t3 = System.currentTimeMillis()
                         retrieveRttMs = max(1L, t3 - t2)

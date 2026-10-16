@@ -143,7 +143,13 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             node.bootstrap()
-            delay(4000)
+            var waited = 0
+            while (node.getActivePeerCount() < 8 && waited < 10000) {
+                delay(500)
+                waited += 500
+            }
+            delay(2000)
+            println("[Live DHT] Active peer count after bootstrap: ${node.getActivePeerCount()}")
 
             val harness = LoopbackMeasurementHarness(dhtClient = node)
             val trials = 3
