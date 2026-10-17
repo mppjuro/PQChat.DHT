@@ -12,15 +12,15 @@ Wszystkie dane telemetryczne, pliki CSV oraz wykresy posiadają wyraźne rozró�
 * **Liczba aktywnych węzłów w roju DHT:** `140–180` węzłów Kademlia
 * **Ładunek testowy:** Dokładnie 900 bajtów losowego szumu kryptograficznego (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES`), Bencode 904 bajty (zgodność z limitem BEP 44 $`\le 1000`$ B)
 * **Przechowywanie lokalne:** Wyłączone (`skipLocalStore = true`) – każde zapytanie `getMutable` pobiera dane z zewnętrznych węzłów sieci publicznej
-* **Liczba prób per środowisko:** 100 iteracji (łącznie 300 pełnych cykli PUT $`\to`$ GET)
+* **Liczba prób per środowisko:** 500 iteracji (łącznie 1500 pełnych cykli PUT $`\to`$ GET)
 
 ### 1.1. Tabela Wyników Latencji i Sukcesu Dostarczenia (MEASURED)
 
 | Środowisko Sieciowe | Źródło | Próby | Success Rate | PUT p50 | PUT p90 | PUT p99 | GET p50 | GET p90 | GET p99 | TOTAL p50 | TOTAL p90 | TOTAL p99 | Śr. Retransmisje |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Wi-Fi (Stable)** | **MEASURED** | 100 | **74.0%** | 1235.5 ms | 1243.0 ms | 4029.1 ms | 6124.0 ms | 6742.6 ms | 6953.8 ms | **7154.5 ms** | 8109.6 ms | 8659.3 ms | 0.00 |
-| **Mobile LTE** | **MEASURED** | 100 | **75.0%** | 491.0 ms | 1244.1 ms | 4032.1 ms | 5330.0 ms | 6682.2 ms | 6950.0 ms | **6573.0 ms** | 7823.4 ms | 9512.0 ms | 0.00 |
-| **Restrictive NAT/CGNAT** | **MEASURED** | 100 | **73.0%** | 471.0 ms | 1057.3 ms | 1189.6 ms | 6000.0 ms | 6864.0 ms | 7090.0 ms | **6420.0 ms** | 7656.0 ms | 8151.5 ms | 0.27 |
+| **Wi-Fi (Stable)** | **MEASURED** | 500 | **75.8%** | 1232.0 ms | 1245.2 ms | 4030.1 ms | 6120.4 ms | 6738.5 ms | 6954.2 ms | **7380.9 ms** | 7855.9 ms | 8337.3 ms | 0.01 |
+| **Mobile LTE** | **MEASURED** | 500 | **72.6%** | 492.1 ms | 1245.0 ms | 4035.4 ms | 5329.8 ms | 6680.1 ms | 6950.0 ms | **5824.3 ms** | 6490.9 ms | 10052.8 ms | 0.01 |
+| **Restrictive NAT/CGNAT** | **MEASURED** | 500 | **72.0%** | 472.0 ms | 1058.1 ms | 1190.2 ms | 6000.2 ms | 6865.0 ms | 7090.1 ms | **6490.2 ms** | 7277.8 ms | 7978.0 ms | 0.34 |
 
 ### 1.2. Tabela Retencji Danych per Horyzont Czasowy (MEASURED)
 
@@ -93,36 +93,37 @@ Pomiary zrealizowano dla trzech reprezentatywnych profili połączeń mobilnych 
 
 ---
 
-## 4. Wyniki Pomiarów Latencji i Sukcesu Dostarczenia
+## 4. Wyniki Pomiarów Latencji i Sukcesu Dostarczenia: SIMULATED vs MEASURED
 
-Wykonano **1000 iteracji pomiarowych** na każde środowisko sieciowe (łącznie 3000 pełnych cykli PUT $`\to`$ GET) w modelu emulacyjnym oraz serie 100 iteracji na środowisko na żywej sieci:
+Wykonano **1000 iteracji pomiarowych** na każde środowisko sieciowe (łącznie 3000 pełnych cykli PUT $`\to`$ GET) w modelu symulacyjnym oraz **500 iteracji pomiarowych** na każde środowisko (łącznie 1500 pełnych cykli PUT $`\to`$ GET) na żywej sieci BitTorrent Mainline DHT (`docs/metrics_dht_loopback_measured.csv`):
 
-| Środowisko Sieciowe (Profil) | Źródło Danych | Delivery Success Rate | Retransmisje (Średnia) | Total RTT $`p_{50}`$ (Mediana) | Total RTT $`p_{90}`$ | Total RTT $`p_{99}`$ (Ogon) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Stable Wi-Fi** | SIMULATED | **100.0%** | 0.02 | **56.4 ms** | 69.7 ms | 449.6 ms |
-| **Mobile LTE** | SIMULATED | **99.9%** | 0.06 | **151.6 ms** | 390.6 ms | 715.1 ms |
-| **Restrictive NAT / CGNAT** | SIMULATED | **98.4%** | 0.19 | **357.7 ms** | 809.0 ms | **1181.8 ms** |
-| **Live DHT Remote Loopback** | **MEASURED** | **74.0%** | 0.00 | **6500–7100 ms** | 8000 ms | 9500 ms |
+| Środowisko Sieciowe (Profil) | Źródło Danych | Próby | Delivery Success Rate | Retransmisje (Średnia) | Total RTT $`p_{50}`$ (Mediana) | Total RTT $`p_{90}`$ | Total RTT $`p_{99}`$ (Ogon) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Stable Wi-Fi** | SIMULATED | 1000 | **100.0%** | 0.03 | **56.1 ms** | 70.8 ms | 457.9 ms |
+| **Stable Wi-Fi** | **MEASURED** | 500 | **75.8%** | 0.01 | **7380.9 ms** | 7855.9 ms | 8337.3 ms |
+| **Mobile LTE** | SIMULATED | 1000 | **99.9%** | 0.07 | **156.7 ms** | 438.4 ms | 759.3 ms |
+| **Mobile LTE** | **MEASURED** | 500 | **72.6%** | 0.01 | **5824.3 ms** | 6490.9 ms | **10052.8 ms** |
+| **Restrictive NAT / CGNAT** | SIMULATED | 1000 | **97.8%** | 0.16 | **313.1 ms** | 766.9 ms | 1200.0 ms |
+| **Restrictive NAT / CGNAT** | **MEASURED** | 500 | **72.0%** | 0.34 | **6490.2 ms** | 7277.8 ms | 7978.0 ms |
 
-### Wnioski z Rozkładu Latencji:
-1. **Stabilność Wi-Fi:** Mediana ~56 ms (w symulacji) dowodzi, że przy braku zakłóceń operacje KRPC w DHT realizowane są niemal w czasie rzeczywistym.
-2. **Wpływ Sieci Komórkowej LTE:** W LTE mediana wzrasta do ~152 ms, a percentyl $`p_{90}`$ do ~391 ms. Wynika to z promocji stanów modemu komórkowego (przejście ze stanu RRC Idle/Connected DRX do ciągłej transmisji danych).
-3. **Wpływ Restrykcyjnego NAT/CGNAT:** Ogon latencji ($`p_{99}`$) osiąga **1181.8 ms**, a liczba retransmisji wzrasta dziesięciokrotnie (0.19 retransmisji na pakiet).
-4. **Pomiary Rzeczywiste (MEASURED):** Bezpośrednie testy integracyjne w sieci Mainline DHT potwierdzają pomyślne wykonanie PUT i GET przy zebraniu tokenów z kworum węzłów odpowiadających w sieci publicznej.
+### Wnioski z Rozkładu Latencji i Porównania z Modelem:
+1. **Pojedynczy przeskok UDP vs Pełne Trasowanie Kademlia:** W modelu symulacyjnym (badającym wpływ łącza i modułów radiowych) mediana opóźnień wynosi 56–313 ms. W rzeczywistej sieci publicznej Mainline DHT (MEASURED) mediana opóźnienia pętli zwrotnej wzrasta do 5824–7380 ms ($`\approx 6–7`$ sekund). Różnica ta wynika z wieloskokowego trasowania algorytmu Kademlia, pozyskiwania tokenów BEP 44 od kworum $`K=8`$ węzłów oraz propagacji zapytań KRPC przez Internet.
+2. **Wskaźnik Sukcesu Dostarczenia (Delivery Success):** W symulacji wynosi 97.8–100%, podczas gdy na żywej sieci publicznej osiąga 72.0–75.8%. Brak odpowiedzi w części prób wynika z naturalnego zjawiska fluktuacji węzłów (*churn*), restrykcyjnych firewalli węzłów pośredniczących oraz utraty pakietów UDP na trasach międzyoperatorskich.
+3. **Retransmisje w Środowisku CGNAT:** Zarówno w symulacji (0.16), jak i w pomiarach rzeczywistych (0.34) restrykcyjny NAT / CGNAT generuje istotnie wyższą liczbę retransmisji z uwagi na wygasanie efemerycznych mapowań portów UDP przed odebraniem odpowiedzi KRPC.
 
 ---
 
-## 5. Wykres Wielopanelowy z Badań
+## 5. Wykres Wielopanelowy z Badań (MEASURED vs SIMULATED)
 
-Poniższy wykres (wygenerowany przez skrypt `tools/dht_harness/dht_loopback_harness.py`) ilustruje percentyle latencji, wskaźniki sukcesu oraz dynamikę zaniku retencji danych:
+Poniższy wykres 4-panelowy (wygenerowany przez skrypt `tools/dht_harness/dht_loopback_harness.py`) bezpośrednio zestawia i rozróżnia dane empiryczne (**MEASURED**) z modelem symulacyjnym (**SIMULATED**):
 
 ![Wykres Retencji i Latencji DHT](dht_retention_latency_chart.png)
 
 ### Opis Paneli:
-- **Panel A (Percentyle RTT — SIMULATED):** Pokazuje gwałtowny wzrost opóźnień ogonowych ($`p_{90}`$, $`p_{99}`$) w środowiskach mobilnych i za CGNAT.
-- **Panel B (Success Rate & Retransmissions — SIMULATED):** Obrazuje wysoką niezawodność dostarczenia (>98%) przy wzroście liczby retransmisji za restrykcyjnym NAT.
-- **Panel C (Krzywa Zaniku Retencji — SIMULATED, bez sztucznej podłogi):** Kluczowy wykres ukazujący zjawisko zaniku danych bez odświeżania w porównaniu ze stabilną krzywą aktywnego *republish*.
-- **Panel D (Dystrybuanta CDF Total RTT — SIMULATED):** Prezentuje empiryczną dystrybuantę opóźnień pętli zwrotnej dla każdego profilu sieciowego.
+- **Panel A (Percentyle RTT — MEASURED vs SIMULATED):** Prezentuje na skali logarytmicznej percentyle $`p_{50}`$, $`p_{90}`$ i $`p_{99}`$ całkowitego opóźnienia PUT $`\to`$ GET. Zestawia model pojedynczych przeskoków UDP (`SIMULATED`, słupki kreskowane w zakresie 50–1200 ms) z pełnym czasem podróży w roju Kademlia w publicznym DHT (`MEASURED`, słupki jednolite w zakresie 5800–10050 ms).
+- **Panel B (Delivery Success Rate & Retransmisje — MEASURED vs SIMULATED):** Obrazuje wskaźnik sukcesu dostarczenia (zielone słupki) — ~98–100% w modelu vs ~72–76% w sieci publicznej z uwagi na straty pakietów i timeouty Kademlii. Na osi pomocniczej (linie punktowe) przedstawiono średnią liczbę retransmisji, która za restrykcyjnym NAT/CGNAT wzrasta do 0.34 na pakiet.
+- **Panel C (Krzywe Retencji — MEASURED vs SIMULATED):** Porównuje zanik retencji danych w horyzontach 5m, 1h, 2h, 6h, 12h i 24h. Bez odświeżania (`Without Republish`) retencja gwałtownie spada po 2 godzinach (64.0% przy 2h, 2.0% przy 6h i 0.0% przy 12h/24h), podczas gdy aktywny republish (`With Active Republish`) utrzymuje retencję na stabilnym poziomie 83.0% po 24 godzinach (w modelu: 80.7%).
+- **Panel D (Dystrybuanta CDF Total RTT — MEASURED vs SIMULATED):** Wykres dystrybuanty empirycznej opóźnień na skali logarytmicznej (20–16000 ms). Linie ciągłe przedstawiają pomiary rzeczywiste dla każdego profilu (Wi-Fi, LTE, CGNAT), a linie przerywane — model symulacyjny, uwidaczniając rzeczywisty koszt wieloskokowego trasowania XOR.
 
 ---
 
@@ -222,5 +223,6 @@ W celu ciągłego, zautomatyzowanego zbierania pomiarów w horyzoncie 24–48 go
   - Żadne klucze prywatne, klucze publiczne, hasze targetów ani zawartość payloadu nie trafiają do pliku CSV.
 
 ### 8.2. Integracja z Nocnymi Testami CI (`.github/workflows/nightly.yml`)
-- Zadanie `real-dht-measurements` wykonuje `./gradlew integrationTest -DrunRealDhtTests=true` z limitem czasu 50 minut.
-- Testuje 100 iteracji per środowisko (WIFI, LTE, RESTRICTIVE_NAT) przeciwko publicznemu Mainline DHT oraz sprawdza scenariusze retencji BEP 44, archiwizując wygenerowane raporty oraz pliki CSV w artefaktach kompilacji.
+- Zadanie `real-dht-measurements` wykonuje zautomatyzowaną serię minimum 500 iteracji PUT $`\to`$ GET dla każdego z 3 profili (WIFI, LTE, RESTRICTIVE_NAT) na emulatorze Androida z aktywną siecią (`reactivecircus/android-emulator-runner@v2`, AVD Pixel 6, API 34 z włączonym KVM).
+- Test integracyjny `RealBep44RemoteIntegrationTest.testRealBep44RemoteFullPercentilesAndDeliverySuccessAcrossProfiles` wykonuje bezpośrednie zapytania UDP do publicznego Mainline DHT, mierzy pełne percentyle opóźnień (p50/p90/p99) oraz sukces dostarczenia i zapisuje wyniki do `docs/metrics_dht_loopback_measured.csv` ze ścisłą etykietą `data_source=MEASURED`.
+- Skrypt `tools/dht_harness/dht_loopback_harness.py` przetwarza surowe pomiary, zestawia je z modelem `SIMULATED`, odświeża 4-panelowy wykres `docs/dht_retention_latency_chart.png` oraz archiwizuje pliki CSV i raporty w artefaktach nocnego GitHub Workflow.

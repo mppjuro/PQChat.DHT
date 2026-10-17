@@ -149,7 +149,7 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
 
   real-dht-measurements:
-    name: Real DHT Loopback & Retention Suite
+    name: Real DHT Loopback & Retention Suite (Active Network Emulator)
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -163,13 +163,36 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Python visualization dependencies
+        run: |
+          pip install numpy matplotlib
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Run Real DHT Integration Tests (./gradlew integrationTest)
-        run: ./gradlew integrationTest -DrunRealDhtTests=true -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --info
-        env:
-          RUN_REAL_DHT_TESTS: "true"
+      - name: Enable KVM permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Real BEP 44 500-Iteration Measurements on Emulator with Active Network
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            ./gradlew testDebugUnitTest -DrunRealDhtTests=true -DmeasuredIterations=500 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --tests "org.pqchat.dht.dht.integration.RealBep44RemoteIntegrationTest.testRealBep44RemoteFullPercentilesAndDeliverySuccessAcrossProfiles" --info
+            python tools/dht_harness/dht_loopback_harness.py
 
       - name: Upload Real DHT Measurement CSVs and Reports
         if: always()
@@ -177,9 +200,12 @@ jobs:
         with:
           name: real-dht-measurements
           path: |
-            docs/measurements/*.csv
+            docs/metrics_dht_loopback_measured.csv
+            docs/dht_retention_latency_chart.png
+            tools/dht_harness/dht_retention_latency_chart.png
             docs/dht_retention_report.md
-            app/build/reports/tests/integrationTest/
+            docs/measurements/*.csv
+            app/build/reports/tests/testDebugUnitTest/
 
   dht-testbed:
     name: BEP 5/44 Real Traffic Testbed & Threat Analysis
