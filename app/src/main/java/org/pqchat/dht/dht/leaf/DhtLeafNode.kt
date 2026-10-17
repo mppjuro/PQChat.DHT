@@ -806,15 +806,17 @@ class DhtLeafNode(
 
         val localPeers = getLocalPeers()
         val swarmPeers = (findClosestNodes(target, count = 16) + getCachedFastestNodes()).distinctBy { it.address }
-        val bootstrap = if (swarmPeers.size < 16) {
+        val bootstrap = if (autoBootstrap && swarmPeers.size < 16) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         } else emptyList()
         val queryPeers = if (swarmPeers.isNotEmpty()) {
             (swarmPeers + bootstrap).distinctBy { it.address }.take(20)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(20)
-        } else {
+        } else if (autoBootstrap) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+        } else {
+            emptyList()
         }
 
         if (queryPeers.isEmpty()) {
@@ -945,8 +947,10 @@ class DhtLeafNode(
             (storedPeers + remoteCandidates).distinctBy { it.address }.take(20)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(20)
-        } else {
+        } else if (autoBootstrap) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+        } else {
+            emptyList()
         }
 
         if (nodesToQuery.isEmpty()) {
@@ -1116,8 +1120,10 @@ class DhtLeafNode(
             swarmPeers.take(20)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(20)
-        } else {
+        } else if (autoBootstrap) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+        } else {
+            emptyList()
         }
 
         var putSuccess = !skipLocalStore
@@ -1126,6 +1132,7 @@ class DhtLeafNode(
             val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
             coroutineScope {
                 var getJobs: List<Job> = emptyList()
+                val targetTokens = minOf(K, nodesToQuery.size)
                 getJobs = nodesToQuery.map { peer ->
                     launch {
                         try {
@@ -1134,7 +1141,7 @@ class DhtLeafNode(
                             val token = resp?.responseData?.get("token") as? ByteArray
                             if (token != null) {
                                 tokenMap[peer.address] = token
-                                if (tokenMap.size >= K) {
+                                if (tokenMap.size >= targetTokens) {
                                     getJobs.forEach { if (it != coroutineContext.job) it.cancel() }
                                 }
                             }
@@ -1142,8 +1149,8 @@ class DhtLeafNode(
                     }
                 }
                 val startTime = System.currentTimeMillis()
-                while (tokenMap.size < K && (System.currentTimeMillis() - startTime) < 2000L) {
-                    if (tokenMap.size >= 4 && (System.currentTimeMillis() - startTime) > 1200L) {
+                while (tokenMap.size < targetTokens && (System.currentTimeMillis() - startTime) < 2000L) {
+                    if (tokenMap.size >= minOf(4, targetTokens) && (System.currentTimeMillis() - startTime) > 1200L) {
                         getJobs.forEach { it.cancel() }
                         break
                     }
@@ -1154,6 +1161,7 @@ class DhtLeafNode(
 
             if (tokenMap.isNotEmpty()) {
                 val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
+                val targetPuts = minOf(K, tokenMap.size)
                 coroutineScope {
                     var putJobs: List<Job> = emptyList()
                     putJobs = tokenMap.map { (address, token) ->
@@ -1175,7 +1183,7 @@ class DhtLeafNode(
                                     val currentCached = targetRouteCache[target] ?: emptyList()
                                     targetRouteCache.put(target, (listOf(successfulPeer) + currentCached).distinctBy { it.address }.take(8))
                                     val count = successfulPuts.incrementAndGet()
-                                    if (count >= K) {
+                                    if (count >= targetPuts) {
                                         putJobs.forEach { if (it != coroutineContext.job) it.cancel() }
                                     }
                                 }
@@ -1183,8 +1191,8 @@ class DhtLeafNode(
                         }
                     }
                     val startPut = System.currentTimeMillis()
-                    while (successfulPuts.get() < K && (System.currentTimeMillis() - startPut) < 2000L) {
-                        if (successfulPuts.get() >= 4 && (System.currentTimeMillis() - startPut) > 1200L) {
+                    while (successfulPuts.get() < targetPuts && (System.currentTimeMillis() - startPut) < 2000L) {
+                        if (successfulPuts.get() >= minOf(4, targetPuts) && (System.currentTimeMillis() - startPut) > 1200L) {
                             putJobs.forEach { it.cancel() }
                             break
                         }

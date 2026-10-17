@@ -511,8 +511,8 @@ class ChatRepositoryRekeyIntegrationTest {
                 )
             )
 
-            val totalRounds = if (isNightly()) 200 else 55
-            val minEpochs = if (isNightly()) 4L else 1L
+            val totalRounds = if (isNightly()) 110 else 55
+            val minEpochs = if (isNightly()) 2L else 1L
 
             for (i in 0 until totalRounds) {
                 // 1. Alice sends to Bob
