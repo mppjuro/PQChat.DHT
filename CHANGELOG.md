@@ -86,6 +86,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`67f55cd`](https://github.com/mppjuro/PQChat.DHT/commit/67f55cd61aed9fc4a60981f7048091d1954ec8d4) (2026-10-17) — **nightly**: split slow tests into parallel jobs, add timeouts, advance schedule 8h, and optimize loopback leaf node
 - [`1d0aefd`](https://github.com/mppjuro/PQChat.DHT/commit/1d0aefd0c682efe6755572401acbe23a6ff1078e) (2026-10-14) — consolidate workflows into commit fast tests, nightly tests with release, and manual release
 - [`5fc983a`](https://github.com/mppjuro/PQChat.DHT/commit/5fc983a2d79c8780183c550c546e1e6229ed6a6f) (2026-10-14) — **deps**: bump org.junit.jupiter:junit-jupiter from 5.10.2 to 6.1.3
 - [`6567d93`](https://github.com/mppjuro/PQChat.DHT/commit/6567d934be9a03e6182bf6724beaa591be0b67a3) (2026-10-14) — **deps**: bump org.robolectric:robolectric from 4.14.1 to 4.17
@@ -119,6 +120,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`57abd70`](https://github.com/mppjuro/PQChat.DHT/commit/57abd703d051052cb4469d58d0135f34c9059920) (2026-10-16) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`629af73`](https://github.com/mppjuro/PQChat.DHT/commit/629af7333709ce42122b6928c718b0321da75167) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`1bff255`](https://github.com/mppjuro/PQChat.DHT/commit/1bff255c2466fbf15f0e95178651ae80199bcf9e) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`bba0e2e`](https://github.com/mppjuro/PQChat.DHT/commit/bba0e2eb37bc71ad6c105628e0e33b2936c202c9) (2026-10-15) — **changelog**: auto-update CHANGELOG.md [skip ci]
