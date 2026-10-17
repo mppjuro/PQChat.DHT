@@ -13,7 +13,9 @@ import org.pqchat.dht.crypto.Ed25519Engine
 import org.pqchat.dht.debug.LoopbackMeasurementHarness
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.junit.jupiter.api.Tag
+import java.io.File
 import java.security.Security
+import java.util.Locale
 
 /**
  * Integration test verifying real BitTorrent Mainline DHT BEP 44 remote PUT and GET operations.
@@ -41,6 +43,17 @@ class RealBep44RemoteIntegrationTest {
         fun isRemoteDhtTestEnabled(): Boolean {
             return System.getenv("RUN_REAL_DHT_TESTS")?.equals("true", ignoreCase = true) == true ||
                     System.getProperty("runRealDhtTests")?.equals("true", ignoreCase = true) == true
+        }
+
+        fun resolveProjectRootDir(): File {
+            val current = File(".").canonicalFile
+            return if (File(current, "docs").exists()) {
+                current
+            } else if (File(current.parentFile, "docs").exists()) {
+                current.parentFile
+            } else {
+                current
+            }
         }
     }
 
@@ -211,6 +224,77 @@ class RealBep44RemoteIntegrationTest {
                 assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, res.dataSource)
                 assertTrue("Tested records should equal 2", res.testedRecords == 2)
                 println("[Live DHT] Retention Probe Result (hours=${res.hours}, republish=${res.republishEnabled}): survival=${res.survivalRate * 100}%")
+            }
+        } finally {
+            node.stop()
+        }
+    }
+
+    @Test
+    fun testRealBep44RemoteFullPercentilesAndDeliverySuccessAcrossProfiles() = runBlocking {
+        assumeTrue(
+            "Skipping real BEP 44 remote test. Enable with RUN_REAL_DHT_TESTS=true or -DrunRealDhtTests=true",
+            isRemoteDhtTestEnabled()
+        )
+
+        val projectRoot = resolveProjectRootDir()
+        val measuredCsvFile = File(projectRoot, "docs/metrics_dht_loopback_measured.csv")
+
+        val node = DhtLeafNode()
+        node.start()
+        try {
+            node.bootstrap()
+            var waited = 0
+            while (node.getActivePeerCount() < 8 && waited < 10000) {
+                delay(500)
+                waited += 500
+            }
+            delay(2000)
+            val peerCount = node.getActivePeerCount()
+            println("[Live DHT Full Suite] Active peer count after bootstrap: $peerCount")
+            assertTrue("DhtLeafNode must discover active peers in BitTorrent DHT swarm", peerCount > 0)
+
+            val harness = LoopbackMeasurementHarness(dhtClient = node)
+            val iterationsPerEnv = System.getProperty("measuredIterations")?.toIntOrNull() ?: 500
+            val profiles = listOf(
+                LoopbackMeasurementHarness.NetworkEnvironment.WIFI,
+                LoopbackMeasurementHarness.NetworkEnvironment.LTE,
+                LoopbackMeasurementHarness.NetworkEnvironment.RESTRICTIVE_NAT
+            )
+
+            val reports = mutableMapOf<LoopbackMeasurementHarness.NetworkEnvironment, LoopbackMeasurementHarness.AggregateReport>()
+
+            for (env in profiles) {
+                println("[Live DHT Full Suite] Starting benchmark suite for ${env.displayName} with $iterationsPerEnv iterations (concurrency=12)...")
+                val t0 = System.currentTimeMillis()
+                val report = harness.runConcurrentBenchmarkSuite(
+                    networkEnv = env,
+                    iterations = iterationsPerEnv,
+                    concurrency = 12,
+                    onProgress = { done, total ->
+                        if (done % 50 == 0 || done == total) {
+                            val elapsedSec = (System.currentTimeMillis() - t0) / 1000.0
+                            println(" -> [${env.name}] Completed $done/$total iterations in ${String.format(Locale.US, "%.1f", elapsedSec)}s")
+                        }
+                    }
+                )
+                reports[env] = report
+                println(" -> [${env.name}] Report: SuccessRate=${String.format(Locale.US, "%.1f", report.deliverySuccessRate)}%, Total p50=${report.totalP50Ms}ms, p90=${report.totalP90Ms}ms, p99=${report.totalP99Ms}ms, AvgRetrans=${report.averageRetransmissions}")
+            }
+
+            // Export all collected metrics strictly labeled as data_source=MEASURED
+            harness.exportToCsvFile(measuredCsvFile)
+            println("[Live DHT Full Suite] Successfully exported ${harness.collectedMetrics.size} MEASURED records to: ${measuredCsvFile.canonicalPath}")
+            assertTrue("Measured CSV file must exist", measuredCsvFile.exists() && measuredCsvFile.length() > 0)
+
+            // Assertions
+            for (env in profiles) {
+                val r = reports[env]!!
+                assertEquals(LoopbackMeasurementHarness.DataSource.MEASURED, r.dataSource)
+                assertEquals(iterationsPerEnv, r.totalTrials)
+                assertTrue("Delivery success rate must be positive", r.deliverySuccessRate >= 0.0)
+                assertTrue("Total p50 must be recorded", r.totalP50Ms > 0.0)
+                assertTrue("PUT p50 must be recorded", r.putP50Ms > 0.0)
             }
         } finally {
             node.stop()

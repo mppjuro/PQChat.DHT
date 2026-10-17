@@ -1,6 +1,8 @@
 package org.pqchat.dht.debug
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.Ed25519Engine
@@ -299,6 +301,36 @@ class LoopbackMeasurementHarness(
         }
         val source = if (dhtClient != null) DataSource.MEASURED else DataSource.SIMULATED
         return computeAggregateReport(networkEnv, source, records)
+    }
+
+    /**
+     * Runs a benchmark suite concurrently across multiple iterations for a given network environment.
+     * Limits concurrent active coroutines using a Semaphore to prevent socket saturation.
+     */
+    suspend fun runConcurrentBenchmarkSuite(
+        networkEnv: NetworkEnvironment,
+        iterations: Int = 100,
+        concurrency: Int = 12,
+        random: Random = Random.Default,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null
+    ): AggregateReport = withContext(Dispatchers.IO) {
+        val semaphore = Semaphore(concurrency)
+        val records = java.util.Collections.synchronizedList(mutableListOf<TelemetryMetric>())
+        val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val jobs = (0 until iterations).map {
+            async {
+                semaphore.withPermit {
+                    val record = runLoopbackIteration(networkEnv, random)
+                    records.add(record)
+                    val done = completedCount.incrementAndGet()
+                    onProgress?.invoke(done, iterations)
+                }
+            }
+        }
+        jobs.awaitAll()
+        val source = if (dhtClient != null) DataSource.MEASURED else DataSource.SIMULATED
+        computeAggregateReport(networkEnv, source, records.toList())
     }
 
     /**
