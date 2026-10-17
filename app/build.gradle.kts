@@ -67,6 +67,9 @@ android {
                 if (System.getProperty("runRealDhtTests") != null) {
                     it.systemProperty("runRealDhtTests", System.getProperty("runRealDhtTests")!!)
                 }
+                if (System.getProperty("useFakeDht") != null) {
+                    it.systemProperty("useFakeDht", System.getProperty("useFakeDht")!!)
+                }
                 it.useJUnitPlatform {
                     if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
                         excludeTags("slow")
@@ -91,6 +94,9 @@ afterEvaluate {
         testClassesDirs = testDebugTask.get().testClassesDirs
         classpath = testDebugTask.get().classpath
         systemProperty("runSlowTests", "true")
+        if (System.getProperty("useFakeDht") != null) {
+            systemProperty("useFakeDht", System.getProperty("useFakeDht")!!)
+        }
         useJUnitPlatform {
             includeTags("slow")
         }
