@@ -214,4 +214,105 @@ class ResearchTelemetryManagerTest {
         assertTrue("Summary row must have 2 republishes", summaryRow.contains(",2,"))
         assertTrue("Summary row must have DELIVERED status", summaryRow.contains("DELIVERED"))
     }
+
+    @Test
+    fun `test compressed research bundle generation and manifest sha256 checksums`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordPacketEvent(
+            role = PacketRole.FIRST_SEND,
+            target = target,
+            seqNum = 1L,
+            payloadBytes = 900,
+            rttMs = 40L,
+            success = true
+        )
+        manager.recordPacketEvent(
+            role = PacketRole.OWN_REPUBLISH,
+            target = target,
+            seqNum = 1L,
+            payloadBytes = 900,
+            rttMs = 50L,
+            success = true
+        )
+        manager.recordDeliveryAck(target)
+
+        // Generate compressed ZIP bundle
+        val zipFile = manager.buildCompressedResearchBundle()
+        assertNotNull("Generated bundle file must not be null", zipFile)
+        assertTrue("ZIP bundle must exist on disk", zipFile.exists())
+        assertTrue("ZIP bundle must not be empty", zipFile.length() > 0)
+        assertTrue("File name must start with pqchat_research_", zipFile.name.startsWith("pqchat_research_"))
+        assertTrue("File name must end with .zip", zipFile.name.endsWith(".zip"))
+
+        // Inspect ZIP contents
+        val zip = java.util.zip.ZipFile(zipFile)
+        val entryNames = zip.entries().asSequence().map { it.name }.toSet()
+
+        assertTrue("ZIP must contain session_manifest.json", entryNames.contains("session_manifest.json"))
+        assertTrue("ZIP must contain research_telemetry_master.csv", entryNames.contains("research_telemetry_master.csv"))
+        assertTrue("ZIP must contain research_ttl_samples.csv", entryNames.contains("research_ttl_samples.csv"))
+        assertTrue("ZIP must contain research_republish_analysis.csv", entryNames.contains("research_republish_analysis.csv"))
+        assertTrue("ZIP must contain research_resource_profile.csv", entryNames.contains("research_resource_profile.csv"))
+
+        // Verify SHA-256 checksums in manifest
+        val manifest = manager.generateManifestData()
+        assertEquals(manager.sessionId, manifest.sessionId)
+        assertEquals(manager.eventsCount.value, manifest.totalEvents)
+        assertTrue("Manifest must contain file checksums", manifest.fileChecksums.isNotEmpty())
+
+        for ((fileName, hash) in manifest.fileChecksums) {
+            assertTrue("Hash must be 64-character SHA-256 hex string", hash.length == 64)
+            val file = when (fileName) {
+                "research_telemetry_master.csv" -> manager.masterCsvFile
+                "research_ttl_samples.csv" -> manager.ttlSamplesCsvFile
+                "research_republish_analysis.csv" -> manager.republishSummaryCsvFile
+                "research_resource_profile.csv" -> manager.resourceProfileCsvFile
+                "research_packet_events.csv" -> manager.packetEventsCsvFile
+                else -> null
+            }
+            if (file != null && file.exists()) {
+                val actualHash = computeSha256(file)
+                assertEquals("Checksum for $fileName must match actual file hash", actualHash, hash)
+            }
+        }
+
+        zip.close()
+    }
+
+    @Test
+    fun `test graceful no-op when Firebase is not configured`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val unconfiguredSync = FirebaseResearchSync(context = null)
+        assertFalse("Firebase must report not configured when context and credentials are null", unconfiguredSync.isFirebaseConfigured())
+
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            firebaseSync = unconfiguredSync,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordPacketEvent(
+            role = PacketRole.FIRST_SEND,
+            target = target,
+            seqNum = 1L
+        )
+        assertEquals(1, manager.eventsCount.value)
+
+        // Force sync must gracefully return false without throwing any IllegalStateException
+        val syncResult = manager.forceFirebaseSync()
+        assertFalse("Force sync must return false when Firebase is unconfigured", syncResult)
+
+        // Local archive remains fully functional
+        val zipFile = manager.buildCompressedResearchBundle()
+        assertTrue("Local ZIP archive generation must succeed even without Firebase", zipFile.exists() && zipFile.length() > 0)
+    }
 }

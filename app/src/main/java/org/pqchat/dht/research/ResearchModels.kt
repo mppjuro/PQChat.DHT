@@ -176,3 +176,85 @@ object ResearchCsvSchema {
     const val MASTER_CSV_HEADER =
         "record_id,session_id,timestamp_epoch_ms,iso_timestamp,record_type,packet_role,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,success,republish_attempt,message_age_ms,republish_active,is_alive,elapsed_hours,e2e_latency_ms,error_or_status"
 }
+
+/**
+ * Metadata manifest describing the research session, device telemetry context,
+ * and cryptographic SHA-256 hashes of each constituent CSV file in the research bundle.
+ */
+data class SessionManifest(
+    val sessionId: String,
+    val appVersion: String,
+    val versionCode: Int,
+    val deviceModel: String,
+    val androidVersion: Int,
+    val createdEpochMs: Long,
+    val isoCreatedAt: String,
+    val totalEvents: Int,
+    val firstSendCount: Int,
+    val ownRepublishCount: Int,
+    val crowdRepublishCount: Int,
+    val packetsReceivedCount: Int,
+    val ttlSamplesCount: Int,
+    val fileChecksums: Map<String, String>,
+    var manifestSha256: String = ""
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "sessionId" to sessionId,
+        "appVersion" to appVersion,
+        "versionCode" to versionCode,
+        "deviceModel" to deviceModel,
+        "androidVersion" to androidVersion,
+        "createdEpochMs" to createdEpochMs,
+        "isoCreatedAt" to isoCreatedAt,
+        "totalEvents" to totalEvents,
+        "firstSendCount" to firstSendCount,
+        "ownRepublishCount" to ownRepublishCount,
+        "crowdRepublishCount" to crowdRepublishCount,
+        "packetsReceivedCount" to packetsReceivedCount,
+        "ttlSamplesCount" to ttlSamplesCount,
+        "fileChecksums" to fileChecksums,
+        "manifestSha256" to manifestSha256
+    )
+
+    fun toJsonString(): String {
+        val checksumsJson = fileChecksums.entries.joinToString(",") { (k, v) ->
+            "\"$k\":\"$v\""
+        }
+        return """{
+  "sessionId": "$sessionId",
+  "appVersion": "$appVersion",
+  "versionCode": $versionCode,
+  "deviceModel": "$deviceModel",
+  "androidVersion": $androidVersion,
+  "createdEpochMs": $createdEpochMs,
+  "isoCreatedAt": "$isoCreatedAt",
+  "totalEvents": $totalEvents,
+  "firstSendCount": $firstSendCount,
+  "ownRepublishCount": $ownRepublishCount,
+  "crowdRepublishCount": $crowdRepublishCount,
+  "packetsReceivedCount": $packetsReceivedCount,
+  "ttlSamplesCount": $ttlSamplesCount,
+  "fileChecksums": {$checksumsJson},
+  "manifestSha256": "$manifestSha256"
+}""".trimIndent()
+    }
+}
+
+fun computeSha256(file: java.io.File): String {
+    if (!file.exists() || file.length() == 0L) return ""
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { fis ->
+        val buffer = ByteArray(8192)
+        var read: Int
+        while (fis.read(buffer).also { read = it } != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+fun computeSha256(text: String): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    return digest.digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+}
+

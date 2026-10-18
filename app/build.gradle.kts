@@ -2,7 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
-    id("com.google.gms.google-services")
+}
+
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
 
 android {
@@ -20,6 +23,25 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Programmatic Firebase configuration via env vars / Gradle properties
+        val fbProjectId = providers.environmentVariable("FIREBASE_PROJECT_ID")
+            .orElse(providers.gradleProperty("FIREBASE_PROJECT_ID"))
+            .getOrElse("")
+        val fbAppId = providers.environmentVariable("FIREBASE_APP_ID")
+            .orElse(providers.gradleProperty("FIREBASE_APP_ID"))
+            .getOrElse("")
+        val fbApiKey = providers.environmentVariable("FIREBASE_API_KEY")
+            .orElse(providers.gradleProperty("FIREBASE_API_KEY"))
+            .getOrElse("")
+        val fbStorageBucket = providers.environmentVariable("FIREBASE_STORAGE_BUCKET")
+            .orElse(providers.gradleProperty("FIREBASE_STORAGE_BUCKET"))
+            .getOrElse("")
+
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"$fbProjectId\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"$fbAppId\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"$fbApiKey\"")
+        buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"$fbStorageBucket\"")
     }
 
     buildTypes {

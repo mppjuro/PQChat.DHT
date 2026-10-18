@@ -323,6 +323,20 @@ fun DiagnosticsScreen(
                         }
                     }
 
+                    OutlinedButton(
+                        onClick = {
+                            val intent = viewModel.getShareZipIntent(context)
+                            if (intent != null) {
+                                context.startActivity(android.content.Intent.createChooser(intent, "Udostępnij paczkę badawczą .ZIP"))
+                            } else {
+                                Toast.makeText(context, "Brak danych badawczych do eksportu", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    ) {
+                        Text("Eksportuj paczkę badawczą (.ZIP)", fontSize = 12.sp)
+                    }
+
                     if (lastExportStatus != null) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(

@@ -26,6 +26,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+
       - name: Run Lint
         run: ./gradlew lintDebug
 
@@ -62,6 +68,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
 
       - name: Enable KVM permissions
         run: |

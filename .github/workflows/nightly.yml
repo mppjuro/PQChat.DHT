@@ -44,6 +44,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+
       - name: Run Fast Unit Tests
         run: ./gradlew testDebugUnitTest
 
@@ -71,6 +77,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
 
       - name: Run Slow Repository & Rekey Tests
         run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true --tests "org.pqchat.dht.data.repository.*"
@@ -103,6 +115,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+
       - name: Run Slow Statistical, Tor & Measurement Tests
         run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true --tests "org.pqchat.dht.traffic.TrafficThreatModelStatisticalTest" --tests "org.pqchat.dht.network.tor.DhtClientTorIntegrationTest" --tests "org.pqchat.dht.debug.LoopbackMeasurementHarnessTest"
         env:
@@ -133,6 +151,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
 
       - name: Run Real BEP 44 Remote Integration Tests (with retry)
         uses: nick-fields/retry@v4
@@ -174,6 +198,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
 
       - name: Enable KVM permissions
         run: |
@@ -272,6 +302,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+
       - name: Run Two Devices End-to-End Test
         run: |
           USE_FAKE="${{ inputs.use_fake_dht }}"
@@ -311,6 +347,12 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug

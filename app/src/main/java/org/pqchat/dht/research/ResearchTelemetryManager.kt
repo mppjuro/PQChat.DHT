@@ -2,36 +2,46 @@ package org.pqchat.dht.research
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.pqchat.dht.BuildConfig
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.settings.AppSettingsManager
 import org.pqchat.dht.dht.leaf.DhtClient
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.FileWriter
 import java.io.PrintWriter
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
- * Central Coordinator for Academic Research Telemetry in PQChat DHT.
+ * Central Coordinator for Academic Research Telemetry in PQChat DHT (Local-First Architecture).
  *
  * Designed for Master's Thesis empirical analysis:
  * - Differentiates original packets (FIRST_SEND) vs own republish (OWN_REPUBLISH) vs crowdsourced relay (CROWD_REPUBLISH) vs received (PACKET_RECEIVED).
  * - Conducts periodic (15-min) historical DHT retention sampling to determine exact packet expiration and survival curves.
- * - Maintains complete .csv files locally for plotting/graphing.
- * - Streams structured documents and uploads CSV files to Google Firebase when opted-in by user.
+ * - Local-First Batch Archiving: Maintains persistent CSV files and dumps resource usage from AndroidResourceProfiler on device.
+ * - Compresses all CSVs and session_manifest.json with SHA-256 hashes into a single .zip bundle.
+ * - Supports instant offline sharing via Android FileProvider / ACTION_SEND or cloud sync to Firebase Storage.
  * - Strictly zero plaintext, zero cryptographic keys, and default-off user privacy.
  */
 class ResearchTelemetryManager(
     private val context: Context? = null,
     private val settingsManager: AppSettingsManager? = null,
     private val dhtClient: DhtClient? = null,
-    private val firebaseSync: FirebaseResearchSync = FirebaseResearchSync(context),
+    val firebaseSync: FirebaseResearchSync = FirebaseResearchSync(context),
+    val resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler? = null,
+    val baseDir: File? = null,
     val ttlSampler: HistoricalTtlSampler? = if (dhtClient != null) {
         HistoricalTtlSampler(
             dhtClient = dhtClient,
@@ -74,18 +84,21 @@ class ResearchTelemetryManager(
         var crowdRelayed: Boolean = false
     )
 
-    private val telemetryDir: File? by lazy {
-        context?.let { ctx ->
-            val dir = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "research_telemetry")
-            if (!dir.exists()) dir.mkdirs()
-            dir
-        }
+    private val telemetryDir: File by lazy {
+        val base = baseDir
+            ?: context?.getExternalFilesDir(null)
+            ?: context?.filesDir
+            ?: File(System.getProperty("java.io.tmpdir") ?: ".", "pqchat_research_telemetry")
+        val dir = File(base, "research_telemetry")
+        if (!dir.exists()) dir.mkdirs()
+        dir
     }
 
-    val masterCsvFile: File? by lazy { telemetryDir?.let { File(it, "research_telemetry_master.csv") } }
-    val packetEventsCsvFile: File? by lazy { telemetryDir?.let { File(it, "research_packet_events.csv") } }
-    val ttlSamplesCsvFile: File? by lazy { telemetryDir?.let { File(it, "research_ttl_samples.csv") } }
-    val republishSummaryCsvFile: File? by lazy { telemetryDir?.let { File(it, "research_republish_analysis.csv") } }
+    val masterCsvFile: File by lazy { File(telemetryDir, "research_telemetry_master.csv") }
+    val packetEventsCsvFile: File by lazy { File(telemetryDir, "research_packet_events.csv") }
+    val ttlSamplesCsvFile: File by lazy { File(telemetryDir, "research_ttl_samples.csv") }
+    val republishSummaryCsvFile: File by lazy { File(telemetryDir, "research_republish_analysis.csv") }
+    val resourceProfileCsvFile: File by lazy { File(telemetryDir, "research_resource_profile.csv") }
 
     private val csvLock = Any()
 
@@ -102,7 +115,6 @@ class ResearchTelemetryManager(
                     recordTtlSampleInternal(sample)
                 }
             )
-            // Replace sampler with wired instance
             _activeSampler = configuredSampler
         }
 
@@ -117,6 +129,21 @@ class ResearchTelemetryManager(
                 }
             }
         }
+
+        // Periodic background auto-sync check (at most once every 6 hours and strictly on Wi-Fi)
+        scope.launch {
+            while (isActive) {
+                delay(60 * 60 * 1000L) // check every 1 hour
+                if (isEnabled && firebaseSync.isWifiConnected() && firebaseSync.isFirebaseConfigured()) {
+                    try {
+                        val bundle = buildCompressedResearchBundle()
+                        val manifestFile = File(telemetryDir, "session_manifest.json")
+                        val manifestMap = generateManifestData().toMap()
+                        firebaseSync.syncResearchBundle(sessionId, bundle, manifestMap, isManual = false)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     val isEnabled: Boolean
@@ -124,10 +151,13 @@ class ResearchTelemetryManager(
 
     private fun initCsvFiles() {
         synchronized(csvLock) {
-            masterCsvFile?.let { if (!it.exists()) it.writeText(ResearchCsvSchema.MASTER_CSV_HEADER + "\n") }
-            packetEventsCsvFile?.let { if (!it.exists()) it.writeText(PacketTelemetryEvent.CSV_HEADER + "\n") }
-            ttlSamplesCsvFile?.let { if (!it.exists()) it.writeText(TtlSampleEvent.CSV_HEADER + "\n") }
-            republishSummaryCsvFile?.let { if (!it.exists()) it.writeText(RepublishAnalysisSummary.CSV_HEADER + "\n") }
+            if (!masterCsvFile.exists()) masterCsvFile.writeText(ResearchCsvSchema.MASTER_CSV_HEADER + "\n")
+            if (!packetEventsCsvFile.exists()) packetEventsCsvFile.writeText(PacketTelemetryEvent.CSV_HEADER + "\n")
+            if (!ttlSamplesCsvFile.exists()) ttlSamplesCsvFile.writeText(TtlSampleEvent.CSV_HEADER + "\n")
+            if (!republishSummaryCsvFile.exists()) republishSummaryCsvFile.writeText(RepublishAnalysisSummary.CSV_HEADER + "\n")
+            if (!resourceProfileCsvFile.exists()) {
+                resourceProfileCsvFile.writeText(org.pqchat.dht.debug.AndroidResourceProfiler.ResourceSample.CSV_HEADER + "\n")
+            }
         }
     }
 
@@ -198,11 +228,8 @@ class ResearchTelemetryManager(
             else -> {}
         }
 
-        // 1. Write to local CSV files
+        // Append to local CSV files immediately
         appendPacketEventCsv(event)
-
-        // 2. Queue for Firebase sync
-        firebaseSync.queuePacketEvent(event)
     }
 
     /**
@@ -231,73 +258,129 @@ class ResearchTelemetryManager(
         )
 
         appendRepublishSummaryCsv(summary)
-        firebaseSync.queueRepublishSummary(summary)
     }
 
     private fun recordTtlSampleInternal(sample: TtlSampleEvent) {
         if (!isEnabled) return
         _ttlSamplesCount.value += 1
         appendTtlSampleCsv(sample)
-        firebaseSync.queueTtlSample(sample)
     }
 
     private fun appendPacketEventCsv(event: PacketTelemetryEvent) {
-        scope.launch {
-            synchronized(csvLock) {
-                try {
-                    packetEventsCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(event.toCsvRow()) }
-                    }
-                    masterCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(event.toMasterCsvRow()) }
-                    }
-                } catch (_: Exception) {}
-            }
+        synchronized(csvLock) {
+            try {
+                PrintWriter(FileWriter(packetEventsCsvFile, true)).use { it.println(event.toCsvRow()) }
+                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(event.toMasterCsvRow()) }
+            } catch (_: Exception) {}
         }
     }
 
     private fun appendTtlSampleCsv(sample: TtlSampleEvent) {
-        scope.launch {
-            synchronized(csvLock) {
-                try {
-                    ttlSamplesCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(sample.toCsvRow()) }
-                    }
-                    masterCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(sample.toMasterCsvRow()) }
-                    }
-                } catch (_: Exception) {}
-            }
+        synchronized(csvLock) {
+            try {
+                PrintWriter(FileWriter(ttlSamplesCsvFile, true)).use { it.println(sample.toCsvRow()) }
+                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(sample.toMasterCsvRow()) }
+            } catch (_: Exception) {}
         }
     }
 
     private fun appendRepublishSummaryCsv(summary: RepublishAnalysisSummary) {
-        scope.launch {
-            synchronized(csvLock) {
-                try {
-                    republishSummaryCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(summary.toCsvRow()) }
-                    }
-                    masterCsvFile?.let { file ->
-                        PrintWriter(FileWriter(file, true)).use { it.println(summary.toMasterCsvRow()) }
-                    }
-                } catch (_: Exception) {}
-            }
+        synchronized(csvLock) {
+            try {
+                PrintWriter(FileWriter(republishSummaryCsvFile, true)).use { it.println(summary.toCsvRow()) }
+                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(summary.toMasterCsvRow()) }
+            } catch (_: Exception) {}
         }
     }
 
+    /**
+     * Generates SessionManifest containing device specs, counters, and SHA-256 hashes of all CSV files.
+     */
+    fun generateManifestData(): SessionManifest {
+        val checksums = mutableMapOf<String, String>()
+        if (masterCsvFile.exists() && masterCsvFile.length() > 0) checksums[masterCsvFile.name] = computeSha256(masterCsvFile)
+        if (ttlSamplesCsvFile.exists() && ttlSamplesCsvFile.length() > 0) checksums[ttlSamplesCsvFile.name] = computeSha256(ttlSamplesCsvFile)
+        if (republishSummaryCsvFile.exists() && republishSummaryCsvFile.length() > 0) checksums[republishSummaryCsvFile.name] = computeSha256(republishSummaryCsvFile)
+        if (resourceProfileCsvFile.exists() && resourceProfileCsvFile.length() > 0) checksums[resourceProfileCsvFile.name] = computeSha256(resourceProfileCsvFile)
+        if (packetEventsCsvFile.exists() && packetEventsCsvFile.length() > 0) checksums[packetEventsCsvFile.name] = computeSha256(packetEventsCsvFile)
+
+        val now = System.currentTimeMillis()
+        val manifest = SessionManifest(
+            sessionId = sessionId,
+            appVersion = try { BuildConfig.VERSION_NAME } catch (_: Throwable) { "1.0.0" },
+            versionCode = try { BuildConfig.VERSION_CODE } catch (_: Throwable) { 1 },
+            deviceModel = Build.MODEL ?: "GenericAndroid",
+            androidVersion = Build.VERSION.SDK_INT,
+            createdEpochMs = now,
+            isoCreatedAt = formatEpochIso(now),
+            totalEvents = eventsCount.value,
+            firstSendCount = firstSendCount.value,
+            ownRepublishCount = ownRepublishCount.value,
+            crowdRepublishCount = crowdRepublishCount.value,
+            packetsReceivedCount = packetsReceivedCount.value,
+            ttlSamplesCount = ttlSamplesCount.value,
+            fileChecksums = checksums
+        )
+        manifest.manifestSha256 = computeSha256(manifest.toJsonString())
+        return manifest
+    }
+
+    /**
+     * Packs all 4 primary CSV files (master, ttl_samples, republish_analysis, resource_profile)
+     * and session_manifest.json into a compressed ZIP archive.
+     */
+    fun buildCompressedResearchBundle(): File {
+        val dir = telemetryDir
+
+        // 1. Export latest resource profiling samples
+        try {
+            resourceProfiler?.exportToCsvFile(dir, "research_resource_profile.csv")
+        } catch (_: Exception) {}
+
+        // Ensure headers exist
+        initCsvFiles()
+
+        // 2. Generate and write session_manifest.json
+        val manifest = generateManifestData()
+        val manifestFile = File(dir, "session_manifest.json")
+        manifestFile.writeText(manifest.toJsonString(), Charsets.UTF_8)
+
+        // 3. Create compressed ZIP archive
+        val timestamp = System.currentTimeMillis()
+        val zipFile = File(dir, "pqchat_research_${sessionId}_${timestamp}.zip")
+
+        val filesToZip = listOf(
+            masterCsvFile,
+            ttlSamplesCsvFile,
+            republishSummaryCsvFile,
+            resourceProfileCsvFile,
+            packetEventsCsvFile,
+            manifestFile
+        ).filter { it.exists() && it.length() > 0 }
+
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
+            for (file in filesToZip) {
+                val entry = ZipEntry(file.name)
+                zos.putNextEntry(entry)
+                file.inputStream().use { it.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+
+        return zipFile
+    }
 
     /**
      * Creates an Android Intent to share the generated research CSV with external apps (Drive, Gmail, USB, etc.).
      */
     fun createShareCsvIntent(context: Context): Intent? {
-        val file = masterCsvFile ?: return null
+        val file = masterCsvFile
         if (!file.exists() || file.length() == 0L) return null
 
         val uri = try {
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } catch (_: Exception) {
-            android.net.Uri.fromFile(file)
+            Uri.fromFile(file)
         }
 
         return Intent(Intent.ACTION_SEND).apply {
@@ -309,34 +392,51 @@ class ResearchTelemetryManager(
     }
 
     /**
-     * Manually triggers an immediate flush and upload of local CSV data to Google Firebase.
+     * Creates an Android Intent to share the full compressed ZIP bundle (.zip) with external apps
+     * (Google Drive, PC, messaging, email) without requiring Firebase.
+     */
+    fun createShareZipIntent(context: Context): Intent? {
+        val zipFile = try {
+            buildCompressedResearchBundle()
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        if (!zipFile.exists() || zipFile.length() == 0L) return null
+
+        val uri = try {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", zipFile)
+        } catch (_: Exception) {
+            Uri.fromFile(zipFile)
+        }
+
+        return Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "PQChat Research Telemetry Bundle ($sessionId)")
+            putExtra(Intent.EXTRA_TEXT, "Paczka badawcza PQChat DHT (sesja: $sessionId)")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    /**
+     * Manually triggers an immediate bundle packaging and upload to Google Firebase (ZIP to Storage + Summary to Firestore).
      */
     suspend fun forceFirebaseSync(): Boolean = withContext(Dispatchers.IO) {
-        firebaseSync.flushPendingData()
-        masterCsvFile?.let { file ->
-            if (file.exists() && file.length() > 0) {
-                firebaseSync.uploadCsvToStorage(sessionId, file, "research_telemetry_master.csv")
-            }
+        val bundle = try {
+            buildCompressedResearchBundle()
+        } catch (_: Exception) {
+            null
+        } ?: run {
+            return@withContext false
         }
-        packetEventsCsvFile?.let { file ->
-            if (file.exists() && file.length() > 0) {
-                firebaseSync.uploadCsvToStorage(sessionId, file, "research_packet_events.csv")
-            }
-        }
-        ttlSamplesCsvFile?.let { file ->
-            if (file.exists() && file.length() > 0) {
-                firebaseSync.uploadCsvToStorage(sessionId, file, "research_ttl_samples.csv")
-            }
-        }
-        republishSummaryCsvFile?.let { file ->
-            if (file.exists() && file.length() > 0) {
-                firebaseSync.uploadCsvToStorage(sessionId, file, "research_republish_analysis.csv")
-            }
-        }
-        true
+
+        val manifestMap = generateManifestData().toMap()
+        firebaseSync.syncResearchBundle(sessionId, bundle, manifestMap, isManual = true)
     }
 
     fun stop() {
+        scope.cancel()
         _activeSampler?.stop()
         firebaseSync.stop()
     }

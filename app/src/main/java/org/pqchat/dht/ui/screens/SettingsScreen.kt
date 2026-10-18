@@ -975,22 +975,50 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
+                        // Główny przycisk: Eksport kompletnej paczki badawczej (.ZIP)
+                        Button(
+                            onClick = {
+                                val intent = viewModel.getShareZipIntent(context)
+                                if (intent != null) {
+                                    context.startActivity(Intent.createChooser(intent, "Udostępnij paczkę badawczą .ZIP"))
+                                } else {
+                                    android.widget.Toast.makeText(context, "Brak danych badawczych do eksportu", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = appColors.primary,
+                                contentColor = Color.Black
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Eksportuj paczkę badawczą (.ZIP)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
                         // Przyciski akcji: Eksport CSV oraz Wymuszenie synchronizacji
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Button(
+                            OutlinedButton(
                                 onClick = {
                                     val intent = viewModel.getShareCsvIntent(context)
                                     if (intent != null) {
                                         context.startActivity(Intent.createChooser(intent, "Udostępnij / Pobierz plik .CSV"))
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = appColors.primary,
-                                    contentColor = Color.Black
-                                ),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
@@ -1002,8 +1030,7 @@ fun SettingsScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "Eksportuj CSV",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
+                                    fontSize = 11.sp
                                 )
                             }
 

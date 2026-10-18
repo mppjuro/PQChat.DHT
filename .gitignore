@@ -42,3 +42,7 @@ __pycache__/
 .pytest_cache/
 # Ephemeral DHT measurement state (stored only in metrics-retention branch)
 *dht_state.json
+
+# Firebase service credentials (NEVER commit)
+app/google-services.json
+**/google-services.json

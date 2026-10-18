@@ -107,7 +107,8 @@ class PQChatApplication : Application() {
         researchTelemetryManager = org.pqchat.dht.research.ResearchTelemetryManager(
             context = this,
             settingsManager = settingsManager,
-            dhtClient = dhtLeafNode
+            dhtClient = dhtLeafNode,
+            resourceProfiler = resourceProfiler
         )
     }
 

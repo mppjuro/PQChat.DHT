@@ -193,6 +193,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return researchTelemetry?.createShareCsvIntent(context)
     }
 
+    fun getShareZipIntent(context: android.content.Context): android.content.Intent? {
+        return researchTelemetry?.createShareZipIntent(context)
+    }
+
     init {
         if (app == null) {
             dhtLeafNode.start()
