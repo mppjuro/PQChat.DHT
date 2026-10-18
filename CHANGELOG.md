@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`e28c99a`](https://github.com/mppjuro/PQChat.DHT/commit/e28c99a0b02e296c1e1345628d3bc0635800d32a) (2026-10-18) — **research**: adapt telemetry to Firebase Spark plan with Cloud Firestore batch metrics
 - [`79d1fdb`](https://github.com/mppjuro/PQChat.DHT/commit/79d1fdb207bb51938310b62b88d9d7f31d733a81) (2026-10-18) — **research**: implement Local-First Batch Archiving, scrub secrets, and harden CI
 - [`fbd8cef`](https://github.com/mppjuro/PQChat.DHT/commit/fbd8cef18d92dc736dcc952c05dc60fbaca10b41) (2026-10-18) — **research**: add anonymous Firebase telemetry and republish retention metrics for master thesis
 - [`b237b23`](https://github.com/mppjuro/PQChat.DHT/commit/b237b233910bd56f06b0f5a6bd065c1ea2168a36) (2026-10-17) — **dht**: expand RealBep44RemoteIntegrationTest to 500-sample percentiles and dual MEASURED vs SIMULATED telemetry
@@ -126,6 +127,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`40b9081`](https://github.com/mppjuro/PQChat.DHT/commit/40b9081f68f61cda54a679beff3d3cffee13a64d) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`644e049`](https://github.com/mppjuro/PQChat.DHT/commit/644e049700a53f9f463b350d070534a82e060549) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`fc1bea0`](https://github.com/mppjuro/PQChat.DHT/commit/fc1bea050d064067ecf8a360066141efa372c5d5) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`3ffc4d1`](https://github.com/mppjuro/PQChat.DHT/commit/3ffc4d1307354f01294991e4e35f86de42486b22) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
