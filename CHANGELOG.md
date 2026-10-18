@@ -123,6 +123,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`29ee687`](https://github.com/mppjuro/PQChat.DHT/commit/29ee687b15fb64950e576cc86602316b4ce9408c) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`725138e`](https://github.com/mppjuro/PQChat.DHT/commit/725138e9ec29f54872c3317bf7079c0d06e57e5f) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`8ae2d70`](https://github.com/mppjuro/PQChat.DHT/commit/8ae2d70c9766a66fae8257a1f790af51a202b33f) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`3ceccb7`](https://github.com/mppjuro/PQChat.DHT/commit/3ceccb78af879a01d89313935f9b910504d4df65) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
@@ -160,5 +161,6 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🛠️ Pozostałe Zmiany (Other Changes)
 
+- [`2e1ae59`](https://github.com/mppjuro/PQChat.DHT/commit/2e1ae593cba20eb8f07d45ea327306426e49d9d8) (2026-10-18) — decoupled 60-90m republish, ACK tombstones, resend expired messages, adaptive K (16 on LTE/CGNAT), and active chat keepalive (20-25s)
 - [`f72afdf`](https://github.com/mppjuro/PQChat.DHT/commit/f72afdf13624d4b5780031810e11f6c251dafca4) (2026-10-07) — DhtClient interface, implement FakeDht, isolate integration tests, and add GitHub Actions CI
 - [`bc1d1da`](https://github.com/mppjuro/PQChat.DHT/commit/bc1d1da36148c82f091f0440326045a9748bee02) (2026-10-05) — commit
