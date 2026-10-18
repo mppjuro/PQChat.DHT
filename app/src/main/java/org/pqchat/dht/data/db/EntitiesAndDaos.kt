@@ -613,6 +613,23 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT') ORDER BY id ASC")
     suspend fun getAllPendingDeliveryMessages(): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
+    suspend fun getMessageById(id: Long): MessageEntity?
+
+    @Query("UPDATE messages SET status = :status, seqNum = :seqNum, ackNum = :ackNum, timestamp = :timestamp, slotTarget = :slotTarget, slotEdSeed = :slotEdSeed, ackTarget = :ackTarget, ackRatchetKey = :ackRatchetKey, retryCount = :retryCount WHERE id = :id")
+    suspend fun updateMessageForResend(
+        id: Long,
+        status: String,
+        seqNum: Int,
+        ackNum: Int,
+        timestamp: Long,
+        slotTarget: ByteArray?,
+        slotEdSeed: EncryptedBlob?,
+        ackTarget: ByteArray?,
+        ackRatchetKey: EncryptedBlob?,
+        retryCount: Int
+    )
 }
 
 

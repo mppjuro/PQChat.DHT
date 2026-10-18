@@ -38,7 +38,9 @@ class DhtLeafNode(
     companion object {
         const val DEFAULT_DHT_PORT = 49160
         const val MAX_CACHED_NODES = 40
-        const val K = 8 // Replication / closest nodes factor
+        const val DEFAULT_K = 8 // Default replication / closest nodes factor
+        const val CGNAT_LTE_K = 16 // Adaptive replication factor under LTE / Restrictive NAT / CGNAT
+        const val K = DEFAULT_K
         const val TIMEOUT_MS = 3000L
         const val FAST_GET_TIMEOUT_MS = 600L
         const val BOOTSTRAP_TIMEOUT_MS = 6000L
@@ -172,6 +174,13 @@ class DhtLeafNode(
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
     val targetRouteCache = TargetRouteCache()
+
+    @Volatile
+    override var replicationK: Int = DEFAULT_K
+
+    override fun setAdaptiveK(isMobileOrCgnat: Boolean) {
+        replicationK = if (isMobileOrCgnat) CGNAT_LTE_K else DEFAULT_K
+    }
 
     @Volatile
     private var torProxyConfig: TorProxyConfig? = null
@@ -1105,7 +1114,8 @@ class DhtLeafNode(
         }
 
         // Step 2: Push to external DHT swarm peers (prioritizing pre-warmed route cache & cached fastest nodes)
-        val candidates = findClosestNodes(target, count = 24)
+        val candidateCount = maxOf(24, replicationK * 2)
+        val candidates = findClosestNodes(target, count = candidateCount)
         val prewarmed = targetRouteCache[target] ?: preWarmTarget(target)
         val cachedFastest = getCachedFastestNodes()
         val localPeers = getLocalPeers()
@@ -1116,10 +1126,11 @@ class DhtLeafNode(
                 val distB = xorDistance(b.nodeId, target)
                 compareBytes(distA, distB)
             }
+        val maxCandidatesToQuery = maxOf(20, replicationK * 2)
         val nodesToQuery = if (swarmPeers.isNotEmpty()) {
-            swarmPeers.take(20)
+            swarmPeers.take(maxCandidatesToQuery)
         } else if (localPeers.isNotEmpty()) {
-            localPeers.take(20)
+            localPeers.take(maxCandidatesToQuery)
         } else if (autoBootstrap) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         } else {
@@ -1132,7 +1143,7 @@ class DhtLeafNode(
             val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
             coroutineScope {
                 var getJobs: List<Job> = emptyList()
-                val targetTokens = minOf(K, nodesToQuery.size)
+                val targetTokens = minOf(replicationK, nodesToQuery.size)
                 getJobs = nodesToQuery.map { peer ->
                     launch {
                         try {
@@ -1161,7 +1172,7 @@ class DhtLeafNode(
 
             if (tokenMap.isNotEmpty()) {
                 val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
-                val targetPuts = minOf(K, tokenMap.size)
+                val targetPuts = minOf(replicationK, tokenMap.size)
                 coroutineScope {
                     var putJobs: List<Job> = emptyList()
                     putJobs = tokenMap.map { (address, token) ->
@@ -1250,4 +1261,24 @@ class DhtLeafNode(
         )
         return if (ok) target else null
     }
+
+    /**
+     * Sends a lightweight KRPC ping query to maintain carrier UDP NAT mapping table (20–25s timeout).
+     */
+    override suspend fun sendKeepalivePing(): Boolean = withContext(Dispatchers.IO) {
+        val targetPeer = getCachedFastestNodes().firstOrNull()
+            ?: routingTable.firstOrNull()
+            ?: getLocalPeers().firstOrNull()
+            ?: resolveBootstrapNodes().firstOrNull()?.let { DhtPeer(ByteArray(20), it) }
+            ?: return@withContext false
+
+        try {
+            val pingQuery = KrpcMessage.createPingQuery(myNodeId)
+            val resp = sendQuery(targetPeer.address, pingQuery, timeoutMs = 2000L)
+            resp != null
+        } catch (_: Exception) {
+            false
+        }
+    }
 }
+

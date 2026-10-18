@@ -25,10 +25,31 @@ class FakeDht(
     var defaultTtlMs: Long? = null
 ) : DhtClient {
 
+    @Volatile
+    override var replicationK: Int = 8
+
+    override fun setAdaptiveK(isMobileOrCgnat: Boolean) {
+        replicationK = if (isMobileOrCgnat) 16 else 8
+    }
+
+    var packetLossRate: Double
+        get() = dropProbability
+        set(value) { dropProbability = value }
+
+    val keepalivePingCalls = AtomicInteger(0)
+
+    override suspend fun sendKeepalivePing(): Boolean {
+        keepalivePingCalls.incrementAndGet()
+        bytesSent.addAndGet(50L)
+        bytesReceived.addAndGet(50L)
+        return true
+    }
+
     data class StoredEntry(
         val item: DhtLeafNode.MutableItem,
         val storedAt: Long = System.currentTimeMillis(),
-        val ttlMs: Long? = null
+        val ttlMs: Long? = null,
+        val replicas: Int = 8
     ) {
         fun isExpired(now: Long = System.currentTimeMillis()): Boolean {
             return ttlMs != null && (now - storedAt) > ttlMs
@@ -95,16 +116,19 @@ class FakeDht(
         bytesSent.addAndGet(100L)
         simulateDelay()
 
-        if (shouldDrop()) {
-            return null
-        }
-
         val targetHex = CryptoUtils.toHex(target)
         val entry = storage[targetHex] ?: return null
 
         if (entry.isExpired()) {
             storage.remove(targetHex)
             return null
+        }
+
+        if (dropProbability > 0.0) {
+            val failProb = Math.pow(dropProbability, entry.replicas.toDouble())
+            if (Math.random() < failProb) {
+                return null
+            }
         }
 
         bytesReceived.addAndGet(entry.item.v.size.toLong() + 100L)
@@ -125,8 +149,14 @@ class FakeDht(
         bytesReceived.addAndGet(50L)
         simulateDelay()
 
-        if (shouldDrop()) {
-            return false
+        val replicasStored = if (dropProbability > 0.0) {
+            val successfulStores = (0 until replicationK).count { Math.random() >= dropProbability }
+            if (successfulStores == 0) {
+                return false
+            }
+            successfulStores
+        } else {
+            replicationK
         }
 
         require(v.size <= 1000) { "BEP 44 payload cannot exceed 1000 bytes (got ${v.size})" }
@@ -146,7 +176,8 @@ class FakeDht(
             storage[targetHex] = StoredEntry(
                 item = item,
                 storedAt = System.currentTimeMillis(),
-                ttlMs = defaultTtlMs
+                ttlMs = defaultTtlMs,
+                replicas = replicasStored
             )
         }
 
@@ -221,6 +252,7 @@ class FakeDht(
         putCalls.set(0)
         getCalls.set(0)
         coverTrafficCalls.set(0)
+        keepalivePingCalls.set(0)
     }
 
     fun setEntryWithCustomTtl(target: ByteArray, item: DhtLeafNode.MutableItem, ttlMs: Long) {
@@ -232,5 +264,39 @@ class FakeDht(
         )
     }
 
+    /**
+     * Evicts records that have not been refreshed/republished within olderThanMs.
+     * Simulates Kademlia BEP 44 node eviction (typically ~2h on unrefreshed records).
+     */
+    fun evictUnrefreshedRecords(olderThanMs: Long, currentTimeMs: Long = System.currentTimeMillis()): Int {
+        var evicted = 0
+        val it = storage.entries.iterator()
+        while (it.hasNext()) {
+            val entry = it.next()
+            if ((currentTimeMs - entry.value.storedAt) >= olderThanMs) {
+                it.remove()
+                evicted++
+            }
+        }
+        return evicted
+    }
+
+    /**
+     * Simulates random node churn by evicting a fraction of stored records.
+     */
+    fun simulateChurn(fraction: Double = 0.3): Int {
+        var evicted = 0
+        val it = storage.entries.iterator()
+        while (it.hasNext()) {
+            it.next()
+            if (Math.random() < fraction) {
+                it.remove()
+                evicted++
+            }
+        }
+        return evicted
+    }
+
     fun getStoredCount(): Int = storage.size
 }
+

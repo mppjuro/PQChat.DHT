@@ -276,6 +276,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun resendMessage(messageId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Ponowne wysyłanie wiadomości..."
+            val success = repository.resendMessage(messageId)
+            if (success) {
+                _statusNotification.value = "Wiadomość wysłana pomyślnie"
+            } else {
+                _statusNotification.value = "Nie udało się wysłać wiadomości do DHT"
+            }
+        }
+    }
+
     fun initiateRekey() {
         val contactId = _selectedContactId.value ?: return
         viewModelScope.launch(Dispatchers.IO) {

@@ -21,6 +21,8 @@ class AdaptivePollingManager(
     var blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance
     @Volatile var isCrowdsourcedRepublishEnabled: Boolean = true
     var onCoverTrafficTick: (suspend () -> Unit)? = null
+    var onKeepalivePingRequested: (suspend () -> Unit)? = null
+    private var keepaliveJob: Job? = null
 
     constructor(
         onPollRequested: suspend (contactId: String?) -> Unit,
@@ -283,6 +285,12 @@ class AdaptivePollingManager(
         val stateChanged = _currentState.value != newState
         _currentState.value = newState
 
+        if (newState == PollingState.FOREGROUND_CHAT) {
+            startKeepaliveLoop()
+        } else {
+            stopKeepaliveLoop()
+        }
+
         if (newState == PollingState.DOZE_SLEEP) {
             pollingJob?.cancel()
             _isSyncing.value = false
@@ -387,7 +395,34 @@ class AdaptivePollingManager(
         }
     }
 
+    private fun startKeepaliveLoop() {
+        keepaliveJob?.cancel()
+        keepaliveJob = scope.launch {
+            while (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
+                // Keepalive 20-25 seconds (randomized between 20000 and 25000 ms)
+                // Preserves carrier CGNAT / LTE UDP NAT mapping tables (which timeout after 30s)
+                val delayMs = 20_000L + (org.pqchat.dht.crypto.CryptoUtils.secureRandom.nextDouble() * 5_000L).toLong()
+                delay(delayMs)
+                if (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
+                    try {
+                        onKeepalivePingRequested?.invoke()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        android.util.Log.w("AdaptivePollingManager", "Keepalive ping failed", e)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopKeepaliveLoop() {
+        keepaliveJob?.cancel()
+        keepaliveJob = null
+    }
+
     fun stop() {
+        stopKeepaliveLoop()
         val job = pollingJob
         pollingJob = null
         job?.cancel()
@@ -395,3 +430,4 @@ class AdaptivePollingManager(
         scope.cancel()
     }
 }
+

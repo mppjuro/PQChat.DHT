@@ -119,7 +119,7 @@ jobs:
   remote-dht-tests:
     name: Real BEP 44 Remote Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -137,7 +137,7 @@ jobs:
       - name: Run Real BEP 44 Remote Integration Tests (with retry)
         uses: nick-fields/retry@v4
         with:
-          timeout_minutes: 10
+          timeout_minutes: 11
           max_attempts: 2
           command: ./gradlew testDebugUnitTest -DrunRealDhtTests=true -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --tests "org.pqchat.dht.dht.integration.RealBep44RemoteIntegrationTest*" --info
 

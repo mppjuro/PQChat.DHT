@@ -165,6 +165,8 @@ class LoopbackMeasurementHarness(
         if (dhtClient != null) {
             // Live DHT execution (MEASURED)
             dataSource = DataSource.MEASURED
+            dhtClient.setAdaptiveK(networkEnv == NetworkEnvironment.LTE || networkEnv == NetworkEnvironment.RESTRICTIVE_NAT)
+            nodesQueried = maxOf(16, dhtClient.replicationK * 2)
             val t0 = System.currentTimeMillis()
             putOk = try {
                 var ok = dhtClient.putMutable(
@@ -544,7 +546,8 @@ class LoopbackMeasurementHarness(
         random: Random = Random.Default
     ): Boolean {
         // Node churn half-life ~ 50 minutes (0.833 hours)
-        val kReplication = 8 // Standard Kademlia K-bucket replication factor
+        // Adaptive K: K=16 for LTE / Restrictive NAT, K=8 for Wi-Fi
+        val kReplication = if (networkEnv == NetworkEnvironment.LTE || networkEnv == NetworkEnvironment.RESTRICTIVE_NAT) 16 else 8
         val churnHalfLifeHours = 0.833
         val lambdaChurn = ln(2.0) / churnHalfLifeHours
 
@@ -729,9 +732,10 @@ class LoopbackMeasurementHarness(
             }
         }
 
-        val nodesContacted = if (isPut) 16 else 8
+        val kReplication = if (env == NetworkEnvironment.LTE || env == NetworkEnvironment.RESTRICTIVE_NAT) 16 else 8
+        val nodesContacted = if (isPut) kReplication * 2 else kReplication
         val responded = if (success) {
-            if (isPut) random.nextInt(3, 8) else random.nextInt(1, 4)
+            if (isPut) random.nextInt(3, min(8, kReplication) + 1) else random.nextInt(1, 4)
         } else 0
 
         return HopSimulationResult(

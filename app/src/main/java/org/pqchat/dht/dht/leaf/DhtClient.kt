@@ -149,4 +149,23 @@ interface DhtClient {
      * Returns the 20-byte target actually published to DHT, or null on failure.
      */
     suspend fun sendCoverTrafficDummy(): ByteArray?
+
+    /**
+     * Replication factor K: number of closest DHT nodes storing mutable items.
+     * Default is 8 on Wi-Fi, adaptive 16 on Mobile LTE / Restrictive NAT / CGNAT.
+     */
+    var replicationK: Int
+        get() = 8
+        set(_) {}
+
+    /**
+     * Dynamically sets replication factor K based on mobile / CGNAT network environment.
+     */
+    fun setAdaptiveK(isMobileOrCgnat: Boolean) {}
+
+    /**
+     * Sends a lightweight KRPC ping query to maintain carrier NAT mapping tables (20–25s timeout).
+     */
+    suspend fun sendKeepalivePing(): Boolean = false
 }
+

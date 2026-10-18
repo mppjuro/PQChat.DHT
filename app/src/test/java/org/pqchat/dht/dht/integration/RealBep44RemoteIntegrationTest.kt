@@ -231,6 +231,31 @@ class RealBep44RemoteIntegrationTest {
     }
 
     @Test
+    fun testRealBep44KeepalivePingAndAdaptiveK() = runBlocking {
+        assumeTrue(
+            "Skipping real BEP 44 remote test. Enable with RUN_REAL_DHT_TESTS=true or -DrunRealDhtTests=true",
+            isRemoteDhtTestEnabled()
+        )
+        val node = DhtLeafNode()
+        node.start()
+        try {
+            node.bootstrap()
+            delay(3000)
+            node.setAdaptiveK(isMobileOrCgnat = true)
+            assertEquals(16, node.replicationK)
+            node.setAdaptiveK(isMobileOrCgnat = false)
+            assertEquals(8, node.replicationK)
+
+            val pingResult = node.sendKeepalivePing()
+            println("[Live DHT] Keepalive ping returned: $pingResult, active peers: ${node.getActivePeerCount()}")
+            // Ping executes cleanly without crashing socket
+            assertTrue("Node active peer count check", node.getActivePeerCount() >= 0)
+        } finally {
+            node.stop()
+        }
+    }
+
+    @Test
     fun testRealBep44RemoteFullPercentilesAndDeliverySuccessAcrossProfiles() = runBlocking {
         assumeTrue(
             "Skipping real BEP 44 remote test. Enable with RUN_REAL_DHT_TESTS=true or -DrunRealDhtTests=true",

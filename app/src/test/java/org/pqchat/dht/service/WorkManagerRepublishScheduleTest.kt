@@ -526,38 +526,7 @@ class WorkManagerRepublishScheduleTest {
         override suspend fun deleteContact(id: String) {}
     }
 
-    private class FakeMessageDao : MessageDao {
-        val messages = mutableListOf<MessageEntity>()
-        private var idGen = 1L
-        override fun getMessagesForContactFlow(contactId: String): Flow<List<MessageEntity>> =
-            MutableStateFlow(messages.filter { it.contactId == contactId })
-        override suspend fun insertMessage(message: MessageEntity): Long {
-            val id = if (message.id != 0L) message.id else idGen++
-            messages.add(message.copy(id = id))
-            return id
-        }
-        override suspend fun updateStatus(id: Long, status: String) {
-            val idx = messages.indexOfFirst { it.id == id }
-            if (idx >= 0) messages[idx] = messages[idx].copy(status = status)
-        }
-        override suspend fun updateMessageStatusAndSeq(id: Long, status: String, seqNum: Int) {
-            val idx = messages.indexOfFirst { it.id == id }
-            if (idx >= 0) messages[idx] = messages[idx].copy(status = status, seqNum = seqNum)
-        }
-        override suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long) {}
-        override suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity> = emptyList()
-        override suspend fun getAllQueuedMessages(): List<MessageEntity> = emptyList()
-        override suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {}
-        override suspend fun updateMessageStatusAndDirection(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {}
-        override suspend fun normalizeConfirmedSelfNotes(contactId: String) {}
-        override suspend fun deleteMessagesForContact(contactId: String) {}
-        override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean = false
-        override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean = false
-        override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> =
-            messages.filter { it.contactId == contactId && it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
-        override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> =
-            messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
-    }
+    private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
 
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 }

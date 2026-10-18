@@ -15,6 +15,7 @@ import org.pqchat.dht.protocol.ChunkingEngine
 import org.pqchat.dht.protocol.RatchetChain
 import org.pqchat.dht.protocol.RekeyCoordinator
 import org.pqchat.dht.protocol.SlidingWindowBitmap
+import org.pqchat.dht.traffic.PollingWorker
 import java.util.concurrent.ConcurrentHashMap
 
 class ChatRepository(
@@ -1867,4 +1868,118 @@ class ChatRepository(
         val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
         dhtLeafNode.preWarmTarget(nextTarget)
     }
+
+    /**
+     * Resends an unacknowledged or expired message (status "EXPIRED_OFFLINE" / "EXPIRED_DHT" / "QUEUED").
+     * Advances the contact's outgoing chain state to allocate a new cryptographic slot (Target_i)
+     * and publishes the re-encrypted payload to DHT.
+     */
+    suspend fun resendMessage(messageId: Long): Boolean = withContext(Dispatchers.IO) {
+        val msg = messageDao.getMessageById(messageId) ?: return@withContext false
+        if (!msg.isOutgoing) return@withContext false
+        if (msg.status != "EXPIRED_OFFLINE" && msg.status != "EXPIRED_DHT" && msg.status != "QUEUED" && msg.status != "FAILED") {
+            return@withContext false
+        }
+        getContactMutex(msg.contactId).withLock {
+            val contact = contactDao.getContactById(msg.contactId) ?: return@withLock false
+            val isSelf = msg.contactId == SELF_CONTACT_ID
+
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+            val text = msg.textContent?.raw
+            val image = msg.imageBytes?.raw
+
+            val frame = if (text != null) {
+                val plaintext = BinaryFrameCodec.encodeTextMessage(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = System.currentTimeMillis(),
+                    text = text
+                )
+                BinaryFrameCodec.packAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    direction = contact.outboundDirection
+                )
+            } else if (image != null) {
+                val plaintext = BinaryFrameCodec.encodeChunkData(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = System.currentTimeMillis(),
+                    transferId = CryptoUtils.secureRandomBytes(16),
+                    chunkIndex = 0,
+                    totalChunks = 1,
+                    chunkData = image
+                )
+                BinaryFrameCodec.packAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    direction = contact.outboundDirection
+                )
+            } else {
+                return@withLock false
+            }
+
+            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+
+            messageDao.updateMessageRetry(
+                id = msg.id,
+                status = "SENDING",
+                retryCount = msg.retryCount + 1,
+                timestamp = System.currentTimeMillis()
+            )
+
+            val success = dhtLeafNode.putMutable(
+                target = slot.target,
+                v = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = isSelf
+            )
+
+            if (success) {
+                decoyTargetPool.registerPopulatedTarget(slot.target)
+                val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                messageDao.updateMessageForResend(
+                    id = msg.id,
+                    status = newStatus,
+                    seqNum = contact.counterOut,
+                    ackNum = contact.counterIn,
+                    timestamp = System.currentTimeMillis(),
+                    slotTarget = slot.target,
+                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", "${msg.id}"),
+                    ackTarget = targetAck,
+                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", "${msg.id}"),
+                    retryCount = msg.retryCount + 1
+                )
+
+                if (!isSelf) {
+                    PollingWorker.registerRepublishTask(
+                        PollingWorker.RepublishTask(
+                            messageId = msg.id,
+                            contactId = msg.contactId,
+                            target = slot.target,
+                            payload = frame,
+                            edPrivateKeySeed = slot.edPrivateKeySeed,
+                            initialSentTimestamp = System.currentTimeMillis()
+                        )
+                    )
+                    onRepublishTaskUpdated?.invoke()
+                }
+
+                contactDao.updateOutgoingState(
+                    id = contact.id,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                true
+            } else {
+                messageDao.updateStatus(msg.id, "EXPIRED_DHT")
+                false
+            }
+        }
+    }
 }
+

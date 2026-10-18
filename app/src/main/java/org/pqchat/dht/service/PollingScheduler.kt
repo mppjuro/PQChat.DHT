@@ -52,6 +52,11 @@ class PollingScheduler(
     private val isStarted = AtomicBoolean(false)
 
     init {
+        // Wire active chat 20-25s keepalive ping
+        pollingManager.onKeepalivePingRequested = {
+            dhtLeafNode?.sendKeepalivePing()
+        }
+
         // Wire incoming message notification delivery
         repository.onIncomingMessageDelivered = { contactId, textContent, isImage ->
             handleIncomingMessageDelivered(contactId, textContent, isImage)
@@ -159,6 +164,9 @@ class PollingScheduler(
     fun start() {
         if (!isStarted.compareAndSet(false, true)) return
 
+        // Check network environment and set adaptive K (16 on LTE/CGNAT, 8 on Wi-Fi)
+        updateNetworkAdaptiveK()
+
         // Enqueue WorkManager periodic background worker (every 15 min for Doze maintenance)
         context?.let { PollingWorker.enqueuePeriodicWork(it) }
 
@@ -174,6 +182,26 @@ class PollingScheduler(
         if (settingsManager.isForegroundServiceEnabled.value) {
             startForegroundService()
         }
+    }
+
+    fun updateNetworkAdaptiveK() {
+        val ctx = context ?: return
+        try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            if (cm != null) {
+                val isMobile = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val network = cm.activeNetwork
+                    val caps = cm.getNetworkCapabilities(network)
+                    caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
+                } else {
+                    @Suppress("DEPRECATION")
+                    val info = cm.activeNetworkInfo
+                    @Suppress("DEPRECATION")
+                    info?.type == android.net.ConnectivityManager.TYPE_MOBILE
+                }
+                dhtLeafNode?.setAdaptiveK(isMobile)
+            }
+        } catch (_: Exception) {}
     }
 
     fun onChatOpened(contactId: String) {

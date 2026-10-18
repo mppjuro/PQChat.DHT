@@ -63,24 +63,7 @@ class HandshakeVerificationTest {
         }
     }
 
-    private class FakeMessageDao : MessageDao {
-        override fun getMessagesForContactFlow(contactId: String): Flow<List<MessageEntity>> =
-            MutableStateFlow(emptyList())
-        override suspend fun insertMessage(message: MessageEntity): Long = 1L
-        override suspend fun updateStatus(id: Long, status: String) {}
-        override suspend fun updateMessageStatusAndSeq(id: Long, status: String, seqNum: Int) {}
-        override suspend fun updateMessageRetry(id: Long, status: String, retryCount: Int, timestamp: Long) {}
-        override suspend fun getQueuedMessagesForContact(contactId: String): List<MessageEntity> = emptyList()
-        override suspend fun getAllQueuedMessages(): List<MessageEntity> = emptyList()
-        override suspend fun updateStatusForSeq(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {}
-        override suspend fun updateMessageStatusAndDirection(contactId: String, seqNum: Int, isOutgoing: Boolean, status: String) {}
-        override suspend fun normalizeConfirmedSelfNotes(contactId: String) {}
-        override suspend fun deleteMessagesForContact(contactId: String) {}
-        override suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean = false
-        override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean = false
-        override suspend fun getPendingDeliveryMessagesForContact(contactId: String): List<MessageEntity> = emptyList()
-        override suspend fun getAllPendingDeliveryMessages(): List<MessageEntity> = emptyList()
-    }
+    private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
 
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 

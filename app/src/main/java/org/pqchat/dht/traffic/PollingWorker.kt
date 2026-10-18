@@ -40,19 +40,7 @@ class PollingWorker(
             // 3. Mark any messages that expired offline in Room DB
             repository.expireOutdatedPendingMessages(policy.maxTtlMs)
 
-            // 4. Execute periodic republish pass with Exponential Backoff & TTL
-            executeRepublishPass(
-                dhtClient = repository.dhtLeafNode,
-                policy = policy,
-                onMessageExpired = { messageId ->
-                    repository.markMessageExpiredOffline(messageId)
-                }
-            )
-
-            // 5. Update republish WorkManager schedule (adjust interval or stop if all messages ACKed/expired)
-            app.pollingScheduler.applyRepublishSchedule(policy = policy)
-
-            // 6. Keep Doze alarm synced for maintenance windows
+            // 4. Keep Doze alarm synced for maintenance windows
             app.pollingScheduler.scheduleNextDozeAlarm()
 
             Result.success()
@@ -172,24 +160,11 @@ class PollingWorker(
         }
 
         fun scheduleRepublishWork(context: Context, intervalMinutes: Long) {
-            try {
-                val workRequest = buildPeriodicWorkRequest(intervalMinutes)
-                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                    REPUBLISH_WORK_NAME,
-                    ExistingPeriodicWorkPolicy.UPDATE,
-                    workRequest
-                )
-            } catch (e: Exception) {
-                android.util.Log.w("PollingWorker", "Failed to schedule republish work", e)
-            }
+            RepublishWorker.scheduleRepublishWork(context, intervalMinutes)
         }
 
         fun cancelRepublishWork(context: Context) {
-            try {
-                WorkManager.getInstance(context).cancelUniqueWork(REPUBLISH_WORK_NAME)
-            } catch (e: Exception) {
-                android.util.Log.w("PollingWorker", "Failed to cancel republish work", e)
-            }
+            RepublishWorker.cancelRepublishWork(context)
         }
 
         fun enqueuePeriodicWork(context: Context, intervalMinutes: Long = 15L) {

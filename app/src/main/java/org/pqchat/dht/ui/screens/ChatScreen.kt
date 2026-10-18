@@ -424,7 +424,8 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { msg ->
                     MessageBubble(
                         message = msg,
-                        onImageClick = { bytes -> fullscreenImageBytes = bytes }
+                        onImageClick = { bytes -> fullscreenImageBytes = bytes },
+                        onResend = { viewModel.resendMessage(msg.id) }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -596,7 +597,8 @@ fun ChatScreen(
 @Composable
 fun MessageBubble(
     message: MessageEntity,
-    onImageClick: ((ByteArray) -> Unit)? = null
+    onImageClick: ((ByteArray) -> Unit)? = null,
+    onResend: (() -> Unit)? = null
 ) {
     val appColors = LocalAppColors.current
 
@@ -699,19 +701,50 @@ fun MessageBubble(
                         fontSize = 10.sp
                     )
 
-                    val statusColor = when (message.status) {
-                        "CONFIRMED_DHT" -> ElectricGreen
-                        "DELIVERED", "SENT_DHT", "PENDING_DELIVERY" -> appColors.primary
-                        "EXPIRED_OFFLINE" -> Color(0xFFFF5252)
+                    val isExpired = message.status == "EXPIRED_OFFLINE" || message.status == "EXPIRED_DHT"
+                    val statusText = if (isExpired) "Wygasła w DHT" else message.status
+                    val statusColor = when {
+                        message.status == "CONFIRMED_DHT" -> ElectricGreen
+                        message.status in listOf("DELIVERED", "SENT_DHT", "PENDING_DELIVERY") -> appColors.primary
+                        isExpired -> Color(0xFFFF5252)
                         else -> AmberWarning
                     }
 
-                    Text(
-                        text = message.status,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = statusColor,
-                        fontSize = 10.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            fontSize = 10.sp
+                        )
+                        if (isExpired && message.isOutgoing) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = ElectricGreen.copy(alpha = 0.15f),
+                                modifier = Modifier.clickable { onResend?.invoke() }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Ponów wysyłkę",
+                                        tint = ElectricGreen,
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = "Ponów",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = ElectricGreen,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
