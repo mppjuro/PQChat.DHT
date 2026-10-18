@@ -52,6 +52,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`09aa23c`](https://github.com/mppjuro/PQChat.DHT/commit/09aa23c190eb93e24c665e50b6c4d7fc2b4edf6c) (2026-10-18) — **ci**: gate 500-sample DHT benchmark behind measuredIterations property to prevent timeout in RealBep44RemoteIntegrationTest
 - [`2dd2fdb`](https://github.com/mppjuro/PQChat.DHT/commit/2dd2fdb0de819622adff33f512290a2a888dd329) (2026-10-16) — **dht**: resolve BEP 44 remote integration and loopback measurement failures
 - [`b70370f`](https://github.com/mppjuro/PQChat.DHT/commit/b70370fa39a12d0baa7c19a6bd4a09939b22811b) (2026-10-15) — **guide**: Update AGENTS.md with math inline Github formatting guidelines
 - [`81d1a6e`](https://github.com/mppjuro/PQChat.DHT/commit/81d1a6efb71b28bc5d6a4bd22ce28fddc3b0340d) (2026-10-15) — **docs**: formatting of Anti-Grinding & SAS section in README
@@ -122,6 +123,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`725138e`](https://github.com/mppjuro/PQChat.DHT/commit/725138e9ec29f54872c3317bf7079c0d06e57e5f) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`8ae2d70`](https://github.com/mppjuro/PQChat.DHT/commit/8ae2d70c9766a66fae8257a1f790af51a202b33f) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`3ceccb7`](https://github.com/mppjuro/PQChat.DHT/commit/3ceccb78af879a01d89313935f9b910504d4df65) (2026-10-17) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`57abd70`](https://github.com/mppjuro/PQChat.DHT/commit/57abd703d051052cb4469d58d0135f34c9059920) (2026-10-16) — **changelog**: auto-update CHANGELOG.md [skip ci]
