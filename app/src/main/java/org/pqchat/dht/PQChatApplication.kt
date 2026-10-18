@@ -37,6 +37,8 @@ class PQChatApplication : Application() {
         private set
     lateinit var resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler
         private set
+    lateinit var researchTelemetryManager: org.pqchat.dht.research.ResearchTelemetryManager
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -100,10 +102,18 @@ class PQChatApplication : Application() {
             lifecycleCoordinator = lifecycleCoordinator,
             trafficGenerator = trafficGenerator
         )
+
+        // Academic Research & Firebase Sync Telemetry Coordinator (Master's Thesis)
+        researchTelemetryManager = org.pqchat.dht.research.ResearchTelemetryManager(
+            context = this,
+            settingsManager = settingsManager,
+            dhtClient = dhtLeafNode
+        )
     }
 
     override fun onTerminate() {
         super.onTerminate()
+        researchTelemetryManager.stop()
         resourceProfiler.stopSession()
         lifecycleCoordinator.stop()
         pollingScheduler.stop()

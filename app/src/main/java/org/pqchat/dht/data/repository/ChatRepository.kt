@@ -27,8 +27,18 @@ class ChatRepository(
     val dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
     val pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
     val decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance,
-    val blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance
+    val blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance,
+    var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
+        try {
+            org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager
+        } catch (_: Throwable) {
+            null
+        }
+    }
 ) {
+    val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
+        get() = researchTelemetryProvider?.invoke()
+
     constructor(
         contactDao: ContactDao,
         messageDao: MessageDao,
@@ -482,6 +492,7 @@ class ChatRepository(
             }
 
             // 7. Put to DHT under Target_i
+            val tStart = System.currentTimeMillis()
             val success = dhtLeafNode.putMutable(
                 target = slot.target,
                 v = frame,
@@ -489,6 +500,18 @@ class ChatRepository(
                 salt = null,
                 sk = slot.edPrivateKeySeed,
                 skipLocalStore = isSelf
+            )
+            val rttMs = System.currentTimeMillis() - tStart
+            researchTelemetry?.recordPacketEvent(
+                role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                target = slot.target,
+                seqNum = contact.counterOut.toLong(),
+                payloadBytes = frame.size,
+                rttMs = rttMs,
+                nodesQueried = 24,
+                nodesResponded = if (success) 8 else 0,
+                success = success,
+                republishAttempt = 0
             )
 
             if (success) {
@@ -760,12 +783,25 @@ class ChatRepository(
                 )
                 var allSuccess = true
                 for (c in chunks) {
+                    val tStart = System.currentTimeMillis()
                     val ok = dhtLeafNode.putMutable(
                         target = c.target,
                         v = c.frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         sk = c.edPrivateKeySeed,
                         skipLocalStore = isSelf
+                    )
+                    val rttMs = System.currentTimeMillis() - tStart
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                        target = c.target,
+                        seqNum = currentContact.counterOut.toLong(),
+                        payloadBytes = c.frame.size,
+                        rttMs = rttMs,
+                        nodesQueried = 24,
+                        nodesResponded = if (ok) 8 else 0,
+                        success = ok,
+                        republishAttempt = 0
                     )
                     if (!ok) {
                         allSuccess = false
@@ -1032,7 +1068,21 @@ class ChatRepository(
         // 2. Process all available consecutive messages starting at counterIn
         while (true) {
             val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+            val tStart = System.currentTimeMillis()
             var item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf)
+            val rttMs = System.currentTimeMillis() - tStart
+            if (item != null) {
+                researchTelemetry?.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
+                    target = currentSlot.target,
+                    seqNum = contact.counterIn.toLong(),
+                    payloadBytes = item.v.size,
+                    rttMs = rttMs,
+                    nodesQueried = 24,
+                    nodesResponded = 8,
+                    success = true
+                )
+            }
             var isChunkTransfer = false
             var initialChunkPayload: BinaryFrameCodec.DecodedPayload.ChunkData? = null
             var initialChunkIndex = -1
@@ -1042,7 +1092,21 @@ class ChatRepository(
                 // If single message target is empty, probe chunk targets for this slot (probe 0 and 1)
                 for (probeIdx in 0..1) {
                     val chunkTarget = ChunkingEngine.deriveChunkTarget(currentSlot.edPrivateKeySeed, probeIdx)
+                    val tChunkStart = System.currentTimeMillis()
                     val chunkItem = dhtLeafNode.getMutable(chunkTarget, skipLocalStore = isSelf)
+                    val chunkRttMs = System.currentTimeMillis() - tChunkStart
+                    if (chunkItem != null) {
+                        researchTelemetry?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
+                            target = chunkTarget,
+                            seqNum = contact.counterIn.toLong(),
+                            payloadBytes = chunkItem.v.size,
+                            rttMs = chunkRttMs,
+                            nodesQueried = 24,
+                            nodesResponded = 8,
+                            success = true
+                        )
+                    }
                     if (chunkItem != null) {
                         val chunkKey = ChunkingEngine.deriveChunkMsgKey(currentSlot.msgKey, probeIdx)
                         try {
@@ -1705,16 +1769,26 @@ class ChatRepository(
                 onRepublishTaskUpdated?.invoke()
 
                 val slotTarget = msg.slotTarget
+                if (slotTarget != null) {
+                    researchTelemetry?.recordDeliveryAck(slotTarget)
+                }
+
                 val slotEdSeed = msg.slotEdSeed?.raw
                 if (slotTarget != null && slotEdSeed != null) {
                     try {
-                        dhtLeafNode.putMutable(
+                        val tombOk = dhtLeafNode.putMutable(
                             target = slotTarget,
                             v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,
                             skipLocalStore = isSelf
+                        )
+                        researchTelemetry?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
+                            target = slotTarget,
+                            payloadBytes = 900,
+                            success = tombOk
                         )
                     } catch (_: Exception) {}
                 }
@@ -1740,16 +1814,26 @@ class ChatRepository(
                 onRepublishTaskUpdated?.invoke()
 
                 val slotTarget = msg.slotTarget
+                if (slotTarget != null) {
+                    researchTelemetry?.recordDeliveryAck(slotTarget)
+                }
+
                 val slotEdSeed = msg.slotEdSeed?.raw
                 if (slotTarget != null && slotEdSeed != null) {
                     try {
-                        dhtLeafNode.putMutable(
+                        val tombOk = dhtLeafNode.putMutable(
                             target = slotTarget,
                             v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,
                             skipLocalStore = isSelf
+                        )
+                        researchTelemetry?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
+                            target = slotTarget,
+                            payloadBytes = 900,
+                            success = tombOk
                         )
                     } catch (_: Exception) {}
                 }

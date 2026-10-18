@@ -70,13 +70,24 @@ class PoissonTrafficGenerator(
                 messageId = pendingAck.messageId,
                 seqNum = pendingAck.seqNum
             )
-            dhtLeafNode.putMutable(
+            val tStart = System.currentTimeMillis()
+            val ok = dhtLeafNode.putMutable(
                 target = ackTarget,
                 v = ackPayload,
                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 salt = null,
                 sk = ackSeed
             )
+            val rttMs = System.currentTimeMillis() - tStart
+            try {
+                org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.COVER_ACK_SENT,
+                    target = ackTarget,
+                    payloadBytes = ackPayload.size,
+                    rttMs = rttMs,
+                    success = ok
+                )
+            } catch (_: Throwable) {}
             decoyTargetPool.registerPopulatedTarget(ackTarget)
             CoverEvent(
                 timestamp = System.currentTimeMillis(),
@@ -88,7 +99,8 @@ class PoissonTrafficGenerator(
         } else if (isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
             val entry = blindRepublishPool.sampleRandomEntry()
             if (entry != null) {
-                dhtLeafNode.putMutablePreSigned(
+                val tStart = System.currentTimeMillis()
+                val ok = dhtLeafNode.putMutablePreSigned(
                     target = entry.target,
                     v = entry.v,
                     seq = entry.seq,
@@ -97,6 +109,19 @@ class PoissonTrafficGenerator(
                     sig = entry.sig,
                     skipLocalStore = false
                 )
+                val rttMs = System.currentTimeMillis() - tStart
+                try {
+                    org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH,
+                        target = entry.target,
+                        seqNum = entry.seq,
+                        payloadBytes = entry.v.size,
+                        rttMs = rttMs,
+                        nodesQueried = 24,
+                        nodesResponded = if (ok) 8 else 0,
+                        success = ok
+                    )
+                } catch (_: Throwable) {}
                 decoyTargetPool.registerPopulatedTarget(entry.target)
                 CoverEvent(
                     timestamp = System.currentTimeMillis(),
@@ -108,6 +133,14 @@ class PoissonTrafficGenerator(
             } else {
                 val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
                 val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
+                try {
+                    org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
+                        target = actualTarget,
+                        payloadBytes = 900,
+                        success = publishedTarget != null
+                    )
+                } catch (_: Throwable) {}
                 decoyTargetPool.registerPopulatedTarget(actualTarget)
                 CoverEvent(
                     timestamp = System.currentTimeMillis(),
@@ -120,6 +153,14 @@ class PoissonTrafficGenerator(
         } else {
             val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
             val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
+            try {
+                org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
+                    target = actualTarget,
+                    payloadBytes = 900,
+                    success = publishedTarget != null
+                )
+            } catch (_: Throwable) {}
             decoyTargetPool.registerPopulatedTarget(actualTarget)
             CoverEvent(
                 timestamp = System.currentTimeMillis(),

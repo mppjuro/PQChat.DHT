@@ -128,6 +128,7 @@ class PollingWorker(
                 }
 
                 if (timeSinceLast >= interval) {
+                    val tStart = System.currentTimeMillis()
                     val ok = dhtClient.putMutable(
                         target = task.target,
                         v = task.payload,
@@ -135,6 +136,22 @@ class PollingWorker(
                         salt = null,
                         sk = task.edPrivateKeySeed
                     )
+                    val rttMs = System.currentTimeMillis() - tStart
+                    try {
+                        org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.OWN_REPUBLISH,
+                            target = task.target,
+                            seqNum = task.seq,
+                            payloadBytes = task.payload.size,
+                            rttMs = rttMs,
+                            nodesQueried = 24,
+                            nodesResponded = if (ok) 8 else 0,
+                            success = ok,
+                            republishAttempt = task.currentAttempts + 1,
+                            messageAgeMs = age
+                        )
+                    } catch (_: Throwable) {}
+
                     if (ok) {
                         task.lastRepublishedTimestamp = currentTimeMs
                         task.currentAttempts++

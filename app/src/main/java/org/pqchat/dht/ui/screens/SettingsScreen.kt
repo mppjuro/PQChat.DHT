@@ -27,6 +27,7 @@ import org.pqchat.dht.ui.theme.ElectricGreen
 import org.pqchat.dht.ui.theme.LocalAppColors
 import org.pqchat.dht.ui.theme.NeonCyan
 import org.pqchat.dht.ui.util.BatteryOptimizationHelper
+import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
@@ -37,6 +38,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenSelfNotes: () -> Unit
 ) {
+    val context = LocalContext.current
     val appColors = LocalAppColors.current
 
     val themeMode by viewModel.themeMode.collectAsState()
@@ -54,6 +56,16 @@ fun SettingsScreen(
     val isTorEnabled by viewModel.isTorEnabled.collectAsState()
     val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
+
+    val isAnonymousStatsEnabled by viewModel.isAnonymousStatsEnabled.collectAsState()
+    val statsProbeIntervalMs by viewModel.statsProbeIntervalMs.collectAsState()
+    val researchEventsCount by viewModel.researchEventsCount.collectAsState()
+    val researchFirstSendCount by viewModel.researchFirstSendCount.collectAsState()
+    val researchOwnRepublishCount by viewModel.researchOwnRepublishCount.collectAsState()
+    val researchCrowdRepublishCount by viewModel.researchCrowdRepublishCount.collectAsState()
+    val researchPacketsReceivedCount by viewModel.researchPacketsReceivedCount.collectAsState()
+    val researchTtlSamplesCount by viewModel.researchTtlSamplesCount.collectAsState()
+    val researchSyncStatus by viewModel.researchSyncStatus.collectAsState()
 
     Scaffold(
         topBar = {
@@ -810,6 +822,241 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ==================== SECTION 6: MASTER'S THESIS RESEARCH & FIREBASE ====================
+            SettingsSectionHeader(
+                title = "Badania naukowe (Praca Magisterska)",
+                icon = Icons.Default.Analytics
+            )
+
+            Surface(
+                color = appColors.surface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "🔬 Anonimowe Statystyki i Analiza Republishingu",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Zgoda na rejestrowanie i anonimowe przesyłanie do Google Firebase dokładnych czasów emisji i odbioru pakietów, pełnej analizy cykli republishingu oraz pomiaru czasu wygasania rekordów w sieci DHT (próbkowanie TTL co 15 minut). Wszystkie dane są całkowicie anonimowe (brak tożsamości, brak treści wiadomości, brak kluczy kryptograficznych).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // Przełącznik: Wysyłaj anonimowe statystyki (domyślnie wyłączony)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Wysyłaj anonimowe statystyki",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isAnonymousStatsEnabled) "Włączone (aktywne próbkowanie i synchronizacja Firebase)" else "Wyłączone (domyślnie, brak zapisu i transferu)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isAnonymousStatsEnabled) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isAnonymousStatsEnabled,
+                            onCheckedChange = { viewModel.setAnonymousStatsEnabled(it) }
+                        )
+                    }
+
+                    if (isAnonymousStatsEnabled) {
+                        HorizontalDivider(
+                            color = appColors.border,
+                            modifier = Modifier.padding(vertical = 14.dp)
+                        )
+
+                        // Status synchronizacji Firebase
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        ) {
+                            Text(
+                                text = "Status Firebase: ",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = appColors.textPrimary
+                            )
+                            Text(
+                                text = researchSyncStatus,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (researchSyncStatus.contains("Zsynchronizowano") || researchSyncStatus.contains("Uwierzytelniono")) ElectricGreen else appColors.primary
+                            )
+                        }
+
+                        // Liczniki telemetryczne w kafelkach
+                        Text(
+                            text = "Zarejestrowane metryki badawcze:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = appColors.textSecondary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ResearchMetricCard(
+                                    title = "Wysłane (pierwszy raz)",
+                                    count = researchFirstSendCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                ResearchMetricCard(
+                                    title = "Własny republish",
+                                    count = researchOwnRepublishCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ResearchMetricCard(
+                                    title = "Przekaźnik P2P (inni)",
+                                    count = researchCrowdRepublishCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                ResearchMetricCard(
+                                    title = "Odebrane z DHT",
+                                    count = researchPacketsReceivedCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ResearchMetricCard(
+                                    title = "Próbki retencji (TTL)",
+                                    count = researchTtlSamplesCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                ResearchMetricCard(
+                                    title = "Łącznie zdarzeń",
+                                    count = researchEventsCount,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Częstotliwość próbkowania wygasania rekordów (TTL)
+                        IntervalDropdownRow(
+                            title = "Częstotliwość próbkowania wygasania (TTL)",
+                            subtitle = "Jak często badać sieć DHT pod kątem przeżywalności oryginalnych pakietów (domyślnie co 15 minut)",
+                            currentMillis = statsProbeIntervalMs,
+                            defaultMillis = 15 * 60 * 1000L,
+                            options = RESEARCH_PROBE_INTERVAL_OPTIONS,
+                            onSelect = { viewModel.setStatsProbeIntervalMs(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Przyciski akcji: Eksport CSV oraz Wymuszenie synchronizacji
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val intent = viewModel.getShareCsvIntent(context)
+                                    if (intent != null) {
+                                        context.startActivity(Intent.createChooser(intent, "Udostępnij / Pobierz plik .CSV"))
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = appColors.primary,
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Eksportuj CSV",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = { viewModel.triggerFirebaseSyncNow() },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudUpload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Wyślij do Firebase",
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ResearchMetricCard(
+    title: String,
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    val appColors = LocalAppColors.current
+    Surface(
+        color = appColors.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, appColors.border),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = appColors.primary
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall,
+                color = appColors.textSecondary,
+                fontSize = 11.sp
+            )
         }
     }
 }

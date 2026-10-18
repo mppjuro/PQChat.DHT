@@ -56,7 +56,8 @@ class AdaptivePollingManager(
             if (isCrowdsourcedRepublishEnabled && blindRepublishPool.size() > 0) {
                 val entry = blindRepublishPool.sampleRandomEntry()
                 if (entry != null) {
-                    dhtClient.putMutablePreSigned(
+                    val tStart = System.currentTimeMillis()
+                    val ok = dhtClient.putMutablePreSigned(
                         target = entry.target,
                         v = entry.v,
                         seq = entry.seq,
@@ -65,10 +66,33 @@ class AdaptivePollingManager(
                         sig = entry.sig,
                         skipLocalStore = false
                     )
+                    val rttMs = System.currentTimeMillis() - tStart
+                    try {
+                        org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH,
+                            target = entry.target,
+                            seqNum = entry.seq,
+                            payloadBytes = entry.v.size,
+                            rttMs = rttMs,
+                            nodesQueried = 24,
+                            nodesResponded = if (ok) 8 else 0,
+                            success = ok
+                        )
+                    } catch (_: Throwable) {}
                     return
                 }
             }
-            dhtClient.sendCoverTrafficDummy()
+            val dummyTarget = dhtClient.sendCoverTrafficDummy()
+            if (dummyTarget != null) {
+                try {
+                    org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
+                        target = dummyTarget,
+                        payloadBytes = 900,
+                        success = true
+                    )
+                } catch (_: Throwable) {}
+            }
         }
     }
     enum class PollingState(val label: String) {

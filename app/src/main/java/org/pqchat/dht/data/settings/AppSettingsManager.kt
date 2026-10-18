@@ -91,6 +91,14 @@ val REPUBLISH_TTL_OPTIONS = listOf(
     SyncIntervalOption("72 godziny", 72 * 60 * 60 * 1000L)
 )
 
+val RESEARCH_PROBE_INTERVAL_OPTIONS = listOf(
+    SyncIntervalOption("5 minut", 5 * 60 * 1000L),
+    SyncIntervalOption("10 minut", 10 * 60 * 1000L),
+    SyncIntervalOption("15 minut (zalecane)", 15 * 60 * 1000L),
+    SyncIntervalOption("30 minut", 30 * 60 * 1000L),
+    SyncIntervalOption("1 godzina", 60 * 60 * 1000L)
+)
+
 class AppSettingsManager(
     context: Context? = null,
     sharedPreferences: SharedPreferences? = null
@@ -179,6 +187,17 @@ class AppSettingsManager(
     )
     val isBiometricLockEnabled: StateFlow<Boolean> = _isBiometricLockEnabled.asStateFlow()
 
+    // Master's thesis anonymous research telemetry (default FALSE, explicitly opt-in)
+    private val _isAnonymousStatsEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_ANONYMOUS_STATS, false) ?: false
+    )
+    val isAnonymousStatsEnabled: StateFlow<Boolean> = _isAnonymousStatsEnabled.asStateFlow()
+
+    private val _statsProbeIntervalMs = MutableStateFlow(
+        prefs?.getLong(KEY_STATS_PROBE_INTERVAL, 15 * 60 * 1000L) ?: (15 * 60 * 1000L)
+    )
+    val statsProbeIntervalMs: StateFlow<Long> = _statsProbeIntervalMs.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -256,6 +275,16 @@ class AppSettingsManager(
         _isBiometricLockEnabled.value = enabled
     }
 
+    fun setAnonymousStatsEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_ANONYMOUS_STATS, enabled)?.apply()
+        _isAnonymousStatsEnabled.value = enabled
+    }
+
+    fun setStatsProbeIntervalMs(millis: Long) {
+        prefs?.edit()?.putLong(KEY_STATS_PROBE_INTERVAL, millis)?.apply()
+        _statsProbeIntervalMs.value = millis
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -281,5 +310,7 @@ class AppSettingsManager(
         private const val KEY_CROWDSOURCED_REPUBLISH = "crowdsourced_republish_enabled"
         private const val KEY_TOR_ENABLED = "tor_enabled"
         private const val KEY_BIOMETRIC_LOCK = "biometric_lock_enabled"
+        private const val KEY_ANONYMOUS_STATS = "anonymous_stats_enabled"
+        private const val KEY_STATS_PROBE_INTERVAL = "stats_probe_interval"
     }
 }

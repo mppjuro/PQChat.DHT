@@ -160,6 +160,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         settingsManager.setBiometricLockEnabled(enabled)
     }
 
+    // Master's Thesis Research Telemetry & Firebase Sync
+    val isAnonymousStatsEnabled: StateFlow<Boolean> = settingsManager.isAnonymousStatsEnabled
+    val statsProbeIntervalMs: StateFlow<Long> = settingsManager.statsProbeIntervalMs
+
+    val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
+        get() = app?.researchTelemetryManager
+
+    val researchEventsCount: StateFlow<Int> = researchTelemetry?.eventsCount ?: MutableStateFlow(0)
+    val researchFirstSendCount: StateFlow<Int> = researchTelemetry?.firstSendCount ?: MutableStateFlow(0)
+    val researchOwnRepublishCount: StateFlow<Int> = researchTelemetry?.ownRepublishCount ?: MutableStateFlow(0)
+    val researchCrowdRepublishCount: StateFlow<Int> = researchTelemetry?.crowdRepublishCount ?: MutableStateFlow(0)
+    val researchPacketsReceivedCount: StateFlow<Int> = researchTelemetry?.packetsReceivedCount ?: MutableStateFlow(0)
+    val researchTtlSamplesCount: StateFlow<Int> = researchTelemetry?.ttlSamplesCount ?: MutableStateFlow(0)
+    val researchSyncStatus: StateFlow<String> = researchTelemetry?.syncStatus ?: MutableStateFlow("Wyłączone")
+
+    fun setAnonymousStatsEnabled(enabled: Boolean) {
+        settingsManager.setAnonymousStatsEnabled(enabled)
+    }
+
+    fun setStatsProbeIntervalMs(millis: Long) {
+        settingsManager.setStatsProbeIntervalMs(millis)
+    }
+
+    fun triggerFirebaseSyncNow() {
+        viewModelScope.launch {
+            researchTelemetry?.forceFirebaseSync()
+        }
+    }
+
+    fun getShareCsvIntent(context: android.content.Context): android.content.Intent? {
+        return researchTelemetry?.createShareCsvIntent(context)
+    }
+
     init {
         if (app == null) {
             dhtLeafNode.start()
@@ -425,12 +458,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 // 1. Bob verifies the result of putMutable
+                val tStart = System.currentTimeMillis()
                 val success = dhtLeafNode.putMutable(
                     target = bobResult.target0,
                     v = bobResult.frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = bobResult.edPrivateKeySeed
+                )
+                val rttMs = System.currentTimeMillis() - tStart
+                researchTelemetry?.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    target = bobResult.target0,
+                    seqNum = 0L,
+                    payloadBytes = bobResult.frame.size,
+                    rttMs = rttMs,
+                    nodesQueried = 24,
+                    nodesResponded = if (success) 8 else 0,
+                    success = success,
+                    republishAttempt = 0
                 )
 
                 if (!success) {
@@ -445,12 +491,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     while (isActive && republishCount < 40) {
                         delay(15_000L)
                         republishCount++
-                        dhtLeafNode.putMutable(
+                        val tRepubStart = System.currentTimeMillis()
+                        val repOk = dhtLeafNode.putMutable(
                             target = bobResult.target0,
                             v = bobResult.frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = bobResult.edPrivateKeySeed
+                        )
+                        val repRtt = System.currentTimeMillis() - tRepubStart
+                        researchTelemetry?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.OWN_REPUBLISH,
+                            target = bobResult.target0,
+                            seqNum = 0L,
+                            payloadBytes = bobResult.frame.size,
+                            rttMs = repRtt,
+                            nodesQueried = 24,
+                            nodesResponded = if (repOk) 8 else 0,
+                            success = repOk,
+                            republishAttempt = republishCount
                         )
                     }
                 }
