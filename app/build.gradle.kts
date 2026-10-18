@@ -34,14 +34,10 @@ android {
         val fbApiKey = providers.environmentVariable("FIREBASE_API_KEY")
             .orElse(providers.gradleProperty("FIREBASE_API_KEY"))
             .getOrElse("")
-        val fbStorageBucket = providers.environmentVariable("FIREBASE_STORAGE_BUCKET")
-            .orElse(providers.gradleProperty("FIREBASE_STORAGE_BUCKET"))
-            .getOrElse("")
 
         buildConfigField("String", "FIREBASE_PROJECT_ID", "\"$fbProjectId\"")
         buildConfigField("String", "FIREBASE_APP_ID", "\"$fbAppId\"")
         buildConfigField("String", "FIREBASE_API_KEY", "\"$fbApiKey\"")
-        buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"$fbStorageBucket\"")
     }
 
     buildTypes {
@@ -195,11 +191,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
 
-    // Firebase (Master's Thesis Anonymous Research Telemetry)
+    // Firebase (Master's Thesis Anonymous Research Telemetry - Firestore & Auth only)
     val firebaseBom = platform("com.google.firebase:firebase-bom:33.9.0")
     implementation(firebaseBom)
     implementation("com.google.firebase:firebase-firestore-ktx")
-    implementation("com.google.firebase:firebase-storage-ktx")
     implementation("com.google.firebase:firebase-auth-ktx")
 
     // Testing

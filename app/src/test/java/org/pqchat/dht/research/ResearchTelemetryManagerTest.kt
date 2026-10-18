@@ -315,4 +315,67 @@ class ResearchTelemetryManagerTest {
         val zipFile = manager.buildCompressedResearchBundle()
         assertTrue("Local ZIP archive generation must succeed even without Firebase", zipFile.exists() && zipFile.length() > 0)
     }
+
+    @Test
+    fun `test computeSessionPayload conforms to Firestore rules schema and decodes bundle`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordPacketEvent(
+            role = PacketRole.FIRST_SEND,
+            target = target,
+            seqNum = 1L,
+            payloadBytes = 900,
+            rttMs = 42L,
+            nodesQueried = 18,
+            nodesResponded = 8,
+            success = true
+        )
+        manager.recordDeliveryAck(target)
+
+        val (deviceInfo, metrics) = manager.computeSessionPayload()
+
+        // 1. Validate firestore.rules requirements:
+        // - request.resource.data.keys().hasAll(['timestamp', 'deviceInfo', 'metrics'])
+        // - request.resource.data.metrics is map
+        assertNotNull("deviceInfo must not be null", deviceInfo)
+        assertNotNull("metrics must not be null", metrics)
+        assertTrue("deviceInfo must contain sessionId", deviceInfo.containsKey("sessionId"))
+        assertTrue("deviceInfo must contain deviceModel", deviceInfo.containsKey("deviceModel"))
+        assertTrue("deviceInfo must contain appVersion", deviceInfo.containsKey("appVersion"))
+
+        assertTrue("metrics must contain totalEvents", metrics.containsKey("totalEvents"))
+        assertTrue("metrics must contain rttStats", metrics["rttStats"] is Map<*, *>)
+        assertTrue("metrics must contain ttlStats", metrics["ttlStats"] is Map<*, *>)
+        assertTrue("metrics must contain republishStats", metrics["republishStats"] is Map<*, *>)
+        assertTrue("metrics must contain fileChecksums", metrics["fileChecksums"] is Map<*, *>)
+        assertTrue("metrics must contain manifestSha256", metrics.containsKey("manifestSha256"))
+        assertTrue("metrics must contain bundleZipBase64", metrics.containsKey("bundleZipBase64"))
+
+        val rttStats = metrics["rttStats"] as Map<*, *>
+        assertEquals(42L, rttStats["minMs"])
+        assertEquals(42L, rttStats["maxMs"])
+        assertEquals(1, rttStats["count"])
+
+        val republishStats = metrics["republishStats"] as Map<*, *>
+        assertEquals(1, republishStats["deliveredCount"])
+
+        // 2. Validate embedded Base64 ZIP payload
+        val bundleBase64 = metrics["bundleZipBase64"] as String
+        assertTrue("Base64 string must not be empty", bundleBase64.isNotBlank())
+        val decodedBytes = java.util.Base64.getDecoder().decode(bundleBase64)
+        assertTrue("Decoded bytes must have ZIP magic header", decodedBytes.size > 4)
+        assertEquals(0x50.toByte(), decodedBytes[0]) // 'P'
+        assertEquals(0x4B.toByte(), decodedBytes[1]) // 'K'
+
+        // Verify total payload size is far below the 1 MB Firestore limit
+        val estimatedPayloadSize = bundleBase64.length + 2048
+        assertTrue("Payload size must be strictly under 1 MB limit", estimatedPayloadSize < 1024 * 1024)
+    }
 }
+

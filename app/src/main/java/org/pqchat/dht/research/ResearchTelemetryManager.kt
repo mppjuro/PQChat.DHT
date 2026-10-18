@@ -18,9 +18,12 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.FileWriter
 import java.io.PrintWriter
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -32,7 +35,7 @@ import java.util.zip.ZipOutputStream
  * - Conducts periodic (15-min) historical DHT retention sampling to determine exact packet expiration and survival curves.
  * - Local-First Batch Archiving: Maintains persistent CSV files and dumps resource usage from AndroidResourceProfiler on device.
  * - Compresses all CSVs and session_manifest.json with SHA-256 hashes into a single .zip bundle.
- * - Supports instant offline sharing via Android FileProvider / ACTION_SEND or cloud sync to Firebase Storage.
+ * - Supports instant offline sharing via Android FileProvider / ACTION_SEND or Cloud Firestore sync (Firebase Spark plan compliant).
  * - Strictly zero plaintext, zero cryptographic keys, and default-off user privacy.
  */
 class ResearchTelemetryManager(
@@ -75,6 +78,13 @@ class ResearchTelemetryManager(
 
     // In-flight message tracking for republish end-to-end analysis
     private val inFlightRepublishes = ConcurrentHashMap<String, InFlightTracker>()
+
+    // In-memory aggregates for Firestore batch metric synchronization
+    private val rttSamples = ConcurrentLinkedQueue<Long>()
+    private val aliveTtlCount = AtomicInteger(0)
+    private val expiredTtlCount = AtomicInteger(0)
+    private val deliveredAckCount = AtomicInteger(0)
+    private val totalDeliveredLatencyMs = AtomicLong(0L)
 
     private data class InFlightTracker(
         val messagePrefix: String,
@@ -136,10 +146,8 @@ class ResearchTelemetryManager(
                 delay(60 * 60 * 1000L) // check every 1 hour
                 if (isEnabled && firebaseSync.isWifiConnected() && firebaseSync.isFirebaseConfigured()) {
                     try {
-                        val bundle = buildCompressedResearchBundle()
-                        val manifestFile = File(telemetryDir, "session_manifest.json")
-                        val manifestMap = generateManifestData().toMap()
-                        firebaseSync.syncResearchBundle(sessionId, bundle, manifestMap, isManual = false)
+                        val (deviceInfo, metrics) = computeSessionPayload()
+                        firebaseSync.syncResearchSession(sessionId, deviceInfo, metrics, isManual = false)
                     } catch (_: Exception) {}
                 }
             }
@@ -182,6 +190,10 @@ class ResearchTelemetryManager(
 
         val targetPrefix = CryptoUtils.toHex(target).take(8)
         val now = System.currentTimeMillis()
+
+        if (rttMs > 0L && rttSamples.size < 2000) {
+            rttSamples.add(rttMs)
+        }
 
         val event = PacketTelemetryEvent(
             sessionId = sessionId,
@@ -244,6 +256,9 @@ class ResearchTelemetryManager(
         val tracker = inFlightRepublishes.remove(prefix) ?: return
 
         val latency = (deliveredEpochMs - tracker.initialSentMs).coerceAtLeast(0L)
+        deliveredAckCount.incrementAndGet()
+        totalDeliveredLatencyMs.addAndGet(latency)
+
         val summary = RepublishAnalysisSummary(
             messagePrefix = prefix,
             sessionId = sessionId,
@@ -263,6 +278,11 @@ class ResearchTelemetryManager(
     private fun recordTtlSampleInternal(sample: TtlSampleEvent) {
         if (!isEnabled) return
         _ttlSamplesCount.value += 1
+        if (sample.isAlive) {
+            aliveTtlCount.incrementAndGet()
+        } else {
+            expiredTtlCount.incrementAndGet()
+        }
         appendTtlSampleCsv(sample)
     }
 
@@ -291,6 +311,139 @@ class ResearchTelemetryManager(
                 PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(summary.toMasterCsvRow()) }
             } catch (_: Exception) {}
         }
+    }
+
+    fun computeRttStats(): Map<String, Any> {
+        val rtts = rttSamples.toList().sorted()
+        if (rtts.isEmpty()) {
+            return mapOf(
+                "count" to 0,
+                "minMs" to 0L,
+                "maxMs" to 0L,
+                "avgMs" to 0.0,
+                "p50Ms" to 0L,
+                "p90Ms" to 0L,
+                "p99Ms" to 0L
+            )
+        }
+        val count = rtts.size
+        val min = rtts.first()
+        val max = rtts.last()
+        val avg = rtts.average()
+        val p50 = rtts[(count * 0.50).toInt().coerceAtMost(count - 1)]
+        val p90 = rtts[(count * 0.90).toInt().coerceAtMost(count - 1)]
+        val p99 = rtts[(count * 0.99).toInt().coerceAtMost(count - 1)]
+        return mapOf(
+            "count" to count,
+            "minMs" to min,
+            "maxMs" to max,
+            "avgMs" to avg,
+            "p50Ms" to p50,
+            "p90Ms" to p90,
+            "p99Ms" to p99
+        )
+    }
+
+    fun computeTtlStats(): Map<String, Any> {
+        val alive = aliveTtlCount.get()
+        val expired = expiredTtlCount.get()
+        val total = alive + expired
+        val rate = if (total > 0) (alive.toDouble() / total * 100.0) else 0.0
+        return mapOf(
+            "totalSamples" to total,
+            "aliveCount" to alive,
+            "expiredCount" to expired,
+            "survivalRatePercent" to rate
+        )
+    }
+
+    fun computeRepublishStats(): Map<String, Any> {
+        val delivered = deliveredAckCount.get()
+        val firstSends = firstSendCount.value
+        val rate = if (firstSends > 0) (delivered.toDouble() / firstSends * 100.0).coerceAtMost(100.0) else 0.0
+        val avgLatency = if (delivered > 0) (totalDeliveredLatencyMs.get().toDouble() / delivered) else 0.0
+        return mapOf(
+            "trackedMessages" to firstSends,
+            "deliveredCount" to delivered,
+            "deliveryRatePercent" to rate,
+            "avgLatencyMs" to avgLatency,
+            "ownRepublishes" to ownRepublishCount.value,
+            "crowdRelays" to crowdRepublishCount.value
+        )
+    }
+
+    fun computeResourceStats(): Map<String, Any> {
+        val profiler = resourceProfiler ?: return emptyMap()
+        val samples = profiler.samples
+        if (samples.isEmpty()) return emptyMap()
+        val avgBatteryCurrentUa = samples.map { it.batteryCurrentNowUa }.average()
+        val firstSample = samples.first()
+        val lastSample = samples.last()
+        val batteryDrop = (firstSample.batteryLevelPercent - lastSample.batteryLevelPercent).coerceAtLeast(0)
+        val maxWakeLockMs = samples.maxOfOrNull { it.wakeLockDurationMs } ?: 0L
+        val totalDhtBytesSent = (lastSample.dhtBytesSent - firstSample.dhtBytesSent).coerceAtLeast(0L)
+        val totalDhtBytesReceived = (lastSample.dhtBytesReceived - firstSample.dhtBytesReceived).coerceAtLeast(0L)
+        return mapOf(
+            "samplesCount" to samples.size,
+            "avgBatteryCurrentUa" to avgBatteryCurrentUa,
+            "batteryDropPercent" to batteryDrop,
+            "maxWakeLockDurationMs" to maxWakeLockMs,
+            "dhtBytesSent" to totalDhtBytesSent,
+            "dhtBytesReceived" to totalDhtBytesReceived
+        )
+    }
+
+    /**
+     * Prepares device metadata and aggregated metrics conforming to `firestore.rules`.
+     * If the bundle size is <= 600 KB, embeds the complete raw CSV bundle as Base64 in `metrics`.
+     */
+    fun computeSessionPayload(): Pair<Map<String, Any>, Map<String, Any>> {
+        val manifest = generateManifestData()
+        val zipFile = buildCompressedResearchBundle()
+
+        val bundleBase64: String
+        val bundleStatus: String
+        val zipSize = zipFile.length()
+
+        if (zipSize in 1..600_000) {
+            val bytes = zipFile.readBytes()
+            bundleBase64 = Base64.getEncoder().encodeToString(bytes)
+            bundleStatus = "EMBEDDED_ZIP_BASE64"
+        } else if (zipSize > 600_000) {
+            bundleBase64 = "OMITTED_EXCEEDS_600KB"
+            bundleStatus = "Available via local device export (.ZIP) to preserve Firestore 1MB limit"
+        } else {
+            bundleBase64 = ""
+            bundleStatus = "EMPTY"
+        }
+
+        val deviceInfo: Map<String, Any> = mapOf(
+            "sessionId" to sessionId,
+            "deviceModel" to manifest.deviceModel,
+            "androidVersion" to manifest.androidVersion,
+            "appVersion" to manifest.appVersion,
+            "versionCode" to manifest.versionCode
+        )
+
+        val metrics: Map<String, Any> = mapOf(
+            "totalEvents" to manifest.totalEvents,
+            "firstSendCount" to manifest.firstSendCount,
+            "ownRepublishCount" to manifest.ownRepublishCount,
+            "crowdRepublishCount" to manifest.crowdRepublishCount,
+            "packetsReceivedCount" to manifest.packetsReceivedCount,
+            "ttlSamplesCount" to manifest.ttlSamplesCount,
+            "rttStats" to computeRttStats(),
+            "ttlStats" to computeTtlStats(),
+            "republishStats" to computeRepublishStats(),
+            "resourceStats" to computeResourceStats(),
+            "fileChecksums" to manifest.fileChecksums,
+            "manifestSha256" to manifest.manifestSha256,
+            "bundleZipSizeBytes" to zipSize,
+            "bundleZipStatus" to bundleStatus,
+            "bundleZipBase64" to bundleBase64
+        )
+
+        return Pair(deviceInfo, metrics)
     }
 
     /**
@@ -420,19 +573,12 @@ class ResearchTelemetryManager(
     }
 
     /**
-     * Manually triggers an immediate bundle packaging and upload to Google Firebase (ZIP to Storage + Summary to Firestore).
+     * Manually triggers an immediate batch synchronization to Google Cloud Firestore (Firebase Spark free tier).
      */
     suspend fun forceFirebaseSync(): Boolean = withContext(Dispatchers.IO) {
-        val bundle = try {
-            buildCompressedResearchBundle()
-        } catch (_: Exception) {
-            null
-        } ?: run {
-            return@withContext false
-        }
-
-        val manifestMap = generateManifestData().toMap()
-        firebaseSync.syncResearchBundle(sessionId, bundle, manifestMap, isManual = true)
+        if (!firebaseSync.isFirebaseConfigured()) return@withContext false
+        val (deviceInfo, metrics) = computeSessionPayload()
+        firebaseSync.syncResearchSession(sessionId, deviceInfo, metrics, isManual = true)
     }
 
     fun stop() {

@@ -3,42 +3,37 @@ package org.pqchat.dht.research
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
-import android.os.Build
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageMetadata
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import org.pqchat.dht.BuildConfig
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Handles Local-First Batch Archiving and synchronization of academic research telemetry
- * to Google Firebase (Cloud Storage for compressed .zip bundles + Firestore for session summaries).
+ * Handles batch synchronization of academic research telemetry to Google Cloud Firestore (Firebase Spark free tier).
  *
  * Design Principles:
- * 1. Local-First & Zero LTE Wakeup: Never polls or writes individual events over cellular radio.
+ * 1. Cloud Firestore Only: No Cloud Storage dependency (zero costs, Spark-plan compliant).
+ * 2. Local-First Batch Archiving: Never polls or writes individual events over cellular radio.
  *    Telemetry is aggregated locally in CSV files.
- * 2. Bandwidth & Quota Efficient: Only uploads a single compressed .zip bundle and 1 Firestore
- *    summary document per session.
- * 3. Rate-limited & Wi-Fi only: Automatic sync occurs at most once every 6 hours and strictly on Wi-Fi.
+ * 3. Compact JSON & GZIP Batch Payloads: Writes at most 1 aggregate document per session directly
+ *    to collection `research_sessions/{sessionId}`, strictly respecting the 1 MB Firestore limit.
+ * 4. Strict Security & Validation: Matches `firestore.rules` create-only policy (requires non-null auth,
+ *    `timestamp`, `deviceInfo`, and `metrics` map).
+ * 5. Rate-limited & Wi-Fi only: Automatic sync occurs at most once every 6 hours and strictly on Wi-Fi.
  *    Manual sync can be triggered at any time by the user.
- * 4. Safe No-Op Fallback: If Firebase is not configured (missing google-services.json and BuildConfig
+ * 6. Safe No-Op Fallback: If Firebase is not configured (missing google-services.json and BuildConfig
  *    keys), all operations gracefully complete as no-op without throwing exceptions.
  */
 class FirebaseResearchSync(
     private val context: Context? = null,
     private val firestoreProvider: (() -> FirebaseFirestore?)? = null,
-    private val storageProvider: (() -> FirebaseStorage?)? = null,
     private val authProvider: (() -> FirebaseAuth?)? = null
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -50,6 +45,7 @@ class FirebaseResearchSync(
     private var isAuthenticated = false
 
     private var lastAutoSyncTimestamp = 0L
+    private var hasSynced = false
 
     init {
         tryInitializeFirebase()
@@ -67,18 +63,15 @@ class FirebaseResearchSync(
         val projectId = try { BuildConfig.FIREBASE_PROJECT_ID } catch (_: Throwable) { "" }
         val appId = try { BuildConfig.FIREBASE_APP_ID } catch (_: Throwable) { "" }
         val apiKey = try { BuildConfig.FIREBASE_API_KEY } catch (_: Throwable) { "" }
-        val storageBucket = try { BuildConfig.FIREBASE_STORAGE_BUCKET } catch (_: Throwable) { "" }
 
         if (projectId.isNotBlank() && appId.isNotBlank() && apiKey.isNotBlank()) {
             try {
-                val optionsBuilder = FirebaseOptions.Builder()
+                val options = FirebaseOptions.Builder()
                     .setProjectId(projectId)
                     .setApplicationId(appId)
                     .setApiKey(apiKey)
-                if (storageBucket.isNotBlank()) {
-                    optionsBuilder.setStorageBucket(storageBucket)
-                }
-                FirebaseApp.initializeApp(ctx, optionsBuilder.build())
+                    .build()
+                FirebaseApp.initializeApp(ctx, options)
                 return true
             } catch (_: Exception) {
                 return false
@@ -89,7 +82,7 @@ class FirebaseResearchSync(
     }
 
     fun isFirebaseConfigured(): Boolean {
-        if (firestoreProvider != null || storageProvider != null || authProvider != null) {
+        if (firestoreProvider != null || authProvider != null) {
             return true
         }
         return try {
@@ -104,13 +97,6 @@ class FirebaseResearchSync(
         if (firestoreProvider != null) return firestoreProvider.invoke()
         return if (isFirebaseConfigured()) {
             try { FirebaseFirestore.getInstance() } catch (_: Exception) { null }
-        } else null
-    }
-
-    private fun getStorage(): FirebaseStorage? {
-        if (storageProvider != null) return storageProvider.invoke()
-        return if (isFirebaseConfigured()) {
-            try { FirebaseStorage.getInstance() } catch (_: Exception) { null }
         } else null
     }
 
@@ -159,18 +145,22 @@ class FirebaseResearchSync(
     }
 
     /**
-     * Uploads the compressed research bundle (.zip) to Firebase Storage and writes
-     * the session manifest summary to Cloud Firestore.
+     * Synchronizes the research session metrics and optional compressed payload directly to Cloud Firestore.
+     * Complies with `firestore.rules` requirements:
+     * - `request.auth != null`
+     * - Contains keys: `['timestamp', 'deviceInfo', 'metrics']`
+     * - `metrics` is a Map
+     * - Document size strictly capped well below 1 MB.
      *
      * @param sessionId anonymous session identifier
-     * @param zipFile compressed bundle containing all CSVs and session_manifest.json
-     * @param manifestSummary metadata map containing session statistics and SHA-256 checksums
-     * @param isManual true if triggered manually by user; false if automated background check
+     * @param deviceInfo device metadata (model, android version, app version)
+     * @param metrics aggregated statistics, survival rates, RTT percentiles and checksums
+     * @param isManual true if user explicitly triggered sync via Settings/Diagnostics
      */
-    suspend fun syncResearchBundle(
+    suspend fun syncResearchSession(
         sessionId: String,
-        zipFile: File,
-        manifestSummary: Map<String, Any>,
+        deviceInfo: Map<String, Any>,
+        metrics: Map<String, Any>,
         isManual: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
         if (!isFirebaseConfigured()) {
@@ -194,44 +184,41 @@ class FirebaseResearchSync(
             return@withContext false
         }
 
-        val storage = getStorage() ?: run {
-            _syncStatus.value = "Firebase Storage niedostępne"
-            return@withContext false
-        }
         val firestore = getFirestore() ?: run {
             _syncStatus.value = "Firestore niedostępny"
             return@withContext false
         }
 
-        if (!zipFile.exists() || zipFile.length() == 0L) {
-            _syncStatus.value = "Brak pliku paczki badawczej"
-            return@withContext false
-        }
-
         try {
-            _syncStatus.value = "Wysyłanie paczki ZIP do Firebase Storage..."
-            val remotePath = "research_bundles/$sessionId/${zipFile.name}"
-            val storageRef = storage.reference.child(remotePath)
-            val metadata = StorageMetadata.Builder()
-                .setContentType("application/zip")
-                .setCustomMetadata("sessionId", sessionId)
-                .setCustomMetadata("uploadedAt", now.toString())
-                .setCustomMetadata("deviceModel", Build.MODEL)
-                .build()
+            _syncStatus.value = "Zapisywanie metryk w Cloud Firestore..."
+            val documentData = mapOf(
+                "sessionId" to sessionId,
+                "timestamp" to now,
+                "deviceInfo" to deviceInfo,
+                "metrics" to metrics
+            )
 
-            storageRef.putFile(Uri.fromFile(zipFile), metadata).await()
+            val docId = if (!hasSynced) sessionId else "${sessionId}_${now}"
+            try {
+                firestore.collection("research_sessions")
+                    .document(docId)
+                    .set(documentData)
+                    .await()
+            } catch (_: Exception) {
+                // If collision or already created, write with unique timestamped suffix
+                val fallbackId = "${sessionId}_${System.currentTimeMillis()}"
+                firestore.collection("research_sessions")
+                    .document(fallbackId)
+                    .set(documentData)
+                    .await()
+            }
 
-            _syncStatus.value = "Zapisywanie podsumowania sesji w Firestore..."
-            firestore.collection("research_sessions")
-                .document(sessionId)
-                .set(manifestSummary, SetOptions.merge())
-                .await()
-
+            hasSynced = true
             lastAutoSyncTimestamp = now
-            _syncStatus.value = "Pomyślnie zsynchronizowano paczkę ZIP z Firebase"
+            _syncStatus.value = "Pomyślnie zsynchronizowano z Cloud Firestore"
             return@withContext true
         } catch (e: Exception) {
-            _syncStatus.value = "Błąd synchronizacji paczki: ${e.message}"
+            _syncStatus.value = "Błąd zapisu Firestore: ${e.message}"
             return@withContext false
         }
     }
