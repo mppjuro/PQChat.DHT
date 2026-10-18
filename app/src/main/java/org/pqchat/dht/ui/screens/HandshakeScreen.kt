@@ -243,6 +243,7 @@ fun HandshakeScreen(
                         ) {
                             Text("Generate ML-KEM-512 QR Code", fontWeight = FontWeight.Bold)
                         }
+                    } else {
                         // Mode Switch: Statyczny QR / Animowany QR
                         Row(
                             modifier = Modifier
@@ -360,6 +361,37 @@ fun HandshakeScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = NeonCyan
                                 )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Controls to reset or regenerate QR code
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.resetHandshakeState() },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = AmberWarning),
+                                border = BorderStroke(1.dp, AmberWarning),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Zresetuj")
+                            }
+                            Button(
+                                onClick = {
+                                    viewModel.resetHandshakeState()
+                                    viewModel.startAliceHandshake(contactName)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1.5f)
+                            ) {
+                                Text("Nowy kod QR", fontWeight = FontWeight.Bold)
                             }
                         }
                     }

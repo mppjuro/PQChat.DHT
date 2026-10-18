@@ -195,6 +195,7 @@ app/src/main/java/org/pqchat/dht/
 1. **Bezpieczeństwo Pamięci i Kluczy:**
    * Po zakończeniu operacji kryptograficznych na kluczach efemerycznych tablice `ByteArray` muszą być bezzwłocznie zerowane (`array.fill(0)`).
    * Żadne dane jawne (plaintext), klucze prywatne ani zdeszyfrowane payloady nie mogą trafiać do logów systemowych (`Log.d`, `println`).
+   * Przed każdym wypchnięciem commitu zweryfikuj czy nie są wysyłane klucze prywatne, np. API keys.
 2. **Obsługa Błędów Sieci:**
    * Operacje `get` w sieci DHT są asynchroniczne i mogą zakończyć się przekroczeniem czasu oczekiwania (*timeout*). Brak odpowiedzi nie oznacza błędu krytycznego — oznacza jedynie brak nowej wiadomości lub konieczność ponowienia próby w kolejnym cyklu okna.
 3. **Odporność na Replay i Kolizje:**
