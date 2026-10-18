@@ -55,6 +55,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`ec1773b`](https://github.com/mppjuro/PQChat.DHT/commit/ec1773b65c82ee684d4002cd060f40f4ad318224) (2026-10-18) — **ui**: resolve NullPointerException and disappearing QR code in HandshakeScreen Alice flow
 - [`0c039d3`](https://github.com/mppjuro/PQChat.DHT/commit/0c039d36d9fdedd43c19504332ea8a316ddc0846) (2026-10-18) — **dht**: resolve BEP 44 candidate routing poisoning and enhance remote put/get reliability
 - [`31ca34c`](https://github.com/mppjuro/PQChat.DHT/commit/31ca34c1e2b1bff26e75eeb833bf69cb433922d1) (2026-10-18) — **ci**: gate 500-sample DHT benchmark behind measuredIterations property to prevent timeout in RealBep44RemoteIntegrationTest
 - [`590a318`](https://github.com/mppjuro/PQChat.DHT/commit/590a3181bd35dc5585279099bc93d74fc3b06e7f) (2026-10-16) — **dht**: resolve BEP 44 remote integration and loopback measurement failures
@@ -127,6 +128,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`af7135b`](https://github.com/mppjuro/PQChat.DHT/commit/af7135bf6bd0d6e429a3022a50e8a8925534e573) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`40b9081`](https://github.com/mppjuro/PQChat.DHT/commit/40b9081f68f61cda54a679beff3d3cffee13a64d) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`644e049`](https://github.com/mppjuro/PQChat.DHT/commit/644e049700a53f9f463b350d070534a82e060549) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`fc1bea0`](https://github.com/mppjuro/PQChat.DHT/commit/fc1bea050d064067ecf8a360066141efa372c5d5) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
