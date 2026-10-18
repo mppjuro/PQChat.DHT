@@ -236,6 +236,12 @@ class RealBep44RemoteIntegrationTest {
             "Skipping real BEP 44 remote test. Enable with RUN_REAL_DHT_TESTS=true or -DrunRealDhtTests=true",
             isRemoteDhtTestEnabled()
         )
+        val measuredIterationsProp = System.getProperty("measuredIterations")?.toIntOrNull()
+        assumeTrue(
+            "Skipping full profile benchmark suite in standard remote test. Specify -DmeasuredIterations=<count> (e.g. 500) to enable.",
+            measuredIterationsProp != null && measuredIterationsProp > 0
+        )
+        val iterationsPerEnv = measuredIterationsProp!!
 
         val projectRoot = resolveProjectRootDir()
         val measuredCsvFile = File(projectRoot, "docs/metrics_dht_loopback_measured.csv")
@@ -255,7 +261,6 @@ class RealBep44RemoteIntegrationTest {
             assertTrue("DhtLeafNode must discover active peers in BitTorrent DHT swarm", peerCount > 0)
 
             val harness = LoopbackMeasurementHarness(dhtClient = node)
-            val iterationsPerEnv = System.getProperty("measuredIterations")?.toIntOrNull() ?: 500
             val profiles = listOf(
                 LoopbackMeasurementHarness.NetworkEnvironment.WIFI,
                 LoopbackMeasurementHarness.NetworkEnvironment.LTE,

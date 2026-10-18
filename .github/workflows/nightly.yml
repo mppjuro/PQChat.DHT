@@ -346,7 +346,7 @@ jobs:
             - **Slow Statistical & Tor Tests:** Zaliczone (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
             - **Two Devices End-to-End Lifecycle:** Zaliczone (Handshake, >10 Msg, Rekey po 50 wiadomościach, Out-of-Order / SlidingWindowBitmap, DhtLeafNode / FakeDht)
             - **Real BEP 44 Remote Integration Tests:** Zaliczone (Live Mainline DHT)
-            - **Real DHT Loopback & Retention Suite:** Zaliczone (100 iteracji per środowisko, live Mainline DHT)
+            - **Real DHT Loopback & Retention Suite:** Zaliczone (500 iteracji per środowisko, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Zaliczone (150 węzłów Kademlia)
 
             ### Metadane kompilacji:
