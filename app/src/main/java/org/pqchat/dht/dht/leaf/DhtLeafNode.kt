@@ -182,6 +182,14 @@ class DhtLeafNode(
         replicationK = if (isMobileOrCgnat) CGNAT_LTE_K else DEFAULT_K
     }
 
+    val bootstrapRouterIps = ConcurrentHashMap.newKeySet<String>()
+
+    fun isBootstrapRouter(address: InetSocketAddress): Boolean {
+        if (BOOTSTRAP_HOSTS.any { it.first.equals(address.hostString, ignoreCase = true) }) return true
+        val ip = address.address?.hostAddress ?: return false
+        return bootstrapRouterIps.contains(ip)
+    }
+
     @Volatile
     private var torProxyConfig: TorProxyConfig? = null
 
@@ -630,8 +638,12 @@ class DhtLeafNode(
                 list.add(InetSocketAddress.createUnresolved(host, port))
             } else {
                 try {
-                    val ip = InetAddress.getByName(host)
-                    list.add(InetSocketAddress(ip, port))
+                    val ips = InetAddress.getAllByName(host)
+                    for (ip in ips) {
+                        val addr = InetSocketAddress(ip, port)
+                        list.add(addr)
+                        ip.hostAddress?.let { bootstrapRouterIps.add(it) }
+                    }
                 } catch (_: Exception) {
                 }
             }
@@ -643,22 +655,21 @@ class DhtLeafNode(
         val cached = getCachedFastestNodes()
         val randomTarget = CryptoUtils.secureRandomBytes(20)
 
-        // Always probe local LAN / emulator subnet neighbors on DEFAULT_DHT_PORT and emulator forwarded ports
+        // Probe local LAN / emulator subnet neighbors in parallel
         val localNodes = getLocalPeers().map { it.address }
         val localJobs = localNodes.map { node ->
             launch {
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                    sendQuery(node, query, 1500L)
+                    sendQuery(node, query, 1000L)
                 } catch (_: Exception) {
                 }
             }
         }
-        localJobs.joinAll()
 
-        if (cached.isNotEmpty()) {
+        val cachedJobs = if (cached.isNotEmpty()) {
             println("[PQChat] Bootstrapping from ${cached.size} cached DHT nodes...")
-            val cachedJobs = cached.take(16).map { peer ->
+            cached.take(16).map { peer ->
                 launch {
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
@@ -667,36 +678,45 @@ class DhtLeafNode(
                     }
                 }
             }
-            cachedJobs.joinAll()
-        }
+        } else emptyList()
 
-        // If routing table is still sparse, fallback to public bootstrap servers
-        if (routingTable.size < 8) {
-            val bootstrapNodes = resolveBootstrapNodes()
-            val initialJobs = bootstrapNodes.map { bootstrapNode ->
-                launch {
-                    try {
-                        val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                        sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-            initialJobs.joinAll()
-        }
-
-        // Iteratively query first wave of discovered peers to populate closest nodes
-        val peers = routingTable.take(16)
-        val waveJobs = peers.map { peer ->
+        // Fallback or augment with public bootstrap servers
+        val bootstrapNodes = resolveBootstrapNodes()
+        val initialJobs = bootstrapNodes.map { bootstrapNode ->
             launch {
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                    sendQuery(peer.address, query, TIMEOUT_MS)
+                    sendQuery(bootstrapNode, query, BOOTSTRAP_TIMEOUT_MS)
                 } catch (_: Exception) {
                 }
             }
         }
-        waveJobs.joinAll()
+
+        // Wait for initial discover queries across local, cached, and public bootstrap nodes
+        (localJobs + cachedJobs + initialJobs).joinAll()
+
+        // Iteratively query first waves of discovered peers to populate routing table
+        val queried = ConcurrentHashMap.newKeySet<InetSocketAddress>()
+        queried.addAll(bootstrapNodes)
+        queried.addAll(localNodes)
+
+        var rounds = 0
+        while (routingTable.size < 16 && rounds < 2) {
+            rounds++
+            val peersToQuery = routingTable.filter { it.address !in queried && !isBootstrapRouter(it.address) }.take(16)
+            if (peersToQuery.isEmpty()) break
+            peersToQuery.forEach { queried.add(it.address) }
+            val waveJobs = peersToQuery.map { peer ->
+                launch {
+                    try {
+                        val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
+                        sendQuery(peer.address, query, TIMEOUT_MS)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            waveJobs.joinAll()
+        }
     }
 
     suspend fun sendQuery(
@@ -814,16 +834,18 @@ class DhtLeafNode(
         }
 
         val localPeers = getLocalPeers()
-        val swarmPeers = (findClosestNodes(target, count = 16) + getCachedFastestNodes()).distinctBy { it.address }
-        val bootstrap = if (autoBootstrap && swarmPeers.size < 16) {
-            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+        val swarmPeers = (findClosestNodes(target, count = 16) + getCachedFastestNodes())
+            .filter { !isBootstrapRouter(it.address) }
+            .distinctBy { it.address }
+        val bootstrapNodes = if (autoBootstrap && swarmPeers.size < 16) {
+            resolveBootstrapNodes()
         } else emptyList()
         val queryPeers = if (swarmPeers.isNotEmpty()) {
-            (swarmPeers + bootstrap).distinctBy { it.address }.take(20)
+            (swarmPeers + bootstrapNodes.map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }).distinctBy { it.address }.take(20)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(20)
         } else if (autoBootstrap) {
-            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+            bootstrapNodes.map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         } else {
             emptyList()
         }
@@ -833,11 +855,14 @@ class DhtLeafNode(
         }
 
         val queriedAddresses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
-        val allDiscovered = ConcurrentHashMap.newKeySet<DhtPeer>()
-        queryPeers.forEach { allDiscovered.add(it) }
+        val unqueriedCandidates = ConcurrentHashMap.newKeySet<DhtPeer>()
+        val verifiedNodes = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
+
+        queryPeers.forEach { unqueriedCandidates.add(it) }
+        swarmPeers.forEach { verifiedNodes[it.address] = it }
 
         for (round in 0 until 3) {
-            val unqueriedClosest = allDiscovered
+            val unqueriedClosest = unqueriedCandidates
                 .filter { it.address !in queriedAddresses }
                 .sortedWith { a, b ->
                     val distA = xorDistance(a.nodeId, target)
@@ -854,11 +879,22 @@ class DhtLeafNode(
                 async {
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, target)
-                        val resp = sendQuery(peer.address, query, timeoutMs = 2000L)
-                        val nodesBytes = resp?.responseData?.get("nodes") as? ByteArray
-                        if (nodesBytes != null) {
-                            val parsed = parseCompactNodesList(nodesBytes)
-                            parsed.forEach { allDiscovered.add(it) }
+                        val resp = sendQuery(peer.address, query, timeoutMs = 2500L)
+                        if (resp != null) {
+                            val respId = resp.responseData["id"] as? ByteArray
+                            if (respId != null && respId.size == 20 && !isBootstrapRouter(peer.address)) {
+                                verifiedNodes[peer.address] = DhtPeer(respId, peer.address)
+                            }
+                            val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                            if (nodesBytes != null) {
+                                val parsed = parseCompactNodesList(nodesBytes)
+                                parsed.forEach { node ->
+                                    unqueriedCandidates.add(node)
+                                    if (!isBootstrapRouter(node.address)) {
+                                        verifiedNodes[node.address] = node
+                                    }
+                                }
+                            }
                         }
                     } catch (_: Exception) {
                     }
@@ -867,16 +903,26 @@ class DhtLeafNode(
             jobs.awaitAll()
         }
 
-        // Select the 8 nodes closest to target using XOR distance
-        val closest8 = allDiscovered.sortedWith { a, b ->
-            val distA = xorDistance(a.nodeId, target)
-            val distB = xorDistance(b.nodeId, target)
-            compareBytes(distA, distB)
-        }.take(8)
+        // Select the 8 nodes closest to target using XOR distance from verified genuine peers
+        val candidatePool = if (verifiedNodes.isNotEmpty()) {
+            verifiedNodes.values.toList()
+        } else {
+            findClosestNodes(target, count = 8).filter { !isBootstrapRouter(it.address) }
+        }
+
+        val closest8 = candidatePool
+            .filter { !isBootstrapRouter(it.address) && it.nodeId.any { b -> b != 0.toByte() } }
+            .distinctBy { it.address }
+            .sortedWith { a, b ->
+                val distA = xorDistance(a.nodeId, target)
+                val distB = xorDistance(b.nodeId, target)
+                compareBytes(distA, distB)
+            }
+            .take(8)
 
         if (closest8.isNotEmpty()) {
             targetRouteCache[target] = closest8
-            println("[PQChat] Pre-warmed target $targetHex with ${closest8.size} closest nodes in TargetRouteCache (from ${allDiscovered.size} discovered)")
+            println("[PQChat] Pre-warmed target $targetHex with ${closest8.size} closest nodes in TargetRouteCache (from ${verifiedNodes.size} discovered)")
         }
 
         closest8
@@ -946,6 +992,7 @@ class DhtLeafNode(
 
         val remoteCandidates = (prewarmed + closestCandidates + cachedFastest)
             .distinctBy { it.address }
+            .filter { !isBootstrapRouter(it.address) }
             .sortedWith { a, b ->
                 val distA = xorDistance(a.nodeId, target)
                 val distB = xorDistance(b.nodeId, target)
@@ -1121,6 +1168,7 @@ class DhtLeafNode(
         val localPeers = getLocalPeers()
         val swarmPeers = (prewarmed + candidates + cachedFastest)
             .distinctBy { it.address }
+            .filter { !isBootstrapRouter(it.address) }
             .sortedWith { a, b ->
                 val distA = xorDistance(a.nodeId, target)
                 val distB = xorDistance(b.nodeId, target)
@@ -1132,7 +1180,7 @@ class DhtLeafNode(
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(maxCandidatesToQuery)
         } else if (autoBootstrap) {
-            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
+            resolveBootstrapNodes().filter { !isBootstrapRouter(it) }.map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         } else {
             emptyList()
         }
@@ -1148,7 +1196,7 @@ class DhtLeafNode(
                     launch {
                         try {
                             val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                            val resp = sendQuery(peer.address, getQuery, timeoutMs = 2000L)
+                            val resp = sendQuery(peer.address, getQuery, timeoutMs = 2500L)
                             val token = resp?.responseData?.get("token") as? ByteArray
                             if (token != null) {
                                 tokenMap[peer.address] = token
@@ -1160,12 +1208,12 @@ class DhtLeafNode(
                     }
                 }
                 val startTime = System.currentTimeMillis()
-                while (tokenMap.size < targetTokens && (System.currentTimeMillis() - startTime) < 2000L) {
-                    if (tokenMap.size >= minOf(4, targetTokens) && (System.currentTimeMillis() - startTime) > 1200L) {
+                while (tokenMap.size < targetTokens && (System.currentTimeMillis() - startTime) < 3500L) {
+                    if (tokenMap.size >= minOf(4, targetTokens) && (System.currentTimeMillis() - startTime) > 1500L) {
                         getJobs.forEach { it.cancel() }
                         break
                     }
-                    delay(20)
+                    delay(25)
                 }
                 getJobs.forEach { it.cancel() }
             }
@@ -1187,7 +1235,7 @@ class DhtLeafNode(
                                     seq = seq,
                                     salt = salt
                                 )
-                                val resp = sendQuery(address, putQuery, timeoutMs = 2000L)
+                                val resp = sendQuery(address, putQuery, timeoutMs = 2500L)
                                 if (resp != null) {
                                     remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(address)
                                     val successfulPeer = nodesToQuery.firstOrNull { it.address == address } ?: DhtPeer(target, address)
@@ -1202,12 +1250,12 @@ class DhtLeafNode(
                         }
                     }
                     val startPut = System.currentTimeMillis()
-                    while (successfulPuts.get() < targetPuts && (System.currentTimeMillis() - startPut) < 2000L) {
-                        if (successfulPuts.get() >= minOf(4, targetPuts) && (System.currentTimeMillis() - startPut) > 1200L) {
+                    while (successfulPuts.get() < targetPuts && (System.currentTimeMillis() - startPut) < 3500L) {
+                        if (successfulPuts.get() >= minOf(4, targetPuts) && (System.currentTimeMillis() - startPut) > 1500L) {
                             putJobs.forEach { it.cancel() }
                             break
                         }
-                        delay(20)
+                        delay(25)
                     }
                     putJobs.forEach { it.cancel() }
                 }
@@ -1216,6 +1264,11 @@ class DhtLeafNode(
                 }
             }
         } catch (_: Exception) {
+        }
+
+        if (!putSuccess && skipLocalStore) {
+            // Evict stale/non-responsive prewarmed entries so future retries don't reuse failing nodes
+            targetRouteCache.remove(target)
         }
 
         println("[PQChat] putMutablePreSigned target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")

@@ -86,7 +86,12 @@ class RealDhtLoopbackMeasurementTest {
             node.bootstrap()
 
             // Allow bootstrap queries to populate active peer routing table
-            delay(5000)
+            var waited = 0
+            while (node.getActivePeerCount() < 8 && waited < 10000) {
+                delay(500)
+                waited += 500
+            }
+            delay(1000)
             val peerCount = node.getActivePeerCount()
             println("[Live DHT Measurement] Active peer count after initial bootstrap: $peerCount")
             assertTrue("DhtLeafNode must discover active peers in BitTorrent DHT swarm", peerCount > 0)

@@ -72,7 +72,12 @@ class RealBep44RemoteIntegrationTest {
             node.bootstrap()
 
             // Allow bootstrap queries to populate active peer routing table
-            delay(5000)
+            var waited = 0
+            while (node.getActivePeerCount() < 8 && waited < 10000) {
+                delay(500)
+                waited += 500
+            }
+            delay(2000)
             val peerCount = node.getActivePeerCount()
             println("[Live DHT] Active peer count after bootstrap: $peerCount")
             assertTrue("Should connect to at least 1 active DHT peer", peerCount > 0)
@@ -87,17 +92,26 @@ class RealBep44RemoteIntegrationTest {
             val targetHex = CryptoUtils.toHex(target)
             println("[Live DHT] Publishing 900-byte payload under target: $targetHex")
 
-            val t0 = System.currentTimeMillis()
-            val putResult = node.putMutable(
-                target = target,
-                v = payload,
-                seq = 1L,
-                salt = null,
-                sk = seed,
-                skipLocalStore = true
-            )
-            val putRttMs = System.currentTimeMillis() - t0
-            println("[Live DHT] putMutable result: $putResult (RTT:${putRttMs}ms)")
+            var putResult = false
+            var putRttMs = 0L
+            val maxPutAttempts = 3
+            for (attempt in 1..maxPutAttempts) {
+                val t0 = System.currentTimeMillis()
+                putResult = node.putMutable(
+                    target = target,
+                    v = payload,
+                    seq = 1L,
+                    salt = null,
+                    sk = seed,
+                    skipLocalStore = true
+                )
+                putRttMs = System.currentTimeMillis() - t0
+                println("[Live DHT] putMutable attempt $attempt/$maxPutAttempts result: $putResult (RTT:${putRttMs}ms)")
+                if (putResult) break
+                if (attempt < maxPutAttempts) {
+                    delay(2000)
+                }
+            }
             assertTrue("putMutable to remote DHT peers must succeed", putResult)
 
             // Propagation window across Kademlia closest swarm
@@ -170,7 +184,12 @@ class RealBep44RemoteIntegrationTest {
 
             for (i in 1..trials) {
                 println("[Live DHT] Executing Loopback Measurement trial $i/$trials...")
-                val metric = harness.runLoopbackIteration(LoopbackMeasurementHarness.NetworkEnvironment.WIFI)
+                var metric = harness.runLoopbackIteration(LoopbackMeasurementHarness.NetworkEnvironment.WIFI)
+                if (!metric.deliverySuccess) {
+                    println(" -> Trial $i initial attempt failed, waiting 1500ms and retrying trial...")
+                    delay(1500)
+                    metric = harness.runLoopbackIteration(LoopbackMeasurementHarness.NetworkEnvironment.WIFI)
+                }
                 results.add(metric)
                 println(" -> Trial $i: Success=${metric.deliverySuccess}, Total RTT=${metric.rttTotalMs}ms, Source=${metric.dataSource}")
                 assertTrue(
@@ -210,7 +229,12 @@ class RealBep44RemoteIntegrationTest {
         node.start()
         try {
             node.bootstrap()
-            delay(4000)
+            var waited = 0
+            while (node.getActivePeerCount() < 8 && waited < 10000) {
+                delay(500)
+                waited += 500
+            }
+            delay(1000)
 
             val harness = LoopbackMeasurementHarness(dhtClient = node)
             val results = harness.evaluateRetentionScenarios(

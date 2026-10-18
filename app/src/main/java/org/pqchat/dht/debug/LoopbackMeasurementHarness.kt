@@ -179,6 +179,7 @@ class LoopbackMeasurementHarness(
                 )
                 if (!ok) {
                     retransmissions = 1
+                    kotlinx.coroutines.delay(1000)
                     ok = dhtClient.putMutable(
                         target = target,
                         v = testPayload,
@@ -381,6 +382,7 @@ class LoopbackMeasurementHarness(
                                 skipLocalStore = true
                             )
                             if (!ok) {
+                                kotlinx.coroutines.delay(1000)
                                 ok = dhtClient.putMutable(
                                     target = target,
                                     v = payload,
