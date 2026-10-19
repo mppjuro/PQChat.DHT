@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`b0640c2`](https://github.com/mppjuro/PQChat.DHT/commit/b0640c2dc02ecaeea2e6db8b913c99aa76426aa8) (2026-10-19) — **group-chat**: implement decentralized Post-Quantum Sender Keys over BEP 44
 - [`b2e150e`](https://github.com/mppjuro/PQChat.DHT/commit/b2e150ed2b7ea5878bd78c0e6c088aa2600599af) (2026-10-19) — **research**: rozbudowa modułu badawczego i telemetrii pod kątem pracy magisterskiej
 - [`e397907`](https://github.com/mppjuro/PQChat.DHT/commit/e3979073102c4622c4e2f11070720d2cd2ce2c9a) (2026-10-19) — **traffic**: implement strict Poisson traffic shaping and statistical tests
 - [`e28c99a`](https://github.com/mppjuro/PQChat.DHT/commit/e28c99a0b02e296c1e1345628d3bc0635800d32a) (2026-10-18) — **research**: adapt telemetry to Firebase Spark plan with Cloud Firestore batch metrics
@@ -130,6 +131,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`b30239e`](https://github.com/mppjuro/PQChat.DHT/commit/b30239e3a35f9fde7f5c91b8e925470736fce6d7) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c959f1d`](https://github.com/mppjuro/PQChat.DHT/commit/c959f1d80a24946aabf02acd05e28370fbc26db5) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`7ee9fbe`](https://github.com/mppjuro/PQChat.DHT/commit/7ee9fbe54c6ebaa4a01cce1a6fdfb3de5866a57e) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`af7135b`](https://github.com/mppjuro/PQChat.DHT/commit/af7135bf6bd0d6e429a3022a50e8a8925534e573) (2026-10-18) — **changelog**: auto-update CHANGELOG.md [skip ci]
