@@ -35,9 +35,15 @@ class PollingScheduler(
     val pollingManager: AdaptivePollingManager = AdaptivePollingManager(
         onPollRequested = { contactId ->
             if (contactId != null) {
-                repository.pollContactIncoming(contactId)
+                val group = repository.getGroup(contactId)
+                if (group != null) {
+                    repository.pollGroupIncoming(contactId)
+                } else {
+                    repository.pollContactIncoming(contactId)
+                }
             } else {
                 repository.pollAllContactsIncoming()
+                repository.pollAllGroupsIncoming()
             }
         },
         onIdlePreWarm = { contactId ->

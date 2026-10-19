@@ -16,9 +16,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingChunkTransferEntity::class,
         DhtNodeCacheEntity::class,
         PendingRekeyOfferEntity::class,
-        SkippedKeyEntity::class
+        SkippedKeyEntity::class,
+        GroupEntity::class,
+        GroupMemberEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -29,6 +31,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun dhtNodeCacheDao(): DhtNodeCacheDao
     abstract fun pendingRekeyOfferDao(): PendingRekeyOfferDao
     abstract fun skippedKeyDao(): SkippedKeyDao
+    abstract fun groupDao(): GroupDao
+    abstract fun groupMemberDao(): GroupMemberDao
 
     companion object {
         @Volatile
@@ -182,6 +186,43 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS groups (
+                        groupId TEXT NOT NULL PRIMARY KEY,
+                        groupName TEXT NOT NULL,
+                        myMemberId TEXT NOT NULL,
+                        myChainKeyOut BLOB NOT NULL,
+                        myCounterOut INTEGER NOT NULL,
+                        groupEpoch INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL,
+                        lastActive INTEGER NOT NULL,
+                        isActive INTEGER NOT NULL DEFAULT 1
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS group_members (
+                        groupId TEXT NOT NULL,
+                        memberId TEXT NOT NULL,
+                        contactId TEXT,
+                        memberName TEXT NOT NULL,
+                        chainKeyIn BLOB NOT NULL,
+                        counterIn INTEGER NOT NULL,
+                        receivedBitmapBase INTEGER NOT NULL DEFAULT 0,
+                        receivedBitmap BLOB NOT NULL,
+                        joinedAt INTEGER NOT NULL,
+                        isActive INTEGER NOT NULL DEFAULT 1,
+                        PRIMARY KEY (groupId, memberId)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_group_members_groupId ON group_members (groupId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_group_members_contactId ON group_members (contactId)")
+                db.execSQL("ALTER TABLE messages ADD COLUMN senderMemberId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN senderName TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -189,7 +230,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                 INSTANCE = instance

@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pqchat.dht.data.db.ContactEntity
+import org.pqchat.dht.data.db.GroupEntity
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
@@ -42,6 +43,8 @@ fun ContactListScreen(
     val appColors = LocalAppColors.current
 
     val contacts by viewModel.contacts.collectAsState()
+    val groups by viewModel.groups.collectAsState()
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
     val dhtPeers by viewModel.dhtPeerCount.collectAsState()
     val pollingState by viewModel.pollingState.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
@@ -179,6 +182,15 @@ fun ContactListScreen(
         containerColor = appColors.background,
         floatingActionButton = {
             Column(horizontalAlignment = Alignment.End) {
+                ExtendedFloatingActionButton(
+                    onClick = { showCreateGroupDialog = true },
+                    containerColor = CryptoPurple,
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Default.GroupAdd, contentDescription = null) },
+                    text = { Text("Nowa grupa") },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
                 ExtendedFloatingActionButton(
                     onClick = onJoinChatClick,
                     containerColor = appColors.surfaceVariant,
@@ -382,7 +394,44 @@ fun ContactListScreen(
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
+                }
 
+                if (groups.isNotEmpty()) {
+                    item(key = "groups_header") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Groups,
+                                contentDescription = null,
+                                tint = CryptoPurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Czaty grupowe (Sender Keys)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CryptoPurple,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    items(groups, key = { "group_${it.groupId}" }) { group ->
+                        GroupItem(
+                            group = group,
+                            onClick = { onContactClick(group.groupId) }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    item(key = "groups_spacer") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+                item(key = "peer_contacts_header") {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
@@ -452,6 +501,17 @@ fun ContactListScreen(
                     }
                 }
             }
+        }
+
+        if (showCreateGroupDialog) {
+            CreateGroupDialog(
+                contacts = peerContacts,
+                onDismiss = { showCreateGroupDialog = false },
+                onCreateGroup = { name, selectedContactIds ->
+                    viewModel.createGroup(name, selectedContactIds)
+                    showCreateGroupDialog = false
+                }
+            )
         }
     }
 }
@@ -561,4 +621,223 @@ fun ContactItem(
             }
         }
     }
+}
+
+@Composable
+fun GroupItem(
+    group: GroupEntity,
+    onClick: () -> Unit
+) {
+    val appColors = LocalAppColors.current
+
+    Surface(
+        color = appColors.surface,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CryptoPurple.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(14.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(CryptoPurple.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Groups,
+                    contentDescription = null,
+                    tint = CryptoPurple,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.groupName,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = appColors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Post-Quantum Sender Keys • Epoka ${group.groupEpoch}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CryptoPurple.copy(alpha = 0.85f)
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Surface(
+                    color = CryptoPurple.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "TX:${group.myCounterOut}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CryptoPurple,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = appColors.textSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CreateGroupDialog(
+    contacts: List<ContactEntity>,
+    onDismiss: () -> Unit,
+    onCreateGroup: (name: String, selectedContactIds: List<String>) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    var groupName by remember { mutableStateOf("") }
+    val selectedContactIds = remember { mutableStateListOf<String>() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.GroupAdd,
+                    contentDescription = null,
+                    tint = CryptoPurple
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Nowy czat grupowy",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = appColors.textPrimary
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Zdecentralizowany czat grupowy oparty na Post-Quantum Sender Keys over BEP 44. Każda wiadomość jest publikowana jako pojedyncza ramka 900B w DHT (koszt O(1)).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = appColors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = { groupName = it },
+                    label = { Text("Nazwa grupy") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CryptoPurple,
+                        unfocusedBorderColor = appColors.border,
+                        focusedTextColor = appColors.textPrimary,
+                        unfocusedTextColor = appColors.textPrimary
+                    )
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Wybierz uczestników (${selectedContactIds.size}/${contacts.size}):",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = appColors.textPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                if (contacts.isEmpty()) {
+                    Text(
+                        text = "Brak zewnętrznych kontaktów do zaproszenia. Grupa zostanie utworzona lokalnie.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                    ) {
+                        items(contacts, key = { it.id }) { contact ->
+                            val isSelected = selectedContactIds.contains(contact.id)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isSelected) {
+                                            selectedContactIds.remove(contact.id)
+                                        } else {
+                                            selectedContactIds.add(contact.id)
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        if (checked) {
+                                            selectedContactIds.add(contact.id)
+                                        } else {
+                                            selectedContactIds.remove(contact.id)
+                                        }
+                                    },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = CryptoPurple
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = contact.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = appColors.textPrimary
+                                    )
+                                    if (contact.isVerified) {
+                                        Text(
+                                            text = "Zweryfikowany SAS",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ElectricGreen
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (groupName.isNotBlank()) {
+                        onCreateGroup(groupName.trim(), selectedContactIds.toList())
+                    }
+                },
+                enabled = groupName.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CryptoPurple,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("Utwórz grupę")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Anuluj", color = appColors.textSecondary)
+            }
+        },
+        containerColor = appColors.surface
+    )
 }

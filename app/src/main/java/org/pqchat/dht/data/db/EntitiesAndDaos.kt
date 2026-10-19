@@ -113,7 +113,9 @@ data class MessageEntity(
     val ackTarget: ByteArray? = null,
     val ackRatchetKey: EncryptedBlob? = null,
     val slotTarget: ByteArray? = null,
-    val slotEdSeed: EncryptedBlob? = null
+    val slotEdSeed: EncryptedBlob? = null,
+    val senderMemberId: String? = null,
+    val senderName: String? = null
 ) {
     @Ignore
     constructor(
@@ -132,7 +134,9 @@ data class MessageEntity(
         ackTarget: ByteArray? = null,
         ackRatchetKey: ByteArray? = null,
         slotTarget: ByteArray? = null,
-        slotEdSeed: ByteArray? = null
+        slotEdSeed: ByteArray? = null,
+        senderMemberId: String? = null,
+        senderName: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -149,7 +153,9 @@ data class MessageEntity(
         ackTarget = ackTarget,
         ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
         slotTarget = slotTarget,
-        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") }
+        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
+        senderMemberId = senderMemberId,
+        senderName = senderName
     )
 
     val rawTextContent: String? get() = textContent?.raw
@@ -697,5 +703,193 @@ interface DhtNodeCacheDao {
 
     @Query("SELECT COUNT(*) FROM dht_node_cache")
     suspend fun count(): Int
+}
+
+@Entity(tableName = "groups")
+data class GroupEntity(
+    @PrimaryKey
+    val groupId: String,
+    val groupName: String,
+    val myMemberId: String,
+    val myChainKeyOut: EncryptedBlob,
+    val myCounterOut: Int,
+    val groupEpoch: Long = 0L,
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastActive: Long = System.currentTimeMillis(),
+    val isActive: Boolean = true
+) {
+    @Ignore
+    constructor(
+        groupId: String,
+        groupName: String,
+        myMemberId: String,
+        myChainKeyOut: ByteArray,
+        myCounterOut: Int,
+        groupEpoch: Long = 0L,
+        createdAt: Long = System.currentTimeMillis(),
+        lastActive: Long = System.currentTimeMillis(),
+        isActive: Boolean = true
+    ) : this(
+        groupId = groupId,
+        groupName = groupName,
+        myMemberId = myMemberId,
+        myChainKeyOut = EncryptedBlob(myChainKeyOut, "groups", groupId),
+        myCounterOut = myCounterOut,
+        groupEpoch = groupEpoch,
+        createdAt = createdAt,
+        lastActive = lastActive,
+        isActive = isActive
+    )
+
+    val rawMyChainKeyOut: ByteArray get() = myChainKeyOut.raw
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is GroupEntity) return false
+        return groupId == other.groupId &&
+                groupName == other.groupName &&
+                myMemberId == other.myMemberId &&
+                myChainKeyOut == other.myChainKeyOut &&
+                myCounterOut == other.myCounterOut &&
+                groupEpoch == other.groupEpoch &&
+                createdAt == other.createdAt &&
+                lastActive == other.lastActive &&
+                isActive == other.isActive
+    }
+
+    override fun hashCode(): Int = groupId.hashCode()
+}
+
+@Entity(
+    tableName = "group_members",
+    primaryKeys = ["groupId", "memberId"],
+    indices = [
+        Index(value = ["groupId"]),
+        Index(value = ["contactId"])
+    ]
+)
+data class GroupMemberEntity(
+    val groupId: String,
+    val memberId: String,
+    val contactId: String? = null,
+    val memberName: String,
+    val chainKeyIn: EncryptedBlob,
+    val counterIn: Int,
+    val receivedBitmapBase: Int = 0,
+    val receivedBitmap: ByteArray = ByteArray(128),
+    val joinedAt: Long = System.currentTimeMillis(),
+    val isActive: Boolean = true
+) {
+    @Ignore
+    constructor(
+        groupId: String,
+        memberId: String,
+        contactId: String? = null,
+        memberName: String,
+        chainKeyIn: ByteArray,
+        counterIn: Int,
+        receivedBitmapBase: Int = 0,
+        receivedBitmap: ByteArray = ByteArray(128),
+        joinedAt: Long = System.currentTimeMillis(),
+        isActive: Boolean = true
+    ) : this(
+        groupId = groupId,
+        memberId = memberId,
+        contactId = contactId,
+        memberName = memberName,
+        chainKeyIn = EncryptedBlob(chainKeyIn, "group_members", "${groupId}_${memberId}"),
+        counterIn = counterIn,
+        receivedBitmapBase = receivedBitmapBase,
+        receivedBitmap = receivedBitmap,
+        joinedAt = joinedAt,
+        isActive = isActive
+    )
+
+    val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is GroupMemberEntity) return false
+        return groupId == other.groupId &&
+                memberId == other.memberId &&
+                contactId == other.contactId &&
+                memberName == other.memberName &&
+                chainKeyIn == other.chainKeyIn &&
+                counterIn == other.counterIn &&
+                receivedBitmapBase == other.receivedBitmapBase &&
+                receivedBitmap.contentEquals(other.receivedBitmap) &&
+                joinedAt == other.joinedAt &&
+                isActive == other.isActive
+    }
+
+    override fun hashCode(): Int {
+        var result = groupId.hashCode()
+        result = 31 * result + memberId.hashCode()
+        return result
+    }
+}
+
+@Dao
+interface GroupDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(group: GroupEntity)
+
+    @Query("SELECT * FROM groups WHERE groupId = :groupId LIMIT 1")
+    suspend fun getGroupById(groupId: String): GroupEntity?
+
+    @Query("SELECT * FROM groups WHERE isActive = 1 ORDER BY lastActive DESC")
+    fun getAllGroupsFlow(): Flow<List<GroupEntity>>
+
+    @Query("SELECT * FROM groups WHERE isActive = 1 ORDER BY lastActive DESC")
+    suspend fun getAllActiveGroups(): List<GroupEntity>
+
+    @Query("UPDATE groups SET myCounterOut = :counterOut, myChainKeyOut = :chainKeyOut, lastActive = :lastActive WHERE groupId = :groupId")
+    suspend fun updateOutgoingState(groupId: String, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long = System.currentTimeMillis())
+
+    @Query("UPDATE groups SET groupEpoch = :epoch, myCounterOut = :counterOut, myChainKeyOut = :chainKeyOut, lastActive = :lastActive WHERE groupId = :groupId")
+    suspend fun updateRekeyedState(groupId: String, epoch: Long, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long = System.currentTimeMillis())
+
+    @Query("UPDATE groups SET isActive = :isActive WHERE groupId = :groupId")
+    suspend fun updateActiveStatus(groupId: String, isActive: Boolean)
+
+    @Query("DELETE FROM groups WHERE groupId = :groupId")
+    suspend fun deleteGroup(groupId: String)
+}
+
+@Dao
+interface GroupMemberDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(member: GroupMemberEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateAll(members: List<GroupMemberEntity>)
+
+    @Query("SELECT * FROM group_members WHERE groupId = :groupId AND memberId = :memberId LIMIT 1")
+    suspend fun getMember(groupId: String, memberId: String): GroupMemberEntity?
+
+    @Query("SELECT * FROM group_members WHERE groupId = :groupId AND isActive = 1")
+    suspend fun getMembersForGroup(groupId: String): List<GroupMemberEntity>
+
+    @Query("SELECT * FROM group_members WHERE groupId = :groupId AND isActive = 1")
+    fun getMembersForGroupFlow(groupId: String): Flow<List<GroupMemberEntity>>
+
+    @Query("UPDATE group_members SET counterIn = :counterIn, chainKeyIn = :chainKeyIn, receivedBitmapBase = :bitmapBase, receivedBitmap = :bitmap WHERE groupId = :groupId AND memberId = :memberId")
+    suspend fun updateMemberIncomingStateWithBitmap(
+        groupId: String,
+        memberId: String,
+        counterIn: Int,
+        chainKeyIn: EncryptedBlob,
+        bitmapBase: Int,
+        bitmap: ByteArray
+    )
+
+    @Query("UPDATE group_members SET isActive = 0 WHERE groupId = :groupId AND memberId = :memberId")
+    suspend fun markMemberInactive(groupId: String, memberId: String)
+
+    @Query("DELETE FROM group_members WHERE groupId = :groupId AND memberId = :memberId")
+    suspend fun deleteMember(groupId: String, memberId: String)
+
+    @Query("DELETE FROM group_members WHERE groupId = :groupId")
+    suspend fun deleteMembersForGroup(groupId: String)
 }
 

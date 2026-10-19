@@ -372,6 +372,20 @@ object MessageDebugLogger {
                 "totalChunks" to p.totalChunks,
                 "dataSizeBytes" to p.data.size
             )
+            is BinaryFrameCodec.DecodedPayload.GroupControl -> linkedMapOf<String, Any?>(
+                "type" to "GroupControl (0x06)",
+                "controlSubType" to when (p.controlSubType) {
+                    BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> "INVITE"
+                    BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> "REKEY"
+                    BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> "LEAVE"
+                    else -> "UNKNOWN (${p.controlSubType})"
+                },
+                "groupEpoch" to p.groupEpoch,
+                "currentCounter" to p.currentCounter,
+                "groupName" to p.groupName,
+                "memberCount" to p.members.size,
+                "description" to "Zdecentralizowana kontrola grupy PQ Sender Keys over BEP 44"
+            )
         }
 
         val pqcAnalysis = when (frameMsg.msgType) {
@@ -404,6 +418,7 @@ object MessageDebugLogger {
             BinaryFrameCodec.TYPE_REKEY_OFFER -> "REKEY OFFER"
             BinaryFrameCodec.TYPE_REKEY_RESPONSE -> "REKEY RESPONSE"
             BinaryFrameCodec.TYPE_CHUNK_DATA -> "CHUNK"
+            BinaryFrameCodec.TYPE_GROUP_CONTROL -> "GROUP CONTROL"
             else -> "TYP 0x%02X".format(frameMsg.msgType)
         }
 

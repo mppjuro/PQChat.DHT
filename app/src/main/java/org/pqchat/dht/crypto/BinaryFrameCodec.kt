@@ -27,6 +27,11 @@ object BinaryFrameCodec {
     const val TYPE_REKEY_OFFER: Byte = 0x03
     const val TYPE_REKEY_RESPONSE: Byte = 0x04
     const val TYPE_CHUNK_DATA: Byte = 0x05
+    const val TYPE_GROUP_CONTROL: Byte = 0x06
+
+    const val GROUP_SUBTYPE_INVITE: Byte = 0x01
+    const val GROUP_SUBTYPE_REKEY: Byte = 0x02
+    const val GROUP_SUBTYPE_LEAVE: Byte = 0x03
 
     // Type 0x01 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + Salt (24 B) + Tag (32 B) = 856 <= 859
     const val T1_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
@@ -130,6 +135,53 @@ object BinaryFrameCodec {
                 result = 31 * result + chunkIndex
                 result = 31 * result + totalChunks
                 result = 31 * result + data.contentHashCode()
+                return result
+            }
+        }
+
+        data class GroupMemberSummary(
+            val memberId: ByteArray,
+            val memberName: String
+        ) {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupMemberSummary) return false
+                return memberId.contentEquals(other.memberId) && memberName == other.memberName
+            }
+            override fun hashCode(): Int = 31 * memberId.contentHashCode() + memberName.hashCode()
+        }
+
+        data class GroupControl(
+            val controlSubType: Byte,
+            val groupId: ByteArray,
+            val groupEpoch: Long,
+            val senderMemberId: ByteArray,
+            val senderGroupChainKey: ByteArray,
+            val currentCounter: Long,
+            val groupName: String,
+            val members: List<GroupMemberSummary> = emptyList()
+        ) : DecodedPayload() {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupControl) return false
+                return controlSubType == other.controlSubType &&
+                        groupId.contentEquals(other.groupId) &&
+                        groupEpoch == other.groupEpoch &&
+                        senderMemberId.contentEquals(other.senderMemberId) &&
+                        senderGroupChainKey.contentEquals(other.senderGroupChainKey) &&
+                        currentCounter == other.currentCounter &&
+                        groupName == other.groupName &&
+                        members == other.members
+            }
+            override fun hashCode(): Int {
+                var result = controlSubType.toInt()
+                result = 31 * result + groupId.contentHashCode()
+                result = 31 * result + groupEpoch.hashCode()
+                result = 31 * result + senderMemberId.contentHashCode()
+                result = 31 * result + senderGroupChainKey.contentHashCode()
+                result = 31 * result + currentCounter.hashCode()
+                result = 31 * result + groupName.hashCode()
+                result = 31 * result + members.hashCode()
                 return result
             }
         }
@@ -251,6 +303,57 @@ object BinaryFrameCodec {
         }
 
         return packPlaintext(TYPE_CHUNK_DATA, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
+    fun encodeGroupControl(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        controlSubType: Byte,
+        groupId: ByteArray,
+        groupEpoch: Long,
+        senderMemberId: ByteArray,
+        senderGroupChainKey: ByteArray,
+        currentCounter: Long,
+        groupName: String,
+        members: List<DecodedPayload.GroupMemberSummary> = emptyList()
+    ): ByteArray {
+        require(groupId.size == 16) { "groupId must be 16 bytes" }
+        require(senderMemberId.size == 16) { "senderMemberId must be 16 bytes" }
+        require(senderGroupChainKey.size == 64) { "senderGroupChainKey must be 64 bytes" }
+
+        val nameBytes = groupName.toByteArray(Charsets.UTF_8).let {
+            if (it.size > 64) it.copyOf(64) else it
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(controlSubType)
+        buffer.put(groupId)
+        buffer.putInt(groupEpoch.toInt())
+        buffer.put(senderMemberId)
+        buffer.put(senderGroupChainKey)
+        buffer.putInt(currentCounter.toInt())
+        buffer.putShort(nameBytes.size.toShort())
+        buffer.put(nameBytes)
+
+        buffer.putShort(members.size.toShort())
+        for (m in members) {
+            val mNameBytes = m.memberName.toByteArray(Charsets.UTF_8).let {
+                if (it.size > 32) it.copyOf(32) else it
+            }
+            val required = 16 + 1 + mNameBytes.size
+            if (buffer.remaining() < required) break
+            buffer.put(m.memberId.let { if (it.size == 16) it else it.copyOf(16) })
+            buffer.put(mNameBytes.size.toByte())
+            buffer.put(mNameBytes)
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
     }
 
     private fun packPlaintext(
@@ -380,6 +483,43 @@ object BinaryFrameCodec {
                 buffer.get(data)
                 DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data)
             }
+            TYPE_GROUP_CONTROL -> {
+                val subType = buffer.get()
+                val gId = ByteArray(16)
+                buffer.get(gId)
+                val epoch = buffer.int.toLong() and 0xFFFFFFFFL
+                val sMemberId = ByteArray(16)
+                buffer.get(sMemberId)
+                val sChainKey = ByteArray(64)
+                buffer.get(sChainKey)
+                val curCounter = buffer.int.toLong() and 0xFFFFFFFFL
+                val nameLen = buffer.short.toInt() and 0xFFFF
+                val nameBytes = ByteArray(nameLen)
+                buffer.get(nameBytes)
+                val gName = String(nameBytes, Charsets.UTF_8)
+                val mCount = buffer.short.toInt() and 0xFFFF
+                val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()
+                for (i in 0 until mCount) {
+                    if (buffer.remaining() < 17) break
+                    val mId = ByteArray(16)
+                    buffer.get(mId)
+                    val mNameLen = buffer.get().toInt() and 0xFF
+                    val actualLen = minOf(mNameLen, buffer.remaining())
+                    val mNameBytes = ByteArray(actualLen)
+                    buffer.get(mNameBytes)
+                    memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
+                }
+                DecodedPayload.GroupControl(
+                    controlSubType = subType,
+                    groupId = gId,
+                    groupEpoch = epoch,
+                    senderMemberId = sMemberId,
+                    senderGroupChainKey = sChainKey,
+                    currentCounter = curCounter,
+                    groupName = gName,
+                    members = memberList
+                )
+            }
             else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
         }
 
@@ -393,6 +533,36 @@ object BinaryFrameCodec {
         direction: String
     ): FrameMessage {
         val aad = buildAad(target, direction)
+        return unpackAeadFrame(key, frame, aad)
+    }
+
+    fun buildGroupAad(target: ByteArray, groupId: ByteArray, senderMemberId: ByteArray): ByteArray {
+        val aad = ByteArray(target.size + groupId.size + senderMemberId.size)
+        System.arraycopy(target, 0, aad, 0, target.size)
+        System.arraycopy(groupId, 0, aad, target.size, groupId.size)
+        System.arraycopy(senderMemberId, 0, aad, target.size + groupId.size, senderMemberId.size)
+        return aad
+    }
+
+    fun packGroupAeadFrame(
+        key: ByteArray,
+        plaintext: ByteArray,
+        target: ByteArray,
+        groupId: ByteArray,
+        senderMemberId: ByteArray
+    ): ByteArray {
+        val aad = buildGroupAad(target, groupId, senderMemberId)
+        return packAeadFrame(key, plaintext, aad)
+    }
+
+    fun unpackGroupAeadFrame(
+        key: ByteArray,
+        frame: ByteArray,
+        target: ByteArray,
+        groupId: ByteArray,
+        senderMemberId: ByteArray
+    ): FrameMessage {
+        val aad = buildGroupAad(target, groupId, senderMemberId)
         return unpackAeadFrame(key, frame, aad)
     }
 

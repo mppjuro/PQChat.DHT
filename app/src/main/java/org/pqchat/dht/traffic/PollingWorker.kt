@@ -34,6 +34,9 @@ class PollingWorker(
             // 1. Poll all registered contact incoming slots from DHT
             repository.pollAllContactsIncoming()
 
+            // 1b. Poll all registered group incoming slots from DHT
+            repository.pollAllGroupsIncoming()
+
             // 2. Check pending ACKs
             repository.checkPendingAcks()
 

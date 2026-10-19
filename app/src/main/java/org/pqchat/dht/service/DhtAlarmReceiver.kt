@@ -40,6 +40,7 @@ class DhtAlarmReceiver : BroadcastReceiver() {
                 }
 
                 repository.pollAllContactsIncoming()
+                repository.pollAllGroupsIncoming()
             } catch (e: Exception) {
                 Log.e(TAG, "Error during Doze DHT poll pass", e)
             } finally {

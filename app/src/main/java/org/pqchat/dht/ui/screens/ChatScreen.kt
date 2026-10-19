@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.pqchat.dht.data.db.MessageEntity
+import org.pqchat.dht.data.db.GroupEntity
+import org.pqchat.dht.data.db.GroupMemberEntity
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.util.ImageGallerySaver
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
@@ -63,6 +65,13 @@ fun ChatScreen(
 
     val contacts by viewModel.contacts.collectAsState()
     val contact = contacts.firstOrNull { it.id == contactId }
+    val groups by viewModel.groups.collectAsState()
+    val group = groups.firstOrNull { it.groupId == contactId }
+    val isGroup = group != null
+    val groupMembers by remember(contactId, isGroup) {
+        if (isGroup) viewModel.getGroupMembersFlow(contactId) else kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+
     val messages by viewModel.messages.collectAsState()
     val nextPollInMs by viewModel.nextPollInMs.collectAsState()
     val isRekeyInProgress by viewModel.isRekeyInProgress.collectAsState()
@@ -71,6 +80,7 @@ fun ChatScreen(
     var textInput by remember { mutableStateOf("") }
     var showSasDialog by remember { mutableStateOf(false) }
     var showEditContactNameDialog by remember { mutableStateOf(false) }
+    var showGroupMembersDialog by remember { mutableStateOf(false) }
     var editedContactName by remember { mutableStateOf("") }
     var fullscreenImageBytes by remember { mutableStateOf<ByteArray?>(null) }
 
@@ -130,72 +140,95 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable(enabled = contact != null) {
-                                    if (contact != null) {
-                                        editedContactName = contact.name
-                                        showEditContactNameDialog = true
-                                    }
-                                }
-                        ) {
+                        if (group != null) {
                             Text(
-                                text = contact?.name ?: "Chat",
+                                text = group.groupName,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = appColors.textPrimary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (contact != null) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Zmień nazwę kontaktu",
-                                    tint = appColors.textSecondary.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                            if (contact != null && contact.id != ChatRepository.SELF_CONTACT_ID) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                IconButton(
-                                    onClick = { showSasDialog = true },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
-                                        contentDescription = if (contact.isVerified) "Zweryfikowany SAS" else "Niezweryfikowany SAS",
-                                        tint = if (contact.isVerified) ElectricGreen else AmberWarning,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-                        contact?.let {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                if (it.sas.isNotEmpty()) {
-                                    Text(
-                                        text = "SAS: ${it.sas}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (it.isVerified) ElectricGreen else AmberWarning,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        softWrap = false
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                }
                                 Text(
-                                    text = "TX: ${it.counterOut}  RX: ${it.counterIn}",
+                                    text = "PQ Sender Keys • Epoka ${group.groupEpoch} • TX: ${group.myCounterOut}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = appColors.primary,
+                                    color = CryptoPurple,
+                                    fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
                                     softWrap = false
                                 )
+                            }
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(enabled = contact != null) {
+                                        if (contact != null) {
+                                            editedContactName = contact.name
+                                            showEditContactNameDialog = true
+                                        }
+                                    }
+                            ) {
+                                Text(
+                                    text = contact?.name ?: "Chat",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = appColors.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (contact != null) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Zmień nazwę kontaktu",
+                                        tint = appColors.textSecondary.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                if (contact != null && contact.id != ChatRepository.SELF_CONTACT_ID) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    IconButton(
+                                        onClick = { showSasDialog = true },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
+                                            contentDescription = if (contact.isVerified) "Zweryfikowany SAS" else "Niezweryfikowany SAS",
+                                            tint = if (contact.isVerified) ElectricGreen else AmberWarning,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            contact?.let {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    if (it.sas.isNotEmpty()) {
+                                        Text(
+                                            text = "SAS: ${it.sas}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (it.isVerified) ElectricGreen else AmberWarning,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                    }
+                                    Text(
+                                        text = "TX: ${it.counterOut}  RX: ${it.counterIn}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = appColors.primary,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             }
                         }
                     }
@@ -210,6 +243,15 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    if (isGroup) {
+                        IconButton(onClick = { showGroupMembersDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Groups,
+                                contentDescription = "Członkowie grupy",
+                                tint = CryptoPurple
+                            )
+                        }
+                    }
                     // ── DHT Sync Timer Chip ────────────────────────────────────────
                     Surface(
                         onClick = {
@@ -577,6 +619,115 @@ fun ChatScreen(
             )
         }
 
+        if (showGroupMembersDialog && group != null) {
+            AlertDialog(
+                onDismissRequest = { showGroupMembersDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            tint = CryptoPurple
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = group.groupName,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = appColors.textPrimary
+                        )
+                    }
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Identyfikator: ${group.groupId}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = appColors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Epoka KEM: ${group.groupEpoch} • Mój licznik TX: ${group.myCounterOut}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CryptoPurple,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Członkowie grupy (${groupMembers.size}):",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = appColors.textPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (groupMembers.isEmpty()) {
+                            Text(
+                                text = "Brak zarejestrowanych członków.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                            ) {
+                                items(groupMembers, key = { it.memberId }) { member ->
+                                    Surface(
+                                        color = appColors.surfaceVariant.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = member.memberName,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = appColors.textPrimary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    text = "ID: ${member.memberId.take(8)}...",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = appColors.textSecondary
+                                                )
+                                            }
+                                            Surface(
+                                                color = CryptoPurple.copy(alpha = 0.15f),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "RX: ${member.counterIn}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = CryptoPurple,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showGroupMembersDialog = false }) {
+                        Text("Zamknij", color = appColors.primary)
+                    }
+                },
+                containerColor = appColors.surface
+            )
+        }
+
         fullscreenImageBytes?.let { bytes ->
             FullscreenImageViewer(
                 imageBytes = bytes,
@@ -629,6 +780,17 @@ fun MessageBubble(
                 .border(1.dp, borderColor, RoundedCornerShape(16.dp))
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
+                // Sender name for group messages
+                if (!isOut && !message.senderName.isNullOrBlank()) {
+                    Text(
+                        text = message.senderName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CryptoPurple,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
                 // Image payload if present
                 message.rawImageBytes?.let { bytes ->
                     val bitmap = remember(bytes) {

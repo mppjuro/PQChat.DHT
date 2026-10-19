@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.db.ContactEntity
+import org.pqchat.dht.data.db.GroupEntity
+import org.pqchat.dht.data.db.GroupMemberEntity
 import org.pqchat.dht.data.db.MessageEntity
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.dht.leaf.DhtClient
@@ -73,6 +75,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val contacts: StateFlow<List<ContactEntity>> = repository.getAllContactsFlow()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    val groups: StateFlow<List<GroupEntity>> = repository.getAllGroupsFlow()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun getGroupMembersFlow(groupId: String): Flow<List<GroupMemberEntity>> =
+        repository.getGroupMembersFlow(groupId)
 
     private val _selectedContactId = MutableStateFlow<String?>(null)
     val selectedContactId: StateFlow<String?> = _selectedContactId.asStateFlow()
@@ -297,11 +305,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun selectContact(contactId: String) {
         _selectedContactId.value = contactId
         pollingManager.onChatOpened(contactId)
+        viewModelScope.launch {
+            val group = repository.getGroup(contactId)
+            if (group != null) {
+                repository.pollGroupIncoming(contactId)
+            }
+        }
     }
 
     fun unselectContact() {
         _selectedContactId.value = null
         pollingManager.onChatClosed()
+    }
+
+    fun createGroup(groupName: String, contactIds: List<String>) {
+        if (groupName.isBlank()) return
+        viewModelScope.launch {
+            val group = repository.createGroup(groupName, contactIds)
+            selectContact(group.groupId)
+        }
     }
 
     /** Trigger an immediate DHT poll (ignores current countdown). */
@@ -314,7 +336,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isBlank()) return
 
         viewModelScope.launch {
-            repository.sendTextMessage(contactId, text)
+            val group = repository.getGroup(contactId)
+            if (group != null) {
+                repository.sendGroupMessage(contactId, text)
+            } else {
+                repository.sendTextMessage(contactId, text)
+            }
         }
     }
 

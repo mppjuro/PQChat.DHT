@@ -16,6 +16,7 @@ import org.pqchat.dht.protocol.RatchetChain
 import org.pqchat.dht.protocol.RekeyCoordinator
 import org.pqchat.dht.protocol.SlidingWindowBitmap
 import org.pqchat.dht.traffic.PollingWorker
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class ChatRepository(
@@ -37,7 +38,9 @@ class ChatRepository(
         } catch (_: Throwable) {
             null
         }
-    }
+    },
+    val groupDao: GroupDao? = null,
+    val groupMemberDao: GroupMemberDao? = null
 ) {
     val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
         get() = researchTelemetryProvider?.invoke()
@@ -89,7 +92,9 @@ class ChatRepository(
         blindRepublishPool,
         outboundPoissonQueue,
         isStrictPoissonShapingEnabled,
-        strictPoissonShapingEnabledProvider
+        strictPoissonShapingEnabledProvider,
+        groupDao = database.groupDao(),
+        groupMemberDao = database.groupMemberDao()
     )
 
     /**
@@ -206,6 +211,42 @@ class ChatRepository(
 
     fun getContactMutex(contactId: String): Mutex =
         contactMutexes.computeIfAbsent(contactId) { Mutex() }
+
+    private val groupMutexes = ConcurrentHashMap<String, Mutex>()
+    fun getGroupMutex(groupId: String): Mutex =
+        groupMutexes.computeIfAbsent(groupId) { Mutex() }
+
+    fun getAllGroupsFlow(): Flow<List<GroupEntity>> =
+        groupDao?.getAllGroupsFlow() ?: flowOf(emptyList())
+
+    fun getGroupMembersFlow(groupId: String): Flow<List<GroupMemberEntity>> =
+        groupMemberDao?.getMembersForGroupFlow(groupId) ?: flowOf(emptyList())
+
+    suspend fun getGroup(groupId: String): GroupEntity? = withContext(Dispatchers.IO) {
+        groupDao?.getGroupById(groupId)
+    }
+
+    private fun uuidStringToBytes(uuidStr: String): ByteArray {
+        return try {
+            val u = java.util.UUID.fromString(uuidStr)
+            val bb = java.nio.ByteBuffer.allocate(16)
+            bb.putLong(u.mostSignificantBits)
+            bb.putLong(u.leastSignificantBits)
+            bb.array()
+        } catch (_: Exception) {
+            val hash = CryptoUtils.sha256(uuidStr.toByteArray(Charsets.UTF_8))
+            hash.copyOf(16)
+        }
+    }
+
+    private fun bytesToUuidString(bytes: ByteArray): String {
+        return try {
+            val bb = java.nio.ByteBuffer.wrap(bytes)
+            java.util.UUID(bb.long, bb.long).toString()
+        } catch (_: Exception) {
+            CryptoUtils.toHex(bytes)
+        }
+    }
 
     fun getAllContactsFlow(): Flow<List<ContactEntity>> = contactDao.getAllContactsFlow()
 
@@ -1321,6 +1362,21 @@ class ChatRepository(
                         skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
                         anyProcessed = true
                     }
+                    BinaryFrameCodec.TYPE_GROUP_CONTROL -> {
+                        val controlPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.GroupControl
+                        processIncomingGroupControl(contactId, controlPayload)
+                        bitmap.markReceived(sk.slotIndex)
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = contact.counterIn,
+                            chainKeyIn = contact.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        sk.destroy()
+                        skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        anyProcessed = true
+                    }
                     else -> {}
                 }
             } catch (_: Exception) {
@@ -1746,6 +1802,21 @@ class ChatRepository(
                         isSelf = isSelf,
                         contact = contact
                     )
+                }
+
+                BinaryFrameCodec.TYPE_GROUP_CONTROL -> {
+                    val controlPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.GroupControl
+                    bitmap.markReceived(slot.counter)
+                    processIncomingGroupControl(contactId, controlPayload)
+                    contactDao.updateIncomingStateWithBitmap(
+                        id = contactId,
+                        counterIn = slot.counter + 1,
+                        chainKeyIn = slot.nextChainKey,
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+                    preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                    true
                 }
                 else -> false
             }
@@ -2434,6 +2505,618 @@ class ChatRepository(
                 false
             }
         }
+    }
+
+    // ==========================================
+    // DECENTRALIZED GROUP CHAT (SENDER KEYS OVER BEP 44)
+    // ==========================================
+
+    suspend fun createGroup(
+        groupName: String,
+        invitedContactIds: List<String>
+    ): GroupEntity = withContext(Dispatchers.IO) {
+        val groupId = UUID.randomUUID().toString()
+        val myMemberId = UUID.randomUUID().toString()
+        val myChainKeyOut = CryptoUtils.secureRandomBytes(64)
+        val group = GroupEntity(
+            groupId = groupId,
+            groupName = groupName,
+            myMemberId = myMemberId,
+            myChainKeyOut = myChainKeyOut,
+            myCounterOut = 0,
+            groupEpoch = 1L,
+            createdAt = System.currentTimeMillis(),
+            lastActive = System.currentTimeMillis(),
+            isActive = true
+        )
+        groupDao?.insertOrUpdate(group)
+
+        val groupIdBytes = uuidStringToBytes(groupId)
+        val myMemberIdBytes = uuidStringToBytes(myMemberId)
+
+        val membersSummary = mutableListOf<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>()
+        membersSummary.add(BinaryFrameCodec.DecodedPayload.GroupMemberSummary(myMemberIdBytes, "Ja"))
+
+        val memberEntities = mutableListOf<GroupMemberEntity>()
+        memberEntities.add(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = myMemberId,
+                contactId = null,
+                memberName = "Ja",
+                chainKeyIn = myChainKeyOut,
+                counterIn = 0,
+                joinedAt = System.currentTimeMillis(),
+                isActive = true
+            )
+        )
+        for (contactId in invitedContactIds) {
+            val contact = contactDao.getContactById(contactId) ?: continue
+            val memberId = UUID.randomUUID().toString()
+            val memberIdBytes = uuidStringToBytes(memberId)
+            val memberName = contact.name
+            membersSummary.add(BinaryFrameCodec.DecodedPayload.GroupMemberSummary(memberIdBytes, memberName))
+            memberEntities.add(
+                GroupMemberEntity(
+                    groupId = groupId,
+                    memberId = memberId,
+                    contactId = contactId,
+                    memberName = memberName,
+                    chainKeyIn = ByteArray(64),
+                    counterIn = 0,
+                    joinedAt = System.currentTimeMillis(),
+                    isActive = true
+                )
+            )
+        }
+        if (memberEntities.isNotEmpty()) {
+            groupMemberDao?.insertOrUpdateAll(memberEntities)
+        }
+
+        // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact
+        for (contactId in invitedContactIds) {
+            try {
+                sendGroupControlInvite(
+                    contactId = contactId,
+                    groupIdBytes = groupIdBytes,
+                    groupEpoch = 1L,
+                    myMemberIdBytes = myMemberIdBytes,
+                    myChainKeyOut = myChainKeyOut,
+                    currentCounter = 0L,
+                    groupName = groupName,
+                    membersSummary = membersSummary
+                )
+            } catch (_: Exception) {}
+        }
+
+        group
+    }
+
+    private suspend fun sendGroupControlInvite(
+        contactId: String,
+        groupIdBytes: ByteArray,
+        groupEpoch: Long,
+        myMemberIdBytes: ByteArray,
+        myChainKeyOut: ByteArray,
+        currentCounter: Long,
+        groupName: String,
+        membersSummary: List<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>
+    ): Boolean {
+        return getContactMutex(contactId).withLock {
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+
+            val plaintext = BinaryFrameCodec.encodeGroupControl(
+                seqNum = contact.counterOut and 0xFFFF,
+                ackNum = contact.counterIn and 0xFFFF,
+                timestampUTC = System.currentTimeMillis(),
+                controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+                groupId = groupIdBytes,
+                groupEpoch = groupEpoch,
+                senderMemberId = myMemberIdBytes,
+                senderGroupChainKey = myChainKeyOut,
+                currentCounter = currentCounter,
+                groupName = groupName,
+                members = membersSummary
+            )
+
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                direction = contact.outboundDirection
+            )
+
+            val isSelf = contactId == SELF_CONTACT_ID
+            if (isStrictPoissonShaping()) {
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                        }
+                    )
+                )
+                return@withLock true
+            }
+
+            val success = dhtLeafNode.putMutable(
+                target = slot.target,
+                v = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = isSelf
+            )
+
+            if (success) {
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                decoyTargetPool.registerPopulatedTarget(slot.target)
+            }
+            success
+        }
+    }
+
+    private suspend fun sendGroupControlRekeyOrInvite(
+        contactId: String,
+        controlSubType: Byte,
+        groupIdBytes: ByteArray,
+        groupEpoch: Long,
+        myMemberIdBytes: ByteArray,
+        myChainKeyOut: ByteArray,
+        currentCounter: Long,
+        groupName: String
+    ): Boolean {
+        return getContactMutex(contactId).withLock {
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+
+            val plaintext = BinaryFrameCodec.encodeGroupControl(
+                seqNum = contact.counterOut and 0xFFFF,
+                ackNum = contact.counterIn and 0xFFFF,
+                timestampUTC = System.currentTimeMillis(),
+                controlSubType = controlSubType,
+                groupId = groupIdBytes,
+                groupEpoch = groupEpoch,
+                senderMemberId = myMemberIdBytes,
+                senderGroupChainKey = myChainKeyOut,
+                currentCounter = currentCounter,
+                groupName = groupName,
+                members = emptyList()
+            )
+
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                direction = contact.outboundDirection
+            )
+
+            val isSelf = contactId == SELF_CONTACT_ID
+            if (isStrictPoissonShaping()) {
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                        }
+                    )
+                )
+                return@withLock true
+            }
+
+            val success = dhtLeafNode.putMutable(
+                target = slot.target,
+                v = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = isSelf
+            )
+
+            if (success) {
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                decoyTargetPool.registerPopulatedTarget(slot.target)
+            }
+            success
+        }
+    }
+
+    suspend fun processIncomingGroupControl(
+        contactId: String,
+        control: BinaryFrameCodec.DecodedPayload.GroupControl
+    ) = withContext(Dispatchers.IO) {
+        val groupId = bytesToUuidString(control.groupId)
+        val senderMemberId = bytesToUuidString(control.senderMemberId)
+        val senderContact = contactDao.getContactById(contactId)
+        val senderName = senderContact?.name ?: "Uczestnik"
+
+        when (control.controlSubType) {
+            BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> {
+                var existingGroup = groupDao?.getGroupById(groupId)
+                if (existingGroup == null) {
+                    val myMemberId = UUID.randomUUID().toString()
+                    val myChainKeyOut = CryptoUtils.secureRandomBytes(64)
+                    val newGroup = GroupEntity(
+                        groupId = groupId,
+                        groupName = control.groupName,
+                        myMemberId = myMemberId,
+                        myChainKeyOut = myChainKeyOut,
+                        myCounterOut = 0,
+                        groupEpoch = control.groupEpoch,
+                        createdAt = System.currentTimeMillis(),
+                        lastActive = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    groupDao?.insertOrUpdate(newGroup)
+
+                    val senderMember = GroupMemberEntity(
+                        groupId = groupId,
+                        memberId = senderMemberId,
+                        contactId = contactId,
+                        memberName = senderName,
+                        chainKeyIn = control.senderGroupChainKey,
+                        counterIn = control.currentCounter.toInt(),
+                        joinedAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(senderMember)
+
+                    val myMember = GroupMemberEntity(
+                        groupId = groupId,
+                        memberId = myMemberId,
+                        contactId = null,
+                        memberName = "Ja",
+                        chainKeyIn = myChainKeyOut,
+                        counterIn = 0,
+                        joinedAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(myMember)
+
+                    for (m in control.members) {
+                        val mId = bytesToUuidString(m.memberId)
+                        if (mId != senderMemberId && mId != myMemberId) {
+                            val existing = groupMemberDao?.getMember(groupId, mId)
+                            if (existing == null) {
+                                groupMemberDao?.insertOrUpdate(
+                                    GroupMemberEntity(
+                                        groupId = groupId,
+                                        memberId = mId,
+                                        contactId = null,
+                                        memberName = m.memberName,
+                                        chainKeyIn = ByteArray(64),
+                                        counterIn = 0,
+                                        joinedAt = System.currentTimeMillis(),
+                                        isActive = true
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    // Respond back with our own Sender Key so inviter can receive our group messages
+                    val myMemberIdBytes = uuidStringToBytes(myMemberId)
+                    val groupIdBytes = control.groupId
+                    sendGroupControlRekeyOrInvite(
+                        contactId = contactId,
+                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                        groupIdBytes = groupIdBytes,
+                        groupEpoch = control.groupEpoch,
+                        myMemberIdBytes = myMemberIdBytes,
+                        myChainKeyOut = myChainKeyOut,
+                        currentCounter = 0L,
+                        groupName = control.groupName
+                    )
+                } else {
+                    val member = GroupMemberEntity(
+                        groupId = groupId,
+                        memberId = senderMemberId,
+                        contactId = contactId,
+                        memberName = senderName,
+                        chainKeyIn = control.senderGroupChainKey,
+                        counterIn = control.currentCounter.toInt(),
+                        joinedAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(member)
+                }
+            }
+            BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> {
+                val existingGroup = groupDao?.getGroupById(groupId) ?: return@withContext
+                val existingMember = groupMemberDao?.getMember(groupId, senderMemberId)
+                if (existingMember != null) {
+                    val updated = existingMember.copy(
+                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}"),
+                        counterIn = control.currentCounter.toInt(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(updated)
+                } else {
+                    val newMember = GroupMemberEntity(
+                        groupId = groupId,
+                        memberId = senderMemberId,
+                        contactId = contactId,
+                        memberName = senderName,
+                        chainKeyIn = control.senderGroupChainKey,
+                        counterIn = control.currentCounter.toInt(),
+                        joinedAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(newMember)
+                }
+            }
+            BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> {
+                groupMemberDao?.markMemberInactive(groupId, senderMemberId)
+            }
+        }
+    }
+
+    suspend fun sendGroupMessage(groupId: String, text: String): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            // Auto-rekey every 50 messages
+            if (group.myCounterOut > 0 && group.myCounterOut % 50 == 0) {
+                rotateGroupSenderKeyInternal(group)
+            }
+            val currentGroup = groupDao?.getGroupById(groupId) ?: group
+
+            val slot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+
+            val plaintext = BinaryFrameCodec.encodeTextMessage(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                text = text
+            )
+
+            val frame = BinaryFrameCodec.packGroupAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                groupId = groupIdBytes,
+                senderMemberId = myMemberIdBytes
+            )
+
+            val msgId = messageDao.insertMessage(
+                MessageEntity(
+                    contactId = groupId,
+                    isOutgoing = true,
+                    seqEpoch = currentGroup.myCounterOut / 65536,
+                    seqNum = currentGroup.myCounterOut,
+                    ackNum = 0,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = text,
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
+                    senderMemberId = currentGroup.myMemberId,
+                    senderName = "Ja"
+                )
+            )
+
+            groupDao?.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(slot.nextChainKey, "groups", groupId),
+                lastActive = System.currentTimeMillis()
+            )
+
+            if (isStrictPoissonShaping()) {
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = false,
+                        seqNum = currentGroup.myCounterOut,
+                        messageId = msgId,
+                        contactId = groupId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                                messageDao.updateStatus(msgId, "SENT_DHT")
+                            }
+                        }
+                    )
+                )
+                return@withLock true
+            }
+
+            val success = dhtLeafNode.putMutable(
+                target = slot.target,
+                v = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = false
+            )
+
+            if (success) {
+                decoyTargetPool.registerPopulatedTarget(slot.target)
+                messageDao.updateStatus(msgId, "SENT_DHT")
+            }
+            success
+        }
+    }
+
+    suspend fun rotateGroupSenderKey(groupId: String): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            rotateGroupSenderKeyInternal(group)
+            true
+        }
+    }
+
+    private suspend fun rotateGroupSenderKeyInternal(group: GroupEntity) {
+        val newChainKeyOut = CryptoUtils.secureRandomBytes(64)
+        val newEpoch = group.groupEpoch + 1
+        val newCounterOut = 0
+
+        groupDao?.updateRekeyedState(
+            groupId = group.groupId,
+            epoch = newEpoch,
+            counterOut = newCounterOut,
+            chainKeyOut = EncryptedBlob(newChainKeyOut, "groups", group.groupId),
+            lastActive = System.currentTimeMillis()
+        )
+
+        val members = groupMemberDao?.getMembersForGroup(group.groupId) ?: emptyList()
+        val groupIdBytes = uuidStringToBytes(group.groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+
+        for (member in members) {
+            val contactId = member.contactId ?: continue
+            try {
+                sendGroupControlRekeyOrInvite(
+                    contactId = contactId,
+                    controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupIdBytes = groupIdBytes,
+                    groupEpoch = newEpoch,
+                    myMemberIdBytes = myMemberIdBytes,
+                    myChainKeyOut = newChainKeyOut,
+                    currentCounter = 0L,
+                    groupName = group.groupName
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withLock false
+            val groupIdBytes = uuidStringToBytes(groupId)
+            var anyReceived = false
+
+            for (member in members) {
+                if (member.memberId == group.myMemberId) continue
+                if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
+
+                var curMember = member
+                var consecutive = 0
+                while (consecutive < 10) {
+                    val slot = RatchetChain.deriveSlot(curMember.rawChainKeyIn, curMember.counterIn)
+                    val memberIdBytes = uuidStringToBytes(curMember.memberId)
+
+                    val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = false) ?: break
+                    try {
+                        val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(
+                            key = slot.msgKey,
+                            frame = item.v,
+                            target = slot.target,
+                            groupId = groupIdBytes,
+                            senderMemberId = memberIdBytes
+                        )
+
+                        val bitmap = SlidingWindowBitmap(curMember.receivedBitmapBase, 1024, curMember.receivedBitmap)
+
+                        if (!bitmap.isReceived(slot.counter)) {
+                            bitmap.markReceived(slot.counter)
+
+                            when (frameMsg.msgType) {
+                                BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
+                                    val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                                    val seqEpoch = slot.counter / 65536
+                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)
+                                    if (!alreadyExists) {
+                                        messageDao.insertMessage(
+                                            MessageEntity(
+                                                contactId = groupId,
+                                                isOutgoing = false,
+                                                seqEpoch = seqEpoch,
+                                                seqNum = slot.counter,
+                                                ackNum = frameMsg.ackNum,
+                                                timestamp = frameMsg.timestampUTC,
+                                                textContent = textPayload.text,
+                                                status = "DELIVERED",
+                                                senderMemberId = curMember.memberId,
+                                                senderName = curMember.memberName
+                                            )
+                                        )
+                                        onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+
+                        // Advance incoming chain state for this member.
+                        // STRICT REQUIREMENT: DO NOT overwrite with tombstone! Other members must read this same DHT slot.
+                        groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                            groupId = groupId,
+                            memberId = curMember.memberId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = EncryptedBlob(slot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+
+                        curMember = curMember.copy(
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = EncryptedBlob(slot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            receivedBitmapBase = bitmap.windowBase,
+                            receivedBitmap = bitmap.toByteArray()
+                        )
+                        anyReceived = true
+                        consecutive++
+                    } catch (_: Exception) {
+                        harvestUndecryptableItem(slot.target, item)
+                        break
+                    }
+                }
+            }
+            anyReceived
+        }
+    }
+
+    suspend fun pollAllGroupsIncoming(): List<Boolean> = coroutineScope {
+        val groups = groupDao?.getAllActiveGroups() ?: emptyList()
+        groups.map { group ->
+            async {
+                pollGroupIncoming(group.groupId)
+            }
+        }.awaitAll()
     }
 }
 
