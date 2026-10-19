@@ -6,11 +6,14 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.dht.FakeDht
+import org.pqchat.dht.dht.leaf.DhtClient
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.sqrt
 
@@ -298,6 +301,225 @@ class TrafficThreatModelStatisticalTest {
 
         // DecoyTargetPool must have registered the targets
         assertTrue("Decoy pool must contain at least 2 populated targets", decoyPool.size() >= 2)
+    }
+
+    @Test
+    fun testStrictPoissonTrafficShaping_DistributionIndistinguishableFromIdleNoise() = runBlocking {
+        val lambda = 1.0 / 300.0 // average once every 5 minutes = 300s
+        val n = 3000
+
+        // 1. Idle resting baseline (no chat messages; only dummy cover traffic)
+        val fakeDhtIdle = FakeDht()
+        val generatorIdle = PoissonTrafficGenerator(dhtLeafNode = fakeDhtIdle, lambda = lambda)
+        val intervalsIdle = DoubleArray(n) { generatorIdle.computeNextIntervalMs().toDouble() }
+
+        // 2. Active chatting state under Strict Poisson Shaping:
+        // User heavily sending messages queued into OutboundPoissonQueue
+        val fakeDhtActive = FakeDht()
+        val outboundQueue = OutboundPoissonQueue()
+        val ackQueue = PendingAckQueue()
+        val republishPool = BlindRepublishPool()
+        val generatorActive = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDhtActive,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = republishPool,
+            outboundPoissonQueue = outboundQueue,
+            lambda = lambda
+        )
+
+        // Pre-enqueue batches of user messages (simulating intense conversation bursts)
+        for (i in 0 until 50) {
+            outboundQueue.enqueue(
+                OutboundPoissonFrame(
+                    target = CryptoUtils.secureRandomBytes(20),
+                    payload = ByteArray(900) { (it % 256).toByte() },
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = CryptoUtils.secureRandomBytes(32),
+                    seqNum = i,
+                    messageId = i.toLong(),
+                    contactId = "peer"
+                )
+            )
+        }
+
+        val intervalsActive = DoubleArray(n)
+        for (i in 0 until n) {
+            intervalsActive[i] = generatorActive.computeNextIntervalMs().toDouble()
+            // Replenish bursts periodically to simulate persistent user typing
+            if (i % 30 == 0) {
+                outboundQueue.enqueue(
+                    OutboundPoissonFrame(
+                        target = CryptoUtils.secureRandomBytes(20),
+                        payload = ByteArray(900) { 0x55 },
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = CryptoUtils.secureRandomBytes(32),
+                        seqNum = i,
+                        messageId = (1000 + i).toLong(),
+                        contactId = "peer"
+                    )
+                )
+            }
+            // Execute tick
+            val event = generatorActive.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+            assertNotNull(event)
+            // Verify all emitted frames have strictly uniform 900-byte payload
+            assertEquals("Every emitted packet must be exactly 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+        }
+
+        // --- STATISTICAL TEST 1: Chi-Square Goodness-of-Fit against theoretical exponential distribution ---
+        val kBins = 10
+        val expectedPerBin = n.toDouble() / kBins
+        val binCounts = IntArray(kBins)
+        for (x in intervalsActive) {
+            val u = 1.0 - exp(-lambda * (x / 1000.0))
+            val bin = (u * kBins).toInt().coerceIn(0, kBins - 1)
+            binCounts[bin]++
+        }
+
+        var chiSquare = 0.0
+        for (observed in binCounts) {
+            val diff = observed - expectedPerBin
+            chiSquare += (diff * diff) / expectedPerBin
+        }
+
+        // Critical value for chi-square with 9 degrees of freedom at alpha=0.01 is 21.67
+        assertTrue(
+            "Chi-Square test statistic ($chiSquare) for active chatting must not reject exponential distribution (critical = 21.67)",
+            chiSquare < 21.67
+        )
+
+        // --- STATISTICAL TEST 2: Two-Sample Kolmogorov-Smirnov Test between Active and Idle distributions ---
+        // Null Hypothesis H0: The inter-arrival distributions of PUT packets in active chatting and idle resting states are identical.
+        val dStatistic = computeTwoSampleKsStatistic(intervalsActive, intervalsIdle)
+        // Critical value at alpha = 0.05: D_crit = 1.36 * sqrt((n1 + n2) / (n1 * n2))
+        val dCritical = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+
+        assertTrue(
+            "Two-sample KS statistic D ($dStatistic) must be strictly less than critical value ($dCritical) at alpha=0.05, proving statistical indistinguishability",
+            dStatistic < dCritical
+        )
+
+        // --- STATISTICAL TEST 3: Lack of Autocorrelation / Memorylessness during Active Chatting ---
+        val meanActive = intervalsActive.average()
+        val denominator = intervalsActive.sumOf { (it - meanActive) * (it - meanActive) }
+        for (lag in listOf(1, 2, 5)) {
+            var numerator = 0.0
+            for (i in 0 until n - lag) {
+                numerator += (intervalsActive[i] - meanActive) * (intervalsActive[i + lag] - meanActive)
+            }
+            val rLag = numerator / denominator
+            assertTrue(
+                "Autocorrelation at lag $lag during active chatting must be negligible (|r| < 0.05), got $rLag",
+                abs(rLag) < 0.05
+            )
+        }
+    }
+
+    @Test
+    fun testStrictPoissonTrafficShaping_ChatBurstQueueTransitions() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val fakeDht = FakeDht()
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+
+        val repository = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true
+        )
+
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = repository.blindRepublishPool,
+            outboundPoissonQueue = outboundQueue
+        )
+
+        val contact = ContactEntity(
+            id = "alice",
+            name = "Alice",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            chainKeyIn = CryptoUtils.secureRandomBytes(64),
+            counterIn = 0
+        )
+        contactDao.insertOrUpdate(contact)
+
+        // 1. Rapid burst of 15 messages sent by user
+        val burstCount = 15
+        for (i in 1..burstCount) {
+            val ok = repository.sendTextMessage("alice", "Burst message #$i")
+            assertTrue("Send must succeed immediately into queue", ok)
+        }
+
+        // All 15 messages must be in database with status "QUEUED_POISSON"
+        val queuedMessages = messageDao.messages
+        assertEquals(burstCount, queuedMessages.size)
+        assertTrue(queuedMessages.all { it.status == "QUEUED_POISSON" })
+        assertEquals(burstCount, outboundQueue.size)
+        assertEquals(0, fakeDht.storage.size) // No DHT leakage prior to Poisson ticks!
+
+        // Outgoing sequence counter advanced across all slots
+        val updatedContact = contactDao.getContactById("alice")!!
+        assertEquals(burstCount, updatedContact.counterOut)
+
+        // 2. Process Poisson ticks one by one: verify seamless 1-by-1 emission and status progression
+        for (i in 1..burstCount) {
+            val event = generator.processCoverTrafficTick()
+            assertNotNull(event)
+            assertTrue("Emitted frame must be FIRST_SEND", event.isFirstSend)
+            assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+            assertEquals(burstCount - i, outboundQueue.size)
+            assertEquals(i, fakeDht.storage.size)
+        }
+
+        // All 15 messages should now be "PENDING_DELIVERY"
+        val deliveredMessages = messageDao.messages
+        assertTrue(deliveredMessages.all { it.status == "PENDING_DELIVERY" })
+
+        // 3. Next Poisson tick: queue is empty -> automatically falls back to Tier 4 Dummy Chaff
+        val dummyEvent = generator.processCoverTrafficTick()
+        assertNotNull(dummyEvent)
+        assertFalse("Subsequent tick when queue empty must be dummy chaff", dummyEvent.isFirstSend)
+        assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, dummyEvent.payloadSize)
+    }
+
+    private fun computeTwoSampleKsStatistic(sample1: DoubleArray, sample2: DoubleArray): Double {
+        val n1 = sample1.size
+        val n2 = sample2.size
+        val sorted1 = sample1.sortedArray()
+        val sorted2 = sample2.sortedArray()
+
+        var i1 = 0
+        var i2 = 0
+        var maxDiff = 0.0
+
+        while (i1 < n1 && i2 < n2) {
+            val v1 = sorted1[i1]
+            val v2 = sorted2[i2]
+            val v = if (v1 <= v2) v1 else v2
+
+            while (i1 < n1 && sorted1[i1] <= v) i1++
+            while (i2 < n2 && sorted2[i2] <= v) i2++
+
+            val cdf1 = i1.toDouble() / n1
+            val cdf2 = i2.toDouble() / n2
+            val diff = abs(cdf1 - cdf2)
+            if (diff > maxDiff) {
+                maxDiff = diff
+            }
+        }
+        return maxDiff
     }
 
     // --- Minimal In-Memory DAOs for isolation ---

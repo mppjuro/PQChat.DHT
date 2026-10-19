@@ -21,17 +21,27 @@ class PoissonTrafficGenerator(
     private val dhtLeafNode: DhtClient,
     val lambda: Double = 1.0 / 480.0, // average once every 8 minutes (480s)
     val pendingAckQueue: PendingAckQueue = PendingAckQueue(),
+    val outboundPoissonQueue: OutboundPoissonQueue = OutboundPoissonQueue(),
     val decoyTargetPool: DecoyTargetPool = DecoyTargetPool.defaultInstance,
     val blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance,
     var isCrowdsourcedRepublishEnabled: Boolean = true,
-    var crowdsourcedRepublishEnabledProvider: (() -> Boolean)? = null
+    var crowdsourcedRepublishEnabledProvider: (() -> Boolean)? = null,
+    var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
+        try {
+            org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager
+        } catch (_: Throwable) {
+            null
+        }
+    }
 ) {
     data class CoverEvent(
         val timestamp: Long,
         val targetHex: String,
         val intervalSeconds: Double,
         val isAck: Boolean = false,
-        val isBlindRepublish: Boolean = false
+        val isBlindRepublish: Boolean = false,
+        val isFirstSend: Boolean = false,
+        val payloadSize: Int = 900
     )
 
     fun isCrowdsourcedEnabled(): Boolean =
@@ -54,124 +64,156 @@ class PoissonTrafficGenerator(
     }
 
     /**
-     * Emits a single cover traffic tick:
-     * 1. Priority 1: If pendingAckQueue has an item, replaces dummy with encrypted Cover-Traffic ACK token.
-     * 2. Priority 2: If crowdsourced republishing is enabled and BlindRepublishPool has entries,
-     *    republishes a random valid third-party BEP 44 packet instead of synthetic chaffing.
-     * 3. Fallback: Emits a CSPRNG dummy decoy packet.
+     * Emits a single cover traffic tick according to strict priority order:
+     * 1. Priority 1: Pending user message from OutboundPoissonQueue (Strict Poisson Traffic Shaping, FIRST_SEND).
+     * 2. Priority 2: Pending encrypted Cover-Traffic ACK token (COVER_ACK_SENT).
+     * 3. Priority 3: Crowdsourced third-party BEP 44 republish from BlindRepublishPool (CROWD_REPUBLISH).
+     * 4. Priority 4 (Fallback): Synthetic CSPRNG dummy decoy packet (COVER_DUMMY_SENT).
      */
     suspend fun processCoverTrafficTick(delayMs: Long = 0L): CoverEvent {
-        val pendingAck = pendingAckQueue.poll()
-        val event = if (pendingAck != null) {
-            val ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
-            val ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
-            val ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
-                ratchetKey = pendingAck.ratchetKey,
-                messageId = pendingAck.messageId,
-                seqNum = pendingAck.seqNum
-            )
+        val outboundFrame = outboundPoissonQueue.poll()
+        val event = if (outboundFrame != null) {
             val tStart = System.currentTimeMillis()
             val ok = dhtLeafNode.putMutable(
-                target = ackTarget,
-                v = ackPayload,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = ackSeed
+                target = outboundFrame.target,
+                v = outboundFrame.payload,
+                seq = outboundFrame.seq,
+                salt = outboundFrame.salt,
+                sk = outboundFrame.sk,
+                skipLocalStore = outboundFrame.skipLocalStore
             )
             val rttMs = System.currentTimeMillis() - tStart
             try {
-                org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
-                    role = org.pqchat.dht.research.PacketRole.COVER_ACK_SENT,
-                    target = ackTarget,
-                    payloadBytes = ackPayload.size,
+                researchTelemetryProvider?.invoke()?.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    target = outboundFrame.target,
+                    seqNum = outboundFrame.seqNum.toLong(),
+                    payloadBytes = outboundFrame.payload.size,
                     rttMs = rttMs,
-                    success = ok
+                    nodesQueried = 24,
+                    nodesResponded = if (ok) 8 else 0,
+                    success = ok,
+                    republishAttempt = 0
                 )
             } catch (_: Throwable) {}
-            decoyTargetPool.registerPopulatedTarget(ackTarget)
+            decoyTargetPool.registerPopulatedTarget(outboundFrame.target)
+            try {
+                outboundFrame.onSent?.invoke(ok)
+            } catch (_: Throwable) {}
             CoverEvent(
                 timestamp = System.currentTimeMillis(),
-                targetHex = CryptoUtils.toHex(ackTarget),
+                targetHex = CryptoUtils.toHex(outboundFrame.target),
                 intervalSeconds = delayMs / 1000.0,
-                isAck = true,
-                isBlindRepublish = false
+                isAck = false,
+                isBlindRepublish = false,
+                isFirstSend = true,
+                payloadSize = outboundFrame.payload.size
             )
-        } else if (isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
-            val entry = blindRepublishPool.sampleRandomEntry()
-            if (entry != null) {
+        } else {
+            val pendingAck = pendingAckQueue.poll()
+            if (pendingAck != null) {
+                val ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
+                val ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
+                val ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
+                    ratchetKey = pendingAck.ratchetKey,
+                    messageId = pendingAck.messageId,
+                    seqNum = pendingAck.seqNum
+                )
                 val tStart = System.currentTimeMillis()
-                val ok = dhtLeafNode.putMutablePreSigned(
-                    target = entry.target,
-                    v = entry.v,
-                    seq = entry.seq,
-                    salt = entry.salt,
-                    pk = entry.publicKey,
-                    sig = entry.sig,
-                    skipLocalStore = false
+                val ok = dhtLeafNode.putMutable(
+                    target = ackTarget,
+                    v = ackPayload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = ackSeed
                 )
                 val rttMs = System.currentTimeMillis() - tStart
                 try {
-                    org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
-                        role = org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH,
-                        target = entry.target,
-                        seqNum = entry.seq,
-                        payloadBytes = entry.v.size,
+                    researchTelemetryProvider?.invoke()?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.COVER_ACK_SENT,
+                        target = ackTarget,
+                        payloadBytes = ackPayload.size,
                         rttMs = rttMs,
-                        nodesQueried = 24,
-                        nodesResponded = if (ok) 8 else 0,
                         success = ok
                     )
                 } catch (_: Throwable) {}
-                decoyTargetPool.registerPopulatedTarget(entry.target)
+                decoyTargetPool.registerPopulatedTarget(ackTarget)
                 CoverEvent(
                     timestamp = System.currentTimeMillis(),
-                    targetHex = CryptoUtils.toHex(entry.target),
+                    targetHex = CryptoUtils.toHex(ackTarget),
                     intervalSeconds = delayMs / 1000.0,
-                    isAck = false,
-                    isBlindRepublish = true
+                    isAck = true,
+                    isBlindRepublish = false,
+                    isFirstSend = false,
+                    payloadSize = ackPayload.size
                 )
-            } else {
-                val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
-                val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
-                try {
-                    org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
-                        role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
-                        target = actualTarget,
-                        payloadBytes = 900,
-                        success = publishedTarget != null
+            } else if (isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
+                val entry = blindRepublishPool.sampleRandomEntry()
+                if (entry != null) {
+                    val tStart = System.currentTimeMillis()
+                    val ok = dhtLeafNode.putMutablePreSigned(
+                        target = entry.target,
+                        v = entry.v,
+                        seq = entry.seq,
+                        salt = entry.salt,
+                        pk = entry.publicKey,
+                        sig = entry.sig,
+                        skipLocalStore = false
                     )
-                } catch (_: Throwable) {}
-                decoyTargetPool.registerPopulatedTarget(actualTarget)
-                CoverEvent(
-                    timestamp = System.currentTimeMillis(),
-                    targetHex = CryptoUtils.toHex(actualTarget),
-                    intervalSeconds = delayMs / 1000.0,
-                    isAck = false,
-                    isBlindRepublish = false
-                )
+                    val rttMs = System.currentTimeMillis() - tStart
+                    try {
+                        researchTelemetryProvider?.invoke()?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH,
+                            target = entry.target,
+                            seqNum = entry.seq,
+                            payloadBytes = entry.v.size,
+                            rttMs = rttMs,
+                            nodesQueried = 24,
+                            nodesResponded = if (ok) 8 else 0,
+                            success = ok
+                        )
+                    } catch (_: Throwable) {}
+                    decoyTargetPool.registerPopulatedTarget(entry.target)
+                    CoverEvent(
+                        timestamp = System.currentTimeMillis(),
+                        targetHex = CryptoUtils.toHex(entry.target),
+                        intervalSeconds = delayMs / 1000.0,
+                        isAck = false,
+                        isBlindRepublish = true,
+                        isFirstSend = false,
+                        payloadSize = entry.v.size
+                    )
+                } else {
+                    emitDummyCover(delayMs)
+                }
+            } else {
+                emitDummyCover(delayMs)
             }
-        } else {
-            val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
-            val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
-            try {
-                org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager.recordPacketEvent(
-                    role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
-                    target = actualTarget,
-                    payloadBytes = 900,
-                    success = publishedTarget != null
-                )
-            } catch (_: Throwable) {}
-            decoyTargetPool.registerPopulatedTarget(actualTarget)
-            CoverEvent(
-                timestamp = System.currentTimeMillis(),
-                targetHex = CryptoUtils.toHex(actualTarget),
-                intervalSeconds = delayMs / 1000.0,
-                isAck = false,
-                isBlindRepublish = false
-            )
         }
         _eventFlow.emit(event)
         return event
+    }
+
+    private suspend fun emitDummyCover(delayMs: Long): CoverEvent {
+        val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
+        val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
+        try {
+            researchTelemetryProvider?.invoke()?.recordPacketEvent(
+                role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
+                target = actualTarget,
+                payloadBytes = 900,
+                success = publishedTarget != null
+            )
+        } catch (_: Throwable) {}
+        decoyTargetPool.registerPopulatedTarget(actualTarget)
+        return CoverEvent(
+            timestamp = System.currentTimeMillis(),
+            targetHex = CryptoUtils.toHex(actualTarget),
+            intervalSeconds = delayMs / 1000.0,
+            isAck = false,
+            isBlindRepublish = false,
+            isFirstSend = false
+        )
     }
 
     fun start() {

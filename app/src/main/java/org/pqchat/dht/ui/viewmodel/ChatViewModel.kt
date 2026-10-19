@@ -149,6 +149,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = settingsManager.isCrowdsourcedRepublishEnabled
     val isTorEnabled: StateFlow<Boolean> = settingsManager.isTorEnabled
     val isBiometricLockEnabled: StateFlow<Boolean> = settingsManager.isBiometricLockEnabled
+    val isStrictPoissonShapingEnabled: StateFlow<Boolean> = settingsManager.isStrictPoissonShapingEnabled
     val torState: StateFlow<org.pqchat.dht.network.tor.TorState> =
         app?.embeddedTorManager?.state ?: MutableStateFlow(org.pqchat.dht.network.tor.TorState.Disconnected)
 
@@ -158,6 +159,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBiometricLockEnabled(enabled: Boolean) {
         settingsManager.setBiometricLockEnabled(enabled)
+    }
+
+    fun setStrictPoissonShapingEnabled(enabled: Boolean) {
+        settingsManager.setStrictPoissonShapingEnabled(enabled)
     }
 
     // Master's Thesis Research Telemetry & Firebase Sync

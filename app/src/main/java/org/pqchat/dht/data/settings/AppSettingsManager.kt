@@ -198,6 +198,12 @@ class AppSettingsManager(
     )
     val statsProbeIntervalMs: StateFlow<Long> = _statsProbeIntervalMs.asStateFlow()
 
+    // Strict Poisson Traffic Shaping (default FALSE, opt-in privacy defense against traffic analysis)
+    private val _isStrictPoissonShapingEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_STRICT_POISSON_SHAPING, false) ?: false
+    )
+    val isStrictPoissonShapingEnabled: StateFlow<Boolean> = _isStrictPoissonShapingEnabled.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -285,6 +291,11 @@ class AppSettingsManager(
         _statsProbeIntervalMs.value = millis
     }
 
+    fun setStrictPoissonShapingEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_STRICT_POISSON_SHAPING, enabled)?.apply()
+        _isStrictPoissonShapingEnabled.value = enabled
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -312,5 +323,6 @@ class AppSettingsManager(
         private const val KEY_BIOMETRIC_LOCK = "biometric_lock_enabled"
         private const val KEY_ANONYMOUS_STATS = "anonymous_stats_enabled"
         private const val KEY_STATS_PROBE_INTERVAL = "stats_probe_interval"
+        private const val KEY_STRICT_POISSON_SHAPING = "strict_poisson_shaping_enabled"
     }
 }

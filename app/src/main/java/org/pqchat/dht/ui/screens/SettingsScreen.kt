@@ -55,6 +55,7 @@ fun SettingsScreen(
     val isCrowdsourcedRepublishEnabled by viewModel.isCrowdsourcedRepublishEnabled.collectAsState()
     val isTorEnabled by viewModel.isTorEnabled.collectAsState()
     val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsState()
+    val isStrictPoissonShapingEnabled by viewModel.isStrictPoissonShapingEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
 
     val isAnonymousStatsEnabled by viewModel.isAnonymousStatsEnabled.collectAsState()
@@ -727,6 +728,41 @@ fun SettingsScreen(
                         Switch(
                             checked = isBiometricLockEnabled,
                             onCheckedChange = { viewModel.setBiometricLockEnabled(it) }
+                        )
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Przełącznik: Ścisłe kształtowanie ruchu Poissona (Strict Poisson Traffic Shaping)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Ścisłe kształtowanie ruchu Poissona (Traffic Shaping)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isStrictPoissonShapingEnabled) {
+                                    "Włączone — wiadomości, rekeying i obrazy czekają w kolejce 900B i są emitowane ściśle według taktu Poissona (zastępując Delayed PUT), zapewniając pełną tajność godzin i częstotliwości konwersacji."
+                                } else {
+                                    "Wyłączone — wiadomości są wysyłane natychmiastowo z losowym opóźnieniem (Delayed PUT) i równoległymi slotami-wabikami."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isStrictPoissonShapingEnabled) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isStrictPoissonShapingEnabled,
+                            onCheckedChange = { viewModel.setStrictPoissonShapingEnabled(it) }
                         )
                     }
 

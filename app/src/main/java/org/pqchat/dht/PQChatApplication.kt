@@ -55,13 +55,22 @@ class PQChatApplication : Application() {
         database = AppDatabase.getInstance(this)
         dhtLeafNode = DhtLeafNode(port = DhtLeafNode.DEFAULT_DHT_PORT, nodeCacheDao = database.dhtNodeCacheDao()).apply { start() }
         val pendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
+        val outboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue()
         settingsManager = AppSettingsManager(this)
-        repository = ChatRepository(database, dhtLeafNode, pendingAckQueue)
+        repository = ChatRepository(
+            database = database,
+            dhtLeafNode = dhtLeafNode,
+            pendingAckQueue = pendingAckQueue,
+            outboundPoissonQueue = outboundPoissonQueue,
+            strictPoissonShapingEnabledProvider = { settingsManager.isStrictPoissonShapingEnabled.value }
+        )
         trafficGenerator = PoissonTrafficGenerator(
-            dhtLeafNode,
+            dhtLeafNode = dhtLeafNode,
             pendingAckQueue = pendingAckQueue,
             blindRepublishPool = repository.blindRepublishPool,
-            crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value }
+            outboundPoissonQueue = outboundPoissonQueue,
+            crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value },
+            researchTelemetryProvider = { if (::researchTelemetryManager.isInitialized) researchTelemetryManager else null }
         ).apply { start() }
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }
         embeddedTorManager = org.pqchat.dht.network.tor.EmbeddedTorManager(this)

@@ -28,6 +28,9 @@ class ChatRepository(
     val pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
     val decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance,
     val blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance,
+    val outboundPoissonQueue: org.pqchat.dht.traffic.OutboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue(),
+    var isStrictPoissonShapingEnabled: Boolean = false,
+    var strictPoissonShapingEnabledProvider: (() -> Boolean)? = null,
     var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
         try {
             org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager
@@ -38,6 +41,9 @@ class ChatRepository(
 ) {
     val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
         get() = researchTelemetryProvider?.invoke()
+
+    fun isStrictPoissonShaping(): Boolean =
+        strictPoissonShapingEnabledProvider?.invoke() ?: isStrictPoissonShapingEnabled
 
     constructor(
         contactDao: ContactDao,
@@ -67,7 +73,10 @@ class ChatRepository(
         dhtLeafNode: org.pqchat.dht.dht.leaf.DhtClient,
         pendingAckQueue: org.pqchat.dht.traffic.PendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue(),
         decoyTargetPool: org.pqchat.dht.traffic.DecoyTargetPool = org.pqchat.dht.traffic.DecoyTargetPool.defaultInstance,
-        blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance
+        blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance,
+        outboundPoissonQueue: org.pqchat.dht.traffic.OutboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue(),
+        isStrictPoissonShapingEnabled: Boolean = false,
+        strictPoissonShapingEnabledProvider: (() -> Boolean)? = null
     ) : this(
         database.contactDao(),
         database.messageDao(),
@@ -77,7 +86,10 @@ class ChatRepository(
         dhtLeafNode,
         pendingAckQueue,
         decoyTargetPool,
-        blindRepublishPool
+        blindRepublishPool,
+        outboundPoissonQueue,
+        isStrictPoissonShapingEnabled,
+        strictPoissonShapingEnabledProvider
     )
 
     /**
@@ -455,6 +467,74 @@ class ChatRepository(
 
             val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
 
+            val isSelf = contactId == SELF_CONTACT_ID
+
+            if (isStrictPoissonShaping()) {
+                val msgId = messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = true,
+                        seqEpoch = contact.counterOut / 65536,
+                        seqNum = contact.counterOut,
+                        ackNum = contact.counterIn,
+                        timestamp = System.currentTimeMillis(),
+                        textContent = text,
+                        status = "QUEUED_POISSON",
+                        ackTarget = targetAck,
+                        ackRatchetKey = slot.msgKey,
+                        slotTarget = slot.target,
+                        slotEdSeed = slot.edPrivateKeySeed
+                    )
+                )
+
+                // Piggybacking ACK: Clear pending cover ACK queue for this contact
+                pendingAckQueue.removeForContact(contactId, contact.counterIn)
+
+                // Advance outgoing chain state immediately so subsequent messages get next sequence slot
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        messageId = msgId,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                                val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                messageDao.updateStatus(msgId, newStatus)
+                                if (!isSelf) {
+                                    org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                        org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                            messageId = msgId,
+                                            contactId = contactId,
+                                            target = slot.target,
+                                            payload = frame,
+                                            edPrivateKeySeed = slot.edPrivateKeySeed,
+                                            initialSentTimestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                    onRepublishTaskUpdated?.invoke()
+                                }
+                            } else {
+                                messageDao.updateStatus(msgId, "EXPIRED_DHT")
+                            }
+                        }
+                    )
+                )
+                return@withLock true
+            }
+
             // 6. Store message in database with seqEpoch and ACK metadata
             val msgId = messageDao.insertMessage(
                 MessageEntity(
@@ -475,8 +555,6 @@ class ChatRepository(
 
             // Piggybacking ACK: Clear pending cover ACK queue for this contact
             pendingAckQueue.removeForContact(contactId, contact.counterIn)
-
-            val isSelf = contactId == SELF_CONTACT_ID
 
             // Delayed PUT: randomized hold delay (docs/threat_model.md Section 4 & 5.1)
             if (delayedPutMaxMs > 0L && !isSelf) {
@@ -637,6 +715,85 @@ class ChatRepository(
 
             val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
 
+            val isSelf = contactId == SELF_CONTACT_ID
+
+            if (isStrictPoissonShaping()) {
+                val msgId = messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = true,
+                        seqEpoch = contact.counterOut / 65536,
+                        seqNum = contact.counterOut,
+                        ackNum = contact.counterIn,
+                        timestamp = System.currentTimeMillis(),
+                        textContent = "[Image: ${rawBytes.size / 1024} KB (${chunks.size} chunks)]",
+                        imageBytes = rawBytes,
+                        status = "QUEUED_POISSON",
+                        ackTarget = targetAck,
+                        ackRatchetKey = slot.msgKey,
+                        slotTarget = slot.target,
+                        slotEdSeed = slot.edPrivateKeySeed
+                    )
+                )
+
+                // Piggybacking ACK: Clear pending cover ACK queue for this contact
+                pendingAckQueue.removeForContact(contactId, contact.counterIn)
+
+                // Advance outgoing chain state immediately
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+
+                val chunksRemaining = java.util.concurrent.atomic.AtomicInteger(chunks.size)
+                val anyFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+                for (c in chunks) {
+                    outboundPoissonQueue.enqueue(
+                        org.pqchat.dht.traffic.OutboundPoissonFrame(
+                            target = c.target,
+                            payload = c.frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = c.edPrivateKeySeed,
+                            skipLocalStore = isSelf,
+                            seqNum = contact.counterOut,
+                            messageId = msgId,
+                            contactId = contactId,
+                            onSent = { success ->
+                                decoyTargetPool.registerPopulatedTarget(c.target)
+                                if (!success) {
+                                    anyFailed.set(true)
+                                }
+                                if (chunksRemaining.decrementAndGet() == 0) {
+                                    if (!anyFailed.get()) {
+                                        val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                        messageDao.updateStatus(msgId, newStatus)
+                                        if (!isSelf && chunks.isNotEmpty()) {
+                                            val firstChunk = chunks[0]
+                                            org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                                org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                                    messageId = msgId,
+                                                    contactId = contactId,
+                                                    target = firstChunk.target,
+                                                    payload = firstChunk.frame,
+                                                    edPrivateKeySeed = firstChunk.edPrivateKeySeed,
+                                                    initialSentTimestamp = System.currentTimeMillis()
+                                                )
+                                            )
+                                            onRepublishTaskUpdated?.invoke()
+                                        }
+                                    } else {
+                                        messageDao.updateStatus(msgId, "EXPIRED_DHT")
+                                    }
+                                }
+                            }
+                        )
+                    )
+                }
+                return@withLock true
+            }
+
             val msgId = messageDao.insertMessage(
                 MessageEntity(
                     contactId = contactId,
@@ -657,8 +814,6 @@ class ChatRepository(
 
             // Piggybacking ACK: Clear pending cover ACK queue for this contact
             pendingAckQueue.removeForContact(contactId, contact.counterIn)
-
-            val isSelf = contactId == SELF_CONTACT_ID
 
             // Delayed PUT: randomized hold delay (docs/threat_model.md Section 4 & 5.1)
             if (delayedPutMaxMs > 0L && !isSelf) {
@@ -781,60 +936,116 @@ class ChatRepository(
                     ackNum = currentContact.counterIn and 0xFFFF,
                     direction = currentContact.outboundDirection
                 )
-                var allSuccess = true
-                for (c in chunks) {
-                    val tStart = System.currentTimeMillis()
-                    val ok = dhtLeafNode.putMutable(
-                        target = c.target,
-                        v = c.frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        sk = c.edPrivateKeySeed,
-                        skipLocalStore = isSelf
-                    )
-                    val rttMs = System.currentTimeMillis() - tStart
-                    researchTelemetry?.recordPacketEvent(
-                        role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
-                        target = c.target,
-                        seqNum = currentContact.counterOut.toLong(),
-                        payloadBytes = c.frame.size,
-                        rttMs = rttMs,
-                        nodesQueried = 24,
-                        nodesResponded = if (ok) 8 else 0,
-                        success = ok,
-                        republishAttempt = 0
-                    )
-                    if (!ok) {
-                        allSuccess = false
-                        break
-                    }
-                }
-                if (allSuccess) {
+                if (isStrictPoissonShaping()) {
+                    messageDao.updateMessageStatusAndSeq(msg.id, "QUEUED_POISSON", currentContact.counterOut)
                     pendingAckQueue.removeForContact(contactId, currentContact.counterIn)
-                    val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
-                    messageDao.updateMessageStatusAndSeq(msg.id, newStatus, currentContact.counterOut)
-                    if (!isSelf && chunks.isNotEmpty()) {
-                        val firstChunk = chunks[0]
-                        org.pqchat.dht.service.DhtWorker.registerRepublishTask(
-                            org.pqchat.dht.traffic.PollingWorker.RepublishTask(
-                                messageId = msg.id,
-                                contactId = contactId,
-                                target = firstChunk.target,
-                                payload = firstChunk.frame,
-                                edPrivateKeySeed = firstChunk.edPrivateKeySeed,
-                                initialSentTimestamp = msg.timestamp
-                            )
-                        )
-                        onRepublishTaskUpdated?.invoke()
-                    }
                     contactDao.updateOutgoingState(
                         id = contactId,
                         counterOut = currentContact.counterOut + 1,
                         chainKeyOut = slot.nextChainKey
                     )
+                    val chunksRemaining = java.util.concurrent.atomic.AtomicInteger(chunks.size)
+                    val anyFailed = java.util.concurrent.atomic.AtomicBoolean(false)
+                    for (c in chunks) {
+                        outboundPoissonQueue.enqueue(
+                            org.pqchat.dht.traffic.OutboundPoissonFrame(
+                                target = c.target,
+                                payload = c.frame,
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = c.edPrivateKeySeed,
+                                skipLocalStore = isSelf,
+                                seqNum = currentContact.counterOut,
+                                messageId = msg.id,
+                                contactId = contactId,
+                                onSent = { success ->
+                                    decoyTargetPool.registerPopulatedTarget(c.target)
+                                    if (!success) {
+                                        anyFailed.set(true)
+                                    }
+                                    if (chunksRemaining.decrementAndGet() == 0) {
+                                        if (!anyFailed.get()) {
+                                            val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                            messageDao.updateStatus(msg.id, newStatus)
+                                            if (!isSelf && chunks.isNotEmpty()) {
+                                                val firstChunk = chunks[0]
+                                                org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                                    org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                                        messageId = msg.id,
+                                                        contactId = contactId,
+                                                        target = firstChunk.target,
+                                                        payload = firstChunk.frame,
+                                                        edPrivateKeySeed = firstChunk.edPrivateKeySeed,
+                                                        initialSentTimestamp = msg.timestamp
+                                                    )
+                                                )
+                                                onRepublishTaskUpdated?.invoke()
+                                            }
+                                        } else {
+                                            messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
+                                        }
+                                    }
+                                }
+                            )
+                        )
+                    }
                     sentCount++
                 } else {
-                    messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
-                    break
+                    var allSuccess = true
+                    for (c in chunks) {
+                        val tStart = System.currentTimeMillis()
+                        val ok = dhtLeafNode.putMutable(
+                            target = c.target,
+                            v = c.frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            sk = c.edPrivateKeySeed,
+                            skipLocalStore = isSelf
+                        )
+                        val rttMs = System.currentTimeMillis() - tStart
+                        researchTelemetry?.recordPacketEvent(
+                            role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                            target = c.target,
+                            seqNum = currentContact.counterOut.toLong(),
+                            payloadBytes = c.frame.size,
+                            rttMs = rttMs,
+                            nodesQueried = 24,
+                            nodesResponded = if (ok) 8 else 0,
+                            success = ok,
+                            republishAttempt = 0
+                        )
+                        if (!ok) {
+                            allSuccess = false
+                            break
+                        }
+                    }
+                    if (allSuccess) {
+                        pendingAckQueue.removeForContact(contactId, currentContact.counterIn)
+                        val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                        messageDao.updateMessageStatusAndSeq(msg.id, newStatus, currentContact.counterOut)
+                        if (!isSelf && chunks.isNotEmpty()) {
+                            val firstChunk = chunks[0]
+                            org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                    messageId = msg.id,
+                                    contactId = contactId,
+                                    target = firstChunk.target,
+                                    payload = firstChunk.frame,
+                                    edPrivateKeySeed = firstChunk.edPrivateKeySeed,
+                                    initialSentTimestamp = msg.timestamp
+                                )
+                            )
+                            onRepublishTaskUpdated?.invoke()
+                        }
+                        contactDao.updateOutgoingState(
+                            id = contactId,
+                            counterOut = currentContact.counterOut + 1,
+                            chainKeyOut = slot.nextChainKey
+                        )
+                        sentCount++
+                    } else {
+                        messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
+                        break
+                    }
                 }
             } else if (msg.textContent != null) {
                 val slot = RatchetChain.deriveSlot(currentContact.chainKeyOut, currentContact.counterOut)
@@ -850,40 +1061,86 @@ class ChatRepository(
                     target = slot.target,
                     direction = currentContact.outboundDirection
                 )
-                val ok = dhtLeafNode.putMutable(
-                    target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-                if (ok) {
+                if (isStrictPoissonShaping()) {
+                    messageDao.updateMessageStatusAndSeq(msg.id, "QUEUED_POISSON", currentContact.counterOut)
                     pendingAckQueue.removeForContact(contactId, currentContact.counterIn)
-                    val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
-                    messageDao.updateMessageStatusAndSeq(msg.id, newStatus, currentContact.counterOut)
-                    if (!isSelf) {
-                        org.pqchat.dht.service.DhtWorker.registerRepublishTask(
-                            org.pqchat.dht.traffic.PollingWorker.RepublishTask(
-                                messageId = msg.id,
-                                contactId = contactId,
-                                target = slot.target,
-                                payload = frame,
-                                edPrivateKeySeed = slot.edPrivateKeySeed,
-                                initialSentTimestamp = msg.timestamp
-                            )
-                        )
-                        onRepublishTaskUpdated?.invoke()
-                    }
                     contactDao.updateOutgoingState(
                         id = contactId,
                         counterOut = currentContact.counterOut + 1,
                         chainKeyOut = slot.nextChainKey
                     )
+                    outboundPoissonQueue.enqueue(
+                        org.pqchat.dht.traffic.OutboundPoissonFrame(
+                            target = slot.target,
+                            payload = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = isSelf,
+                            seqNum = currentContact.counterOut,
+                            messageId = msg.id,
+                            contactId = contactId,
+                            onSent = { success ->
+                                if (success) {
+                                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                                    val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                    messageDao.updateStatus(msg.id, newStatus)
+                                    if (!isSelf) {
+                                        org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                            org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                                messageId = msg.id,
+                                                contactId = contactId,
+                                                target = slot.target,
+                                                payload = frame,
+                                                edPrivateKeySeed = slot.edPrivateKeySeed,
+                                                initialSentTimestamp = msg.timestamp
+                                            )
+                                        )
+                                        onRepublishTaskUpdated?.invoke()
+                                    }
+                                } else {
+                                    messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
+                                }
+                            }
+                        )
+                    )
                     sentCount++
                 } else {
-                    messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
-                    break
+                    val ok = dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                    if (ok) {
+                        pendingAckQueue.removeForContact(contactId, currentContact.counterIn)
+                        val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                        messageDao.updateMessageStatusAndSeq(msg.id, newStatus, currentContact.counterOut)
+                        if (!isSelf) {
+                            org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                                org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                    messageId = msg.id,
+                                    contactId = contactId,
+                                    target = slot.target,
+                                    payload = frame,
+                                    edPrivateKeySeed = slot.edPrivateKeySeed,
+                                    initialSentTimestamp = msg.timestamp
+                                )
+                            )
+                            onRepublishTaskUpdated?.invoke()
+                        }
+                        contactDao.updateOutgoingState(
+                            id = contactId,
+                            counterOut = currentContact.counterOut + 1,
+                            chainKeyOut = slot.nextChainKey
+                        )
+                        sentCount++
+                    } else {
+                        messageDao.updateMessageRetry(msg.id, "QUEUED", msg.retryCount + 1, System.currentTimeMillis())
+                        break
+                    }
                 }
             }
         }
@@ -925,6 +1182,35 @@ class ChatRepository(
         )
 
         val isSelf = contact.id == SELF_CONTACT_ID
+        if (isStrictPoissonShaping()) {
+            contactDao.updateOutgoingState(
+                id = contact.id,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+            outboundPoissonQueue.enqueue(
+                org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = nextTarget,
+                    payload = offerFrame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf,
+                    seqNum = contact.counterOut,
+                    contactId = contact.id,
+                    onSent = { success ->
+                        if (success) {
+                            decoyTargetPool.registerPopulatedTarget(nextTarget)
+                        } else {
+                            pendingRekeyOfferDao?.deletePendingOffer(contact.id)
+                            _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contact.id
+                        }
+                    }
+                )
+            )
+            return true
+        }
+
         val success = dhtLeafNode.putMutable(
             target = nextTarget,
             v = offerFrame,
@@ -1379,15 +1665,34 @@ class ChatRepository(
                     )
 
                     // 3. Publish Type 0x04 Response on receiver's outgoing channel (reverse direction)
-                    dhtLeafNode.putMutable(
-                        target = outSlot.target,
-                        v = respFrame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        sk = outSlot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
-                    )
-
                     contactDao.updateOutgoingState(contactId, currentContact.counterOut + 1, outSlot.nextChainKey)
+                    if (isStrictPoissonShaping()) {
+                        outboundPoissonQueue.enqueue(
+                            org.pqchat.dht.traffic.OutboundPoissonFrame(
+                                target = outSlot.target,
+                                payload = respFrame,
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = outSlot.edPrivateKeySeed,
+                                skipLocalStore = isSelf,
+                                seqNum = currentContact.counterOut,
+                                contactId = contactId,
+                                onSent = { success ->
+                                    if (success) {
+                                        decoyTargetPool.registerPopulatedTarget(outSlot.target)
+                                    }
+                                }
+                            )
+                        )
+                    } else {
+                        dhtLeafNode.putMutable(
+                            target = outSlot.target,
+                            v = respFrame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            sk = outSlot.edPrivateKeySeed,
+                            skipLocalStore = isSelf
+                        )
+                    }
 
                     ssRekey.fill(0)
                     true
@@ -1961,7 +2266,7 @@ class ChatRepository(
     suspend fun resendMessage(messageId: Long): Boolean = withContext(Dispatchers.IO) {
         val msg = messageDao.getMessageById(messageId) ?: return@withContext false
         if (!msg.isOutgoing) return@withContext false
-        if (msg.status != "EXPIRED_OFFLINE" && msg.status != "EXPIRED_DHT" && msg.status != "QUEUED" && msg.status != "FAILED") {
+        if (msg.status != "EXPIRED_OFFLINE" && msg.status != "EXPIRED_DHT" && msg.status != "QUEUED" && msg.status != "QUEUED_POISSON" && msg.status != "FAILED") {
             return@withContext false
         }
         getContactMutex(msg.contactId).withLock {
@@ -2006,6 +2311,67 @@ class ChatRepository(
             }
 
             val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+
+            if (isStrictPoissonShaping()) {
+                messageDao.updateMessageRetry(
+                    id = msg.id,
+                    status = "QUEUED_POISSON",
+                    retryCount = msg.retryCount + 1,
+                    timestamp = System.currentTimeMillis()
+                )
+                contactDao.updateOutgoingState(
+                    id = contact.id,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        messageId = msg.id,
+                        contactId = msg.contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                                val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                messageDao.updateMessageForResend(
+                                    id = msg.id,
+                                    status = newStatus,
+                                    seqNum = contact.counterOut,
+                                    ackNum = contact.counterIn,
+                                    timestamp = System.currentTimeMillis(),
+                                    slotTarget = slot.target,
+                                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", "${msg.id}"),
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", "${msg.id}"),
+                                    retryCount = msg.retryCount + 1
+                                )
+                                if (!isSelf) {
+                                    PollingWorker.registerRepublishTask(
+                                        PollingWorker.RepublishTask(
+                                            messageId = msg.id,
+                                            contactId = msg.contactId,
+                                            target = slot.target,
+                                            payload = frame,
+                                            edPrivateKeySeed = slot.edPrivateKeySeed,
+                                            initialSentTimestamp = System.currentTimeMillis()
+                                        )
+                                    )
+                                    onRepublishTaskUpdated?.invoke()
+                                }
+                            } else {
+                                messageDao.updateStatus(msg.id, "EXPIRED_DHT")
+                            }
+                        }
+                    )
+                )
+                return@withLock true
+            }
 
             messageDao.updateMessageRetry(
                 id = msg.id,

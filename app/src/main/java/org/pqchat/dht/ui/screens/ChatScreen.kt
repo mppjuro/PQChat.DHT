@@ -702,10 +702,16 @@ fun MessageBubble(
                     )
 
                     val isExpired = message.status == "EXPIRED_OFFLINE" || message.status == "EXPIRED_DHT"
-                    val statusText = if (isExpired) "Wygasła w DHT" else message.status
+                    val isQueuedPoisson = message.status == "QUEUED_POISSON"
+                    val statusText = when {
+                        isExpired -> "Wygasła w DHT"
+                        isQueuedPoisson -> "W kolejce maskującej Poissona"
+                        else -> message.status
+                    }
                     val statusColor = when {
                         message.status == "CONFIRMED_DHT" -> ElectricGreen
                         message.status in listOf("DELIVERED", "SENT_DHT", "PENDING_DELIVERY") -> appColors.primary
+                        isQueuedPoisson -> NeonCyan
                         isExpired -> Color(0xFFFF5252)
                         else -> AmberWarning
                     }
