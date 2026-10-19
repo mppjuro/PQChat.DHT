@@ -9,6 +9,7 @@ import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.settings.AppSettingsManager
 import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
+import org.pqchat.dht.dht.leaf.DhtOpMetrics
 import java.io.File
 
 class ResearchTelemetryManagerTest {
@@ -19,6 +20,8 @@ class ResearchTelemetryManagerTest {
 
     class MockDhtClient : DhtClient {
         override val myNodeId: ByteArray = ByteArray(20) { 1 }
+        override var replicationK: Int = 8
+        override var lastOperationMetrics: DhtOpMetrics = DhtOpMetrics(nodesQueried = 24, nodesResponded = 8, lookupHops = 3)
         override fun start() {}
         override fun stop() {}
         override fun getActivePeerCount(): Int = 8
@@ -31,7 +34,8 @@ class ResearchTelemetryManagerTest {
             target: ByteArray,
             salt: ByteArray?,
             skipLocalStore: Boolean,
-            timeoutMs: Long
+            timeoutMs: Long,
+            probeAllReplicas: Boolean
         ): DhtLeafNode.MutableItem? {
             return storedItems[CryptoUtils.toHex(target)]
         }
@@ -45,7 +49,18 @@ class ResearchTelemetryManagerTest {
             skipLocalStore: Boolean
         ): Boolean {
             val hex = CryptoUtils.toHex(target)
-            storedItems[hex] = DhtLeafNode.MutableItem(v, seq, sk, ByteArray(64), salt, null, null)
+            storedItems[hex] = DhtLeafNode.MutableItem(
+                v = v,
+                seq = seq,
+                k = sk,
+                sig = ByteArray(64),
+                salt = salt,
+                token = null,
+                responder = null,
+                nodesQueried = 24,
+                nodesResponded = 8,
+                lookupHops = 3
+            )
             return true
         }
 
@@ -59,7 +74,18 @@ class ResearchTelemetryManagerTest {
             skipLocalStore: Boolean
         ): Boolean {
             val hex = CryptoUtils.toHex(target)
-            storedItems[hex] = DhtLeafNode.MutableItem(v, seq, pk, sig, salt, null, null)
+            storedItems[hex] = DhtLeafNode.MutableItem(
+                v = v,
+                seq = seq,
+                k = pk,
+                sig = sig,
+                salt = salt,
+                token = null,
+                responder = null,
+                nodesQueried = 24,
+                nodesResponded = 8,
+                lookupHops = 3
+            )
             return true
         }
 
@@ -376,6 +402,53 @@ class ResearchTelemetryManagerTest {
         // Verify total payload size is far below the 1 MB Firestore limit
         val estimatedPayloadSize = bundleBase64.length + 2048
         assertTrue("Payload size must be strictly under 1 MB limit", estimatedPayloadSize < 1024 * 1024)
+    }
+
+    @Test
+    fun `test enrichment with AndroidResourceProfiler and dhtClient metrics`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val profiler = org.pqchat.dht.debug.AndroidResourceProfiler(
+            context = null,
+            dhtClient = mockDhtClient,
+            pollingStateProvider = { "FOREGROUND_CHAT" },
+            lambdaProvider = { 1.0 / 300.0 },
+            batteryCurrentProvider = { 123456L },
+            batteryLevelProvider = { 88 }
+        )
+
+        mockDhtClient.replicationK = 16
+        mockDhtClient.lastOperationMetrics = DhtOpMetrics(nodesQueried = 20, nodesResponded = 14, lookupHops = 4)
+
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            resourceProfiler = profiler,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordPacketEvent(
+            role = PacketRole.FIRST_SEND,
+            target = target,
+            seqNum = 42L,
+            payloadBytes = 900,
+            rttMs = 55L,
+            success = true
+        )
+
+        val packetCsv = manager.packetEventsCsvFile.readText()
+        val masterCsv = manager.masterCsvFile.readText()
+
+        assertTrue("Packet CSV should contain nodesQueried = 20", packetCsv.contains(",20,"))
+        assertTrue("Packet CSV should contain nodesResponded = 14", packetCsv.contains(",14,"))
+        assertTrue("Packet CSV should contain lookupHops = 4", packetCsv.contains(",4,"))
+        assertTrue("Packet CSV should contain replicationK = 16", packetCsv.contains(",16,"))
+        assertTrue("Packet CSV should contain pollingState = FOREGROUND_CHAT", packetCsv.contains("FOREGROUND_CHAT"))
+        assertTrue("Packet CSV should contain batteryCurrentUa = 123456", packetCsv.contains(",123456,"))
+        assertTrue("Packet CSV should contain batteryLevelPct = 88", packetCsv.contains(",88,"))
+
+        assertTrue("Master CSV should contain FOREGROUND_CHAT", masterCsv.contains("FOREGROUND_CHAT"))
+        assertTrue("Master CSV should contain 123456", masterCsv.contains(",123456,"))
     }
 }
 

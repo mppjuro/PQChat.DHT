@@ -144,6 +144,22 @@ class FirebaseResearchSync(
         return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
+    companion object {
+        const val DEFAULT_BATCH_SYNC_INTERVAL_MS = 30 * 60 * 1000L // 30 minutes
+        const val JITTER_WINDOW_MS = 5 * 60 * 1000L                // +/- 5 minutes
+    }
+
+    /**
+     * Checks whether environmental conditions permit safe delayed batch synchronization.
+     * Guaranteed protection against timing side-channels and measurement distortion:
+     * 1. Never transmit during active radio profiling or loopback benchmarks.
+     * 2. Require Wi-Fi connection for automated background batch syncing.
+     */
+    fun isSafeToSync(isProfilingActive: Boolean = false): Boolean {
+        if (isProfilingActive) return false
+        return isWifiConnected()
+    }
+
     /**
      * Synchronizes the research session metrics and optional compressed payload directly to Cloud Firestore.
      * Complies with `firestore.rules` requirements:
@@ -155,7 +171,7 @@ class FirebaseResearchSync(
      * @param sessionId anonymous session identifier
      * @param deviceInfo device metadata (model, android version, app version)
      * @param metrics aggregated statistics, survival rates, RTT percentiles and checksums
-     * @param isManual true if user explicitly triggered sync via Settings/Diagnostics
+     * @param isManual true if user explicitly triggered sync via Settings/Diagnostics (bypasses timer/Wi-Fi restrictions)
      */
     suspend fun syncResearchSession(
         sessionId: String,
@@ -170,12 +186,13 @@ class FirebaseResearchSync(
 
         val now = System.currentTimeMillis()
         if (!isManual) {
-            // Rate-limit: at most once every 6 hours
-            if (now - lastAutoSyncTimestamp < 6 * 3600 * 1000L) {
+            // Rate-limit: at most once every 30 minutes with jitter window
+            val minInterval = DEFAULT_BATCH_SYNC_INTERVAL_MS - JITTER_WINDOW_MS
+            if (now - lastAutoSyncTimestamp < minInterval) {
                 return@withContext false
             }
-            // Strict Wi-Fi requirement for automated background uploads
-            if (!isWifiConnected()) {
+            // Strict check: no active radio profiling and Wi-Fi only
+            if (!isSafeToSync()) {
                 return@withContext false
             }
         }

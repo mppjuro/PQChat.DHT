@@ -586,8 +586,9 @@ class ChatRepository(
                 seqNum = contact.counterOut.toLong(),
                 payloadBytes = frame.size,
                 rttMs = rttMs,
-                nodesQueried = 24,
-                nodesResponded = if (success) 8 else 0,
+                nodesQueried = dhtLeafNode.lastNodesQueried,
+                nodesResponded = dhtLeafNode.lastNodesResponded,
+                lookupHops = dhtLeafNode.lastLookupHops,
                 success = success,
                 republishAttempt = 0
             )
@@ -1008,8 +1009,9 @@ class ChatRepository(
                             seqNum = currentContact.counterOut.toLong(),
                             payloadBytes = c.frame.size,
                             rttMs = rttMs,
-                            nodesQueried = 24,
-                            nodesResponded = if (ok) 8 else 0,
+                            nodesQueried = dhtLeafNode.lastNodesQueried,
+                            nodesResponded = dhtLeafNode.lastNodesResponded,
+                            lookupHops = dhtLeafNode.lastLookupHops,
                             success = ok,
                             republishAttempt = 0
                         )
@@ -1364,8 +1366,9 @@ class ChatRepository(
                     seqNum = contact.counterIn.toLong(),
                     payloadBytes = item.v.size,
                     rttMs = rttMs,
-                    nodesQueried = 24,
-                    nodesResponded = 8,
+                    nodesQueried = item.nodesQueried.takeIf { it > 0 } ?: dhtLeafNode.lastNodesQueried,
+                    nodesResponded = item.nodesResponded.takeIf { it > 0 } ?: dhtLeafNode.lastNodesResponded,
+                    lookupHops = item.lookupHops.takeIf { it > 0 } ?: dhtLeafNode.lastLookupHops,
                     success = true
                 )
             }
@@ -1388,8 +1391,9 @@ class ChatRepository(
                             seqNum = contact.counterIn.toLong(),
                             payloadBytes = chunkItem.v.size,
                             rttMs = chunkRttMs,
-                            nodesQueried = 24,
-                            nodesResponded = 8,
+                            nodesQueried = chunkItem.nodesQueried.takeIf { it > 0 } ?: dhtLeafNode.lastNodesQueried,
+                            nodesResponded = chunkItem.nodesResponded.takeIf { it > 0 } ?: dhtLeafNode.lastNodesResponded,
+                            lookupHops = chunkItem.lookupHops.takeIf { it > 0 } ?: dhtLeafNode.lastLookupHops,
                             success = true
                         )
                     }

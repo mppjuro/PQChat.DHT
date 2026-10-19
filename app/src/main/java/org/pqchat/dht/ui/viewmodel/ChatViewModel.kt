@@ -482,8 +482,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     seqNum = 0L,
                     payloadBytes = bobResult.frame.size,
                     rttMs = rttMs,
-                    nodesQueried = 24,
-                    nodesResponded = if (success) 8 else 0,
+                    nodesQueried = dhtLeafNode.lastNodesQueried,
+                    nodesResponded = dhtLeafNode.lastNodesResponded,
+                    lookupHops = dhtLeafNode.lastLookupHops,
                     success = success,
                     republishAttempt = 0
                 )
@@ -515,8 +516,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             seqNum = 0L,
                             payloadBytes = bobResult.frame.size,
                             rttMs = repRtt,
-                            nodesQueried = 24,
-                            nodesResponded = if (repOk) 8 else 0,
+                            nodesQueried = dhtLeafNode.lastNodesQueried,
+                            nodesResponded = dhtLeafNode.lastNodesResponded,
+                            lookupHops = dhtLeafNode.lastLookupHops,
                             success = repOk,
                             republishAttempt = republishCount
                         )

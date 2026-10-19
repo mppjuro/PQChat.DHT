@@ -35,10 +35,16 @@ data class PacketTelemetryEvent(
     val rttMs: Long = 0L,
     val nodesQueried: Int = 0,
     val nodesResponded: Int = 0,
+    val lookupHops: Int = 0,
     val success: Boolean = true,
     val republishAttempt: Int = 0,
     val messageAgeMs: Long = 0L,
     val networkType: String = "UNKNOWN",
+    val pollingState: String = "UNKNOWN",
+    val replicationK: Int = 8,
+    val poissonLambda: Double = 0.0,
+    val batteryCurrentUa: Long = 0L,
+    val batteryLevelPct: Int = 100,
     val errorCode: String? = null
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
@@ -54,26 +60,34 @@ data class PacketTelemetryEvent(
         "rttMs" to rttMs,
         "nodesQueried" to nodesQueried,
         "nodesResponded" to nodesResponded,
+        "lookupHops" to lookupHops,
         "success" to success,
         "republishAttempt" to republishAttempt,
         "messageAgeMs" to messageAgeMs,
         "networkType" to networkType,
+        "pollingState" to pollingState,
+        "replicationK" to replicationK,
+        "poissonLambda" to poissonLambda,
+        "batteryCurrentUa" to batteryCurrentUa,
+        "batteryLevelPct" to batteryLevelPct,
         "errorCode" to errorCode
     )
 
     fun toCsvRow(): String {
         val safeError = (errorCode ?: "").replace("\"", "\"\"")
-        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,${role.name},\"${role.displayName}\",$targetPrefix,$seqNum,$payloadBytes,$rttMs,$nodesQueried,$nodesResponded,$success,$republishAttempt,$messageAgeMs,$networkType,\"$safeError\""
+        val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,${role.name},\"${role.displayName}\",$targetPrefix,$seqNum,$payloadBytes,$rttMs,$nodesQueried,$nodesResponded,$lookupHops,$success,$republishAttempt,$messageAgeMs,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,\"$safeError\""
     }
 
     fun toMasterCsvRow(): String {
         val safeError = (errorCode ?: "").replace("\"", "\"\"")
-        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,PACKET_EVENT,${role.name},$targetPrefix,$seqNum,$payloadBytes,$rttMs,$nodesQueried,$nodesResponded,$success,$republishAttempt,$messageAgeMs,\"\",$success,\"\",\"\",\"$safeError\""
+        val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,PACKET_EVENT,${role.name},$targetPrefix,$seqNum,$payloadBytes,$rttMs,$nodesQueried,$nodesResponded,$lookupHops,$success,$republishAttempt,$messageAgeMs,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,\"\",$success,\"\",\"\",\"$safeError\""
     }
 
     companion object {
         const val CSV_HEADER =
-            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,role,role_display_name,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,success,republish_attempt,message_age_ms,network_type,error_code"
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,role,role_display_name,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,lookup_hops,success,republish_attempt,message_age_ms,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct,error_code"
     }
 }
 
@@ -91,9 +105,17 @@ data class TtlSampleEvent(
     val elapsedHours: Double,
     val republishActive: Boolean,
     val isAlive: Boolean,
-    val nodesResponded: Int,
-    val probeRttMs: Long,
-    val confirmedLifespanMinutes: Double? = null
+    val nodesQueried: Int = 0,
+    val nodesResponded: Int = 0,
+    val lookupHops: Int = 0,
+    val probeRttMs: Long = 0L,
+    val confirmedLifespanMinutes: Double? = null,
+    val networkType: String = "UNKNOWN",
+    val pollingState: String = "UNKNOWN",
+    val replicationK: Int = 8,
+    val poissonLambda: Double = 0.0,
+    val batteryCurrentUa: Long = 0L,
+    val batteryLevelPct: Int = 100
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "sampleId" to sampleId,
@@ -106,26 +128,36 @@ data class TtlSampleEvent(
         "elapsedHours" to elapsedHours,
         "republishActive" to republishActive,
         "isAlive" to isAlive,
+        "nodesQueried" to nodesQueried,
         "nodesResponded" to nodesResponded,
+        "lookupHops" to lookupHops,
         "probeRttMs" to probeRttMs,
-        "confirmedLifespanMinutes" to confirmedLifespanMinutes
+        "confirmedLifespanMinutes" to confirmedLifespanMinutes,
+        "networkType" to networkType,
+        "pollingState" to pollingState,
+        "replicationK" to replicationK,
+        "poissonLambda" to poissonLambda,
+        "batteryCurrentUa" to batteryCurrentUa,
+        "batteryLevelPct" to batteryLevelPct
     )
 
     fun toCsvRow(): String {
         val elapsedMinStr = String.format(Locale.US, "%.2f", elapsedMinutes)
         val elapsedHrStr = String.format(Locale.US, "%.4f", elapsedHours)
         val confirmedStr = confirmedLifespanMinutes?.let { String.format(Locale.US, "%.2f", it) } ?: ""
-        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,$targetPrefix,$initialPutEpochMs,$elapsedMinStr,$elapsedHrStr,$republishActive,$isAlive,$nodesResponded,$probeRttMs,$confirmedStr"
+        val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
+        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,$targetPrefix,$initialPutEpochMs,$elapsedMinStr,$elapsedHrStr,$republishActive,$isAlive,$nodesQueried,$nodesResponded,$lookupHops,$probeRttMs,$confirmedStr,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct"
     }
 
     fun toMasterCsvRow(): String {
         val elapsedHrStr = String.format(Locale.US, "%.4f", elapsedHours)
-        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,TTL_PROBE,TTL_PROBE,$targetPrefix,1,900,$probeRttMs,8,$nodesResponded,$isAlive,0,0,$republishActive,$isAlive,$elapsedHrStr,\"\",\"\""
+        val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
+        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,TTL_PROBE,TTL_PROBE,$targetPrefix,1,900,$probeRttMs,$nodesQueried,$nodesResponded,$lookupHops,$isAlive,0,0,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,$republishActive,$isAlive,$elapsedHrStr,\"\",\"\""
     }
 
     companion object {
         const val CSV_HEADER =
-            "sample_id,session_id,timestamp_epoch_ms,iso_timestamp,target_prefix,initial_put_epoch_ms,elapsed_minutes,elapsed_hours,republish_active,is_alive,nodes_responded,probe_rtt_ms,confirmed_lifespan_minutes"
+            "sample_id,session_id,timestamp_epoch_ms,iso_timestamp,target_prefix,initial_put_epoch_ms,elapsed_minutes,elapsed_hours,republish_active,is_alive,nodes_queried,nodes_responded,lookup_hops,probe_rtt_ms,confirmed_lifespan_minutes,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct"
     }
 }
 
@@ -163,7 +195,7 @@ data class RepublishAnalysisSummary(
 
     fun toMasterCsvRow(): String {
         val iso = formatEpochIso(initialSentEpochMs)
-        return "summary_$messagePrefix,$sessionId,$initialSentEpochMs,$iso,REPUBLISH_SUMMARY,SUMMARY,$messagePrefix,1,900,0,0,0,$isDelivered,$totalRepublishes,0,$crowdRelayed,$isDelivered,\"\",$endToEndDeliveryLatencyMs,$finalStatus"
+        return "summary_$messagePrefix,$sessionId,$initialSentEpochMs,$iso,REPUBLISH_SUMMARY,SUMMARY,$messagePrefix,1,900,0,0,0,0,$isDelivered,$totalRepublishes,0,\"\",\"\",8,0.0,0,100,$crowdRelayed,$isDelivered,\"\",$endToEndDeliveryLatencyMs,$finalStatus"
     }
 
     companion object {
@@ -174,7 +206,7 @@ data class RepublishAnalysisSummary(
 
 object ResearchCsvSchema {
     const val MASTER_CSV_HEADER =
-        "record_id,session_id,timestamp_epoch_ms,iso_timestamp,record_type,packet_role,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,success,republish_attempt,message_age_ms,republish_active,is_alive,elapsed_hours,e2e_latency_ms,error_or_status"
+        "record_id,session_id,timestamp_epoch_ms,iso_timestamp,record_type,packet_role,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,lookup_hops,success,republish_attempt,message_age_ms,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct,republish_active,is_alive,elapsed_hours,e2e_latency_ms,error_or_status"
 }
 
 /**

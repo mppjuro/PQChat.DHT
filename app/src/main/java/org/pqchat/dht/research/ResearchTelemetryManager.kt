@@ -45,12 +45,7 @@ class ResearchTelemetryManager(
     val firebaseSync: FirebaseResearchSync = FirebaseResearchSync(context),
     val resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler? = null,
     val baseDir: File? = null,
-    val ttlSampler: HistoricalTtlSampler? = if (dhtClient != null) {
-        HistoricalTtlSampler(
-            dhtClient = dhtClient,
-            onSampleRecorded = { /* will be wired in init */ }
-        )
-    } else null
+    customTtlSampler: HistoricalTtlSampler? = null
 ) {
     val sessionId: String = UUID.randomUUID().toString().take(12)
 
@@ -112,39 +107,41 @@ class ResearchTelemetryManager(
 
     private val csvLock = Any()
 
-    private var _activeSampler: HistoricalTtlSampler? = null
+    val ttlSampler: HistoricalTtlSampler? = customTtlSampler ?: if (dhtClient != null) {
+        HistoricalTtlSampler(
+            dhtClient = dhtClient,
+            probeIntervalFlow = settingsManager?.statsProbeIntervalMs,
+            resourceProfiler = resourceProfiler,
+            networkTypeProvider = { detectCurrentNetworkType() },
+            onSampleRecorded = { sample ->
+                recordTtlSampleInternal(sample)
+            }
+        )
+    } else null
 
     init {
         initCsvFiles()
-
-        // Wire TTL sampler if present
-        if (ttlSampler != null) {
-            val configuredSampler = HistoricalTtlSampler(
-                dhtClient = dhtClient!!,
-                onSampleRecorded = { sample ->
-                    recordTtlSampleInternal(sample)
-                }
-            )
-            _activeSampler = configuredSampler
-        }
 
         // Listen to settings toggle changes
         scope.launch {
             settingsManager?.isAnonymousStatsEnabled?.collect { enabled ->
                 if (enabled) {
-                    _activeSampler?.start { sessionId }
+                    ttlSampler?.start { sessionId }
                     firebaseSync.ensureAuthenticated()
                 } else {
-                    _activeSampler?.stop()
+                    ttlSampler?.stop()
                 }
             }
         }
 
-        // Periodic background auto-sync check (at most once every 6 hours and strictly on Wi-Fi)
+        // Periodic background auto-sync check (every 30 minutes with random jitter, strictly on Wi-Fi and not actively profiling)
         scope.launch {
             while (isActive) {
-                delay(60 * 60 * 1000L) // check every 1 hour
-                if (isEnabled && firebaseSync.isWifiConnected() && firebaseSync.isFirebaseConfigured()) {
+                val jitter = (-5 * 60 * 1000L..5 * 60 * 1000L).random()
+                val nextDelay = (30 * 60 * 1000L + jitter).coerceAtLeast(10 * 60 * 1000L)
+                delay(nextDelay)
+                val isProfiling = resourceProfiler?.isProfiling?.value == true
+                if (isEnabled && firebaseSync.isSafeToSync(isProfiling) && firebaseSync.isFirebaseConfigured()) {
                     try {
                         val (deviceInfo, metrics) = computeSessionPayload()
                         firebaseSync.syncResearchSession(sessionId, deviceInfo, metrics, isManual = false)
@@ -156,6 +153,28 @@ class ResearchTelemetryManager(
 
     val isEnabled: Boolean
         get() = settingsManager?.isAnonymousStatsEnabled?.value == true
+
+    fun detectCurrentNetworkType(): String {
+        if (dhtClient?.isTorRoutingActive == true) {
+            return "TOR_SOCKS5"
+        }
+        val ctx = context ?: return "UNKNOWN"
+        return try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val net = cm?.activeNetwork
+            val caps = cm?.getNetworkCapabilities(net)
+            when {
+                caps == null -> "UNKNOWN"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WIFI"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "LTE_CELLULAR"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ETHERNET"
+                else -> "UNKNOWN"
+            }
+        } catch (_: Throwable) {
+            "UNKNOWN"
+        }
+    }
 
     private fun initCsvFiles() {
         synchronized(csvLock) {
@@ -178,12 +197,18 @@ class ResearchTelemetryManager(
         seqNum: Long = 1L,
         payloadBytes: Int = 900,
         rttMs: Long = 0L,
-        nodesQueried: Int = 0,
-        nodesResponded: Int = 0,
+        nodesQueried: Int = dhtClient?.lastNodesQueried ?: 0,
+        nodesResponded: Int = dhtClient?.lastNodesResponded ?: 0,
+        lookupHops: Int = dhtClient?.lastLookupHops ?: 0,
         success: Boolean = true,
         republishAttempt: Int = 0,
         messageAgeMs: Long = 0L,
-        networkType: String = "UNKNOWN",
+        networkType: String? = null,
+        pollingState: String? = null,
+        replicationK: Int? = null,
+        poissonLambda: Double? = null,
+        batteryCurrentUa: Long? = null,
+        batteryLevelPct: Int? = null,
         errorCode: String? = null
     ) {
         if (!isEnabled) return
@@ -195,6 +220,13 @@ class ResearchTelemetryManager(
             rttSamples.add(rttMs)
         }
 
+        val resolvedNetworkType = networkType ?: detectCurrentNetworkType()
+        val resolvedPollingState = pollingState ?: (resourceProfiler?.getPollingState() ?: "UNKNOWN")
+        val resolvedReplicationK = replicationK ?: (dhtClient?.replicationK ?: 8)
+        val resolvedPoissonLambda = poissonLambda ?: (resourceProfiler?.getPoissonLambda() ?: (1.0 / 480.0))
+        val resolvedBatteryCurrentUa = batteryCurrentUa ?: (resourceProfiler?.queryBatteryCurrentNowUa() ?: 0L)
+        val resolvedBatteryLevelPct = batteryLevelPct ?: (resourceProfiler?.queryBatteryLevelPercent() ?: 100)
+
         val event = PacketTelemetryEvent(
             sessionId = sessionId,
             timestampEpochMs = now,
@@ -205,10 +237,16 @@ class ResearchTelemetryManager(
             rttMs = rttMs,
             nodesQueried = nodesQueried,
             nodesResponded = nodesResponded,
+            lookupHops = lookupHops,
             success = success,
             republishAttempt = republishAttempt,
             messageAgeMs = messageAgeMs,
-            networkType = networkType,
+            networkType = resolvedNetworkType,
+            pollingState = resolvedPollingState,
+            replicationK = resolvedReplicationK,
+            poissonLambda = resolvedPoissonLambda,
+            batteryCurrentUa = resolvedBatteryCurrentUa,
+            batteryLevelPct = resolvedBatteryLevelPct,
             errorCode = errorCode
         )
 
@@ -218,7 +256,7 @@ class ResearchTelemetryManager(
             PacketRole.FIRST_SEND -> {
                 _firstSendCount.value += 1
                 inFlightRepublishes[targetPrefix] = InFlightTracker(targetPrefix, now)
-                _activeSampler?.trackPacket(target, initialPutEpochMs = now, republishActive = true)
+                ttlSampler?.trackPacket(target, initialPutEpochMs = now, republishActive = true)
             }
             PacketRole.OWN_REPUBLISH -> {
                 _ownRepublishCount.value += 1
@@ -275,15 +313,31 @@ class ResearchTelemetryManager(
         appendRepublishSummaryCsv(summary)
     }
 
-    private fun recordTtlSampleInternal(sample: TtlSampleEvent) {
+    fun recordTtlSample(sample: TtlSampleEvent) {
         if (!isEnabled) return
+        val enriched = if (sample.networkType == "UNKNOWN" || sample.pollingState == "UNKNOWN") {
+            sample.copy(
+                networkType = if (sample.networkType == "UNKNOWN") detectCurrentNetworkType() else sample.networkType,
+                pollingState = if (sample.pollingState == "UNKNOWN") (resourceProfiler?.getPollingState() ?: "UNKNOWN") else sample.pollingState,
+                replicationK = if (sample.replicationK == 8 && (dhtClient?.replicationK ?: 8) != 8) (dhtClient?.replicationK ?: 8) else sample.replicationK,
+                poissonLambda = if (sample.poissonLambda == (1.0 / 480.0) && resourceProfiler != null) resourceProfiler.getPoissonLambda() else sample.poissonLambda,
+                batteryCurrentUa = if (sample.batteryCurrentUa == 0L && resourceProfiler != null) resourceProfiler.queryBatteryCurrentNowUa() else sample.batteryCurrentUa,
+                batteryLevelPct = if (sample.batteryLevelPct == -1 && resourceProfiler != null) resourceProfiler.queryBatteryLevelPercent() else sample.batteryLevelPct
+            )
+        } else {
+            sample
+        }
         _ttlSamplesCount.value += 1
-        if (sample.isAlive) {
+        if (enriched.isAlive) {
             aliveTtlCount.incrementAndGet()
         } else {
             expiredTtlCount.incrementAndGet()
         }
-        appendTtlSampleCsv(sample)
+        appendTtlSampleCsv(enriched)
+    }
+
+    private fun recordTtlSampleInternal(sample: TtlSampleEvent) {
+        recordTtlSample(sample)
     }
 
     private fun appendPacketEventCsv(event: PacketTelemetryEvent) {
@@ -583,7 +637,7 @@ class ResearchTelemetryManager(
 
     fun stop() {
         scope.cancel()
-        _activeSampler?.stop()
+        ttlSampler?.stop()
         firebaseSync.stop()
     }
 }

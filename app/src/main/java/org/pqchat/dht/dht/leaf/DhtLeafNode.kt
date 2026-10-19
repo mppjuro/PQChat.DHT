@@ -146,7 +146,10 @@ class DhtLeafNode(
         val sig: ByteArray,
         val salt: ByteArray?,
         val token: ByteArray?,
-        val responder: InetSocketAddress? = null
+        val responder: InetSocketAddress? = null,
+        val nodesQueried: Int = 0,
+        val nodesResponded: Int = 0,
+        val lookupHops: Int = 0
     )
 
     @Volatile
@@ -170,6 +173,9 @@ class DhtLeafNode(
 
     private val _totalBytesReceived = java.util.concurrent.atomic.AtomicLong(0L)
     override val totalBytesReceived: Long get() = _totalBytesReceived.get()
+
+    private val _lastOperationMetrics = java.util.concurrent.atomic.AtomicReference(DhtOpMetrics())
+    override val lastOperationMetrics: DhtOpMetrics get() = _lastOperationMetrics.get()
 
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
@@ -971,17 +977,21 @@ class DhtLeafNode(
         target: ByteArray,
         salt: ByteArray?,
         skipLocalStore: Boolean,
-        timeoutMs: Long
+        timeoutMs: Long,
+        probeAllReplicas: Boolean
     ): MutableItem? = withContext(Dispatchers.IO) {
         _totalGetCalls.incrementAndGet()
         val targetHex = CryptoUtils.toHex(target)
         if (!skipLocalStore) {
             val localItem = localMutableStore[targetHex]
             if (localItem != null) {
-                return@withContext localItem
+                val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 1, lookupHops = 0)
+                _lastOperationMetrics.set(metrics)
+                return@withContext localItem.copy(nodesQueried = 0, nodesResponded = 1, lookupHops = 0)
             }
         }
 
+        val wasPrewarmed = !targetRouteCache[target].isNullOrEmpty()
         val prewarmed = targetRouteCache[target] ?: preWarmTarget(target)
         val storedPeers = remoteStoredPeers[targetHex]?.mapNotNull { addr ->
             (prewarmed + routingTable).firstOrNull { it.address == addr } ?: DhtPeer(target, addr)
@@ -1010,6 +1020,7 @@ class DhtLeafNode(
         }
 
         if (nodesToQuery.isEmpty()) {
+            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
             return@withContext null
         }
 
@@ -1029,6 +1040,8 @@ class DhtLeafNode(
         val foundItem = java.util.concurrent.atomic.AtomicReference<MutableItem?>(null)
         val emptyClosestResponses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
         val closerNodeIndicated = java.util.concurrent.atomic.AtomicBoolean(false)
+        val verifiedResponses = java.util.concurrent.atomic.AtomicInteger(0)
+        val totalResponses = java.util.concurrent.atomic.AtomicInteger(0)
 
         coroutineScope {
             var queryJobs: List<Job> = emptyList()
@@ -1037,19 +1050,23 @@ class DhtLeafNode(
                     try {
                         val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
                         val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
+                        totalResponses.incrementAndGet()
 
                         val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                         if (verified != null) {
+                            verifiedResponses.incrementAndGet()
                             if (foundItem.compareAndSet(null, verified)) {
-                                queryJobs.forEach { job ->
-                                    if (job != coroutineContext.job) job.cancel()
+                                if (!probeAllReplicas) {
+                                    queryJobs.forEach { job ->
+                                        if (job != coroutineContext.job) job.cancel()
+                                    }
                                 }
                             }
-                            return@launch
+                            if (!probeAllReplicas) return@launch
                         }
 
                         // Response received without valid 'v'
-                        if (topClosestAddresses.contains(peer.address)) {
+                        if (!probeAllReplicas && topClosestAddresses.contains(peer.address)) {
                             val nodesBytes = resp.responseData["nodes"] as? ByteArray
                             var hasCloser = false
                             if (nodesBytes != null) {
@@ -1085,10 +1102,12 @@ class DhtLeafNode(
             queryJobs.joinAll()
         }
 
-        if (foundItem.get() == null && closerNodeIndicated.get()) {
+        var secondWaveCount = 0
+        if (foundItem.get() == null && closerNodeIndicated.get() && !probeAllReplicas) {
             val secondWave = findClosestNodes(target, count = 16)
                 .filter { it.address !in nodesToQuery.map { n -> n.address } }
                 .take(8)
+            secondWaveCount = secondWave.size
             if (secondWave.isNotEmpty()) {
                 coroutineScope {
                     var secondJobs: List<Job> = emptyList()
@@ -1097,8 +1116,10 @@ class DhtLeafNode(
                             try {
                                 val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
                                 val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
+                                totalResponses.incrementAndGet()
                                 val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                                 if (verified != null) {
+                                    verifiedResponses.incrementAndGet()
                                     if (foundItem.compareAndSet(null, verified)) {
                                         secondJobs.forEach { job ->
                                             if (job != coroutineContext.job) job.cancel()
@@ -1114,13 +1135,36 @@ class DhtLeafNode(
             }
         }
 
+        val totalQueried = nodesToQuery.size + secondWaveCount
+        val totalResponded = if (probeAllReplicas) {
+            verifiedResponses.get()
+        } else if (foundItem.get() != null) {
+            maxOf(1, verifiedResponses.get())
+        } else {
+            totalResponses.get()
+        }
+        val hops = (if (wasPrewarmed) 1 else 2) + (if (secondWaveCount > 0) 1 else 0)
+
+        val metrics = DhtOpMetrics(
+            nodesQueried = totalQueried,
+            nodesResponded = totalResponded,
+            lookupHops = hops
+        )
+        _lastOperationMetrics.set(metrics)
+
         val bestItem = foundItem.get()
-        if (bestItem != null) {
+        val finalBestItem = bestItem?.copy(
+            nodesQueried = totalQueried,
+            nodesResponded = totalResponded,
+            lookupHops = hops
+        )
+
+        if (finalBestItem != null) {
             if (!skipLocalStore) {
-                localMutableStore[targetHex] = bestItem
+                localMutableStore[targetHex] = finalBestItem
             }
-            bestItem.responder?.let { respAddr ->
-                val respPeer = DhtPeer(bestItem.k.copyOf(20), respAddr)
+            finalBestItem.responder?.let { respAddr ->
+                val respPeer = DhtPeer(finalBestItem.k.copyOf(20), respAddr)
                 val existing = targetRouteCache[target] ?: emptyList()
                 targetRouteCache.put(target, (listOf(respPeer) + existing).distinctBy { it.address }.take(8))
             }
@@ -1128,8 +1172,8 @@ class DhtLeafNode(
             targetRouteCache.put(target, topClosest)
         }
 
-        println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=${nodesToQuery.size}, found=${bestItem != null}")
-        bestItem
+        println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=$totalQueried, responded=$totalResponded, hops=$hops, found=${finalBestItem != null}")
+        finalBestItem
     }
 
     /**
@@ -1186,6 +1230,7 @@ class DhtLeafNode(
         }
 
         var putSuccess = !skipLocalStore
+        val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
 
         try {
             val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
@@ -1219,7 +1264,6 @@ class DhtLeafNode(
             }
 
             if (tokenMap.isNotEmpty()) {
-                val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
                 val targetPuts = minOf(replicationK, tokenMap.size)
                 coroutineScope {
                     var putJobs: List<Job> = emptyList()
@@ -1266,12 +1310,21 @@ class DhtLeafNode(
         } catch (_: Exception) {
         }
 
+        val wasPrewarmed = !targetRouteCache[target].isNullOrEmpty()
+        val hops = if (wasPrewarmed) 1 else 2
+        val putMetrics = DhtOpMetrics(
+            nodesQueried = nodesToQuery.size,
+            nodesResponded = successfulPuts.get(),
+            lookupHops = hops
+        )
+        _lastOperationMetrics.set(putMetrics)
+
         if (!putSuccess && skipLocalStore) {
             // Evict stale/non-responsive prewarmed entries so future retries don't reuse failing nodes
             targetRouteCache.remove(target)
         }
 
-        println("[PQChat] putMutablePreSigned target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess")
+        println("[PQChat] putMutablePreSigned target=$targetHex, candidates=${nodesToQuery.size}, storedPeers=${remoteStoredPeers[targetHex]?.size ?: 0}, putSuccess=$putSuccess, nodesResponded=${successfulPuts.get()}, hops=$hops")
         putSuccess
     }
 

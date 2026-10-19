@@ -233,6 +233,10 @@ class AndroidResourceProfiler(
         return file
     }
 
+    fun getPollingState(): String = pollingStateProvider?.invoke() ?: _latestSample.value?.pollingState ?: "UNKNOWN"
+
+    fun getPoissonLambda(): Double = lambdaProvider?.invoke() ?: _latestSample.value?.poissonLambda ?: (1.0 / 480.0)
+
     fun queryBatteryCurrentNowUa(): Long {
         batteryCurrentProvider?.let { return it.invoke() }
         val ctx = context ?: return 0L

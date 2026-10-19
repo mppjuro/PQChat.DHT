@@ -90,8 +90,9 @@ class PoissonTrafficGenerator(
                     seqNum = outboundFrame.seqNum.toLong(),
                     payloadBytes = outboundFrame.payload.size,
                     rttMs = rttMs,
-                    nodesQueried = 24,
-                    nodesResponded = if (ok) 8 else 0,
+                    nodesQueried = dhtLeafNode.lastNodesQueried,
+                    nodesResponded = dhtLeafNode.lastNodesResponded,
+                    lookupHops = dhtLeafNode.lastLookupHops,
                     success = ok,
                     republishAttempt = 0
                 )
@@ -134,6 +135,9 @@ class PoissonTrafficGenerator(
                         target = ackTarget,
                         payloadBytes = ackPayload.size,
                         rttMs = rttMs,
+                        nodesQueried = dhtLeafNode.lastNodesQueried,
+                        nodesResponded = dhtLeafNode.lastNodesResponded,
+                        lookupHops = dhtLeafNode.lastLookupHops,
                         success = ok
                     )
                 } catch (_: Throwable) {}
@@ -168,8 +172,9 @@ class PoissonTrafficGenerator(
                             seqNum = entry.seq,
                             payloadBytes = entry.v.size,
                             rttMs = rttMs,
-                            nodesQueried = 24,
-                            nodesResponded = if (ok) 8 else 0,
+                            nodesQueried = dhtLeafNode.lastNodesQueried,
+                            nodesResponded = dhtLeafNode.lastNodesResponded,
+                            lookupHops = dhtLeafNode.lastLookupHops,
                             success = ok
                         )
                     } catch (_: Throwable) {}
@@ -202,6 +207,9 @@ class PoissonTrafficGenerator(
                 role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
                 target = actualTarget,
                 payloadBytes = 900,
+                nodesQueried = dhtLeafNode.lastNodesQueried,
+                nodesResponded = dhtLeafNode.lastNodesResponded,
+                lookupHops = dhtLeafNode.lastLookupHops,
                 success = publishedTarget != null
             )
         } catch (_: Throwable) {}

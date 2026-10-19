@@ -144,8 +144,9 @@ class PollingWorker(
                             seqNum = task.seq,
                             payloadBytes = task.payload.size,
                             rttMs = rttMs,
-                            nodesQueried = 24,
-                            nodesResponded = if (ok) 8 else 0,
+                            nodesQueried = dhtClient.lastNodesQueried,
+                            nodesResponded = dhtClient.lastNodesResponded,
+                            lookupHops = dhtClient.lastLookupHops,
                             success = ok,
                             republishAttempt = task.currentAttempts + 1,
                             messageAgeMs = age

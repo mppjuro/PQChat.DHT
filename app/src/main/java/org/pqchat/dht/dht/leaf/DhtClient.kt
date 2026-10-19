@@ -24,6 +24,16 @@ enum class TorTransportMode {
 }
 
 /**
+ * Operational telemetry metrics captured during the most recent BEP 44 DHT operation.
+ * Used for empirical academic analysis (nodes queried, responding replicas, Kademlia routing hops).
+ */
+data class DhtOpMetrics(
+    val nodesQueried: Int = 0,
+    val nodesResponded: Int = 0,
+    val lookupHops: Int = 0
+)
+
+/**
  * Common abstraction for DHT client implementations (production leaf node, fake/mock nodes for testing).
  */
 interface DhtClient {
@@ -52,6 +62,15 @@ interface DhtClient {
      * Real-time diagnostic message about Tor proxy capabilities and transport state.
      */
     val torDiagnosticMessage: String? get() = null
+
+    /**
+     * Operational telemetry: metrics (queried, responded, hops) from the most recent DHT operation.
+     */
+    val lastOperationMetrics: DhtOpMetrics get() = DhtOpMetrics()
+
+    val lastNodesQueried: Int get() = lastOperationMetrics.nodesQueried
+    val lastNodesResponded: Int get() = lastOperationMetrics.nodesResponded
+    val lastLookupHops: Int get() = lastOperationMetrics.lookupHops
 
     /**
      * Empirical telemetry: cumulative count of BEP 44 GET queries executed.
@@ -101,12 +120,15 @@ interface DhtClient {
     /**
      * BEP 44 get query to retrieve mutable item for target.
      * Returns null if not found, timeout or verification failure.
+     * When [probeAllReplicas] is true, queries all closest swarm nodes without early cancellation
+     * to measure empirical multi-point replica retention/decay (nodesResponded).
      */
     suspend fun getMutable(
         target: ByteArray,
         salt: ByteArray? = null,
         skipLocalStore: Boolean = false,
-        timeoutMs: Long = DhtLeafNode.FAST_GET_TIMEOUT_MS
+        timeoutMs: Long = DhtLeafNode.FAST_GET_TIMEOUT_MS,
+        probeAllReplicas: Boolean = false
     ): DhtLeafNode.MutableItem?
 
     companion object {

@@ -20,7 +20,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 class HistoricalTtlSampler(
     private val dhtClient: DhtClient,
     private val onSampleRecorded: (TtlSampleEvent) -> Unit,
-    val probeIntervalMs: Long = DEFAULT_PROBE_INTERVAL_MS
+    @Volatile var probeIntervalMs: Long = DEFAULT_PROBE_INTERVAL_MS,
+    private val probeIntervalFlow: kotlinx.coroutines.flow.StateFlow<Long>? = null,
+    private val resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler? = null,
+    private val networkTypeProvider: (() -> String)? = null
 ) {
     companion object {
         const val DEFAULT_PROBE_INTERVAL_MS = 15 * 60 * 1000L // 15 minut
@@ -122,6 +125,8 @@ class HistoricalTtlSampler(
 
     /**
      * Executes a single sampling pass over all tracked historical packet targets.
+     * When probing, uses probeAllReplicas=true to count responding replicas without early cancellation,
+     * recording multi-point retention decay curves (nodesResponded from K to 0).
      */
     suspend fun executeSamplingPass(
         currentTimeMs: Long = System.currentTimeMillis(),
@@ -137,13 +142,14 @@ class HistoricalTtlSampler(
             }
 
             val tStart = System.currentTimeMillis()
-            // Probe DHT for this item (skipLocalStore = true to query external network nodes)
+            // Probe DHT for this item across all replicas (skipLocalStore = true to query external network nodes)
             val retrieved = try {
                 dhtClient.getMutable(
                     target = item.target,
                     salt = null,
                     skipLocalStore = true,
-                    timeoutMs = 4000L
+                    timeoutMs = 4000L,
+                    probeAllReplicas = true
                 )
             } catch (_: Exception) {
                 null
@@ -154,9 +160,17 @@ class HistoricalTtlSampler(
             val elapsedMinutes = ageMs / (60.0 * 1000.0)
             val elapsedHours = ageMs / (3600.0 * 1000.0)
 
+            val nodesQueried = retrieved?.nodesQueried?.takeIf { it > 0 } ?: dhtClient.lastNodesQueried
+            val nodesResponded = if (isAlive) {
+                (retrieved.nodesResponded.takeIf { it > 0 } ?: dhtClient.lastNodesResponded).coerceAtLeast(1)
+            } else {
+                0
+            }
+            val lookupHops = retrieved?.lookupHops?.takeIf { it > 0 } ?: dhtClient.lastLookupHops
+
             var confirmedLifespanMin: Double? = null
 
-            if (isAlive) {
+            if (isAlive && nodesResponded > 0) {
                 item.lastSeenAliveMs = currentTimeMs
                 item.consecutiveMisses = 0
             } else {
@@ -177,10 +191,18 @@ class HistoricalTtlSampler(
                 elapsedMinutes = elapsedMinutes,
                 elapsedHours = elapsedHours,
                 republishActive = item.republishActive,
-                isAlive = isAlive,
-                nodesResponded = if (isAlive) 8 else 0,
+                isAlive = isAlive && nodesResponded > 0,
+                nodesQueried = nodesQueried,
+                nodesResponded = nodesResponded,
+                lookupHops = lookupHops,
                 probeRttMs = probeRttMs,
-                confirmedLifespanMinutes = confirmedLifespanMin
+                confirmedLifespanMinutes = confirmedLifespanMin,
+                networkType = networkTypeProvider?.invoke() ?: "UNKNOWN",
+                pollingState = resourceProfiler?.getPollingState() ?: "UNKNOWN",
+                replicationK = dhtClient.replicationK,
+                poissonLambda = resourceProfiler?.getPoissonLambda() ?: (1.0 / 480.0),
+                batteryCurrentUa = resourceProfiler?.queryBatteryCurrentNowUa() ?: 0L,
+                batteryLevelPct = resourceProfiler?.queryBatteryLevelPercent() ?: 100
             )
 
             onSampleRecorded(sample)
@@ -196,8 +218,20 @@ class HistoricalTtlSampler(
                 // Initial calibration probe injection on start
                 injectCalibrationProbePair()
 
+                // Dynamically observe settingsManager.statsProbeIntervalMs if provided
+                probeIntervalFlow?.let { flow ->
+                    launch {
+                        flow.collect { newInterval ->
+                            if (newInterval > 0L) {
+                                probeIntervalMs = newInterval
+                            }
+                        }
+                    }
+                }
+
                 while (isActive) {
-                    delay(probeIntervalMs)
+                    val currentInterval = probeIntervalFlow?.value ?: probeIntervalMs
+                    delay(currentInterval.coerceAtLeast(1000L))
                     val sessionId = sessionIdProvider()
                     executeSamplingPass(System.currentTimeMillis(), sessionId)
                 }

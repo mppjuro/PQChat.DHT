@@ -66,6 +66,9 @@ class FakeDht(
     val bytesSent = java.util.concurrent.atomic.AtomicLong(0L)
     val bytesReceived = java.util.concurrent.atomic.AtomicLong(0L)
 
+    private val _lastOperationMetrics = java.util.concurrent.atomic.AtomicReference(org.pqchat.dht.dht.leaf.DhtOpMetrics())
+    override val lastOperationMetrics: org.pqchat.dht.dht.leaf.DhtOpMetrics get() = _lastOperationMetrics.get()
+
     override val totalGetCalls: Long get() = getCalls.get().toLong()
     override val totalPutCalls: Long get() = putCalls.get().toLong()
     override val totalBytesSent: Long get() = bytesSent.get()
@@ -110,29 +113,60 @@ class FakeDht(
         target: ByteArray,
         salt: ByteArray?,
         skipLocalStore: Boolean,
-        timeoutMs: Long
+        timeoutMs: Long,
+        probeAllReplicas: Boolean
     ): DhtLeafNode.MutableItem? {
         getCalls.incrementAndGet()
         bytesSent.addAndGet(100L)
         simulateDelay()
 
         val targetHex = CryptoUtils.toHex(target)
-        val entry = storage[targetHex] ?: return null
-
-        if (entry.isExpired()) {
-            storage.remove(targetHex)
+        val entry = storage[targetHex]
+        if (entry == null || entry.isExpired()) {
+            if (entry != null && entry.isExpired()) storage.remove(targetHex)
+            val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+                nodesQueried = replicationK * 2,
+                nodesResponded = 0,
+                lookupHops = 2
+            )
+            _lastOperationMetrics.set(metrics)
             return null
         }
 
         if (dropProbability > 0.0) {
             val failProb = Math.pow(dropProbability, entry.replicas.toDouble())
             if (Math.random() < failProb) {
+                val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+                    nodesQueried = replicationK * 2,
+                    nodesResponded = 0,
+                    lookupHops = 2
+                )
+                _lastOperationMetrics.set(metrics)
                 return null
             }
         }
 
+        val survivingReplicas = if (entry.ttlMs != null && entry.ttlMs > 0L) {
+            val elapsed = (System.currentTimeMillis() - entry.storedAt).coerceAtLeast(0L)
+            val fraction = (1.0 - (elapsed.toDouble() / entry.ttlMs)).coerceIn(0.0, 1.0)
+            maxOf(1, (entry.replicas * fraction).toInt())
+        } else {
+            entry.replicas
+        }
+
+        val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+            nodesQueried = replicationK * 2,
+            nodesResponded = survivingReplicas,
+            lookupHops = 1
+        )
+        _lastOperationMetrics.set(metrics)
+
         bytesReceived.addAndGet(entry.item.v.size.toLong() + 100L)
-        return entry.item
+        return entry.item.copy(
+            nodesQueried = metrics.nodesQueried,
+            nodesResponded = metrics.nodesResponded,
+            lookupHops = metrics.lookupHops
+        )
     }
 
     override suspend fun putMutablePreSigned(
@@ -152,6 +186,12 @@ class FakeDht(
         val replicasStored = if (dropProbability > 0.0) {
             val successfulStores = (0 until replicationK).count { Math.random() >= dropProbability }
             if (successfulStores == 0) {
+                val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+                    nodesQueried = replicationK * 2,
+                    nodesResponded = 0,
+                    lookupHops = 1
+                )
+                _lastOperationMetrics.set(metrics)
                 return false
             }
             successfulStores
@@ -163,6 +203,13 @@ class FakeDht(
 
         val targetHex = CryptoUtils.toHex(target)
         val existing = storage[targetHex]
+        val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+            nodesQueried = replicationK * 2,
+            nodesResponded = replicasStored,
+            lookupHops = 1
+        )
+        _lastOperationMetrics.set(metrics)
+
         if (existing == null || seq >= existing.item.seq) {
             val item = DhtLeafNode.MutableItem(
                 v = v.copyOf(),
@@ -171,7 +218,10 @@ class FakeDht(
                 sig = sig.copyOf(),
                 salt = salt?.copyOf(),
                 token = null,
-                responder = InetSocketAddress("127.0.0.1", 6881)
+                responder = InetSocketAddress("127.0.0.1", 6881),
+                nodesQueried = metrics.nodesQueried,
+                nodesResponded = metrics.nodesResponded,
+                lookupHops = metrics.lookupHops
             )
             storage[targetHex] = StoredEntry(
                 item = item,
@@ -213,6 +263,13 @@ class FakeDht(
         val sig = org.pqchat.dht.crypto.Ed25519Engine.sign(dummySeed, signData)
         val targetHex = CryptoUtils.toHex(target)
 
+        val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
+            nodesQueried = replicationK * 2,
+            nodesResponded = replicationK,
+            lookupHops = 1
+        )
+        _lastOperationMetrics.set(metrics)
+
         storage[targetHex] = StoredEntry(
             item = DhtLeafNode.MutableItem(
                 v = dummyPayload,
@@ -221,7 +278,10 @@ class FakeDht(
                 sig = sig,
                 salt = null,
                 token = null,
-                responder = InetSocketAddress("127.0.0.1", 6881)
+                responder = InetSocketAddress("127.0.0.1", 6881),
+                nodesQueried = metrics.nodesQueried,
+                nodesResponded = metrics.nodesResponded,
+                lookupHops = metrics.lookupHops
             ),
             storedAt = System.currentTimeMillis(),
             ttlMs = defaultTtlMs

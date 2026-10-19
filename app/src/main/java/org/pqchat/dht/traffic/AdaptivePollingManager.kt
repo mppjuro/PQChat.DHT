@@ -74,8 +74,9 @@ class AdaptivePollingManager(
                             seqNum = entry.seq,
                             payloadBytes = entry.v.size,
                             rttMs = rttMs,
-                            nodesQueried = 24,
-                            nodesResponded = if (ok) 8 else 0,
+                            nodesQueried = dhtClient.lastNodesQueried,
+                            nodesResponded = dhtClient.lastNodesResponded,
+                            lookupHops = dhtClient.lastLookupHops,
                             success = ok
                         )
                     } catch (_: Throwable) {}
@@ -89,6 +90,9 @@ class AdaptivePollingManager(
                         role = org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT,
                         target = dummyTarget,
                         payloadBytes = 900,
+                        nodesQueried = dhtClient.lastNodesQueried,
+                        nodesResponded = dhtClient.lastNodesResponded,
+                        lookupHops = dhtClient.lastLookupHops,
                         success = true
                     )
                 } catch (_: Throwable) {}
