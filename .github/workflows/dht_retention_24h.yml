@@ -23,12 +23,12 @@ jobs:
 
     steps:
       - name: Checkout main repo (code & harness)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: main-repo
 
       - name: Checkout metrics-retention branch (telemetry & state)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: metrics-retention
           path: retention-data
