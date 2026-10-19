@@ -2,8 +2,8 @@ name: Nightly Tests & Release
 
 on:
   schedule:
-    # Uruchamiane codziennie o 18:00 UTC (8 godzin wczesniej niz 02:00 UTC, tj. 20:00 CEST / 19:00 CET w Polsce)
-    - cron: '0 18 * * *'
+    # Uruchamiane codziennie o północy w Polsce (22:00 UTC)
+    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       skip_release:
@@ -361,9 +361,11 @@ jobs:
         id: prepare_apk
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
-          APK_NAME="PQChat.DHT-nightly-${SHORT_SHA}.apk"
+          DATE_TAG=$(date -u +'%Y-%m-%d')
+          APK_NAME="PQChat.DHT-nightly-${DATE_TAG}-${SHORT_SHA}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "${APK_NAME}"
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
+          echo "DATE_TAG=${DATE_TAG}" >> $GITHUB_ENV
           echo "APK_NAME=${APK_NAME}" >> $GITHUB_ENV
           echo "BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_ENV
 
@@ -378,7 +380,7 @@ jobs:
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}
-          name: "Nightly Build (${{ env.SHORT_SHA }})"
+          name: "Nightly Build (${{ env.DATE_TAG }}-${{ env.SHORT_SHA }})"
           body: |
             ## 🌙 PQChat.DHT Nightly Build
 
