@@ -17,6 +17,7 @@ import math
 import random
 import csv
 import hashlib
+import concurrent.futures
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 
@@ -25,10 +26,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from .dht_cluster import DhtCluster
-from .client import HeadlessPqClient
-from .attackers import AttackEvaluator, CorrelationEvaluationResult
-from . import ed25519
+if __package__ is None or __package__ == "":
+    import sys
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from tools.testbed.dht_cluster import DhtCluster
+    from tools.testbed.client import HeadlessPqClient, DecoyTargetPoolModel
+    from tools.testbed.attackers import AttackEvaluator, CorrelationEvaluationResult
+    from tools.testbed import ed25519
+else:
+    from .dht_cluster import DhtCluster
+    from .client import HeadlessPqClient, DecoyTargetPoolModel
+    from .attackers import AttackEvaluator, CorrelationEvaluationResult
+    from . import ed25519
 
 
 @dataclass
@@ -119,13 +128,19 @@ class TestbedController:
         bobs: List[HeadlessPqClient] = []
 
         vpn_pool = [f"198.51.100.{10 + (i % 5)}" for i in range(self.num_pairs * 2)]
+        shared_decoy_pool = DecoyTargetPoolModel()
 
         for p in range(self.num_pairs):
             alice_ip = f"192.168.1.{100 + p}"
             bob_ip = f"192.168.2.{100 + p}"
-            all_receiver_ips.append(bob_ip)
+            alice_vpn = vpn_pool[p] if posture.vpn_enabled else None
+            bob_vpn = vpn_pool[self.num_pairs + p] if posture.vpn_enabled else None
 
-            pair_mappings[alice_ip] = bob_ip
+            effective_alice_ip = alice_vpn if posture.vpn_enabled else alice_ip
+            effective_bob_ip = bob_vpn if posture.vpn_enabled else bob_ip
+
+            all_receiver_ips.append(effective_bob_ip)
+            pair_mappings[effective_alice_ip] = effective_bob_ip
             pair_identities[alice_ip] = p
             pair_identities[bob_ip] = p
 
@@ -133,15 +148,11 @@ class TestbedController:
             chain_seed = f"chain_pair_{p}_{seed}".encode("utf-8")
             init_chain_key = hashlib.sha512(chain_seed).digest()
 
-            alice_vpn = vpn_pool[p] if posture.vpn_enabled else None
-            bob_vpn = vpn_pool[self.num_pairs + p] if posture.vpn_enabled else None
-
             if posture.vpn_enabled:
                 client_to_physical[alice_vpn] = alice_ip
                 client_to_physical[bob_vpn] = bob_ip
                 pair_identities[alice_vpn] = p
                 pair_identities[bob_vpn] = p
-                pair_mappings[alice_vpn] = bob_vpn
 
             alice = HeadlessPqClient(
                 client_id=f"Alice_{p}",
@@ -149,7 +160,8 @@ class TestbedController:
                 cluster=cluster,
                 init_chain_key=init_chain_key,
                 rng=rng,
-                vpn_gateway_ip=alice_vpn
+                vpn_gateway_ip=alice_vpn,
+                decoy_pool=shared_decoy_pool
             )
             bob = HeadlessPqClient(
                 client_id=f"Bob_{p}",
@@ -157,10 +169,16 @@ class TestbedController:
                 cluster=cluster,
                 init_chain_key=init_chain_key,
                 rng=rng,
-                vpn_gateway_ip=bob_vpn
+                vpn_gateway_ip=bob_vpn,
+                decoy_pool=shared_decoy_pool
             )
             alices.append(alice)
             bobs.append(bob)
+
+        # Seed shared decoy pool with active conversation slots across pairs (without mutating ratchet)
+        for a in alices:
+            for _, s_tgt, _ in a.ratchet.compute_lookahead_slots(0, window_size=2):
+                shared_decoy_pool.register_populated_target(s_tgt)
 
         # 3. Simulate Traffic Events Over Time
         # Schedule message emission times per pair
@@ -224,6 +242,7 @@ class TestbedController:
                     seq=alice.counter_out,
                     timestamp_ms=actual_put_time
                 )
+                shared_decoy_pool.register_populated_target(tgt)
 
                 # Decoy PUT slots published alongside real message
                 for _ in range(posture.decoy_put_slots):
@@ -239,6 +258,8 @@ class TestbedController:
                         seq=0,
                         timestamp_ms=actual_put_time
                     )
+                    shared_decoy_pool.register_populated_target(d_tgt)
+
 
             elif ev_type == "POLL":
                 bob = client
@@ -276,6 +297,18 @@ class TestbedController:
             client_to_physical=client_to_physical if posture.vpn_enabled else None
         )
         return result
+
+
+def _worker_run_trial(args: Tuple) -> Tuple[CorrelationEvaluationResult, int]:
+    posture, seed, num_pairs, num_cluster_nodes, msgs_per_pair, sim_duration_sec, base_poll_sec = args
+    ctrl = TestbedController(
+        num_pairs=num_pairs,
+        num_cluster_nodes=num_cluster_nodes,
+        msgs_per_pair=msgs_per_pair,
+        sim_duration_sec=sim_duration_sec,
+        base_poll_sec=base_poll_sec
+    )
+    return ctrl.run_single_trial(posture, seed), seed
 
 
 def run_full_testbed_suite(
@@ -417,93 +450,116 @@ def run_full_testbed_suite(
 
     all_results = {}
     csv_rows = []
+    max_workers = min(28, max(1, os.cpu_count() or 4))
 
-    for posture in postures:
-        print(f"\nEvaluating: {posture.display_name} ...", flush=True)
-        top1_list = []
-        entropy_list = []
-        candidates_list = []
-        multi_msg_runs = {M: [] for M in [1, 2, 5, 10, 20]}
-        delta_t_accum: Dict[float, List[float]] = {}
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        for posture in postures:
+            print(f"\nEvaluating: {posture.display_name} ...", flush=True)
+            top1_list = []
+            entropy_list = []
+            candidates_list = []
+            multi_msg_runs = {M: [] for M in [1, 2, 5, 10, 20]}
+            delta_t_accum: Dict[float, List[float]] = {}
 
-        t_start = time.time()
-        for i in range(num_runs):
-            seed = 1000 + i
-            res = controller.run_single_trial(posture, seed)
-            top1_list.append(res.top1_accuracy)
-            entropy_list.append(res.shannon_entropy_ratio)
-            candidates_list.append(res.candidate_set_size)
+            t_start = time.time()
+            tasks = [
+                (posture, 1000 + i, controller.num_pairs, controller.num_cluster_nodes,
+                 controller.msgs_per_pair, controller.sim_duration_sec, controller.base_poll_sec)
+                for i in range(num_runs)
+            ]
 
-            for M, val in res.multi_msg_accuracy.items():
-                multi_msg_runs[M].append(val)
+            if num_runs > 1 and max_workers > 1:
+                results_with_seed = list(executor.map(_worker_run_trial, tasks))
+            else:
+                results_with_seed = [_worker_run_trial(t) for t in tasks]
 
-            for dt, val in res.delta_t_accuracy.items():
-                delta_t_accum.setdefault(dt, []).append(val)
+            # Preserve deterministic order by seed
+            results_with_seed.sort(key=lambda x: x[1])
 
-            # Record telemetry CSV row (MEASURED)
-            csv_rows.append({
-                "trial_id": i + 1,
-                "seed": seed,
-                "data_source": "MEASURED",
-                "posture": posture.name,
-                "display_name": posture.display_name,
-                "top1_accuracy": res.top1_accuracy,
-                "entropy_ratio": res.shannon_entropy_ratio,
-                "candidates": res.candidate_set_size,
-                "m1": res.multi_msg_accuracy.get(1, 0.0),
-                "m2": res.multi_msg_accuracy.get(2, 0.0),
-                "m5": res.multi_msg_accuracy.get(5, 0.0),
-                "m10": res.multi_msg_accuracy.get(10, 0.0),
-                "m20": res.multi_msg_accuracy.get(20, 0.0),
-                "vpn_enabled": posture.vpn_enabled
-            })
+            for res, seed in results_with_seed:
+                top1_list.append(res.top1_accuracy)
+                entropy_list.append(res.shannon_entropy_ratio)
+                candidates_list.append(res.candidate_set_size)
 
-        t_elapsed = time.time() - t_start
-        stat_top1 = compute_metric_stats(top1_list)
-        stat_entropy = compute_metric_stats(entropy_list)
-        stat_candidates = compute_metric_stats(candidates_list)
-        stat_multi = {M: compute_metric_stats(multi_msg_runs[M]) for M in [1, 2, 5, 10, 20]}
-        delta_t_mean = {dt: float(np.mean(vals)) for dt, vals in delta_t_accum.items()}
+                for M, val in res.multi_msg_accuracy.items():
+                    multi_msg_runs[M].append(val)
 
-        all_results[posture.name] = {
-            "posture": posture,
-            "top1": stat_top1,
-            "entropy": stat_entropy,
-            "candidates": stat_candidates,
-            "multi_msg": stat_multi,
-            "delta_t": delta_t_mean,
-            "time_sec": t_elapsed
-        }
+                for dt, val in res.delta_t_accuracy.items():
+                    delta_t_accum.setdefault(dt, []).append(val)
 
-        print(f"  -> Top-1 Accuracy: {stat_top1.format_pct()} (Advantage: +{(stat_top1.mean - controller.baseline_guessing)*100:4.1f}%)")
-        print(f"  -> Entropy Ratio: {stat_entropy.format_pct()} | Avg Candidates: {stat_candidates.mean:4.1f}")
-        print(f"  -> Elapsed: {t_elapsed:.2f}s")
+                # Record telemetry CSV row (MEASURED)
+                csv_rows.append({
+                    "trial_id": seed - 1000 + 1,
+                    "seed": seed,
+                    "data_source": "SIMULATED" if ed25519.is_fast_mode() else "MEASURED",
+                    "posture": posture.name,
+                    "display_name": posture.display_name,
+                    "top1_accuracy": res.top1_accuracy,
+                    "entropy_ratio": res.shannon_entropy_ratio,
+                    "candidates": res.candidate_set_size,
+                    "m1": res.multi_msg_accuracy.get(1, 0.0),
+                    "m2": res.multi_msg_accuracy.get(2, 0.0),
+                    "m5": res.multi_msg_accuracy.get(5, 0.0),
+                    "m10": res.multi_msg_accuracy.get(10, 0.0),
+                    "m20": res.multi_msg_accuracy.get(20, 0.0),
+                    "vpn_enabled": posture.vpn_enabled
+                })
 
-    # Sybil Fraction Sweep Evaluation
-    print("\n--- Evaluating Sybil Neighborhood Sweep (f = 0.0 .. 0.5) ---")
-    sybil_fractions = [0.0, 0.05, 0.10, 0.20, 0.35, 0.50]
-    sybil_results = {}
+            t_elapsed = time.time() - t_start
+            stat_top1 = compute_metric_stats(top1_list)
+            stat_entropy = compute_metric_stats(entropy_list)
+            stat_candidates = compute_metric_stats(candidates_list)
+            stat_multi = {M: compute_metric_stats(multi_msg_runs[M]) for M in [1, 2, 5, 10, 20]}
+            delta_t_mean = {dt: float(np.mean(vals)) for dt, vals in delta_t_accum.items()}
 
-    for f_val in sybil_fractions:
-        p_sybil = PostureConfig(
-            name=f"SYBIL_{int(f_val*100)}",
-            display_name=f"Sybil f={f_val*100:4.1f}%",
-            polling_jitter_ratio=0.3,
-            cover_get_ratio=1.5,
-            put_delay_max_sec=5.0,
-            decoy_put_slots=1,
-            poisson_lambda=1.0 / 480.0,
-            use_populated_decoys=True,
-            sybil_fraction=f_val
-        )
-        syb_acc = []
-        for i in range(num_runs):
-            res = controller.run_single_trial(p_sybil, seed=1000 + i)
-            syb_acc.append(res.top1_accuracy)
-        stat_syb = compute_metric_stats(syb_acc)
-        sybil_results[f_val] = stat_syb
-        p_compromise_theory = (1.0 - (1.0 - f_val) ** 8) * 100 if f_val > 0 else 0.0
-        print(f"  f = {f_val*100:4.1f}% (Theory P_comp = {p_compromise_theory:4.1f}%) -> Top-1: {stat_syb.format_pct()}")
+            all_results[posture.name] = {
+                "posture": posture,
+                "top1": stat_top1,
+                "entropy": stat_entropy,
+                "candidates": stat_candidates,
+                "multi_msg": stat_multi,
+                "delta_t": delta_t_mean,
+                "time_sec": t_elapsed
+            }
+
+            print(f"  -> Top-1 Accuracy: {stat_top1.format_pct()} (Advantage: +{(stat_top1.mean - controller.baseline_guessing)*100:4.1f}%)")
+            print(f"  -> Entropy Ratio: {stat_entropy.format_pct()} | Avg Candidates: {stat_candidates.mean:4.1f}")
+            print(f"  -> Elapsed: {t_elapsed:.2f}s")
+
+        # Sybil Fraction Sweep Evaluation
+        print("\n--- Evaluating Sybil Neighborhood Sweep (f = 0.0 .. 0.5) ---")
+        sybil_fractions = [0.0, 0.05, 0.10, 0.20, 0.35, 0.50]
+        sybil_results = {}
+
+        for f_val in sybil_fractions:
+            p_sybil = PostureConfig(
+                name=f"SYBIL_{int(f_val*100)}",
+                display_name=f"Sybil f={f_val*100:4.1f}%",
+                polling_jitter_ratio=0.3,
+                cover_get_ratio=1.5,
+                put_delay_max_sec=5.0,
+                decoy_put_slots=1,
+                poisson_lambda=1.0 / 480.0,
+                use_populated_decoys=True,
+                sybil_fraction=f_val
+            )
+            tasks = [
+                (p_sybil, 1000 + i, controller.num_pairs, controller.num_cluster_nodes,
+                 controller.msgs_per_pair, controller.sim_duration_sec, controller.base_poll_sec)
+                for i in range(num_runs)
+            ]
+            if num_runs > 1 and max_workers > 1:
+                res_syb = list(executor.map(_worker_run_trial, tasks))
+            else:
+                res_syb = [_worker_run_trial(t) for t in tasks]
+
+            syb_acc = [r[0].top1_accuracy for r in res_syb]
+            stat_syb = compute_metric_stats(syb_acc)
+            sybil_results[f_val] = stat_syb
+            p_compromise_theory = (1.0 - (1.0 - f_val) ** 8) * 100 if f_val > 0 else 0.0
+            print(f"  f = {f_val*100:4.1f}% (Theory P_comp = {p_compromise_theory:4.1f}%) -> Top-1: {stat_syb.format_pct()}")
+
+
 
     # 6. Save Telemetry CSV
     output_dir = os.path.dirname(os.path.abspath(__file__))

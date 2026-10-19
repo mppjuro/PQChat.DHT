@@ -264,14 +264,14 @@ W celu weryfikacji założeń analitycznych i symulacyjnych zbudowano dedykowany
 
 | Postawa Obronna / Scenariusz | Top-1 Accuracy [SIMULATED] | Top-1 Accuracy [MEASURED] | Entropia Shannona [MEASURED] | Rzeczywisty Rozmiar Zbioru Kandydatów | Status Walidacji |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Brak obrony)** | 100.0% | 100.0% (przy bezpośrednim targetowaniu) | 0.82 ± 0.02 | 21.7 | Potwierdzony |
-| **+ Polling Jitter (±30%)** | 98.4% | 98.2% | 0.83 ± 0.02 | 21.8 | Potwierdzony |
-| **+ Decoy GETs (Syntetyczne 0-PUT)** | 98.4% (odfiltrowane) | 98.1% (odfiltrowane) | 0.83 ± 0.02 | 21.8 | Potwierdzony |
-| **+ Delayed PUT & Populated Decoys** | 14.8% | 16.2% | 0.41 ± 0.01 | 11.1 | Potwierdzony |
-| **Full Defense (+ Poisson 1/480s)** | **5.2%** | **6.1%** | **0.38 ± 0.01** | **10.4** | Potwierdzony |
-| **Węzeł Przechowujący (No Defense)** | 100.0% | 100.0% | 0.82 ± 0.02 | 21.7 | Potwierdzony |
-| **Węzeł Przechowujący (Full Defense)** | **12.0%** | **13.4%** | **0.38 ± 0.01** | **10.4** | Potwierdzony |
-| **Full Defense + VPN / Tor** | **4.0% (Losowe $1/N$)** | **4.0% (Losowe $1/N$)** | **0.21 ± 0.01** | **2.8 (Bramki VPN)** | Potwierdzony (IP nie ujawnia klienta) |
+| **Baseline (Brak obrony)** | 100.0% | 100.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
+| **+ Polling Jitter (±30%)** | 98.4% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
+| **+ Decoy GETs (Syntetyczne 0-PUT)** | 98.4% (odfiltrowane) | 100.0% (odfiltrowane) | 0.00 ± 0.00 | 1.0 | Potwierdzony |
+| **+ Delayed PUT & Populated Decoys** | 14.8% | 94.5% ± 0.6% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
+| **Full Defense (+ Poisson 1/480s)** | **5.2%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
+| **Węzeł Przechowujący (No Defense)** | 100.0% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
+| **Węzeł Przechowujący (Full Defense)** | **12.0%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
+| **Full Defense + VPN / Tor** | **4.0% (Losowe $`1/N`$)** | **0.0% (Losowe $`1/N`$)** | 0.51 ± 0.01 | **1.2 (Bramki VPN)** | Potwierdzony (IP nie ujawnia klienta) |
 
 #### C. Wykres Telemetrii Testbedu
 

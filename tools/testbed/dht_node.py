@@ -270,7 +270,7 @@ class DhtNode:
                     payload_size=payload_size,
                     seq=seq_val,
                     is_malicious=self.is_malicious,
-                    data_source="MEASURED"
+                    data_source="SIMULATED" if ed25519.is_fast_mode() else "MEASURED"
                 )
                 self.logger.log(entry)
 

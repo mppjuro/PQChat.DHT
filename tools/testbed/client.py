@@ -7,6 +7,7 @@ Decoy PUT slots, Poisson Cover Traffic, and VPN/NAT IP abstraction.
 import math
 import random
 import hashlib
+import hmac
 from typing import List, Tuple, Dict, Optional, Set
 
 from . import bencode
@@ -15,13 +16,13 @@ from .dht_cluster import DhtCluster
 
 
 def hkdf_expand(pseudo_random_key: bytes, info: bytes, length: int) -> bytes:
-    """HKDF-Expand (RFC 5869) using SHA-512."""
+    """HKDF-Expand (RFC 5869) using HMAC-SHA-512."""
     hash_len = 64
     n = math.ceil(length / hash_len)
     okm = bytearray()
     t = b""
     for i in range(1, n + 1):
-        h = hashlib.sha512(t + info + bytes([i])).digest()
+        h = hmac.new(pseudo_random_key, t + info + bytes([i]), hashlib.sha512).digest()
         t = h
         okm.extend(h)
     return bytes(okm[:length])
@@ -109,7 +110,8 @@ class HeadlessPqClient:
         cluster: DhtCluster,
         init_chain_key: bytes,
         rng: random.Random,
-        vpn_gateway_ip: Optional[str] = None
+        vpn_gateway_ip: Optional[str] = None,
+        decoy_pool: Optional[DecoyTargetPoolModel] = None
     ):
         self.client_id = client_id
         self.virtual_ip = virtual_ip
@@ -121,7 +123,7 @@ class HeadlessPqClient:
         self.ratchet = RatchetChainModel(init_chain_key)
         self.counter_out = 0
         self.counter_in = 0
-        self.decoy_pool = DecoyTargetPoolModel()
+        self.decoy_pool = decoy_pool if decoy_pool is not None else DecoyTargetPoolModel()
 
         # Cache of Target -> (pk, sk)
         self.slot_credentials: Dict[bytes, Tuple[bytes, bytes]] = {}
@@ -286,3 +288,5 @@ class HeadlessPqClient:
             seq=0,
             timestamp_ms=timestamp_ms
         )
+        self.decoy_pool.register_populated_target(dummy_target)
+

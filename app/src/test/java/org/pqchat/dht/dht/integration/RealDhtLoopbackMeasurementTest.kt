@@ -143,28 +143,9 @@ class RealDhtLoopbackMeasurementTest {
             harness.exportToCsvFile(combinedCsvFile, allMetrics)
             assertTrue("Combined CSV file must exist", combinedCsvFile.exists() && combinedCsvFile.length() > 0)
 
-            // 2. Evaluate retention scenarios for horizons 1h, 2h, 6h, 24h (with & without republish)
-            val sampleSizePerHorizon = System.getProperty("retentionSampleSize")?.toIntOrNull() ?: 10
-            println("[Live DHT Measurement] Evaluating retention scenarios for horizons $RETENTION_HORIZONS (sampleSize=$sampleSizePerHorizon per horizon)...")
-
-            val retentionResults = harness.evaluateRetentionScenarios(
-                networkEnv = NetworkEnvironment.WIFI,
-                horizonsHours = RETENTION_HORIZONS,
-                sampleSizePerHorizon = sampleSizePerHorizon
-            )
-
-            assertEquals(
-                "Must evaluate 4 horizons * 2 republish modes = 8 retention scenarios",
-                RETENTION_HORIZONS.size * 2,
-                retentionResults.size
-            )
-
-            // Export retention results to CSV
-            exportRetentionCsv(File(measurementsDir, "retention_measured.csv"), retentionResults)
-
-            for (res in retentionResults) {
-                println("  => [Retention] ${res.hours}h (Republish=${res.republishEnabled}): Survival=${String.format(Locale.US, "%.1f", res.survivalRate * 100.0)}% (${res.survivingRecords}/${res.testedRecords}), Mean RTT=${String.format(Locale.US, "%.1f", res.meanRetrieveRttMs)}ms")
-            }
+            // 2. Multi-hour retention horizons (1h–24h) require actual elapsed time
+            // and are measured by the 24h cron workflow (.github/workflows/dht_retention_24h.yml)
+            // rather than reported as MEASURED immediately without delay.
 
             // 3. Generate docs/dht_retention_report.md with tables (preserving existing sections 5+ if present)
             val existingSuffix = if (reportFile.exists()) {
@@ -173,7 +154,7 @@ class RealDhtLoopbackMeasurementTest {
                 if (idx != -1) text.substring(idx) else ""
             } else ""
 
-            var reportContent = buildFullRetentionReport(aggregateReports, retentionResults, node.getActivePeerCount())
+            var reportContent = buildFullRetentionReport(aggregateReports, node.getActivePeerCount())
             if (existingSuffix.isNotEmpty()) {
                 reportContent += existingSuffix
             }
@@ -218,7 +199,6 @@ class RealDhtLoopbackMeasurementTest {
 
     private fun buildFullRetentionReport(
         reports: Map<NetworkEnvironment, AggregateReport>,
-        retentionResults: List<RetentionPointResult>,
         activePeers: Int
     ): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss 'UTC'", Locale.US).apply {
@@ -259,17 +239,9 @@ class RealDhtLoopbackMeasurementTest {
             )
         }
         sb.appendLine()
-        sb.appendLine("### 1.2. Tabela Retencji Danych per Horyzont Czasowy (MEASURED)")
+        sb.appendLine("### 1.2. Retencja Danych w Horyzontach 1–24h (Status Pomiarów)")
         sb.appendLine()
-        sb.appendLine("| Horyzont Czasowy | Aktywny Republish | Źródło Danych | Wskaźnik Przetrwania (Survival Rate) | Zbadane Próby | Przetrwane Próby | Średni RTT Odczytu GET |")
-        sb.appendLine("| :--- | :---: | :---: | :---: | :---: | :---: | :---: |")
-
-        for (res in retentionResults) {
-            val repText = if (res.republishEnabled) "**TAK** (Co 1.5h)" else "NIE (Wygasanie BEP 44)"
-            sb.appendLine(
-                "| **${String.format(Locale.US, "%.1f", res.hours)} h** | $repText | **${res.dataSource}** | **${String.format(Locale.US, "%.1f", res.survivalRate * 100.0)}%** | ${res.testedRecords} | ${res.survivingRecords} | ${String.format(Locale.US, "%.1f", res.meanRetrieveRttMs)} ms |"
-            )
-        }
+        sb.appendLine("Pomiary retencji w wielogodzinnych horyzontach czasowych (1h, 2h, 6h, 12h, 24h) wymagają rzeczywistego upływu czasu w publicznej sieci DHT i są realizowane przez dedykowany przepływ pracy CI uruchamiany co godzinę: [`.github/workflows/dht_retention_24h.yml`](../.github/workflows/dht_retention_24h.yml). Pomiary te nie są symulowane w testach natychmiastowych bez opóźnienia.")
 
         sb.appendLine()
         sb.appendLine("---")

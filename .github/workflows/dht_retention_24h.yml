@@ -1,0 +1,111 @@
+name: DHT Retention 24h Verification (Live Mainline DHT)
+
+on:
+  schedule:
+    # Uruchamiane co godzinę
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Wymuś publikację nowej serii (publish N>=300)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  dht-retention-probe:
+    name: Live Mainline DHT Retention Probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout main repo (code & harness)
+        uses: actions/checkout@v4
+        with:
+          path: main-repo
+
+      - name: Checkout metrics-retention branch (telemetry & state)
+        uses: actions/checkout@v4
+        with:
+          ref: metrics-retention
+          path: retention-data
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy
+
+      - name: Execute DHT Retention Step (Live BitTorrent Mainline DHT)
+        run: |
+          cd main-repo
+          STATE_FILE="../retention-data/dht_state.json"
+          OUTPUT_CSV="../retention-data/metrics_dht_retention_measured.csv"
+
+          FORCE_PUB="${{ github.event.inputs.force_publish }}"
+          NEED_PUBLISH="false"
+
+          if [ "$FORCE_PUB" = "true" ] || [ ! -f "$STATE_FILE" ]; then
+            NEED_PUBLISH="true"
+          else
+            STATE_AGE_HOURS=$(python3 -c "
+import json, time, os
+if os.path.exists('$STATE_FILE'):
+    try:
+        st = json.load(open('$STATE_FILE'))
+        created = st.get('created_at_epoch_ms', 0) / 1000.0
+        print((time.time() - created) / 3600.0)
+    except Exception:
+        print(999.0)
+else:
+    print(999.0)
+")
+            echo "Current state series age: ${STATE_AGE_HOURS} hours"
+            # Once 26 hours have elapsed, begin a new retention measurement cycle
+            IS_OLD=$(python3 -c "print('true' if float('$STATE_AGE_HOURS') > 26.0 else 'false')")
+            if [ "$IS_OLD" = "true" ]; then
+              echo "Cycle >= 26h reached. Initiating fresh 24h retention series."
+              NEED_PUBLISH="true"
+            fi
+          fi
+
+          if [ "$NEED_PUBLISH" = "true" ]; then
+            echo "================================================================="
+            echo "Publishing fresh N=300 records to live BitTorrent Mainline DHT..."
+            echo "================================================================="
+            python3 tools/dht_harness/dht_retention_cli.py \
+              --mode publish \
+              --count 300 \
+              --state "$STATE_FILE" \
+              --output "$OUTPUT_CSV" \
+              --timeout 10.0
+          else
+            echo "================================================================="
+            echo "Probing records in live BitTorrent Mainline DHT (retrieve mode)..."
+            echo "================================================================="
+            python3 tools/dht_harness/dht_retention_cli.py \
+              --mode retrieve \
+              --state "$STATE_FILE" \
+              --output "$OUTPUT_CSV" \
+              --timeout 10.0
+          fi
+
+      - name: Commit and Push state & CSV to metrics-retention branch
+        run: |
+          cd retention-data
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dht_state.json metrics_dht_retention_measured.csv
+          if git diff --staged --quiet; then
+            echo "No state or telemetry updates to commit."
+          else
+            git commit -m "chore(metrics): update 24h DHT retention telemetry (Live DHT) [skip ci]"
+            git push origin metrics-retention
+          fi

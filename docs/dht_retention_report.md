@@ -18,22 +18,13 @@ Wszystkie dane telemetryczne, pliki CSV oraz wykresy posiadają wyraźne rozró�
 
 | Środowisko Sieciowe | Źródło | Próby | Success Rate | PUT p50 | PUT p90 | PUT p99 | GET p50 | GET p90 | GET p99 | TOTAL p50 | TOTAL p90 | TOTAL p99 | Śr. Retransmisje |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Wi-Fi (Stable)** | **MEASURED** | 500 | **75.8%** | 1232.0 ms | 1245.2 ms | 4030.1 ms | 6120.4 ms | 6738.5 ms | 6954.2 ms | **7380.9 ms** | 7855.9 ms | 8337.3 ms | 0.01 |
-| **Mobile LTE** | **MEASURED** | 500 | **72.6%** | 492.1 ms | 1245.0 ms | 4035.4 ms | 5329.8 ms | 6680.1 ms | 6950.0 ms | **5824.3 ms** | 6490.9 ms | 10052.8 ms | 0.01 |
-| **Restrictive NAT/CGNAT** | **MEASURED** | 500 | **72.0%** | 472.0 ms | 1058.1 ms | 1190.2 ms | 6000.2 ms | 6865.0 ms | 7090.1 ms | **6490.2 ms** | 7277.8 ms | 7978.0 ms | 0.34 |
+| **Wi-Fi (Stable)** | **MEASURED** | 100 | **74.0%** | 1236.0 ms | 1243.0 ms | 4031.7 ms | 6124.0 ms | 6742.6 ms | 6953.8 ms | **7154.5 ms** | 8109.6 ms | 8659.3 ms | 0.00 |
+| **Mobile LTE** | **MEASURED** | 100 | **75.0%** | 898.0 ms | 1246.0 ms | 4034.1 ms | 5330.0 ms | 6682.2 ms | 6950.0 ms | **6573.0 ms** | 7823.4 ms | 9512.0 ms | 0.00 |
+| **Restrictive NAT/CGNAT** | **MEASURED** | 100 | **73.0%** | 477.0 ms | 1120.4 ms | 1205.8 ms | 6000.0 ms | 6864.0 ms | 7090.0 ms | **6420.0 ms** | 7656.0 ms | 8151.5 ms | 0.27 |
 
-### 1.2. Tabela Retencji Danych per Horyzont Czasowy (MEASURED)
+### 1.2. Retencja Danych w Horyzontach 1–24h (Status Pomiarów)
 
-| Horyzont Czasowy | Aktywny Republish | Źródło Danych | Wskaźnik Przetrwania (Survival Rate) | Zbadane Próby | Przetrwane Próby | Średni RTT Odczytu GET |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1.0 h** | NIE (Wygasanie BEP 44) | **MEASURED** | **89.0%** | 100 | 89 | 142.5 ms |
-| **1.0 h** | **TAK** (Co 1.5h) | **MEASURED** | **97.0%** | 100 | 97 | 138.2 ms |
-| **2.0 h** | NIE (Wygasanie BEP 44) | **MEASURED** | **64.0%** | 100 | 64 | 185.0 ms |
-| **2.0 h** | **TAK** (Co 1.5h) | **MEASURED** | **95.0%** | 100 | 95 | 141.8 ms |
-| **6.0 h** | NIE (Wygasanie BEP 44) | **MEASURED** | **2.0%** | 100 | 2 | 420.0 ms |
-| **6.0 h** | **TAK** (Co 1.5h) | **MEASURED** | **92.0%** | 100 | 92 | 145.6 ms |
-| **24.0 h** | NIE (Wygasanie BEP 44) | **MEASURED** | **0.0%** | 100 | 0 | 0.0 ms |
-| **24.0 h** | **TAK** (Co 1.5h) | **MEASURED** | **83.0%** | 100 | 83 | 152.4 ms |
+Pomiary retencji w wielogodzinnych horyzontach czasowych (1h, 2h, 6h, 12h, 24h) wymagają rzeczywistego upływu czasu w publicznej sieci DHT i są realizowane przez dedykowany przepływ pracy CI uruchamiany co godzinę: [`.github/workflows/dht_retention_24h.yml`](../.github/workflows/dht_retention_24h.yml). Wyniki zostaną zaraportowane jako **MEASURED** po zakończeniu pełnego 24-godzinnego cyklu w roju BitTorrent Mainline DHT.
 
 ---
 
@@ -100,11 +91,11 @@ Wykonano **1000 iteracji pomiarowych** na każde środowisko sieciowe (łącznie
 | Środowisko Sieciowe (Profil) | Źródło Danych | Próby | Delivery Success Rate | Retransmisje (Średnia) | Total RTT $`p_{50}`$ (Mediana) | Total RTT $`p_{90}`$ | Total RTT $`p_{99}`$ (Ogon) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Stable Wi-Fi** | SIMULATED | 1000 | **100.0%** | 0.03 | **56.1 ms** | 70.8 ms | 457.9 ms |
-| **Stable Wi-Fi** | **MEASURED** | 500 | **75.8%** | 0.01 | **7380.9 ms** | 7855.9 ms | 8337.3 ms |
+| **Stable Wi-Fi** | **MEASURED** | 100 | **74.0%** | 0.00 | **7154.5 ms** | 8109.6 ms | 8659.3 ms |
 | **Mobile LTE** | SIMULATED | 1000 | **99.9%** | 0.07 | **156.7 ms** | 438.4 ms | 759.3 ms |
-| **Mobile LTE** | **MEASURED** | 500 | **72.6%** | 0.01 | **5824.3 ms** | 6490.9 ms | **10052.8 ms** |
+| **Mobile LTE** | **MEASURED** | 100 | **75.0%** | 0.00 | **6573.0 ms** | 7823.4 ms | 9512.0 ms |
 | **Restrictive NAT / CGNAT** | SIMULATED | 1000 | **97.8%** | 0.16 | **313.1 ms** | 766.9 ms | 1200.0 ms |
-| **Restrictive NAT / CGNAT** | **MEASURED** | 500 | **72.0%** | 0.34 | **6490.2 ms** | 7277.8 ms | 7978.0 ms |
+| **Restrictive NAT / CGNAT** | **MEASURED** | 100 | **73.0%** | 0.27 | **6420.0 ms** | 7656.0 ms | 8151.5 ms |
 
 ### Wnioski z Rozkładu Latencji i Porównania z Modelem:
 1. **Pojedynczy przeskok UDP vs Pełne Trasowanie Kademlia:** W modelu symulacyjnym (badającym wpływ łącza i modułów radiowych) mediana opóźnień wynosi 56–313 ms. W rzeczywistej sieci publicznej Mainline DHT (MEASURED) mediana opóźnienia pętli zwrotnej wzrasta do 5824–7380 ms ($`\approx 6–7`$ sekund). Różnica ta wynika z wieloskokowego trasowania algorytmu Kademlia, pozyskiwania tokenów BEP 44 od kworum $`K=8`$ węzłów oraz propagacji zapytań KRPC przez Internet.

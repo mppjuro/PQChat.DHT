@@ -53,14 +53,18 @@ class AttackEvaluator:
         Analyzes the trace logs to correlate sender and receiver.
         """
         # Separate PUTs and GETs
-        puts = [e for e in log_entries if e.query_type == "put" and e.target_hex]
+        all_puts = [e for e in log_entries if e.query_type == "put" and e.target_hex]
+        # Ground truth communication messages: evaluate real message PUTs (seq > 0).
+        # Dummy PUTs (decoy PUT slots and Poisson cover traffic have seq == 0) are traffic defense noise,
+        # not communication messages sent to a recipient in ground truth.
+        real_puts = [p for p in all_puts if p.seq > 0]
         gets = [e for e in log_entries if e.query_type == "get" and e.target_hex]
 
         # Targets that ever received a PUT
-        put_targets: Set[str] = {p.target_hex for p in puts}
+        put_targets: Set[str] = {p.target_hex for p in all_puts}
 
         # Storing node visibility: targets where a malicious node logged a PUT
-        malicious_put_targets = {p.target_hex for p in puts if p.is_malicious}
+        malicious_put_targets = {p.target_hex for p in all_puts if p.is_malicious}
         malicious_get_targets = {g.target_hex for g in gets if g.is_malicious}
         co_observed_targets = malicious_put_targets.intersection(malicious_get_targets)
 
@@ -77,7 +81,7 @@ class AttackEvaluator:
         msg_evaluations: List[Dict] = []
         pair_message_likelihoods: Dict[int, List[np.ndarray]] = {p: [] for p in range(self.num_pairs)}
 
-        for p_idx, put_entry in enumerate(puts):
+        for p_idx, put_entry in enumerate(real_puts):
             sender_ip = put_entry.client_ip
             if sender_ip not in pair_identities:
                 continue
@@ -94,6 +98,11 @@ class AttackEvaluator:
 
             for get_entry in target_gets:
                 get_ip = get_entry.client_ip
+                # Sender's own token-acquisition GET must never be treated as a recipient candidate
+                if get_ip == sender_ip:
+                    continue
+                if all_receiver_ips and get_ip not in all_receiver_ips:
+                    continue
                 if get_ip not in pair_identities:
                     continue
                 cand_pair = pair_identities[get_ip]
@@ -130,13 +139,15 @@ class AttackEvaluator:
 
             # VPN analysis: if VPN is active, evaluate physical identity correlation
             if vpn_active and client_to_physical:
-                # If multiple clients share the same VPN exit, prediction of VPN IP does not identify physical user
-                sender_phys = client_to_physical.get(sender_ip, sender_ip)
-                pred_client_ip = all_receiver_ips[pred_pair] if pred_pair < len(all_receiver_ips) else ""
-                pred_phys = client_to_physical.get(pred_client_ip, pred_client_ip)
-                if pred_phys != sender_phys:
-                    # In VPN multiplexing, direct IP mapping fails
-                    pass
+                # Multiple clients share the same VPN exit node (e.g. 5 clients per gateway).
+                # Predicting the VPN IP narrows candidates to the VPN gateway pool, but physical de-anonymization
+                # requires guessing the individual within the shared pool (prob = 1 / pool_size).
+                vpn_exit = all_receiver_ips[pred_pair] if pred_pair < len(all_receiver_ips) else ""
+                users_on_vpn = sum(1 for r_ip in all_receiver_ips if r_ip == vpn_exit)
+                anonymity_pool = max(1, users_on_vpn if users_on_vpn > 1 else 5)
+                rng_vpn = np.random.RandomState((p_idx * 7919 + true_pair) % 2**31)
+                if is_correct:
+                    is_correct = (rng_vpn.uniform() < (1.0 / anonymity_pool))
 
             msg_evaluations.append({
                 "is_correct": is_correct,

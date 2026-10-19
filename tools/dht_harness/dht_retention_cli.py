@@ -427,7 +427,7 @@ async def run_publish(args):
         initial_telemetry.append({
             "measurement_id": i + 1,
             "timestamp_epoch_ms": now_ms,
-            "data_source": "MEASURED",
+            "data_source": "SIMULATED" if is_mock else "MEASURED",
             "network_environment": "MOCK_CLUSTER" if is_mock else "LIVE_DHT",
             "operation": "INITIAL_PUT",
             "rtt_put_ms": rtt_ms,
@@ -561,7 +561,7 @@ async def run_retrieve(args):
         telemetry_rows.append({
             "measurement_id": i + 1,
             "timestamp_epoch_ms": now_ms,
-            "data_source": "MEASURED",
+            "data_source": "SIMULATED" if is_mock else "MEASURED",
             "network_environment": "MOCK_CLUSTER" if is_mock else "LIVE_DHT",
             "operation": "RETENTION_PROBE",
             "rtt_put_ms": rtt_put_ms,

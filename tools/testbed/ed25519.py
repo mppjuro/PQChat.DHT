@@ -84,8 +84,13 @@ _KEYPAIR_CACHE = {}
 _VERIFY_CACHE = {}
 _MAX_CACHE_SIZE = 50000
 
-# Fast mode enables ultra-high throughput deterministic 64-byte signature simulation for large Monte Carlo runs
-FAST_MODE = True
+# Fast mode is disabled by default to ensure RFC 8032 Ed25519 cryptographic authenticity.
+# When enabled, operations are simulated and any resulting telemetry MUST be labeled as SIMULATED.
+FAST_MODE = False
+
+
+def is_fast_mode() -> bool:
+    return FAST_MODE
 
 
 def generate_keypair(seed: bytes) -> Tuple[bytes, bytes]:

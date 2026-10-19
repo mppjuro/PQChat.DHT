@@ -356,7 +356,8 @@ class LoopbackMeasurementHarness(
             for (republish in listOf(false, true)) {
                 var surviving = 0
                 val rtts = mutableListOf<Double>()
-                val dataSource = if (dhtClient != null) DataSource.MEASURED else DataSource.SIMULATED
+                // Multi-hour retention (1h–24h) cannot be reported as MEASURED unless delayProvider actually waited or real time elapsed
+                val dataSource = if (dhtClient != null && (hours <= 5.0 / 60.0 || delayProvider != null)) DataSource.MEASURED else DataSource.SIMULATED
 
                 for (i in 0 until sampleSizePerHorizon) {
                     val survived: Boolean

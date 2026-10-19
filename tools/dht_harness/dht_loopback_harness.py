@@ -284,14 +284,12 @@ def export_csv(records: List[TelemetryRecord], file_path: str):
             ])
 
 
-def load_or_generate_measured_records(
-    measured_csv_path: str,
-    trials_per_env: int = 500
+def load_measured_records(
+    measured_csv_path: str
 ) -> List[TelemetryRecord]:
     """
-    Loads empirical records from docs/metrics_dht_loopback_measured.csv,
-    or generates minimum 500 trials per profile based on calibrated empirical distributions
-    from real BitTorrent Mainline DHT measurements.
+    Loads empirical records strictly from docs/metrics_dht_loopback_measured.csv.
+    Does not synthetically generate or fabricate records. Missing file or empty data returns an empty list.
     """
     records: List[TelemetryRecord] = []
     if os.path.exists(measured_csv_path) and os.path.getsize(measured_csv_path) > 100:
@@ -316,99 +314,19 @@ def load_or_generate_measured_records(
                         nodes_responded=int(row["nodes_responded"]),
                         error_code=row.get("error_code", "NONE")
                     ))
-        counts = {k: sum(1 for r in records if r.network_environment == k) for k in PROFILES.keys()}
-        if all(c >= trials_per_env for c in counts.values()):
+        if records:
             print(f"[Measured Data] Loaded {len(records)} existing MEASURED records from {measured_csv_path}")
             return records
 
-    print(f"[Measured Data] Generating {trials_per_env} MEASURED iterations per profile grounded in real DHT parameters...")
-    records = []
-    measurement_id = 1
-    t_base = int(time.time() * 1000) - (trials_per_env * 3 * 200)
-
-    # Empirical parameters measured on live BitTorrent Mainline DHT:
-    empirical_params = {
-        "WIFI": {
-            "success_rate": 0.744,
-            "put_median": 1232.0, "put_sigma": 120.0,
-            "get_median": 6120.0, "get_sigma": 380.0,
-            "retrans_prob": 0.012
-        },
-        "LTE": {
-            "success_rate": 0.752,
-            "put_median": 492.0, "put_sigma": 95.0,
-            "get_median": 5330.0, "get_sigma": 490.0,
-            "retrans_prob": 0.024
-        },
-        "RESTRICTIVE_NAT": {
-            "success_rate": 0.732,
-            "put_median": 472.0, "put_sigma": 85.0,
-            "get_median": 6000.0, "get_sigma": 550.0,
-            "retrans_prob": 0.260
-        }
-    }
-
-    random.seed(42)
-    np.random.seed(42)
-
-    for env_key in ["WIFI", "LTE", "RESTRICTIVE_NAT"]:
-        params = empirical_params[env_key]
-        for i in range(trials_per_env):
-            is_success = (random.random() < params["success_rate"])
-            is_worst_tail = (random.random() < 0.01)
-
-            if is_worst_tail:
-                put_rtt = params["put_median"] + random.uniform(2500.0, 3200.0)
-            else:
-                put_rtt = max(200.0, random.gauss(params["put_median"], params["put_sigma"]))
-
-            retrans = 1 if (random.random() < params["retrans_prob"]) else 0
-            if env_key == "RESTRICTIVE_NAT" and random.random() < 0.05:
-                retrans = 2
-
-            if is_success:
-                if is_worst_tail:
-                    get_rtt = params["get_median"] + random.uniform(800.0, 1800.0)
-                else:
-                    get_rtt = max(1000.0, random.gauss(params["get_median"], params["get_sigma"]))
-                total_rtt = put_rtt + get_rtt
-                err_code = "NONE"
-                nodes_r = random.randint(4, 8)
-            else:
-                get_rtt = 0.0
-                total_rtt = put_rtt
-                err_code = random.choice(["GET_TIMEOUT", "GET_VERIFICATION_FAILED"]) if random.random() < 0.8 else "PUT_FAILED"
-                nodes_r = 0
-
-            records.append(TelemetryRecord(
-                measurement_id=measurement_id,
-                timestamp_epoch_ms=t_base + measurement_id * 200,
-                data_source="MEASURED",
-                network_environment=env_key,
-                operation="LOOPBACK_PUT_GET",
-                rtt_put_ms=round(put_rtt, 2),
-                rtt_get_ms=round(get_rtt, 2),
-                rtt_total_ms=round(total_rtt, 2),
-                delivery_success=is_success,
-                retransmissions=retrans,
-                retention_hours=0.0,
-                republish_enabled=False,
-                nodes_queried=16,
-                nodes_responded=nodes_r,
-                error_code=err_code
-            ))
-            measurement_id += 1
-
-    export_csv(records, measured_csv_path)
-    print(f"[Measured Data] Saved {len(records)} MEASURED records to: {measured_csv_path}")
-    return records
+    print(f"[Measured Data] No valid MEASURED records found in {measured_csv_path}. Returning empty list.")
+    return []
 
 
 def compute_env_stats(records_env: List[TelemetryRecord], profile: NetworkProfile, data_source: str) -> Dict:
     successful = [r for r in records_env if r.delivery_success]
     success_rate = (len(successful) / len(records_env)) * 100.0 if records_env else 0.0
 
-    put_rtts = [r.rtt_put_ms for r in records_env]
+    put_rtts = [r.rtt_put_ms for r in records_env] if records_env else [0.0]
     get_rtts = [r.rtt_get_ms for r in successful] if successful else [0.0]
     tot_rtts = [r.rtt_total_ms for r in successful] if successful else [0.0]
     avg_retrans = np.mean([r.retransmissions for r in records_env]) if records_env else 0.0
@@ -465,20 +383,23 @@ def run_full_harness():
               f"RTT Total: p50={stats['tot_p50']:5.1f}ms, p90={stats['tot_p90']:5.1f}ms, p99={stats['tot_p99']:5.1f}ms | "
               f"Retrans: {stats['avg_retrans']:4.2f}")
 
-    # 2. MEASURED Phase: Load or generate 500 iterations per profile
-    print(f"\n[Phase 2] Loading / Preparing MEASURED empirical telemetry (N=500 per profile)...")
-    meas_records = load_or_generate_measured_records(docs_meas_csv, trials_per_env=500)
-    # Also save copy in tools_meas_csv
-    export_csv(meas_records, tools_meas_csv)
+    # 2. MEASURED Phase: Read exclusively from real measurements CSV
+    print(f"\n[Phase 2] Loading MEASURED empirical telemetry from {docs_meas_csv}...")
+    meas_records = load_measured_records(docs_meas_csv)
+    if meas_records:
+        export_csv(meas_records, tools_meas_csv)
 
     meas_results: Dict[str, Dict] = {}
     for env_key, profile in PROFILES.items():
         records_env = [r for r in meas_records if r.network_environment == env_key]
-        stats = compute_env_stats(records_env, profile, "MEASURED")
-        meas_results[env_key] = stats
-        print(f" -> [MEASURED]  {profile.display_name:22s} | Success: {stats['success_rate']:5.1f}% | "
-              f"RTT Total: p50={stats['tot_p50']:5.1f}ms, p90={stats['tot_p90']:5.1f}ms, p99={stats['tot_p99']:5.1f}ms | "
-              f"Retrans: {stats['avg_retrans']:4.2f}")
+        if records_env:
+            stats = compute_env_stats(records_env, profile, "MEASURED")
+            meas_results[env_key] = stats
+            print(f" -> [MEASURED]  {profile.display_name:22s} | Success: {stats['success_rate']:5.1f}% | "
+                  f"RTT Total: p50={stats['tot_p50']:5.1f}ms, p90={stats['tot_p90']:5.1f}ms, p99={stats['tot_p99']:5.1f}ms | "
+                  f"Retrans: {stats['avg_retrans']:4.2f}")
+        else:
+            print(f" -> [MEASURED]  {profile.display_name:22s} | Brak danych (MEASURED pending)")
 
     # 3. Print Side-by-Side Comparison
     print("\n" + "=" * 86)
@@ -615,20 +536,49 @@ def run_full_harness():
     sim_no_rep = [r["survival_rate"] for r in retention_results if not r["republish"]]
     sim_with_rep = [r["survival_rate"] for r in retention_results if r["republish"]]
 
-    # Empirical measured retention values from BitTorrent Mainline DHT tests:
-    # 5m: 98.7% (with rep) / 98.0% (without rep)
-    # 1h: 97.0% (with rep) / 89.0% (without rep)
-    # 2h: 95.0% (with rep) / 64.0% (without rep)
-    # 6h: 92.0% (with rep) / 2.0% (without rep)
-    # 12h: 88.0% (with rep) / 0.0% (without rep)
-    # 24h: 83.0% (with rep) / 0.0% (without rep)
-    meas_with_rep = [98.7, 97.0, 95.0, 92.0, 88.0, 83.0]
-    meas_no_rep = [98.0, 89.0, 64.0, 2.0, 0.0, 0.0]
+    # Read retention strictly from docs/metrics_dht_retention_measured.csv
+    docs_retention_csv = os.path.abspath(os.path.join(base_dir, "..", "..", "docs", "metrics_dht_retention_measured.csv"))
+    meas_retention_points: Dict[Tuple[float, bool], List[float]] = {}
+    if os.path.exists(docs_retention_csv):
+        with open(docs_retention_csv, mode="r", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                if row.get("data_source") == "MEASURED" and row.get("network_environment") != "MOCK_CLUSTER":
+                    h = float(row.get("retention_hours", 0.0))
+                    repub = (row.get("republish_enabled", "").strip().lower() == "true")
+                    succ = (row.get("delivery_success", "").strip().lower() == "true")
+                    meas_retention_points.setdefault((round(h, 2), repub), []).append(1.0 if succ else 0.0)
 
-    ax_ret.plot(h_vals, meas_with_rep, marker='s', markersize=7, linewidth=2.8, color='#1565c0', label='With Active Republish (~1.5h refresh) [MEASURED]')
-    ax_ret.plot(h_vals, sim_with_rep, marker='s', markersize=6, linewidth=2.0, linestyle='--', color='#00acc1', label='With Active Republish (~1.5h refresh) [SIMULATED]')
-    ax_ret.plot(h_vals, meas_no_rep, marker='o', markersize=7, linewidth=2.8, color='#c62828', label='Without Republish (Single Put) [MEASURED]')
-    ax_ret.plot(h_vals, sim_no_rep, marker='o', markersize=6, linewidth=2.0, linestyle='--', color='#f57c00', label='Without Republish (Single Put) [SIMULATED]')
+    # Plot SIMULATED reference curves
+    ax_ret.plot(h_vals, sim_with_rep, marker='s', markersize=6, linewidth=2.0, linestyle='--', color='#00acc1', label='Z odświeżaniem (~1.5h refresh) [SIMULATED]')
+    ax_ret.plot(h_vals, sim_no_rep, marker='o', markersize=6, linewidth=2.0, linestyle='--', color='#f57c00', label='Bez odświeżania (Single Put) [SIMULATED]')
+
+    if meas_retention_points:
+        meas_h_rep = []
+        meas_rate_rep = []
+        meas_h_norep = []
+        meas_rate_norep = []
+        for (h, repub), vals in sorted(meas_retention_points.items()):
+            rate = float(np.mean(vals)) * 100.0
+            if repub:
+                meas_h_rep.append(h)
+                meas_rate_rep.append(rate)
+            else:
+                meas_h_norep.append(h)
+                meas_rate_norep.append(rate)
+        if meas_h_rep:
+            ax_ret.plot(meas_h_rep, meas_rate_rep, marker='s', markersize=7, linewidth=2.8, color='#1565c0', label='Z odświeżaniem [MEASURED]')
+        if meas_h_norep:
+            ax_ret.plot(meas_h_norep, meas_rate_norep, marker='o', markersize=7, linewidth=2.8, color='#c62828', label='Bez odświeżania [MEASURED]')
+    else:
+        # Pusty panel z adnotacją dla brakujących pomiarów rzeczywistych
+        ax_ret.text(
+            0.5, 0.5,
+            "Brak zmierzonych danych retencji (MEASURED)\nOczekiwanie na rzeczywiste pomiary publicznego DHT (1–24h)\n(.github/workflows/dht_retention_24h.yml)",
+            ha='center', va='center', transform=ax_ret.transAxes,
+            fontsize=9.5, fontweight='bold', color='#b71c1c',
+            bbox=dict(boxstyle='round,pad=0.8', facecolor='#ffebee', edgecolor='#c62828', alpha=0.92)
+        )
 
     ax_ret.set_xticks(h_vals)
     tick_labels = ["5m" if h < 1.0 else f"{int(h)}h" for h in h_vals]
@@ -649,9 +599,10 @@ def run_full_harness():
 
     # Plot MEASURED CDF curves (solid lines)
     for env_key in env_keys:
-        sorted_m = np.sort(meas_results[env_key]["tot_rtts"])
-        yvals_m = np.arange(len(sorted_m)) / float(len(sorted_m) - 1)
-        ax_cdf.plot(sorted_m, yvals_m * 100, linewidth=2.6, color=meas_colors[env_key], label=f'{PROFILES[env_key].display_name} [MEASURED]')
+        if env_key in meas_results and len(meas_results[env_key]["tot_rtts"]) > 0:
+            sorted_m = np.sort(meas_results[env_key]["tot_rtts"])
+            yvals_m = np.arange(len(sorted_m)) / float(len(sorted_m) - 1)
+            ax_cdf.plot(sorted_m, yvals_m * 100, linewidth=2.6, color=meas_colors[env_key], label=f'{PROFILES[env_key].display_name} [MEASURED]')
 
     # Plot SIMULATED CDF curves (dashed lines)
     for env_key in env_keys:
