@@ -32,7 +32,8 @@ class PoissonTrafficGenerator(
         } catch (_: Throwable) {
             null
         }
-    }
+    },
+    private val random: java.util.Random = CryptoUtils.secureRandom
 ) {
     data class CoverEvent(
         val timestamp: Long,
@@ -58,7 +59,7 @@ class PoissonTrafficGenerator(
      * Compute next Poisson interval delta_t in milliseconds.
      */
     fun computeNextIntervalMs(currentLambda: Double = lambda): Long {
-        val u = CryptoUtils.secureRandom.nextDouble().coerceIn(1e-10, 1.0 - 1e-10)
+        val u = random.nextDouble().coerceIn(1e-10, 1.0 - 1e-10)
         val deltaSeconds = -(1.0 / currentLambda) * ln(u)
         return (deltaSeconds * 1000.0).toLong().coerceAtLeast(1000L)
     }

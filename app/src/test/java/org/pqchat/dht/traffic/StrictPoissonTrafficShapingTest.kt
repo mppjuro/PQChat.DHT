@@ -289,7 +289,8 @@ class StrictPoissonTrafficShapingTest {
             lambda = lambda,
             pendingAckQueue = ackQueue,
             blindRepublishPool = repo.blindRepublishPool,
-            outboundPoissonQueue = outboundQueue
+            outboundPoissonQueue = outboundQueue,
+            random = java.util.Random(101L)
         )
 
         val contactId = "bob"
@@ -373,7 +374,8 @@ class StrictPoissonTrafficShapingTest {
             lambda = lambda,
             pendingAckQueue = ackQueue,
             blindRepublishPool = repo.blindRepublishPool,
-            outboundPoissonQueue = outboundQueue
+            outboundPoissonQueue = outboundQueue,
+            random = java.util.Random(202L)
         )
 
         // Setup 4 contacts for a 5-person group (Self + 4 contacts)
@@ -458,7 +460,8 @@ class StrictPoissonTrafficShapingTest {
             lambda = lambda,
             pendingAckQueue = ackQueue,
             blindRepublishPool = repo.blindRepublishPool,
-            outboundPoissonQueue = outboundQueue
+            outboundPoissonQueue = outboundQueue,
+            random = java.util.Random(303L)
         )
 
         // Setup 4 contacts and group
@@ -546,7 +549,8 @@ class StrictPoissonTrafficShapingTest {
             lambda = lambda,
             pendingAckQueue = ackQueue,
             blindRepublishPool = repo.blindRepublishPool,
-            outboundPoissonQueue = outboundQueue
+            outboundPoissonQueue = outboundQueue,
+            random = java.util.Random(404L)
         )
 
         val contacts = listOf("bob", "charlie", "dave", "eve")

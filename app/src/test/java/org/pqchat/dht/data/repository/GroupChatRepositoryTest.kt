@@ -630,7 +630,8 @@ class GroupChatRepositoryTest {
                 lambda = lambda,
                 pendingAckQueue = ackQueue,
                 blindRepublishPool = repo.blindRepublishPool,
-                outboundPoissonQueue = outboundQueue
+                outboundPoissonQueue = outboundQueue,
+                random = java.util.Random(505L)
             )
 
             val contacts = listOf("bob", "charlie", "dave", "eve")
