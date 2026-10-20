@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`0e57077`](https://github.com/mppjuro/PQChat.DHT/commit/0e57077cd6a8e015716c85cbb9c27673125f703f) (2026-10-20) — **traffic**: Constant-Size Decoy-Padded Poll Batch eliminating chat screen correlation and traffic pairing
 - [`2103513`](https://github.com/mppjuro/PQChat.DHT/commit/21035136caed2ffd5f5ddbd45cbb88919fcd10f0) (2026-10-20) — **traffic**: enforce strict Poisson traffic shaping and eliminate group correlation vulnerability
 - [`b0640c2`](https://github.com/mppjuro/PQChat.DHT/commit/b0640c2dc02ecaeea2e6db8b913c99aa76426aa8) (2026-10-19) — **group-chat**: implement decentralized Post-Quantum Sender Keys over BEP 44
 - [`b2e150e`](https://github.com/mppjuro/PQChat.DHT/commit/b2e150ed2b7ea5878bd78c0e6c088aa2600599af) (2026-10-19) — **research**: rozbudowa modułu badawczego i telemetrii pod kątem pracy magisterskiej
@@ -142,6 +143,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`1a9e658`](https://github.com/mppjuro/PQChat.DHT/commit/1a9e6588ddee237d4f89ffc94cdcb2fcda7f06be) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`2cabcb1`](https://github.com/mppjuro/PQChat.DHT/commit/2cabcb14c17e38b6d58f26d6f34b22f9d56807d1) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c9d864b`](https://github.com/mppjuro/PQChat.DHT/commit/c9d864b5eac0926f938748a51518d9ca04616667) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c007000`](https://github.com/mppjuro/PQChat.DHT/commit/c007000818a18cdec1adf141f0d456ca1b756950) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
