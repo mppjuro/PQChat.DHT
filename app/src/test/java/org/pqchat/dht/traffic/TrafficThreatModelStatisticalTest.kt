@@ -12,6 +12,8 @@ import org.pqchat.dht.data.db.*
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.dht.FakeDht
 import org.pqchat.dht.dht.leaf.DhtClient
+import org.pqchat.dht.dht.leaf.DhtLeafNode
+import org.pqchat.dht.protocol.RatchetChain
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -494,6 +496,260 @@ class TrafficThreatModelStatisticalTest {
         assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, dummyEvent.payloadSize)
     }
 
+    @Test
+    fun testConstantSizeDecoyPaddedPollBatch_IndistinguishableFromDecoyNoise() = runBlocking {
+        class TrackingFakeDht(val delegate: FakeDht = FakeDht()) : DhtClient by delegate {
+            val queriedTargetsInOrder = mutableListOf<ByteArray>()
+            val cycleCounts = mutableListOf<Int>()
+            private var currentCount = 0
+
+            fun startCycle() {
+                currentCount = 0
+            }
+
+            fun endCycle() {
+                cycleCounts.add(currentCount)
+            }
+
+            override suspend fun getMutable(
+                target: ByteArray,
+                salt: ByteArray?,
+                skipLocalStore: Boolean,
+                timeoutMs: Long,
+                probeAllReplicas: Boolean
+            ): DhtLeafNode.MutableItem? {
+                queriedTargetsInOrder.add(target.copyOf())
+                currentCount++
+                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas)
+            }
+        }
+
+        val contactDao = FakeContactDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val fakeDht = TrackingFakeDht()
+        val decoyPool = DecoyTargetPool()
+
+        // Pre-populate DecoyTargetPool with 25 realistic populated targets
+        val populatedDecoyTargets = (1..25).map { CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)) }
+        decoyPool.registerPopulatedTargets(populatedDecoyTargets)
+
+        val repository = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = PendingAckQueue(),
+            decoyTargetPool = decoyPool,
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao
+        )
+
+        // Setup contacts
+        val aliceChainKeyIn = CryptoUtils.secureRandomBytes(64)
+        val alice = ContactEntity(
+            id = "alice",
+            name = "Alice",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            chainKeyIn = aliceChainKeyIn,
+            counterIn = 0
+        )
+        contactDao.insertOrUpdate(alice)
+
+        val bob = ContactEntity(
+            id = "bob",
+            name = "Bob",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            chainKeyIn = CryptoUtils.secureRandomBytes(64),
+            counterIn = 0
+        )
+        contactDao.insertOrUpdate(bob)
+
+        // Setup a group with Alice, Bob, and Self
+        val groupId = "group-1"
+        val myMemberId = "self-member-id"
+        groupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "Alpha Squad",
+                myMemberId = myMemberId,
+                myCounterOut = 0,
+                myChainKeyOut = EncryptedBlob(CryptoUtils.secureRandomBytes(64), "groups", groupId)
+            )
+        )
+        groupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = "alice-member",
+                memberName = "Alice Group",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+        groupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = "bob-member",
+                memberName = "Bob Group",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+
+        val expectedBatchSize = ChatRepository.N_POLL_TARGETS
+        assertEquals("Default N_POLL_TARGETS must be 8", 8, expectedBatchSize)
+
+        // -----------------------------------------------------------------------------------------
+        // 1. STATISTICAL PROPERTY 1: Invariant Batch Size across All Polling Modes
+        // -----------------------------------------------------------------------------------------
+        // Test states:
+        // A) FOREGROUND_CHAT with Alice (1 contact, 7 decoys)
+        // B) FOREGROUND_CHAT with Group (2 other members, 6 decoys)
+        // C) APP_ACTIVE_OTHER / Contact List (2 contacts, 2 group members, 4 decoys)
+
+        val testScenarios: List<Pair<String, suspend () -> Boolean>> = listOf(
+            "FOREGROUND_CHAT_ALICE" to { repository.pollConstantBatch(focusContactId = "alice", batchSize = expectedBatchSize, intraBatchJitterMinMs = 0L, intraBatchJitterMaxMs = 0L) },
+            "FOREGROUND_CHAT_GROUP" to { repository.pollConstantBatch(focusContactId = groupId, batchSize = expectedBatchSize, intraBatchJitterMinMs = 0L, intraBatchJitterMaxMs = 0L) },
+            "APP_ACTIVE_GENERAL" to { repository.pollConstantBatch(focusContactId = null, batchSize = expectedBatchSize, intraBatchJitterMinMs = 0L, intraBatchJitterMaxMs = 0L) }
+        )
+
+        for ((scenarioName, pollAction) in testScenarios) {
+            for (cycle in 1..25) {
+                fakeDht.startCycle()
+                pollAction()
+                fakeDht.endCycle()
+                val countInCycle = fakeDht.cycleCounts.last()
+                assertEquals(
+                    "[$scenarioName cycle #$cycle] Every poll cycle must strictly generate exactly $expectedBatchSize GET queries",
+                    expectedBatchSize,
+                    countInCycle
+                )
+            }
+        }
+
+        // Test D: Idle / No Contacts (0 real targets, 8 decoys)
+        val idleContactDao = FakeContactDao()
+        val idleRepo = ChatRepository(
+            contactDao = idleContactDao,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            decoyTargetPool = decoyPool
+        )
+        for (cycle in 1..25) {
+            fakeDht.startCycle()
+            idleRepo.pollConstantBatch(focusContactId = null, batchSize = expectedBatchSize, intraBatchJitterMinMs = 0L, intraBatchJitterMaxMs = 0L)
+            fakeDht.endCycle()
+            val countInCycle = fakeDht.cycleCounts.last()
+            assertEquals(
+                "[IDLE_NO_CONTACTS cycle #$cycle] Must strictly generate exactly $expectedBatchSize GET queries even with 0 contacts",
+                expectedBatchSize,
+                countInCycle
+            )
+        }
+
+        // Variance of query count across all 100 cycles must be strictly 0.0
+        val allCounts = fakeDht.cycleCounts
+        assertEquals(100, allCounts.size)
+        assertTrue("All cycles must have exactly $expectedBatchSize queries", allCounts.all { it == expectedBatchSize })
+        val countMean = allCounts.average()
+        val countVariance = allCounts.map { (it - countMean) * (it - countMean) }.average()
+        assertEquals(0.0, countVariance, 1e-9)
+
+        // -----------------------------------------------------------------------------------------
+        // 2. STATISTICAL PROPERTY 2: Uniform Permutation of Real Target (Chi-Square Goodness-of-Fit)
+        // -----------------------------------------------------------------------------------------
+        // An eavesdropper observing the 8 queries must not be able to identify which slot is Alice's.
+        // The index of Alice's query in the batch {0, 1, ..., 7} must follow a Discrete Uniform distribution.
+        val aliceSlot = RatchetChain.deriveSlot(alice.chainKeyIn, 0)
+        val aliceTargetHex = CryptoUtils.toHex(aliceSlot.target)
+
+        val nPermutationCycles = 800
+        val positionCounts = IntArray(expectedBatchSize)
+
+        fakeDht.queriedTargetsInOrder.clear()
+        for (i in 0 until nPermutationCycles) {
+            fakeDht.startCycle()
+            repository.pollConstantBatch(focusContactId = "alice", batchSize = expectedBatchSize, intraBatchJitterMinMs = 0L, intraBatchJitterMaxMs = 0L)
+            fakeDht.endCycle()
+
+            val batchStartIndex = i * expectedBatchSize
+            val batchTargets = (0 until expectedBatchSize).map { offset ->
+                CryptoUtils.toHex(fakeDht.queriedTargetsInOrder[batchStartIndex + offset])
+            }
+
+            val aliceIndex = batchTargets.indexOf(aliceTargetHex)
+            assertTrue("Alice target must be present in every poll batch", aliceIndex in 0 until expectedBatchSize)
+            positionCounts[aliceIndex]++
+        }
+
+        // Expected frequency per position: E = 800 / 8 = 100
+        val expectedPerPos = nPermutationCycles.toDouble() / expectedBatchSize
+        var chiSquarePos = 0.0
+        for (observed in positionCounts) {
+            val diff = observed - expectedPerPos
+            chiSquarePos += (diff * diff) / expectedPerPos
+        }
+
+        // Critical value for Chi-Square with 7 degrees of freedom at alpha=0.01 is 18.48
+        assertTrue(
+            "Chi-Square test statistic ($chiSquarePos) for Alice position must not reject Discrete Uniform distribution (critical = 18.48)",
+            chiSquarePos < 18.48
+        )
+
+        // -----------------------------------------------------------------------------------------
+        // 3. STATISTICAL PROPERTY 3: Kolmogorov-Smirnov Test on Target Hashes (Active vs Decoy)
+        // -----------------------------------------------------------------------------------------
+        // A network observer comparing SHA-1 target bytes during conversation ratchet steps vs decoy targets
+        // must not find any statistical deviation in the 160-bit target distribution.
+        val nTestSlots = 100
+        val realChainKey = CryptoUtils.secureRandomBytes(64)
+        val realRatchetTargets = (0 until nTestSlots).map { step ->
+            RatchetChain.deriveSlot(realChainKey, step).target
+        }
+        val realByteValues = DoubleArray(realRatchetTargets.size * 20) { idx ->
+            (realRatchetTargets[idx / 20][idx % 20].toInt() and 0xFF) / 255.0
+        }
+
+        val decoyTargets = (0 until nTestSlots).map {
+            CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32))
+        }
+        val decoyByteValues = DoubleArray(decoyTargets.size * 20) { idx ->
+            (decoyTargets[idx / 20][idx % 20].toInt() and 0xFF) / 255.0
+        }
+
+        val ksStat = computeTwoSampleKsStatistic(realByteValues, decoyByteValues)
+        val ksCritical = 1.36 * sqrt((realByteValues.size + decoyByteValues.size).toDouble() / (realByteValues.size.toDouble() * decoyByteValues.size))
+        assertTrue(
+            "Two-sample KS statistic ($ksStat) must be < critical ($ksCritical), proving target hashes are indistinguishable from decoy noise",
+            ksStat < ksCritical
+        )
+
+        // -----------------------------------------------------------------------------------------
+        // 4. STATISTICAL PROPERTY 4: Intra-Batch Timing Jitter Verification
+        // -----------------------------------------------------------------------------------------
+        val jitterMinMs = 15L
+        val jitterMaxMs = 40L
+        val t0 = System.currentTimeMillis()
+        repository.pollConstantBatch(
+            focusContactId = "alice",
+            batchSize = expectedBatchSize,
+            intraBatchJitterMinMs = jitterMinMs,
+            intraBatchJitterMaxMs = jitterMaxMs
+        )
+        val elapsed = System.currentTimeMillis() - t0
+        // (8 - 1) = 7 jitter intervals of at least 15ms -> expected >= 7 * 15 = 105ms
+        assertTrue("Elapsed time ($elapsed ms) must exhibit intra-batch jitter (>= 100 ms)", elapsed >= 100L)
+    }
+
     private fun computeTwoSampleKsStatistic(sample1: DoubleArray, sample2: DoubleArray): Double {
         val n1 = sample1.size
         val n2 = sample2.size
@@ -633,4 +889,77 @@ class TrafficThreatModelStatisticalTest {
     private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
 
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
+
+    private class FakeGroupDao : GroupDao {
+        val groups = mutableMapOf<String, GroupEntity>()
+        val flow = MutableStateFlow<List<GroupEntity>>(emptyList())
+
+        override fun getAllGroupsFlow(): Flow<List<GroupEntity>> = flow
+        override suspend fun getAllActiveGroups(): List<GroupEntity> = groups.values.filter { it.isActive }
+        override suspend fun getGroupById(groupId: String): GroupEntity? = groups[groupId]
+        override suspend fun insertOrUpdate(group: GroupEntity) {
+            groups[group.groupId] = group
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateOutgoingState(groupId: String, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, lastActive = lastActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateRekeyedState(groupId: String, epoch: Long, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, groupEpoch = epoch, lastActive = lastActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateActiveStatus(groupId: String, isActive: Boolean) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(isActive = isActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun deleteGroup(groupId: String) {
+            groups.remove(groupId)
+            flow.value = groups.values.toList()
+        }
+    }
+
+    private class FakeGroupMemberDao : GroupMemberDao {
+        val members = mutableMapOf<String, MutableMap<String, GroupMemberEntity>>()
+        val flows = mutableMapOf<String, MutableStateFlow<List<GroupMemberEntity>>>()
+
+        private fun getFlow(groupId: String): MutableStateFlow<List<GroupMemberEntity>> {
+            return flows.getOrPut(groupId) {
+                MutableStateFlow(members[groupId]?.values?.filter { it.isActive } ?: emptyList())
+            }
+        }
+
+        override fun getMembersForGroupFlow(groupId: String): Flow<List<GroupMemberEntity>> = getFlow(groupId)
+        override suspend fun getMembersForGroup(groupId: String): List<GroupMemberEntity> = members[groupId]?.values?.filter { it.isActive } ?: emptyList()
+        override suspend fun getMember(groupId: String, memberId: String): GroupMemberEntity? = members[groupId]?.get(memberId)
+        override suspend fun insertOrUpdate(member: GroupMemberEntity) {
+            val groupMap = members.getOrPut(member.groupId) { mutableMapOf() }
+            groupMap[member.memberId] = member
+            getFlow(member.groupId).value = groupMap.values.filter { it.isActive }
+        }
+        override suspend fun insertOrUpdateAll(members: List<GroupMemberEntity>) {
+            for (m in members) {
+                insertOrUpdate(m)
+            }
+        }
+        override suspend fun updateMemberIncomingStateWithBitmap(groupId: String, memberId: String, counterIn: Int, chainKeyIn: EncryptedBlob, bitmapBase: Int, bitmap: ByteArray) {
+            val m = members[groupId]?.get(memberId) ?: return
+            insertOrUpdate(m.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap))
+        }
+        override suspend fun markMemberInactive(groupId: String, memberId: String) {
+            val m = members[groupId]?.get(memberId) ?: return
+            insertOrUpdate(m.copy(isActive = false))
+        }
+        override suspend fun deleteMember(groupId: String, memberId: String) {
+            members[groupId]?.remove(memberId)
+            getFlow(groupId).value = members[groupId]?.values?.filter { it.isActive } ?: emptyList()
+        }
+        override suspend fun deleteMembersForGroup(groupId: String) {
+            members.remove(groupId)
+            getFlow(groupId).value = emptyList()
+        }
+    }
 }

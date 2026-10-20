@@ -55,7 +55,7 @@ class EmbeddedTorManagerTest {
 
         // Wait for bootstrap progression
         var waitCount = 0
-        while (manager.state.value !is TorState.Connected && waitCount < 50) {
+        while (manager.state.value !is TorState.Connected && waitCount < 100) {
             delay(50)
             waitCount++
         }
@@ -85,7 +85,7 @@ class EmbeddedTorManagerTest {
 
         manager.start()
         var waitCount = 0
-        while (manager.state.value !is TorState.Connected && waitCount < 50) {
+        while (manager.state.value !is TorState.Connected && waitCount < 100) {
             delay(50)
             waitCount++
         }

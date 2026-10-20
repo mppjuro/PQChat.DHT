@@ -306,10 +306,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _selectedContactId.value = contactId
         pollingManager.onChatOpened(contactId)
         viewModelScope.launch {
-            val group = repository.getGroup(contactId)
-            if (group != null) {
-                repository.pollGroupIncoming(contactId)
-            }
+            repository.pollConstantBatch(contactId)
         }
     }
 

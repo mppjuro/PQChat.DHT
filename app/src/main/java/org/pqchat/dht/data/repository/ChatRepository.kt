@@ -120,6 +120,19 @@ class ChatRepository(
     @Volatile
     var decoyPutSlotsCount: Int = 1
 
+    /**
+     * Constant budget of GET queries executed in each polling batch (docs/threat_model.md).
+     * Padded with DecoyTargetPool queries to guarantee constant size and target anonymity.
+     */
+    @Volatile
+    var pollBatchSize: Int = N_POLL_TARGETS
+
+    @Volatile
+    var intraBatchJitterMinMs: Long = 20L
+
+    @Volatile
+    var intraBatchJitterMaxMs: Long = 80L
+
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
     private val _rekeyInProgressContacts = MutableStateFlow<Set<String>>(emptySet())
@@ -369,6 +382,8 @@ class ChatRepository(
     }
 
     companion object {
+        const val N_POLL_TARGETS = 8
+        const val DEFAULT_POLL_BATCH_SIZE = N_POLL_TARGETS
         const val SELF_CONTACT_ID = "self_notes_loopback"
         const val MAX_SKIPPED_KEYS_PER_CONTACT = 100
 
@@ -2280,6 +2295,384 @@ class ChatRepository(
         val nextSlot = RatchetChain.deriveSlot(chainKeyIn, counterIn)
         val chunk0Target = ChunkingEngine.deriveChunkTarget(nextSlot.edPrivateKeySeed, 0)
         dhtLeafNode.preWarmTargetAsync(chunk0Target)
+    }
+
+    private sealed interface PollTask {
+        val target: ByteArray
+        val isSelf: Boolean
+        val seqNum: Long
+        suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean
+    }
+
+    private inner class DecoyPollTask(
+        override val target: ByteArray
+    ) : PollTask {
+        override val isSelf: Boolean = true
+        override val seqNum: Long = 0L
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item != null) {
+                harvestUndecryptableItem(target, item)
+            }
+            return false
+        }
+    }
+
+    private inner class ContactSlotPollTask(
+        override val target: ByteArray,
+        val contactId: String,
+        val slot: RatchetChain.SlotParameters,
+        override val isSelf: Boolean,
+        override val seqNum: Long
+    ) : PollTask {
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item == null) return false
+            return getContactMutex(contactId).withLock {
+                val processed = processIncomingItem(contactId, slot, item, isSelf)
+                if (!processed) {
+                    harvestUndecryptableItem(slot.target, item)
+                    false
+                } else {
+                    drainOutboxInternal(contactId, force = true)
+                    triggerLookaheadWindowAsync(contactId)
+                    true
+                }
+            }
+        }
+    }
+
+    private inner class SkippedKeyPollTask(
+        override val target: ByteArray,
+        val contactId: String,
+        val skippedKey: SkippedKeyEntity,
+        override val isSelf: Boolean,
+        override val seqNum: Long
+    ) : PollTask {
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item == null) return false
+            return getContactMutex(contactId).withLock {
+                try {
+                    val contact = contactDao.getContactById(contactId) ?: return@withLock false
+                    val frameMsg = BinaryFrameCodec.unpackAeadFrame(
+                        key = skippedKey.rawMsgKey,
+                        frame = item.v,
+                        target = skippedKey.target,
+                        direction = contact.inboundDirection
+                    )
+                    val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
+                    when (frameMsg.msgType) {
+                        BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
+                            val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                            val seqEpoch = skippedKey.slotIndex / 65536
+                            if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, skippedKey.slotIndex, false)) {
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = contactId,
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = skippedKey.slotIndex,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = textPayload.text,
+                                        status = "DELIVERED"
+                                    )
+                                )
+                                onIncomingMessageDelivered?.invoke(contactId, textPayload.text, false)
+                            }
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            true
+                        }
+                        else -> {
+                            harvestUndecryptableItem(skippedKey.target, item)
+                            false
+                        }
+                    }
+                } catch (_: Exception) {
+                    harvestUndecryptableItem(skippedKey.target, item)
+                    false
+                }
+            }
+        }
+    }
+
+    private inner class GroupMemberSlotPollTask(
+        override val target: ByteArray,
+        val groupId: String,
+        val member: GroupMemberEntity,
+        val slot: RatchetChain.SlotParameters,
+        val baseSlot: RatchetChain.SlotParameters,
+        val isIndividualSlot: Boolean,
+        val groupIdBytes: ByteArray,
+        val memberIdBytes: ByteArray,
+        override val seqNum: Long
+    ) : PollTask {
+        override val isSelf: Boolean = false
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item == null) return false
+            return getGroupMutex(groupId).withLock {
+                try {
+                    val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(
+                        key = slot.msgKey,
+                        frame = item.v,
+                        target = slot.target,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes
+                    )
+                    val bitmap = SlidingWindowBitmap(member.receivedBitmapBase, 1024, member.receivedBitmap)
+                    if (!bitmap.isReceived(slot.counter)) {
+                        bitmap.markReceived(slot.counter)
+                        if (frameMsg.msgType == BinaryFrameCodec.TYPE_TEXT_MESSAGE) {
+                            val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                            val seqEpoch = slot.counter / 65536
+                            if (!messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)) {
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = groupId,
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = slot.counter,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = textPayload.text,
+                                        status = "DELIVERED",
+                                        senderMemberId = member.memberId,
+                                        senderName = member.memberName
+                                    )
+                                )
+                                onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                            }
+                        }
+                    }
+
+                    groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                        groupId = groupId,
+                        memberId = member.memberId,
+                        counterIn = slot.counter + 1,
+                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${member.memberId}"),
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+
+                    if (isIndividualSlot) {
+                        try {
+                            dhtLeafNode.putMutable(
+                                target = slot.target,
+                                v = BinaryFrameCodec.createTombstonePayload(),
+                                seq = item.seq + 1,
+                                salt = null,
+                                sk = slot.edPrivateKeySeed,
+                                skipLocalStore = false
+                            )
+                        } catch (_: Exception) {}
+                    }
+                    true
+                } catch (_: Exception) {
+                    harvestUndecryptableItem(slot.target, item)
+                    false
+                }
+            }
+        }
+    }
+
+    /**
+     * Executes a Constant-Size Decoy-Padded Poll Batch:
+     * - Generates a constant budget of [batchSize] (default N_POLL_TARGETS = 8) getMutable queries.
+     * - Disguises focused contact/group queries within real/expiring decoy targets from [DecoyTargetPool].
+     * - Shuffles all targets in random permutation using CSPRNG.
+     * - Applies intra-batch jitter between queries to prevent network observer timing/frequency correlation.
+     */
+    suspend fun pollConstantBatch(
+        focusContactId: String? = null,
+        batchSize: Int = pollBatchSize,
+        intraBatchJitterMinMs: Long = this.intraBatchJitterMinMs,
+        intraBatchJitterMaxMs: Long = this.intraBatchJitterMaxMs
+    ): Boolean = withContext(Dispatchers.IO) {
+        // 1. Process any pending ACKs for focused contact (or globally)
+        checkPendingAcks(focusContactId)
+
+        // 2. Assemble candidate real tasks
+        val tasks = mutableListOf<PollTask>()
+
+        if (focusContactId != null) {
+            val group = groupDao?.getGroupById(focusContactId)
+            if (group != null) {
+                val members = groupMemberDao?.getMembersForGroup(focusContactId) ?: emptyList()
+                val groupIdBytes = uuidStringToBytes(focusContactId)
+                val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+                for (member in members) {
+                    if (member.memberId == group.myMemberId) continue
+                    if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
+                    val memberIdBytes = uuidStringToBytes(member.memberId)
+                    val baseSlot = RatchetChain.deriveSlot(member.rawChainKeyIn, member.counterIn)
+                    val individualSlot = RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = member.rawChainKeyIn,
+                        counter = member.counterIn,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes,
+                        recipientMemberId = myMemberIdBytes
+                    )
+                    tasks.add(
+                        GroupMemberSlotPollTask(
+                            target = individualSlot.target,
+                            groupId = focusContactId,
+                            member = member,
+                            slot = individualSlot,
+                            baseSlot = baseSlot,
+                            isIndividualSlot = true,
+                            groupIdBytes = groupIdBytes,
+                            memberIdBytes = memberIdBytes,
+                            seqNum = member.counterIn.toLong()
+                        )
+                    )
+                }
+            } else {
+                val contact = contactDao.getContactById(focusContactId)
+                if (contact != null) {
+                    val isSelf = contact.id == SELF_CONTACT_ID
+                    val skipped = skippedKeyDao?.getSkippedKeysForContact(contact.id) ?: emptyList()
+                    for (sk in skipped) {
+                        tasks.add(
+                            SkippedKeyPollTask(
+                                target = sk.target,
+                                contactId = contact.id,
+                                skippedKey = sk,
+                                isSelf = isSelf,
+                                seqNum = sk.slotIndex.toLong()
+                            )
+                        )
+                    }
+                    val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+                    tasks.add(
+                        ContactSlotPollTask(
+                            target = currentSlot.target,
+                            contactId = contact.id,
+                            slot = currentSlot,
+                            isSelf = isSelf,
+                            seqNum = contact.counterIn.toLong()
+                        )
+                    )
+                }
+            }
+        } else {
+            // General poll: gather all active contacts and group members
+            val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+            for (contact in contacts) {
+                val isSelf = contact.id == SELF_CONTACT_ID
+                val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+                tasks.add(
+                    ContactSlotPollTask(
+                        target = currentSlot.target,
+                        contactId = contact.id,
+                        slot = currentSlot,
+                        isSelf = isSelf,
+                        seqNum = contact.counterIn.toLong()
+                    )
+                )
+            }
+            val groups = groupDao?.getAllActiveGroups() ?: emptyList()
+            for (group in groups) {
+                val members = groupMemberDao?.getMembersForGroup(group.groupId) ?: emptyList()
+                val groupIdBytes = uuidStringToBytes(group.groupId)
+                val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+                for (member in members) {
+                    if (member.memberId == group.myMemberId) continue
+                    if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
+                    val memberIdBytes = uuidStringToBytes(member.memberId)
+                    val baseSlot = RatchetChain.deriveSlot(member.rawChainKeyIn, member.counterIn)
+                    val individualSlot = RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = member.rawChainKeyIn,
+                        counter = member.counterIn,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes,
+                        recipientMemberId = myMemberIdBytes
+                    )
+                    tasks.add(
+                        GroupMemberSlotPollTask(
+                            target = individualSlot.target,
+                            groupId = group.groupId,
+                            member = member,
+                            slot = individualSlot,
+                            baseSlot = baseSlot,
+                            isIndividualSlot = true,
+                            groupIdBytes = groupIdBytes,
+                            memberIdBytes = memberIdBytes,
+                            seqNum = member.counterIn.toLong()
+                        )
+                    )
+                }
+            }
+        }
+
+        // 3. Constant budget adjustment: take at most batchSize, pad with DecoyTargetPool if fewer
+        val finalTasks = if (tasks.size > batchSize) {
+            tasks.take(batchSize).toMutableList()
+        } else {
+            tasks.toMutableList()
+        }
+
+        val countNeeded = batchSize - finalTasks.size
+        if (countNeeded > 0) {
+            val decoyTargets = decoyTargetPool.getDecoyTargets(countNeeded) {
+                runBlocking { collectExpiringAndPastTargets(focusContactId) }
+            }.toMutableList()
+
+            while (decoyTargets.size < countNeeded) {
+                decoyTargets.add(CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)))
+            }
+
+            for (target in decoyTargets.take(countNeeded)) {
+                finalTasks.add(DecoyPollTask(target))
+            }
+        }
+
+        // 4. Random permutation: Fisher-Yates shuffle with CSPRNG
+        val shuffledTasks = finalTasks.shuffled(CryptoUtils.secureRandom)
+
+        // 5. Execute batch sequentially with intra-batch jitter
+        var anyReceived = false
+        for (i in shuffledTasks.indices) {
+            val task = shuffledTasks[i]
+            try {
+                val tStart = System.currentTimeMillis()
+                val item = dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf)
+                val rttMs = System.currentTimeMillis() - tStart
+                if (item != null) {
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
+                        target = task.target,
+                        seqNum = task.seqNum,
+                        payloadBytes = item.v.size,
+                        rttMs = rttMs,
+                        nodesQueried = item.nodesQueried.takeIf { it > 0 } ?: dhtLeafNode.lastNodesQueried,
+                        nodesResponded = item.nodesResponded.takeIf { it > 0 } ?: dhtLeafNode.lastNodesResponded,
+                        lookupHops = item.lookupHops.takeIf { it > 0 } ?: dhtLeafNode.lastLookupHops,
+                        success = true
+                    )
+                }
+                if (task.execute(item)) {
+                    anyReceived = true
+                }
+            } catch (_: Exception) {}
+
+            // Apply intra-batch jitter between queries
+            if (i < shuffledTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
+                val span = (intraBatchJitterMaxMs - intraBatchJitterMinMs).coerceAtLeast(1L)
+                val jitter = intraBatchJitterMinMs + (CryptoUtils.secureRandom.nextDouble() * span).toLong()
+                if (jitter > 0L) {
+                    delay(jitter)
+                }
+            }
+        }
+
+        anyReceived
     }
 
     /**

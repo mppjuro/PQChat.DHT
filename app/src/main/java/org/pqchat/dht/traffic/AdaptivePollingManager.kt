@@ -23,6 +23,7 @@ class AdaptivePollingManager(
     var onCoverTrafficTick: (suspend () -> Unit)? = null
     var onKeepalivePingRequested: (suspend () -> Unit)? = null
     private var keepaliveJob: Job? = null
+    @Volatile var pollBatchSize: Int = N_POLL_TARGETS
 
     constructor(
         onPollRequested: suspend (contactId: String?) -> Unit,
@@ -193,6 +194,9 @@ class AdaptivePollingManager(
         private set
 
     companion object {
+        const val N_POLL_TARGETS = 8
+        const val DEFAULT_POLL_BATCH_SIZE = N_POLL_TARGETS
+
         /**
          * Resolves the target PollingState based on the triplet:
          * (isScreenInteractive, isAppForeground, activeChatContactId).

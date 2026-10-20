@@ -34,17 +34,10 @@ class PollingScheduler(
 
     val pollingManager: AdaptivePollingManager = AdaptivePollingManager(
         onPollRequested = { contactId ->
-            if (contactId != null) {
-                val group = repository.getGroup(contactId)
-                if (group != null) {
-                    repository.pollGroupIncoming(contactId)
-                } else {
-                    repository.pollContactIncoming(contactId)
-                }
-            } else {
-                repository.pollAllContactsIncoming()
-                repository.pollAllGroupsIncoming()
-            }
+            repository.pollConstantBatch(
+                focusContactId = contactId,
+                batchSize = pollingManager.pollBatchSize
+            )
         },
         onIdlePreWarm = { contactId ->
             if (contactId != null) {

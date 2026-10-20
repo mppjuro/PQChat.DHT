@@ -31,11 +31,8 @@ class PollingWorker(
             val settingsManager = app.settingsManager
             val policy = settingsManager.getRepublishPolicy()
 
-            // 1. Poll all registered contact incoming slots from DHT
-            repository.pollAllContactsIncoming()
-
-            // 1b. Poll all registered group incoming slots from DHT
-            repository.pollAllGroupsIncoming()
+            // 1. Poll incoming contact and group slots via constant-size decoy-padded batch
+            repository.pollConstantBatch(null)
 
             // 2. Check pending ACKs
             repository.checkPendingAcks()

@@ -53,8 +53,7 @@ class ChatHeadService : Service() {
 
             while (isActive) {
                 try {
-                    repository.pollAllContactsIncoming()
-                    repository.pollAllGroupsIncoming()
+                    repository.pollConstantBatch(null)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
