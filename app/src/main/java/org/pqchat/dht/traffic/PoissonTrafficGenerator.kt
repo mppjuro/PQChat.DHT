@@ -72,6 +72,20 @@ class PoissonTrafficGenerator(
      * 4. Priority 4 (Fallback): Synthetic CSPRNG dummy decoy packet (COVER_DUMMY_SENT).
      */
     suspend fun processCoverTrafficTick(delayMs: Long = 0L): CoverEvent {
+        if (dhtLeafNode.torTransportMode == org.pqchat.dht.dht.leaf.TorTransportMode.BLOCKED_ERROR) {
+            val event = CoverEvent(
+                timestamp = System.currentTimeMillis(),
+                targetHex = "",
+                intervalSeconds = delayMs / 1000.0,
+                isAck = false,
+                isBlindRepublish = false,
+                isFirstSend = false,
+                payloadSize = 0
+            )
+            _eventFlow.emit(event)
+            return event
+        }
+
         val outboundFrame = outboundPoissonQueue.poll()
         val event = if (outboundFrame != null) {
             val tStart = System.currentTimeMillis()
@@ -245,5 +259,17 @@ class PoissonTrafficGenerator(
     fun stop() {
         isRunning = false
         scope.cancel()
+    }
+
+    /**
+     * Immediately triggers processing of a pending cover traffic tick (e.g. when Tor connection is established).
+     */
+    fun triggerImmediateTick() {
+        if (!isRunning) return
+        scope.launch {
+            try {
+                processCoverTrafficTick(0L)
+            } catch (_: Exception) {}
+        }
     }
 }

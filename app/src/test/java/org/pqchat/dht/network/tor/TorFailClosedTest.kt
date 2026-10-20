@@ -23,6 +23,11 @@ import java.net.ServerSocket
 import java.security.Security
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import org.pqchat.dht.traffic.OutboundPoissonFrame
+import org.pqchat.dht.traffic.OutboundPoissonQueue
+import org.pqchat.dht.traffic.PendingAck
+import org.pqchat.dht.traffic.PendingAckQueue
+import org.pqchat.dht.traffic.PoissonTrafficGenerator
 
 /**
  * Fast, deterministic local unit tests verifying Tor transport fail-closed policy,
@@ -220,6 +225,99 @@ class TorFailClosedTest {
         assertTrue("Diagnostic message should mention TCP SOCKS5", node.torDiagnosticMessage!!.contains("TCP SOCKS5"))
 
         serverThread.join(1000)
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun `when application performs cold start with Tor enabled, fail-closed ensures zero clearnet UDP packets before Tor tunnel is connected`() = runBlocking {
+        val clearnetCatcher = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        testSocket = clearnetCatcher
+        val catcherAddress = InetSocketAddress(clearnetCatcher.localAddress, clearnetCatcher.localPort)
+        val packetsReceived = AtomicInteger(0)
+
+        val listenThread = Thread {
+            val buf = ByteArray(2048)
+            while (!clearnetCatcher.isClosed) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    clearnetCatcher.receive(pkt)
+                    packetsReceived.incrementAndGet()
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }.apply { isDaemon = true; start() }
+
+        // 1. Cold start scenario with isTorEnabled = true
+        val isTorEnabled = true
+        val node = DhtLeafNode(port = 0, autoBootstrap = true)
+        leafNode = node
+
+        // Synchronous check & pre-configuration before start(), workers, or traffic generator
+        if (isTorEnabled) {
+            node.setTorProxy(TorProxyConfig(enabled = true, socksHost = "127.0.0.1", socksPort = 0))
+        }
+
+        // 2. Start leaf node (with autoBootstrap = true, which triggers background bootstrap)
+        node.start()
+
+        // Verify fail-closed blocked mode
+        assertEquals(TorTransportMode.BLOCKED_ERROR, node.torTransportMode)
+        assertFalse("Tor routing should not be active during Tor bootstrap fail-closed state", node.isTorRoutingActive)
+        assertEquals("Total sent bytes counter on node must remain 0", 0L, node.totalBytesSent)
+
+        // 3. Set up traffic queues and Poisson traffic generator
+        val pendingAckQueue = PendingAckQueue()
+        val outboundPoissonQueue = OutboundPoissonQueue()
+
+        val queuedFrame = OutboundPoissonFrame(
+            target = CryptoUtils.secureRandomBytes(20),
+            payload = ByteArray(900),
+            sk = CryptoUtils.secureRandomBytes(32),
+            seqNum = 1,
+            messageId = 123L
+        )
+        outboundPoissonQueue.enqueue(queuedFrame)
+
+        val queuedAck = PendingAck(
+            contactId = "alice",
+            messageId = "msg-123",
+            ratchetKey = CryptoUtils.secureRandomBytes(32),
+            seqNum = 1
+        )
+        pendingAckQueue.enqueue(queuedAck)
+
+        val trafficGenerator = PoissonTrafficGenerator(
+            dhtLeafNode = node,
+            pendingAckQueue = pendingAckQueue,
+            outboundPoissonQueue = outboundPoissonQueue
+        )
+        trafficGenerator.start()
+
+        // 4. Trigger cover traffic tick while Tor is in BLOCKED_ERROR
+        trafficGenerator.processCoverTrafficTick()
+
+        // Queues must remain intact and NOT be dropped/lost while transport is blocked
+        assertEquals("Outbound Poisson frame must remain queued while Tor is blocked", 1, outboundPoissonQueue.size)
+        assertEquals("Pending ACK must remain queued while Tor is blocked", 1, pendingAckQueue.size)
+
+        // Attempt direct query & dummy cover to catcher address
+        val ping = KrpcMessage.createPingQuery(node.myNodeId)
+        val queryResponse = node.sendQuery(catcherAddress, ping, timeoutMs = 200L)
+        assertNull("Direct query must return null when Tor is blocked", queryResponse)
+
+        val dummyTarget = node.sendCoverTrafficDummy()
+        assertNull("Dummy cover must fail when Tor is blocked", dummyTarget)
+
+        // Let any background bootstrap or coroutines settle
+        delay(200)
+
+        // 5. CRITICAL: 0 clearnet UDP packets must have been received by the catcher
+        assertEquals("Zero clearnet UDP packets must leak before Tor tunnel connects", 0, packetsReceived.get())
+        assertEquals("Total sent bytes counter on node must remain 0", 0L, node.totalBytesSent)
+
+        trafficGenerator.stop()
+        clearnetCatcher.close()
     }
 
     private fun findClosedPort(): Int {

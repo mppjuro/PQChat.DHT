@@ -303,6 +303,7 @@ class DefaultTorProcessRunner(
                 }
 
                 if (isActive && running.get()) {
+                    delay(20)
                     onReady(socksPort, controlPort)
                 }
             }

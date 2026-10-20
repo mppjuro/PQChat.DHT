@@ -51,12 +51,29 @@ class PQChatApplication : Application() {
         // Initialize Notification Channels
         NotificationHelper.createNotificationChannel(this)
 
+        // Initialize Settings Manager first to determine Tor policy synchronously
+        settingsManager = AppSettingsManager(this)
+        val isTorInitiallyEnabled = settingsManager.isTorEnabled.value
+
         // Initialize Core Components & Singletons
         database = AppDatabase.getInstance(this)
-        dhtLeafNode = DhtLeafNode(port = DhtLeafNode.DEFAULT_DHT_PORT, nodeCacheDao = database.dhtNodeCacheDao()).apply { start() }
+        dhtLeafNode = DhtLeafNode(port = DhtLeafNode.DEFAULT_DHT_PORT, nodeCacheDao = database.dhtNodeCacheDao())
+
+        // 1 & 2: Fail-Closed Tor configuration prior to any network start or worker queues
+        if (isTorInitiallyEnabled) {
+            dhtLeafNode.setTorProxy(
+                org.pqchat.dht.dht.leaf.TorProxyConfig(
+                    enabled = true,
+                    socksHost = "127.0.0.1",
+                    socksPort = 0
+                )
+            )
+        }
+
+        dhtLeafNode.start()
+
         val pendingAckQueue = org.pqchat.dht.traffic.PendingAckQueue()
         val outboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue()
-        settingsManager = AppSettingsManager(this)
         repository = ChatRepository(
             database = database,
             dhtLeafNode = dhtLeafNode,
@@ -79,6 +96,13 @@ class PQChatApplication : Application() {
         appScope.launch {
             settingsManager.isTorEnabled.collect { enabled ->
                 if (enabled) {
+                    dhtLeafNode.setTorProxy(
+                        org.pqchat.dht.dht.leaf.TorProxyConfig(
+                            enabled = true,
+                            socksHost = "127.0.0.1",
+                            socksPort = 0
+                        )
+                    )
                     embeddedTorManager.start()
                 } else {
                     embeddedTorManager.stop()
@@ -95,6 +119,15 @@ class PQChatApplication : Application() {
                             enabled = true,
                             socksHost = "127.0.0.1",
                             socksPort = state.socksPort
+                        )
+                    )
+                    trafficGenerator.triggerImmediateTick()
+                } else if ((state is org.pqchat.dht.network.tor.TorState.Error || state is org.pqchat.dht.network.tor.TorState.Disconnected) && settingsManager.isTorEnabled.value) {
+                    dhtLeafNode.setTorProxy(
+                        org.pqchat.dht.dht.leaf.TorProxyConfig(
+                            enabled = true,
+                            socksHost = "127.0.0.1",
+                            socksPort = 0
                         )
                     )
                 }

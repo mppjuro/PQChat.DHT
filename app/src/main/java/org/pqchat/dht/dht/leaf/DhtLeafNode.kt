@@ -233,6 +233,13 @@ class DhtLeafNode(
         torTcpTunnelClient = null
 
         if (config?.enabled == true) {
+            val wasBlocked = torTransportMode == TorTransportMode.BLOCKED_ERROR
+            if (config.socksPort <= 0) {
+                torTransportMode = TorTransportMode.BLOCKED_ERROR
+                torDiagnosticMessage = "Tor jest włączony w ustawieniach, oczekiwanie na zestawienie tunelu SOCKS5 (port ${config.socksPort}). Fail-Closed aktywny."
+                println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
+                return
+            }
             val client = Socks5Client(
                 proxyHost = config.socksHost,
                 proxyPort = config.socksPort,
@@ -259,6 +266,12 @@ class DhtLeafNode(
                 torTransportMode = TorTransportMode.BLOCKED_ERROR
                 torDiagnosticMessage = "Błąd połączenia z proxy Tor SOCKS5 (${config.socksHost}:${config.socksPort}): ${e.message}. Fail-Closed aktywny."
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
+            }
+
+            if (wasBlocked && isTorRoutingActive && autoBootstrap && isRunning) {
+                scope.launch {
+                    bootstrap()
+                }
             }
         } else {
             torTransportMode = TorTransportMode.DIRECT_UDP
@@ -564,14 +577,15 @@ class DhtLeafNode(
     }
 
     private fun sendKrpcResponse(bencoded: ByteArray, recipient: InetSocketAddress) {
-        _totalBytesSent.addAndGet(bencoded.size.toLong())
         if (torProxyConfig?.enabled == true) {
             if (torTransportMode == TorTransportMode.SOCKS5_UDP) {
                 torUdpAssociation?.send(bencoded, recipient)
+                _totalBytesSent.addAndGet(bencoded.size.toLong())
             }
             // In SOCKS5_TCP or BLOCKED_ERROR, never leak responses over direct clearnet socket.
         } else {
             socket?.send(DatagramPacket(bencoded, bencoded.size, recipient))
+            _totalBytesSent.addAndGet(bencoded.size.toLong())
         }
     }
 
@@ -662,7 +676,7 @@ class DhtLeafNode(
         val randomTarget = CryptoUtils.secureRandomBytes(20)
 
         // Probe local LAN / emulator subnet neighbors in parallel
-        val localNodes = getLocalPeers().map { it.address }
+        val localNodes = if (torProxyConfig?.enabled == true) emptyList() else getLocalPeers().map { it.address }
         val localJobs = localNodes.map { node ->
             launch {
                 try {
@@ -737,7 +751,6 @@ class DhtLeafNode(
         val startTime = System.currentTimeMillis()
         try {
             val bytes = query.toBencoded()
-            _totalBytesSent.addAndGet(bytes.size.toLong())
 
             // FAIL-CLOSED PROTECTION: If Tor is enabled in settings, NEVER emit to clearnet UDP!
             if (torProxyConfig?.enabled == true) {
@@ -749,6 +762,7 @@ class DhtLeafNode(
                             return@withContext null
                         }
                         assoc.send(bytes, targetAddress)
+                        _totalBytesSent.addAndGet(bytes.size.toLong())
                     }
                     TorTransportMode.SOCKS5_TCP -> {
                         val tcpClient = torTcpTunnelClient
@@ -758,6 +772,7 @@ class DhtLeafNode(
                         }
                         return@withContext try {
                             val respBytes = tcpClient.sendQuery(targetAddress, bytes, timeoutMs)
+                            _totalBytesSent.addAndGet(bytes.size.toLong())
                             _totalBytesReceived.addAndGet(respBytes.size.toLong())
                             val parsed = KrpcMessage.parse(respBytes) as? KrpcMessage.Response
                             if (parsed != null) {
@@ -783,6 +798,7 @@ class DhtLeafNode(
                 if (s.isClosed) return@withContext null
                 val packet = DatagramPacket(bytes, bytes.size, targetAddress)
                 s.send(packet)
+                _totalBytesSent.addAndGet(bytes.size.toLong())
             }
 
             val effectiveTimeout = if (isTorRoutingActive) maxOf(timeoutMs, 4000L) else timeoutMs
@@ -1019,7 +1035,7 @@ class DhtLeafNode(
             emptyList()
         }
 
-        if (nodesToQuery.isEmpty()) {
+        if (nodesToQuery.isEmpty() || torTransportMode == TorTransportMode.BLOCKED_ERROR) {
             _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
             return@withContext null
         }
@@ -1205,6 +1221,11 @@ class DhtLeafNode(
         }
 
         // Step 2: Push to external DHT swarm peers (prioritizing pre-warmed route cache & cached fastest nodes)
+        if (torTransportMode == TorTransportMode.BLOCKED_ERROR) {
+            println("[PQChat] putMutablePreSigned blocked: Tor Fail-Closed active")
+            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
+            return@withContext false
+        }
         val candidateCount = maxOf(24, replicationK * 2)
         val candidates = findClosestNodes(target, count = candidateCount)
         val prewarmed = targetRouteCache[target] ?: preWarmTarget(target)
@@ -1353,6 +1374,9 @@ class DhtLeafNode(
      * Send dummy cover traffic (chaffing) to random target.
      */
     override suspend fun sendCoverTrafficDummy(): ByteArray? {
+        if (torTransportMode == TorTransportMode.BLOCKED_ERROR) {
+            return null
+        }
         val dummySeed = CryptoUtils.secureRandomBytes(32)
         val dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
         val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
@@ -1363,7 +1387,8 @@ class DhtLeafNode(
             v = dummyPayload,
             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
             salt = null,
-            sk = dummySeed
+            sk = dummySeed,
+            skipLocalStore = true
         )
         return if (ok) target else null
     }
