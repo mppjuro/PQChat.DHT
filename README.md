@@ -150,7 +150,7 @@ sequenceDiagram
 
 ```
 
-Detailed message layouts, frame headers, and serialization rules are specified in [`docs/PROTOCOL.md`](https://www.google.com/search?q=docs/PROTOCOL.md). The security assumptions and adversary capabilities are analyzed in [`docs/threat_model.md`](https://www.google.com/search?q=docs/threat_model.md).
+Detailed message layouts, frame headers, and serialization rules are specified in [`docs/PROTOCOL.md`](docs/PROTOCOL.md). The security assumptions and adversary capabilities are analyzed in [`docs/threat_model.md`](docs/threat_model.md).
 
 ---
 
@@ -199,7 +199,7 @@ Run unit and integration tests:
 
 The repo includes reproducible Python test harnesses and threat simulators to evaluate battery, bandwidth, and latency trade-offs:
 
-* **Loopback DHT Measurement**: Real packet retention and latency charts generated under [`docs/dht_retention_report.md`](https://www.google.com/search?q=docs/dht_retention_report.md).
+* **Loopback DHT Measurement**: Real packet retention and latency charts generated under [`docs/dht_retention_report.md`](docs/dht_retention_report.md).
 * **Threat Simulator**: Simulates deanonymization probability against adversary nodes under varying cover-traffic rates (`tools/threat_sim/threat_simulator.py`).
 
 ```bash

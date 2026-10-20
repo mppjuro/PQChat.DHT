@@ -182,7 +182,7 @@ Dla każdej wiadomości $i$:
 3. **5 minut:** Urządzenie jest w użyciu (`BACKGROUND_IDLE` — ekran włączony, ale aplikacja działa w tle / zminimalizowana).
 4. **15 minut:** Urządzenie zablokowane / uśpione (`DOZE_SLEEP` — ekran wyłączony; realizowane przez `WorkManager` oraz `AlarmManager.setAndAllowWhileIdle`).
 
-Szczegółowy model maszyny stanów, obsługa Android 12+ Cached App Freezer (CAF), limity Android 15 `dataSync` FGS (targetSdk 35) oraz mechanizm `BOOT_COMPLETED` opisane są w [docs/android_lifecycle_background_execution.md](file:///c:/Users/PJURO/PQChat.DHT/docs/android_lifecycle_background_execution.md).
+Szczegółowy model maszyny stanów, obsługa Android 12+ Cached App Freezer (CAF), limity Android 15 `dataSync` FGS (targetSdk 35) oraz mechanizm `BOOT_COMPLETED` opisane są w [docs/android_lifecycle_background_execution.md](docs/android_lifecycle_background_execution.md).
 
 ### Spójne Przejścia Cyklu Życia (PollingLifecycleCoordinator):
 Przejścia pomiędzy 4 stanami pollingu są centralnie koordynowane przez `PollingLifecycleCoordinator`:
@@ -192,8 +192,8 @@ Przejścia pomiędzy 4 stanami pollingu są centralnie koordynowane przez `Polli
 
 ### Ruch Maskujący (Poisson Cover Traffic):
 * W tle działa niezależny proces wyznaczający czas do kolejnego fałszywego zapisu na podstawie rozkładu wykładniczego:
-  $$\Delta t = - \frac{1}{\lambda} \ln(U), \quad U \sim \mathcal{U}(0, 1)$$
-* Po upływie $\Delta t$ generowany jest losowy $\text{Target}_{dummy}$ oraz rekord o stałym rozmiarze dokładnie 900 bajtów (904 bajty w Bencode) wypełniony czystym szumem.
+  $`\Delta t = - \frac{1}{\lambda} \ln(U), \quad U \sim \mathcal{U}(0, 1)`$
+* Po upływie $`\Delta t`$ generowany jest losowy $`\text{Target}_{dummy}`$ oraz rekord o stałym rozmiarze dokładnie 900 bajtów (904 bajty w Bencode) wypełniony czystym szumem.
 * Pakiet jest wysyłany operacją `put` do sieci DHT w celu zatarcia korelacji pomiędzy aktywnością użytkownika a emisją pakietów UDP.
 
 ---
@@ -206,8 +206,9 @@ Kod projektu zorganizowany jest w 100% w języku Kotlin:
 app/src/main/java/org/pqchat/dht/
 ├── crypto/              # PqcEngine, MLKemEngine, AesGcmEngine, BinaryFrameCodec, Ed25519Engine, RatchetChain
 ├── data/
-│   ├── local/           # Room Database (AppDatabase, DAOs, Encrypted Entities)
-│   └── repository/      # ChatRepository, MessageChunker
+│   ├── db/              # Room Database (AppDatabase, DAOs, Encrypted Entities)
+│   ├── repository/      # ChatRepository, MessageChunker
+│   └── settings/        # AppSettingsManager (SharedPreferences & DataStore)
 ├── dht/
 │   ├── bencode/         # Wydajny dekoder/enkoder słowników Bencode w czystym Kotlinie
 │   ├── krpc/            # Zarządzanie gniazdami UDP KRPC DHT
@@ -216,9 +217,13 @@ app/src/main/java/org/pqchat/dht/
 ├── network/
 │   └── tor/             # Obsługa embedded Tor i proxy SOCKS5
 ├── protocol/            # ProtocolEngine, CoverAckProtocol (potwierdzenia w szumie)
+├── research/            # ResearchTelemetryManager, FirebaseResearchSync, HistoricalTtlSampler
 ├── service/             # PollingScheduler, PollingLifecycleCoordinator, ScreenStateReceiver, BootReceiver, DhtAlarmReceiver, ChatHeadService
 ├── traffic/             # AdaptivePollingManager, PoissonTrafficGenerator, BlindRepublishPool, DecoyTargetPool, PollingWorker
-└── ui/                  # ChatScreen, ContactsScreen, DiagnosticsScreen, SettingsScreen, motywy
+└── ui/
+    ├── screens/         # ChatScreen, ContactsScreen, DiagnosticsScreen, SettingsScreen
+    ├── components/      # Reusable Compose UI components
+    └── theme/           # Material 3 Design Tokens, Color Scheme, Typography
 ```
 
 ---

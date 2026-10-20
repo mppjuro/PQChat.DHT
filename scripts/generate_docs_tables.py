@@ -2,9 +2,9 @@
 """
 Automated Markdown Table Generator for PQChat.DHT Documentation.
 
-Parses actual measured CSV files:
-- docs/metrics_dht_loopback_measured.csv
-- docs/metrics_testbed_correlation.csv
+Parses actual measured CSV files from the canonical docs/measurements/ directory:
+- docs/measurements/loopback_all.csv
+- docs/measurements/metrics_testbed_correlation.csv
 and injects validated mathematical summary tables into:
 - docs/dht_retention_report.md
 - docs/threat_model.md
@@ -44,7 +44,9 @@ def compute_ci95(values: List[float]) -> Tuple[float, float]:
 
 
 def generate_dht_retention_tables(repo_root: str, update_file: bool = True) -> str:
-    csv_path = os.path.join(repo_root, "docs", "metrics_dht_loopback_measured.csv")
+    csv_path = os.path.join(repo_root, "docs", "measurements", "loopback_all.csv")
+    if not os.path.isfile(csv_path):
+        csv_path = os.path.join(repo_root, "docs", "metrics_dht_loopback_measured.csv")
     md_path = os.path.join(repo_root, "docs", "dht_retention_report.md")
 
     if not os.path.isfile(csv_path):
@@ -176,7 +178,9 @@ def generate_dht_retention_tables(repo_root: str, update_file: bool = True) -> s
 
 
 def generate_threat_model_tables(repo_root: str, update_file: bool = True) -> str:
-    csv_path = os.path.join(repo_root, "docs", "metrics_testbed_correlation.csv")
+    csv_path = os.path.join(repo_root, "docs", "measurements", "metrics_testbed_correlation.csv")
+    if not os.path.isfile(csv_path):
+        csv_path = os.path.join(repo_root, "docs", "metrics_testbed_correlation.csv")
     md_path = os.path.join(repo_root, "docs", "threat_model.md")
 
     if not os.path.isfile(csv_path):
