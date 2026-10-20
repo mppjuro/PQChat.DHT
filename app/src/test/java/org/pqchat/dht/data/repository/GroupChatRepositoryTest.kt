@@ -300,7 +300,7 @@ class GroupChatRepositoryTest {
         val bobMemberId = UUID.randomUUID().toString()
         val aliceSenderGroupChainKey = CryptoUtils.secureRandomBytes(64)
 
-        // Configure Alice's group entity
+        // Configure Alice's group entity and Bob in Alice's group members
         val aliceGroup = GroupEntity(
             groupId = groupId,
             groupName = "PQC Group",
@@ -310,6 +310,16 @@ class GroupChatRepositoryTest {
             groupEpoch = 1L
         )
         aliceGroupDao.insertOrUpdate(aliceGroup)
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = bobMemberId,
+                contactId = "bob-contact-id",
+                memberName = "Bob",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
 
         // Configure Bob's group entity and Alice as member in Bob's group_members
         val bobGroup = GroupEntity(
@@ -357,13 +367,235 @@ class GroupChatRepositoryTest {
         assertEquals("Alice", bobMsg.senderName)
         assertFalse(bobMsg.isOutgoing)
 
-        // 5. CRITICAL REQUIREMENT VERIFICATION:
-        // Group messages must NOT be overwritten by a tombstone on first receive,
-        // so other members in the group can also fetch the exact same slot!
-        val aliceSlot0 = RatchetChain.computeLookaheadSlots(aliceSenderGroupChainKey, 0, windowSize = 1)[0]
-        val dhtRecord = dhtNode.getMutable(aliceSlot0.target)
-        assertNotNull("DHT record must STILL EXIST after Bob's receive (NO TOMBSTONE in group chats!)", dhtRecord)
+        // 5. Verification: DHT record exists under Bob's individual slot
+        val bobSlot0 = RatchetChain.deriveGroupRecipientSlot(aliceSenderGroupChainKey, 0, groupId, bobMemberId)
+        val dhtRecord = dhtNode.getMutable(bobSlot0.target)
+        assertNotNull("DHT record must STILL EXIST after Bob's receive", dhtRecord)
         assertEquals("DHT record must remain 900 bytes", 900, dhtRecord!!.v.size)
+    }
+
+    @Test
+    fun testGroupEachMemberQueriesDistinctTarget() = runBlocking {
+        // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
+        val dhtNode = DhtLeafNode()
+
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val bobMemberId = UUID.randomUUID().toString()
+        val charlieMemberId = UUID.randomUUID().toString()
+        val daveMemberId = UUID.randomUUID().toString()
+        val aliceSenderGroupChainKey = CryptoUtils.secureRandomBytes(64)
+
+        // 1. Setup Alice's group entity and 3 active group members (Bob, Charlie, Dave)
+        val aliceGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "3-Member Recipient PQC Group",
+            myMemberId = aliceMemberId,
+            myChainKeyOut = aliceSenderGroupChainKey,
+            myCounterOut = 0,
+            groupEpoch = 1L
+        )
+        aliceGroupDao.insertOrUpdate(aliceGroup)
+
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = bobMemberId,
+                contactId = "bob-contact-id",
+                memberName = "Bob",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = charlieMemberId,
+                contactId = "charlie-contact-id",
+                memberName = "Charlie",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = daveMemberId,
+                contactId = "dave-contact-id",
+                memberName = "Dave",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+
+        // 2. Setup Bob, Charlie, and Dave repositories
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+        bobGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "3-Member Recipient PQC Group",
+                myMemberId = bobMemberId,
+                myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        bobGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = aliceSenderGroupChainKey,
+                counterIn = 0
+            )
+        )
+
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieChunkDao = FakeChunkDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = charlieChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        )
+        charlieGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "3-Member Recipient PQC Group",
+                myMemberId = charlieMemberId,
+                myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        charlieGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = aliceSenderGroupChainKey,
+                counterIn = 0
+            )
+        )
+
+        val daveContactDao = FakeContactDao()
+        val daveMessageDao = FakeMessageDao()
+        val daveChunkDao = FakeChunkDao()
+        val daveGroupDao = FakeGroupDao()
+        val daveGroupMemberDao = FakeGroupMemberDao()
+        val daveRepo = ChatRepository(
+            contactDao = daveContactDao,
+            messageDao = daveMessageDao,
+            chunkDao = daveChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = daveGroupDao,
+            groupMemberDao = daveGroupMemberDao
+        )
+        daveGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "3-Member Recipient PQC Group",
+                myMemberId = daveMemberId,
+                myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        daveGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = aliceSenderGroupChainKey,
+                counterIn = 0
+            )
+        )
+
+        // 3. Alice sends one group message
+        val broadcastText = "One message to three distinct member targets"
+        val sentOk = aliceRepo.sendGroupMessage(groupId, broadcastText)
+        assertTrue("Group message send must succeed", sentOk)
+
+        // 4. Verify 3 distinct targets are in dhtNode.storage.keys
+        val bobSlot = RatchetChain.deriveGroupRecipientSlot(aliceSenderGroupChainKey, 0, groupId, bobMemberId)
+        val charlieSlot = RatchetChain.deriveGroupRecipientSlot(aliceSenderGroupChainKey, 0, groupId, charlieMemberId)
+        val daveSlot = RatchetChain.deriveGroupRecipientSlot(aliceSenderGroupChainKey, 0, groupId, daveMemberId)
+
+        val bobTargetHex = CryptoUtils.toHex(bobSlot.target)
+        val charlieTargetHex = CryptoUtils.toHex(charlieSlot.target)
+        val daveTargetHex = CryptoUtils.toHex(daveSlot.target)
+
+        assertNotEquals("Bob and Charlie targets must differ", bobTargetHex, charlieTargetHex)
+        assertNotEquals("Bob and Dave targets must differ", bobTargetHex, daveTargetHex)
+        assertNotEquals("Charlie and Dave targets must differ", charlieTargetHex, daveTargetHex)
+
+        assertEquals("DHT storage must contain exactly 3 targets for 3 members", 3, dhtNode.storage.keys.size)
+        assertTrue(dhtNode.storage.keys.contains(bobTargetHex))
+        assertTrue(dhtNode.storage.keys.contains(charlieTargetHex))
+        assertTrue(dhtNode.storage.keys.contains(daveTargetHex))
+
+        // 5. Each target is read by a different member
+        val bobReceived = bobRepo.pollGroupIncoming(groupId)
+        assertTrue("Bob must receive message from his unique target", bobReceived)
+        assertEquals(1, bobMessageDao.messages.size)
+        assertEquals(broadcastText, bobMessageDao.messages[0].rawTextContent)
+
+        val charlieReceived = charlieRepo.pollGroupIncoming(groupId)
+        assertTrue("Charlie must receive message from his unique target", charlieReceived)
+        assertEquals(1, charlieMessageDao.messages.size)
+        assertEquals(broadcastText, charlieMessageDao.messages[0].rawTextContent)
+
+        val daveReceived = daveRepo.pollGroupIncoming(groupId)
+        assertTrue("Dave must receive message from his unique target", daveReceived)
+        assertEquals(1, daveMessageDao.messages.size)
+        assertEquals(broadcastText, daveMessageDao.messages[0].rawTextContent)
     }
 
     @Test

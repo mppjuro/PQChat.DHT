@@ -3348,9 +3348,12 @@ class ChatRepository(
                 it.memberId != currentGroup.myMemberId && it.isActive
             } ?: emptyList()
 
-            // Derive target slots: individual recipient slot for each active group member
-            // (context: groupId || senderMemberId || recipientMemberId || seqNum),
-            // or fallback to base slot if no other members registered yet.
+            // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
+            // Zamiast jednego target = RatchetChain.deriveSlot(myChainKeyOut, counterOut) używanego dla wszystkich członków,
+            // wyprowadzamy unikalny slot dla każdego członka:
+            // memberTarget = HKDF-Expand(myChainKeyOut, "group_target:" || groupId || counterOut || memberId, 32)
+            // a następnie RatchetChain.deriveSlot z odpowiednim msgKey/edSeed per członek.
+            // Wykonujemy osobne putMutable pod każdym unikalnym targetem (N targetów dla N członków).
             val targetSlots = if (activeMembers.isNotEmpty()) {
                 activeMembers.map { member ->
                     val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
@@ -3556,20 +3559,11 @@ class ChatRepository(
                         recipientMemberId = myMemberIdBytes
                     )
 
-                    // First probe the individual recipient slot (Group Follower Correlation Defense)
-                    var item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false)
-                    val (activeSlot, isIndividualSlot) = if (item != null) {
-                        Pair(individualSlot, true)
-                    } else {
-                        // Fallback to legacy shared slot if publisher used single slot
-                        val legacyItem = dhtLeafNode.getMutable(baseSlot.target, skipLocalStore = false)
-                        if (legacyItem != null) {
-                            item = legacyItem
-                            Pair(baseSlot, false)
-                        } else {
-                            break
-                        }
-                    }
+                    // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
+                    // Każdy członek odpytuje wyłącznie swój unikalny target, a nie wspólny.
+                    val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false) ?: break
+                    val activeSlot = individualSlot
+                    val isIndividualSlot = true
 
                     try {
                         val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(

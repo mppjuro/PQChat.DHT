@@ -151,10 +151,39 @@ object RatchetChain {
         getNextExpectedTarget(chainKeyIn.raw, counterIn)
 
     /**
-     * Build info bytes for HKDF-Expand with group recipient context:
-     * groupId || senderMemberId || recipientMemberId || seqNum (32-bit big-endian integer).
+     * Build info bytes for HKDF-Expand with group target context:
+     * "group_target:" || groupId || counter || memberId.
      * Ensures strict mathematical independence of DHT targets and encryption keys across
      * all group members, eliminating Group Follower Correlation and Tombstone Collisions.
+     *
+     * Uzasadnienie: Same-target dla wszystkich członków umożliwia obserwatorowi DHT
+     * skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność
+     * celu komunikacji grupowej.
+     */
+    fun buildGroupTargetInfo(
+        groupId: ByteArray,
+        counter: Int,
+        memberId: ByteArray
+    ): ByteArray {
+        val prefix = "group_target:".toByteArray(Charsets.UTF_8)
+        val gId = if (groupId.size == 16) groupId else groupId.copyOf(16)
+        val mId = if (memberId.size == 16) memberId else memberId.copyOf(16)
+        val buffer = ByteBuffer.allocate(prefix.size + 16 + 4 + 16).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(prefix)
+        buffer.put(gId)
+        buffer.putInt(counter)
+        buffer.put(mId)
+        return buffer.array()
+    }
+
+    fun buildGroupTargetInfo(
+        groupId: String,
+        counter: Int,
+        memberId: String
+    ): ByteArray = buildGroupTargetInfo(uuidStringToBytes(groupId), counter, uuidStringToBytes(memberId))
+
+    /**
+     * Backward-compatible helper retaining 4-tuple signature while using "group_target:" context.
      */
     fun buildGroupRecipientInfo(
         groupId: ByteArray,
@@ -162,24 +191,16 @@ object RatchetChain {
         recipientMemberId: ByteArray,
         seqNum: Int
     ): ByteArray {
-        val gId = if (groupId.size == 16) groupId else groupId.copyOf(16)
-        val sId = if (senderMemberId.size == 16) senderMemberId else senderMemberId.copyOf(16)
-        val rId = if (recipientMemberId.size == 16) recipientMemberId else recipientMemberId.copyOf(16)
-        val buffer = ByteBuffer.allocate(16 + 16 + 16 + 4).order(ByteOrder.BIG_ENDIAN)
-        buffer.put(gId)
-        buffer.put(sId)
-        buffer.put(rId)
-        buffer.putInt(seqNum)
-        return buffer.array()
+        return buildGroupTargetInfo(groupId, seqNum, recipientMemberId)
     }
 
     /**
      * Derives an individual, indexed recipient slot for a group message.
-     * Context: groupId || senderMemberId || recipientMemberId || seqNum.
+     * Context: "group_target:" || groupId || counter || memberId.
      *
      * The sender's ratchet chain advances via base step (counter), yielding nextChainKey.
      * The recipient-specific target, Ed25519 seed, and msgKey are derived via HKDF-Expand
-     * with the 4-tuple context. This guarantees that:
+     * with context "group_target:" || groupId || counter || memberId. This guarantees that:
      * 1. No two members poll the same DHT Target (eliminates Group Follower Correlation).
      * 2. When a member fetches their message, they can safely write a 900B tombstone without
      *    affecting any other member's slot.
@@ -188,8 +209,7 @@ object RatchetChain {
         chainKey: ByteArray,
         counter: Int,
         groupId: ByteArray,
-        senderMemberId: ByteArray,
-        recipientMemberId: ByteArray
+        memberId: ByteArray
     ): SlotParameters {
         require(chainKey.size == CHAIN_KEY_SIZE) {
             "Invalid ChainKey size: ${chainKey.size}, expected $CHAIN_KEY_SIZE"
@@ -201,8 +221,8 @@ object RatchetChain {
         val nextChainKey = baseEntropy.copyOfRange(64, 128)
         baseEntropy.fill(0)
 
-        // Recipient-specific derivation: context groupId || senderMemberId || recipientMemberId || seqNum
-        val recipientInfo = buildGroupRecipientInfo(groupId, senderMemberId, recipientMemberId, counter)
+        // Recipient-specific derivation: context "group_target:" || groupId || counter || memberId
+        val recipientInfo = buildGroupTargetInfo(groupId, counter, memberId)
         val recipientEntropy = HkdfSha512.expand(chainKey, recipientInfo, 64)
 
         val msgKey = recipientEntropy.copyOfRange(0, 32)
@@ -223,12 +243,27 @@ object RatchetChain {
     }
 
     fun deriveGroupRecipientSlot(
+        chainKey: ByteArray,
+        counter: Int,
+        groupId: ByteArray,
+        senderMemberId: ByteArray,
+        recipientMemberId: ByteArray
+    ): SlotParameters = deriveGroupRecipientSlot(chainKey, counter, groupId, recipientMemberId)
+
+    fun deriveGroupRecipientSlot(
+        chainKey: org.pqchat.dht.data.db.EncryptedBlob,
+        counter: Int,
+        groupId: ByteArray,
+        memberId: ByteArray
+    ): SlotParameters = deriveGroupRecipientSlot(chainKey.raw, counter, groupId, memberId)
+
+    fun deriveGroupRecipientSlot(
         chainKey: org.pqchat.dht.data.db.EncryptedBlob,
         counter: Int,
         groupId: ByteArray,
         senderMemberId: ByteArray,
         recipientMemberId: ByteArray
-    ): SlotParameters = deriveGroupRecipientSlot(chainKey.raw, counter, groupId, senderMemberId, recipientMemberId)
+    ): SlotParameters = deriveGroupRecipientSlot(chainKey.raw, counter, groupId, recipientMemberId)
 
     fun uuidStringToBytes(idStr: String): ByteArray {
         return try {
@@ -246,14 +281,37 @@ object RatchetChain {
         chainKey: ByteArray,
         counter: Int,
         groupId: String,
+        memberId: String
+    ): SlotParameters = deriveGroupRecipientSlot(
+        chainKey,
+        counter,
+        uuidStringToBytes(groupId),
+        uuidStringToBytes(memberId)
+    )
+
+    fun deriveGroupRecipientSlot(
+        chainKey: ByteArray,
+        counter: Int,
+        groupId: String,
         senderMemberId: String,
         recipientMemberId: String
     ): SlotParameters = deriveGroupRecipientSlot(
         chainKey,
         counter,
         uuidStringToBytes(groupId),
-        uuidStringToBytes(senderMemberId),
         uuidStringToBytes(recipientMemberId)
+    )
+
+    fun deriveGroupRecipientSlot(
+        chainKey: org.pqchat.dht.data.db.EncryptedBlob,
+        counter: Int,
+        groupId: String,
+        memberId: String
+    ): SlotParameters = deriveGroupRecipientSlot(
+        chainKey.raw,
+        counter,
+        uuidStringToBytes(groupId),
+        uuidStringToBytes(memberId)
     )
 
     fun deriveGroupRecipientSlot(
@@ -266,7 +324,30 @@ object RatchetChain {
         chainKey.raw,
         counter,
         uuidStringToBytes(groupId),
-        uuidStringToBytes(senderMemberId),
         uuidStringToBytes(recipientMemberId)
     )
+
+    fun deriveGroupMemberTargetEntropy(
+        chainKey: ByteArray,
+        counter: Int,
+        groupId: ByteArray,
+        memberId: ByteArray
+    ): ByteArray {
+        val recipientInfo = buildGroupTargetInfo(groupId, counter, memberId)
+        return HkdfSha512.expand(chainKey, recipientInfo, 32)
+    }
+
+    fun deriveGroupMemberTarget(
+        chainKey: ByteArray,
+        counter: Int,
+        groupId: ByteArray,
+        memberId: ByteArray
+    ): ByteArray = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId).target
+
+    fun deriveGroupMemberTarget(
+        chainKey: ByteArray,
+        counter: Int,
+        groupId: String,
+        memberId: String
+    ): ByteArray = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId).target
 }

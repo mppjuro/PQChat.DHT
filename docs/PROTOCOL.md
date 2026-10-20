@@ -227,6 +227,15 @@ Gdy $Counter_{out} > 0$ oraz $Counter_{out} \equiv 0 \pmod{50}$:
   $$ChainKey_{out} \leftarrow \text{HKDF-Extract}(ChainKey_{out}, SS_{rekey})$$
 * Niszczy $sk_{new}$ (zerując pamięć klucza ML-KEM i X25519) i usuwa wpis z bazy danych.
 
+### 6.4. Unikalne Adresy Docelowe BEP 44 per Odbiorca w Czatach Grupowych
+W czatach grupowych zamiast jednego wspólnego adresu docelowego $`Target = \text{RatchetChain.deriveSlot}(myChainKeyOut, counterOut)`$ używanego dla wszystkich członków grupy, nadawca wyprowadza unikalny adres docelowy dla każdego członka:
+$`\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)`$
+a następnie za pomocą `RatchetChain.deriveGroupRecipientSlot` generuje dedykowane parametry slotu (`msgKey`, `edPrivateKeySeed`, `target`).
+
+Nadawca wykonuje osobne operacje `putMutable` pod każdym unikalnym adresem docelowym ($`N`$ targetów dla $`N`$ członków). W `pollGroupIncoming` każdy członek odpytuje **wyłącznie swój unikalny target, a nie wspólny**.
+
+**Uzasadnienie bezpieczeństwa:** Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe zapytania `GET` na ten sam slot, łamiąc tajność celu komunikacji grupowej (Group Follower Correlation). Rozdzielenie slotów na $`N`$ niezależnych pseudolosowych adresów gwarantuje brak możliwości powiązania odbiorców ani wykrycia faktu ich przynależności do tej samej grupy.
+
 ---
 
 ## 7. Format Binarny Ramek DHT (BEP 44 Value)
@@ -327,8 +336,13 @@ Architektura czatów grupowych w PQChat.DHT opiera się na zdecentralizowanym pr
 
 ### 8.2. Adresowanie bez Śledzenia Grupy (Individual Recipient Slots)
 Aby wyeliminować korelację obserwatorów sieciowych DHT monitorujących zapytania (Group Follower Correlation), nadawca generuje **unikalny, niezależny adres docelowy DHT dla każdego odbiorcy wiadomości grupowej**:
-$`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)`$
-Dzięki temu operacja nadania wiadomości do $`k`$ odbiorców skutkuje $`k`$ odrębnymi zapisami pod pseudolosowe adresy, a żaden węzeł DHT nie jest w stanie powiązać ze sobą slotów ani ustalić składu grupy.
+$`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, RecipientMemberID)`$
+gdzie kontekst derywacji oparty jest na:
+$`\text{Info} = \text{"group\_target:"} \parallel GroupID \ (16\text{ B}) \parallel Counter \ (4\text{ B, BE}) \parallel RecipientMemberID \ (16\text{ B})`$
+$`\text{memberEntropy} = \text{HKDF-Expand}(myChainKeyOut, \text{Info}, 64)`$
+z którego wyznaczany jest klucz ładunku $`msgKey`$ (pierwsze 32 bajty) oraz ziarno klucza Ed25519 $`edSeed`$ (kolejne 32 bajty), dające unikalny adres $`\text{Target} = \text{SHA-1}(pk_{Ed25519})`$.
+
+Dzięki temu operacja nadania wiadomości do $`N`$ odbiorców skutkuje $`N`$ odrębnymi operacjami `putMutable` pod pseudolosowe adresy, a żaden węzeł DHT nie jest w stanie powiązać ze sobą slotów ani ustalić składu grupy. W `pollGroupIncoming` każdy członek odpytuje wyłącznie swój unikalny target, a nie wspólny. Uzasadnienie: Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
 
 ### 8.3. Wiązanie Kontekstu AEAD (Group AAD Binding)
 Każda wiadomość grupowa (tekst Typu `0x02` lub chunk Typu `0x05`) szyfrowana jest algorytmem AES-256-GCM z dowiązaniem AAD o sztywnej strukturze:

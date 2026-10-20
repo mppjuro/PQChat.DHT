@@ -178,6 +178,7 @@ class DhtLeafNode(
     override val lastOperationMetrics: DhtOpMetrics get() = _lastOperationMetrics.get()
 
     val localMutableStore = ConcurrentHashMap<String, MutableItem>()
+    val storage: ConcurrentHashMap<String, MutableItem> get() = localMutableStore
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
     val targetRouteCache = TargetRouteCache()
 

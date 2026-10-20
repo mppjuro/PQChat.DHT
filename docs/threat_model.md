@@ -84,13 +84,22 @@ Jeżeli klient generuje zapytania wabikowe wyłącznie pod losowe hasze w przest
 1. **Nieskoordynowane rekordy maskujące (*Poisson Dummy PUTs*):** Generator `PoissonTrafficGenerator` publikuje w tle rekordy o sztywnym rozmiarze dokładnie 900 bajtów (904 B w formacie Bencode) wypełnione kryptograficznym szumem CSPRNG. Rekordy te posiadają fizyczny zapis `PUT` w DHT.
 2. **Wielopodmiotowe targetowanie aktywne:** Zapytania wabikowe kierowane są w $60\%$ do puli slotów aktywnych i dummy-PUTów, a nie wyłącznie do pustej przestrzeni haszy, dzięki czemu przetrwają stanowe filtrowanie 0-PUT.
 
-### 3.3. Wielosesyjny Atak Przecięć (Statistical Disclosure)
-Gdy Alice wysyła ciąg $M$ wiadomości do Boba:
-- W pojedynczej wiadomości ($M=1$) zbiór kandydatów odbiorcy wynosi $\approx 4$ podmioty dzięki zapytaniom wabikowym, co daje skuteczność korelacji rzędu $\approx 47-50\%$.
-- Po $M$ wiadomościach adwersarz akumuluje logarytmiczny iloczyn wiarygodności:
-  $$\mathcal{L}_M(r) = \sum_{m=1}^M \ln P(R = \text{Bob}_r \mid \text{Target}_m)$$
-- Bez ciągłego tła maskującego Bob jest jedynym odbiorcą obecnym we wszystkich $M$ oknach, co przy $M \ge 5$ prowadzi do niemal pewnej deanonimizacji ($100\%$).
+### 3.3. Wielosesyjny Atak Przecięć (Statistical Disclosure) i Korelacja Grupowa
+Gdy Alice wysyła ciąg $`M`$ wiadomości do Boba:
+- W pojedynczej wiadomości ($`M=1`$) zbiór kandydatów odbiorcy wynosi $`\approx 4`$ podmioty dzięki zapytaniom wabikowym, co daje skuteczność korelacji rzędu $`\approx 47-50\%`$.
+- Po $`M`$ wiadomościach adwersarz akumuluje logarytmiczny iloczyn wiarygodności:
+  $`\mathcal{L}_M(r) = \sum_{m=1}^M \ln P(R = \text{Bob}_r \mid \text{Target}_m)`$
+- Bez ciągłego tła maskującego Bob jest jedynym odbiorcą obecnym we wszystkich $`M`$ oknach, co przy $`M \ge 5`$ prowadzi do niemal pewnej deanonimizacji ($`100\%`$).
 - Wdrożenie pełnej obrony (*Full Defense* z ruchem Poissona i opóźnieniami PUT) istotnie spowalnia tę zbieżność.
+
+#### Podatność Same-Target w Czatach Grupowych (Group Follower Correlation)
+W komunikacji grupowej podatność typu **Same-target** (użycie jednego adresu docelowego dla wszystkich uczestników) stanowi krytyczny wektor ataku:
+- **Mechanizm ataku:** Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe zapytania GET na ten sam slot w DHT, łamiąc tajność celu komunikacji grupowej. Obserwator węzłów przechowujących DHT w metryce XOR Kademlia rejestruje równoległe zapytania `GET` pod identyczny klucz 160-bitowy pochodzące z $`N`$ różnych adresów IP w zbliżonym oknie czasowym. W rezultacie adwersarz natychmiast odtwarza pełny skład grupy oraz interwały konwersacji.
+- **Wdrożona obrona (Unique Recipient Target):**
+  W `ChatRepository.sendGroupMessage` zamiast jednego slotu nadawca wyprowadza indywidualny target dla każdego członka:
+  $`\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)`$
+  a następnie wyznacza parametry slotu (`RatchetChain.deriveGroupRecipientSlot`) i wykonuje osobne operacje `putMutable` pod każdym unikalnym targetem ($`N`$ targetów dla $`N`$ członków).
+  W procedurze `pollGroupIncoming` każdy członek odpytuje **wyłącznie swój unikalny target, a nie wspólny** (brak podatnego fallbacku do współdzielonego slotu). W efekcie operacje GET są rozproszone po całej przestrzeni adresowej DHT, uniemożliwiając powiązanie członków grupy ze sobą.
 
 ### 3.4. Atak Sybil w Metryce XOR Kademlia
 Adwersarz posiadający botnet lub zasoby chmurowe rozmieszcza węzły w pobliżu docelowych targetów:
