@@ -1,6 +1,7 @@
 package org.pqchat.dht.data.db
 
 import androidx.room.*
+import javax.crypto.AEADBadTagException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -54,6 +55,15 @@ data class ContactEntity(
         fingerprint = fingerprint,
         isVerified = isVerified
     )
+ 
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        chainKeyOut.validateRowBinding("contacts", id, "chainKeyOut")
+        chainKeyIn.validateRowBinding("contacts", id, "chainKeyIn")
+    }
 
     val rawChainKeyOut: ByteArray get() = chainKeyOut.raw
     val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
@@ -145,18 +155,29 @@ data class MessageEntity(
         seqNum = seqNum,
         ackNum = ackNum,
         timestamp = timestamp,
-        textContent = textContent?.let { EncryptedText(it, "messages", "${contactId}_${seqNum}") },
-        imageBytes = imageBytes?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
+        textContent = textContent?.let { EncryptedText(it, "messages", contactId) },
+        imageBytes = imageBytes?.let { EncryptedBlob(it, "messages", contactId) },
         status = status,
         retryCount = retryCount,
         lastAttemptTimestamp = lastAttemptTimestamp,
         ackTarget = ackTarget,
-        ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
+        ackRatchetKey = ackRatchetKey?.let { EncryptedBlob(it, "messages", contactId) },
         slotTarget = slotTarget,
-        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it, "messages", "${contactId}_${seqNum}") },
+        slotEdSeed = slotEdSeed?.let { EncryptedBlob(it, "messages", contactId) },
         senderMemberId = senderMemberId,
         senderName = senderName
     )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        textContent?.validateRowBinding("messages", contactId, "textContent")
+        imageBytes?.validateRowBinding("messages", contactId, "imageBytes")
+        ackRatchetKey?.validateRowBinding("messages", contactId, "ackRatchetKey")
+        slotEdSeed?.validateRowBinding("messages", contactId, "slotEdSeed")
+    }
 
     val rawTextContent: String? get() = textContent?.raw
     val rawImageBytes: ByteArray? get() = imageBytes?.raw
@@ -198,6 +219,16 @@ data class SkippedKeyEntity(
         createdAt = createdAt,
         expiresAt = expiresAt
     )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        val expectedId = "${contactId}_${slotIndex}"
+        msgKey.validateRowBinding("skipped_keys", expectedId, "msgKey")
+        edPrivateKeySeed.validateRowBinding("skipped_keys", expectedId, "edPrivateKeySeed")
+    }
 
     val rawMsgKey: ByteArray get() = msgKey.raw
     val rawEdPrivateKeySeed: ByteArray get() = edPrivateKeySeed.raw
@@ -292,6 +323,14 @@ data class PendingRekeyOfferEntity(
         createdAt = createdAt
     )
 
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        skNew.validateRowBinding("pending_rekey_offers", contactId, "skNew")
+    }
+
     val rawSkNew: ByteArray get() = skNew.raw
 
     fun destroy() {
@@ -370,6 +409,15 @@ data class ChunkEntity(
         data = EncryptedBlob(data, "chunks", "${transferId}_${chunkIndex}")
     )
 
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        val expectedId = "${transferId}_${chunkIndex}"
+        data.validateRowBinding("chunks", expectedId, "data")
+    }
+
     val rawData: ByteArray get() = data.raw
 
     override fun equals(other: Any?): Boolean {
@@ -434,6 +482,15 @@ data class PendingChunkTransferEntity(
         createdAt = createdAt,
         expiresAt = expiresAt
     )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        baseEdSeed.validateRowBinding("pending_chunk_transfers", "${transferId}_seed", "baseEdSeed")
+        baseMsgKey.validateRowBinding("pending_chunk_transfers", "${transferId}_key", "baseMsgKey")
+    }
 
     val rawBaseEdSeed: ByteArray get() = baseEdSeed.raw
     val rawBaseMsgKey: ByteArray get() = baseMsgKey.raw
@@ -741,6 +798,14 @@ data class GroupEntity(
         isActive = isActive
     )
 
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        myChainKeyOut.validateRowBinding("groups", groupId, "myChainKeyOut")
+    }
+
     val rawMyChainKeyOut: ByteArray get() = myChainKeyOut.raw
 
     override fun equals(other: Any?): Boolean {
@@ -804,6 +869,15 @@ data class GroupMemberEntity(
         joinedAt = joinedAt,
         isActive = isActive
     )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        val expectedId = "${groupId}_${memberId}"
+        chainKeyIn.validateRowBinding("group_members", expectedId, "chainKeyIn")
+    }
 
     val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
 

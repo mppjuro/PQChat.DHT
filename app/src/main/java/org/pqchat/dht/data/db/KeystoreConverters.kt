@@ -1,6 +1,7 @@
 package org.pqchat.dht.data.db
 
 import androidx.room.TypeConverter
+import javax.crypto.AEADBadTagException
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.crypto.KeystoreCrypto
 
@@ -15,6 +16,19 @@ data class EncryptedBlob(
 ) {
     val size: Int get() = raw.size
     fun copyOf(): ByteArray = raw.copyOf()
+
+    /**
+     * Validates that this ciphertext was bound to the expected table and row ID.
+     * Throws [AEADBadTagException] if a row-swap or column-swap attack occurred.
+     */
+    fun validateRowBinding(expectedTable: String, expectedId: String, fieldName: String = "field") {
+        if (boundTable != expectedTable || boundId != expectedId) {
+            throw AEADBadTagException(
+                "Row binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', " +
+                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}'"
+            )
+        }
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -36,6 +50,19 @@ data class EncryptedText(
     val boundId: String? = null
 ) : CharSequence by raw {
     override fun toString(): String = raw
+
+    /**
+     * Validates that this ciphertext was bound to the expected table and row ID.
+     * Throws [AEADBadTagException] if a row-swap or column-swap attack occurred.
+     */
+    fun validateRowBinding(expectedTable: String, expectedId: String, fieldName: String = "field") {
+        if (boundTable != expectedTable || boundId != expectedId) {
+            throw AEADBadTagException(
+                "Row binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', " +
+                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}'"
+            )
+        }
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

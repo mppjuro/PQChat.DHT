@@ -39,20 +39,26 @@ object HkdfSha512 {
         mac.init(key)
 
         var t = ByteArray(0)
-        for (i in 1..n) {
-            mac.reset()
-            if (t.isNotEmpty()) {
-                mac.update(t)
-            }
-            if (info.isNotEmpty()) {
-                mac.update(info)
-            }
-            mac.update(i.toByte())
-            t = mac.doFinal()
+        try {
+            for (i in 1..n) {
+                mac.reset()
+                if (t.isNotEmpty()) {
+                    mac.update(t)
+                }
+                if (info.isNotEmpty()) {
+                    mac.update(info)
+                }
+                mac.update(i.toByte())
+                val prevT = t
+                t = mac.doFinal()
+                prevT.fill(0)
 
-            val toCopy = minOf(HASH_LEN, length - offset)
-            System.arraycopy(t, 0, okm, offset, toCopy)
-            offset += toCopy
+                val toCopy = minOf(HASH_LEN, length - offset)
+                System.arraycopy(t, 0, okm, offset, toCopy)
+                offset += toCopy
+            }
+        } finally {
+            t.fill(0)
         }
 
         return okm
@@ -63,6 +69,10 @@ object HkdfSha512 {
      */
     fun derive(salt: ByteArray?, ikm: ByteArray, info: ByteArray, length: Int): ByteArray {
         val prk = extract(salt, ikm)
-        return expand(prk, info, length)
+        try {
+            return expand(prk, info, length)
+        } finally {
+            prk.fill(0)
+        }
     }
 }

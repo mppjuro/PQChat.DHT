@@ -33,16 +33,20 @@ object AesGcmEngine {
 
         // Java GCM appends the 16-byte tag to the ciphertext
         val encryptedWithTag = cipher.doFinal(plaintext)
-        val ciphertextLen = encryptedWithTag.size - TAG_SIZE_BYTES
-        require(ciphertextLen == plaintext.size) { "Ciphertext size mismatch" }
+        try {
+            val ciphertextLen = encryptedWithTag.size - TAG_SIZE_BYTES
+            require(ciphertextLen == plaintext.size) { "Ciphertext size mismatch" }
 
-        val ciphertext = ByteArray(ciphertextLen)
-        val tag = ByteArray(TAG_SIZE_BYTES)
+            val ciphertext = ByteArray(ciphertextLen)
+            val tag = ByteArray(TAG_SIZE_BYTES)
 
-        System.arraycopy(encryptedWithTag, 0, ciphertext, 0, ciphertextLen)
-        System.arraycopy(encryptedWithTag, ciphertextLen, tag, 0, TAG_SIZE_BYTES)
+            System.arraycopy(encryptedWithTag, 0, ciphertext, 0, ciphertextLen)
+            System.arraycopy(encryptedWithTag, ciphertextLen, tag, 0, TAG_SIZE_BYTES)
 
-        return Pair(tag, ciphertext)
+            return Pair(tag, ciphertext)
+        } finally {
+            encryptedWithTag.fill(0)
+        }
     }
 
     /**
@@ -68,9 +72,13 @@ object AesGcmEngine {
 
         // Combine ciphertext and tag for Java Cipher
         val encryptedWithTag = ByteArray(ciphertext.size + tag.size)
-        System.arraycopy(ciphertext, 0, encryptedWithTag, 0, ciphertext.size)
-        System.arraycopy(tag, 0, encryptedWithTag, ciphertext.size, tag.size)
+        try {
+            System.arraycopy(ciphertext, 0, encryptedWithTag, 0, ciphertext.size)
+            System.arraycopy(tag, 0, encryptedWithTag, ciphertext.size, tag.size)
 
-        return cipher.doFinal(encryptedWithTag)
+            return cipher.doFinal(encryptedWithTag)
+        } finally {
+            encryptedWithTag.fill(0)
+        }
     }
 }

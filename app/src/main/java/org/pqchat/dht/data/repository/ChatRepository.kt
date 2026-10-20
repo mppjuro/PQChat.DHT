@@ -2421,9 +2421,9 @@ class ChatRepository(
                                     ackNum = contact.counterIn,
                                     timestamp = System.currentTimeMillis(),
                                     slotTarget = slot.target,
-                                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", "${msg.id}"),
+                                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", msg.contactId),
                                     ackTarget = targetAck,
-                                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", "${msg.id}"),
+                                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", msg.contactId),
                                     retryCount = msg.retryCount + 1
                                 )
                                 if (!isSelf) {
@@ -2474,9 +2474,9 @@ class ChatRepository(
                     ackNum = contact.counterIn,
                     timestamp = System.currentTimeMillis(),
                     slotTarget = slot.target,
-                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", "${msg.id}"),
+                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", msg.contactId),
                     ackTarget = targetAck,
-                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", "${msg.id}"),
+                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", msg.contactId),
                     retryCount = msg.retryCount + 1
                 )
 

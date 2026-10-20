@@ -4,8 +4,10 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import org.pqchat.dht.data.db.ContactEntity
 import org.pqchat.dht.data.db.EncryptedBlob
 import org.pqchat.dht.data.db.EncryptedText
+import org.pqchat.dht.data.db.GroupEntity
 import org.pqchat.dht.data.db.KeystoreConverters
 import java.security.GeneralSecurityException
 import javax.crypto.AEADBadTagException
@@ -230,5 +232,106 @@ class KeystoreCryptoTest {
         }
         assertEquals(testMasterKey, key4)
         assertEquals(listOf(false to false), attempts4)
+    }
+
+    @Test
+    fun testRowSwapAndTableSwapAttacksThrowAEADBadTagException() {
+        val converters = KeystoreConverters()
+
+        // 1. Create legitimate ContactEntity records for Alice and Bob
+        val aliceChainKeyBytes = CryptoUtils.secureRandomBytes(64)
+        val alice = ContactEntity(
+            id = "alice",
+            name = "Alice",
+            chainKeyOut = aliceChainKeyBytes,
+            chainKeyIn = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            counterIn = 0
+        )
+        val aliceDbBlob = converters.toDatabaseBlob(alice.chainKeyOut)
+        assertNotNull(aliceDbBlob)
+
+        val bob = ContactEntity(
+            id = "bob",
+            name = "Bob",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            chainKeyIn = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            counterIn = 0
+        )
+        val bobDbBlob = converters.toDatabaseBlob(bob.chainKeyOut)
+        assertNotNull(bobDbBlob)
+
+        // 2. Simulate Row-Swap attack in SQLite:
+        // Attacker swaps Alice's encrypted chainKeyOut column into Bob's row.
+        val swappedAliceBlobForBob = converters.fromDatabaseBlob(aliceDbBlob)
+        assertNotNull(swappedAliceBlobForBob)
+        assertEquals("contacts", swappedAliceBlobForBob!!.boundTable)
+        assertEquals("alice", swappedAliceBlobForBob.boundId)
+
+        // When Room reconstructs Bob's ContactEntity from the modified row, validateRowBinding() triggers:
+        val exRowSwap = assertThrows(AEADBadTagException::class.java) {
+            ContactEntity(
+                id = "bob",
+                name = "Bob",
+                chainKeyOut = swappedAliceBlobForBob,
+                chainKeyIn = bob.chainKeyIn,
+                counterOut = 0,
+                counterIn = 0
+            )
+        }
+        assertTrue(
+            "Exception message must mention row ID mismatch",
+            exRowSwap.message!!.contains("expected table='contacts', id='bob'") &&
+            exRowSwap.message!!.contains("id='alice'")
+        )
+
+        // 3. Simulate Table-Swap attack in SQLite:
+        // Attacker copies Alice's chainKeyOut from 'contacts' table into 'groups' table (myChainKeyOut column).
+        val exTableSwapGroup = assertThrows(AEADBadTagException::class.java) {
+            GroupEntity(
+                groupId = "group_sec_101",
+                groupName = "Secret Group",
+                myMemberId = "member_1",
+                myChainKeyOut = swappedAliceBlobForBob,
+                myCounterOut = 0
+            )
+        }
+        assertTrue(
+            "Exception message must mention table and ID mismatch",
+            exTableSwapGroup.message!!.contains("expected table='groups', id='group_sec_101'") &&
+            exTableSwapGroup.message!!.contains("table='contacts', id='alice'")
+        )
+
+        // 4. Reverse Table-Swap attack:
+        // Attacker copies a GroupEntity's myChainKeyOut into a ContactEntity row.
+        val groupChainKey = CryptoUtils.secureRandomBytes(64)
+        val group = GroupEntity(
+            groupId = "group_ops_202",
+            groupName = "Operations",
+            myMemberId = "member_2",
+            myChainKeyOut = groupChainKey,
+            myCounterOut = 0
+        )
+        val groupDbBlob = converters.toDatabaseBlob(group.myChainKeyOut)
+        assertNotNull(groupDbBlob)
+        val restoredGroupBlob = converters.fromDatabaseBlob(groupDbBlob)
+        assertNotNull(restoredGroupBlob)
+
+        val exTableSwapContact = assertThrows(AEADBadTagException::class.java) {
+            ContactEntity(
+                id = "bob",
+                name = "Bob",
+                chainKeyOut = restoredGroupBlob!!,
+                chainKeyIn = bob.chainKeyIn,
+                counterOut = 0,
+                counterIn = 0
+            )
+        }
+        assertTrue(
+            "Exception message must mention table and ID mismatch",
+            exTableSwapContact.message!!.contains("expected table='contacts', id='bob'") &&
+            exTableSwapContact.message!!.contains("table='groups', id='group_ops_202'")
+        )
     }
 }

@@ -437,93 +437,102 @@ object BinaryFrameCodec {
         val plaintext = AesGcmEngine.decrypt(key, iv, tag, ciphertext, aad)
         require(plaintext.size == CIPHERTEXT_SIZE)
 
-        val buffer = ByteBuffer.wrap(plaintext).order(ByteOrder.BIG_ENDIAN)
-        val msgType = buffer.get()
-        val seqNum = buffer.short.toInt() and 0xFFFF
-        val ackNum = buffer.short.toInt() and 0xFFFF
-        val timestampUTC = buffer.long
+        try {
+            val buffer = ByteBuffer.wrap(plaintext).order(ByteOrder.BIG_ENDIAN)
+            val msgType = buffer.get()
+            val seqNum = buffer.short.toInt() and 0xFFFF
+            val ackNum = buffer.short.toInt() and 0xFFFF
+            val timestampUTC = buffer.long
 
-        val payload = when (msgType) {
-            TYPE_HANDSHAKE_FINALIZE -> {
-                val ct = ByteArray(T1_CIPHERTEXT_SIZE)
-                val salt = ByteArray(T1_SALT_SIZE)
-                val confTag = ByteArray(T1_CONFIRMATION_TAG_SIZE)
-                buffer.get(ct)
-                buffer.get(salt)
-                buffer.get(confTag)
-                DecodedPayload.HandshakeFinalize(ct, salt, confTag)
-            }
-            TYPE_TEXT_MESSAGE -> {
-                val len = buffer.short.toInt() and 0xFFFF
-                require(len <= T2_MAX_TEXT_SIZE) { "Text length $len exceeds $T2_MAX_TEXT_SIZE" }
-                val textBytes = ByteArray(len)
-                buffer.get(textBytes)
-                DecodedPayload.TextMessage(String(textBytes, Charsets.UTF_8))
-            }
-            TYPE_REKEY_OFFER -> {
-                val epoch = buffer.int.toLong() and 0xFFFFFFFFL
-                val pk = ByteArray(T3_PUBLIC_KEY_SIZE)
-                buffer.get(pk)
-                DecodedPayload.RekeyOffer(epoch, pk)
-            }
-            TYPE_REKEY_RESPONSE -> {
-                val epoch = buffer.int.toLong() and 0xFFFFFFFFL
-                val ct = ByteArray(T4_CIPHERTEXT_SIZE)
-                buffer.get(ct)
-                DecodedPayload.RekeyResponse(epoch, ct)
-            }
-            TYPE_CHUNK_DATA -> {
-                val transferId = ByteArray(T5_TRANSFER_ID_SIZE)
-                buffer.get(transferId)
-                val chunkIndex = buffer.short.toInt() and 0xFFFF
-                val totalChunks = buffer.short.toInt() and 0xFFFF
-                val chunkLen = buffer.short.toInt() and 0xFFFF
-                require(chunkLen <= T5_MAX_CHUNK_SIZE) { "Chunk length $chunkLen exceeds $T5_MAX_CHUNK_SIZE" }
-                val data = ByteArray(chunkLen)
-                buffer.get(data)
-                DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data)
-            }
-            TYPE_GROUP_CONTROL -> {
-                val subType = buffer.get()
-                val gId = ByteArray(16)
-                buffer.get(gId)
-                val epoch = buffer.int.toLong() and 0xFFFFFFFFL
-                val sMemberId = ByteArray(16)
-                buffer.get(sMemberId)
-                val sChainKey = ByteArray(64)
-                buffer.get(sChainKey)
-                val curCounter = buffer.int.toLong() and 0xFFFFFFFFL
-                val nameLen = buffer.short.toInt() and 0xFFFF
-                val nameBytes = ByteArray(nameLen)
-                buffer.get(nameBytes)
-                val gName = String(nameBytes, Charsets.UTF_8)
-                val mCount = buffer.short.toInt() and 0xFFFF
-                val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()
-                for (i in 0 until mCount) {
-                    if (buffer.remaining() < 17) break
-                    val mId = ByteArray(16)
-                    buffer.get(mId)
-                    val mNameLen = buffer.get().toInt() and 0xFF
-                    val actualLen = minOf(mNameLen, buffer.remaining())
-                    val mNameBytes = ByteArray(actualLen)
-                    buffer.get(mNameBytes)
-                    memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
+            val payload = when (msgType) {
+                TYPE_HANDSHAKE_FINALIZE -> {
+                    val ct = ByteArray(T1_CIPHERTEXT_SIZE)
+                    val salt = ByteArray(T1_SALT_SIZE)
+                    val confTag = ByteArray(T1_CONFIRMATION_TAG_SIZE)
+                    buffer.get(ct)
+                    buffer.get(salt)
+                    buffer.get(confTag)
+                    DecodedPayload.HandshakeFinalize(ct, salt, confTag)
                 }
-                DecodedPayload.GroupControl(
-                    controlSubType = subType,
-                    groupId = gId,
-                    groupEpoch = epoch,
-                    senderMemberId = sMemberId,
-                    senderGroupChainKey = sChainKey,
-                    currentCounter = curCounter,
-                    groupName = gName,
-                    members = memberList
-                )
+                TYPE_TEXT_MESSAGE -> {
+                    val len = buffer.short.toInt() and 0xFFFF
+                    require(len <= T2_MAX_TEXT_SIZE) { "Text length $len exceeds $T2_MAX_TEXT_SIZE" }
+                    val textBytes = ByteArray(len)
+                    buffer.get(textBytes)
+                    DecodedPayload.TextMessage(String(textBytes, Charsets.UTF_8))
+                }
+                TYPE_REKEY_OFFER -> {
+                    val epoch = buffer.int.toLong() and 0xFFFFFFFFL
+                    val pk = ByteArray(T3_PUBLIC_KEY_SIZE)
+                    buffer.get(pk)
+                    DecodedPayload.RekeyOffer(epoch, pk)
+                }
+                TYPE_REKEY_RESPONSE -> {
+                    val epoch = buffer.int.toLong() and 0xFFFFFFFFL
+                    val ct = ByteArray(T4_CIPHERTEXT_SIZE)
+                    buffer.get(ct)
+                    DecodedPayload.RekeyResponse(epoch, ct)
+                }
+                TYPE_CHUNK_DATA -> {
+                    val transferId = ByteArray(T5_TRANSFER_ID_SIZE)
+                    buffer.get(transferId)
+                    val chunkIndex = buffer.short.toInt() and 0xFFFF
+                    val totalChunks = buffer.short.toInt() and 0xFFFF
+                    val chunkLen = buffer.short.toInt() and 0xFFFF
+                    require(chunkLen <= T5_MAX_CHUNK_SIZE) { "Chunk length $chunkLen exceeds $T5_MAX_CHUNK_SIZE" }
+                    val data = ByteArray(chunkLen)
+                    buffer.get(data)
+                    DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data)
+                }
+                TYPE_GROUP_CONTROL -> {
+                    val subType = buffer.get()
+                    val gId = ByteArray(16)
+                    buffer.get(gId)
+                    val epoch = buffer.int.toLong() and 0xFFFFFFFFL
+                    val sMemberId = ByteArray(16)
+                    buffer.get(sMemberId)
+                    val sChainKey = ByteArray(64)
+                    buffer.get(sChainKey)
+                    val curCounter = buffer.int.toLong() and 0xFFFFFFFFL
+                    val nameLen = buffer.short.toInt() and 0xFFFF
+                    require(nameLen in 0..64 && nameLen <= buffer.remaining()) { "Invalid group name length: $nameLen" }
+                    val nameBytes = ByteArray(nameLen)
+                    buffer.get(nameBytes)
+                    val gName = String(nameBytes, Charsets.UTF_8)
+                    val mCount = buffer.short.toInt() and 0xFFFF
+                    require(mCount <= 64) { "Member count $mCount exceeds maximum allowed 64" }
+                    val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()
+                    for (i in 0 until mCount) {
+                        if (buffer.remaining() < 17) break
+                        val mId = ByteArray(16)
+                        buffer.get(mId)
+                        val mNameLen = buffer.get().toInt() and 0xFF
+                        val actualLen = minOf(mNameLen, buffer.remaining())
+                        val mNameBytes = ByteArray(actualLen)
+                        buffer.get(mNameBytes)
+                        memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
+                    }
+                    DecodedPayload.GroupControl(
+                        controlSubType = subType,
+                        groupId = gId,
+                        groupEpoch = epoch,
+                        senderMemberId = sMemberId,
+                        senderGroupChainKey = sChainKey,
+                        currentCounter = curCounter,
+                        groupName = gName,
+                        members = memberList
+                    )
+                }
+                else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
             }
-            else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
-        }
 
-        return FrameMessage(msgType, seqNum, ackNum, timestampUTC, payload)
+            return FrameMessage(msgType, seqNum, ackNum, timestampUTC, payload)
+        } finally {
+            plaintext.fill(0)
+            ciphertext.fill(0)
+            iv.fill(0)
+            tag.fill(0)
+        }
     }
 
     fun unpackAeadFrame(
