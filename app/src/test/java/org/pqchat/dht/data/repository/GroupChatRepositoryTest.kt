@@ -4,7 +4,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
@@ -30,6 +32,20 @@ class GroupChatRepositoryTest {
             Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
             Security.insertProviderAt(BouncyCastleProvider(), 1)
         }
+    }
+
+    @Before
+    fun setUp() {
+        PollingWorker.clearRepublishTasks()
+        BlindRepublishPool.defaultInstance.clear()
+        DecoyTargetPool.defaultInstance.clear()
+    }
+
+    @After
+    fun tearDown() {
+        PollingWorker.clearRepublishTasks()
+        BlindRepublishPool.defaultInstance.clear()
+        DecoyTargetPool.defaultInstance.clear()
     }
 
     private class FakeContactDao : ContactDao {
@@ -816,6 +832,7 @@ class GroupChatRepositoryTest {
             val groupMemberDao = FakeGroupMemberDao()
             val ackQueue = PendingAckQueue()
             val outboundQueue = OutboundPoissonQueue()
+            val republishPool = BlindRepublishPool()
 
             val repo = ChatRepository(
                 contactDao = contactDao,
@@ -827,6 +844,7 @@ class GroupChatRepositoryTest {
                 pendingAckQueue = ackQueue,
                 outboundPoissonQueue = outboundQueue,
                 isStrictPoissonShapingEnabled = true,
+                blindRepublishPool = republishPool,
                 groupDao = groupDao,
                 groupMemberDao = groupMemberDao
             )
@@ -836,7 +854,7 @@ class GroupChatRepositoryTest {
                 dhtLeafNode = fakeDht,
                 lambda = lambda,
                 pendingAckQueue = ackQueue,
-                blindRepublishPool = repo.blindRepublishPool,
+                blindRepublishPool = republishPool,
                 outboundPoissonQueue = outboundQueue,
                 random = java.util.Random(505L)
             )

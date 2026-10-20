@@ -272,7 +272,7 @@ class ChatRepository(
 
     /**
      * Publishes parallel dummy decoy PUT slots to the DHT.
-     * Generates a 1000-byte CSPRNG packet signed by an ephemeral Ed25519 key,
+     * Generates a 900-byte CSPRNG packet signed by an ephemeral Ed25519 key,
      * blurs sender emission and registers the target in DecoyTargetPool.
      */
     internal suspend fun publishDecoyPutSlots(count: Int) {
@@ -281,7 +281,7 @@ class ChatRepository(
             val dummySeed = CryptoUtils.secureRandomBytes(32)
             val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
             val decoyTarget = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
-            val dummyPayload = CryptoUtils.secureRandomBytes(1000)
+            val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
             val ok = dhtLeafNode.putMutable(
                 target = decoyTarget,
@@ -429,7 +429,7 @@ class ChatRepository(
     }
 
     /**
-     * Sends a text message to contact via DHT with key hopping and 1000-byte frame.
+     * Sends a text message to contact via DHT with key hopping and 900-byte frame.
      * Protected by per-contact Mutex and backed by Room outbox queue.
      */
     suspend fun sendTextMessage(contactId: String, text: String): Boolean = withContext(Dispatchers.IO) {
@@ -3286,7 +3286,7 @@ class ChatRepository(
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
                     )
-                    groupMemberDao?.insertOrUpdate(updated)
+                    groupMemberDao.insertOrUpdate(updated)
                 } else if (placeholderMember != null) {
                     groupMemberDao?.deleteMember(groupId, placeholderMember.memberId)
                     val updated = placeholderMember.copy(
