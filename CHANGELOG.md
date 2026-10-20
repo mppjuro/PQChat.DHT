@@ -58,6 +58,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`20c9d80`](https://github.com/mppjuro/PQChat.DHT/commit/20c9d80b5266abea92e8d5e651481fd9ac0a3af3) (2026-10-20) — **test**: resolve loopback retention test assertion, remove compiler warnings, and migrate Firebase ktx deps
 - [`7c17622`](https://github.com/mppjuro/PQChat.DHT/commit/7c17622504ac3d157ab26bcb25ba7cdb07ac1b42) (2026-10-19) — **research-integrity**: eliminate synthetic generator records and calibrate 100-run testbed correlation
 - [`ec1773b`](https://github.com/mppjuro/PQChat.DHT/commit/ec1773b65c82ee684d4002cd060f40f4ad318224) (2026-10-18) — **ui**: resolve NullPointerException and disappearing QR code in HandshakeScreen Alice flow
 - [`0c039d3`](https://github.com/mppjuro/PQChat.DHT/commit/0c039d36d9fdedd43c19504332ea8a316ddc0846) (2026-10-18) — **dht**: resolve BEP 44 candidate routing poisoning and enhance remote put/get reliability
@@ -99,6 +100,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 ## 📦 Budowanie i Zależności (Build & CI)
 
 - [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
+- [`c575e47`](https://github.com/mppjuro/PQChat.DHT/commit/c575e4723b97834be5ef464b36ee6c67f9fcd7aa) (2026-10-19) — **deps**: bump com.google.firebase:firebase-bom from 33.9.0 to 35.0.2
 - [`abb1c4d`](https://github.com/mppjuro/PQChat.DHT/commit/abb1c4dc9d3caff04c48ff5057153f2a614e7123) (2026-10-19) — **deps**: bump actions/checkout from 4 to 7
 - [`d2da711`](https://github.com/mppjuro/PQChat.DHT/commit/d2da71125de7e4fcc521fa23aa2aa8220b6205a8) (2026-10-19) — **deps**: bump actions/setup-python from 5 to 7
 - [`98579ec`](https://github.com/mppjuro/PQChat.DHT/commit/98579ec67438ca3e1ae1eaff7638a957bca92427) (2026-10-19) — **retention**: fix multi-line indentation syntax error in dht_retention_24h.yml
@@ -137,6 +139,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`c007000`](https://github.com/mppjuro/PQChat.DHT/commit/c007000818a18cdec1adf141f0d456ca1b756950) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9060c74`](https://github.com/mppjuro/PQChat.DHT/commit/9060c7432fcc16997dce74e080bf781f49f7b927) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`fe91c94`](https://github.com/mppjuro/PQChat.DHT/commit/fe91c94c35cbc9baf37fea984480c833a140776f) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`5d2678c`](https://github.com/mppjuro/PQChat.DHT/commit/5d2678c5625fd873b2760531783b3987afde8dac) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
