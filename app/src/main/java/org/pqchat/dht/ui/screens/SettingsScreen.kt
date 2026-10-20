@@ -29,6 +29,7 @@ import org.pqchat.dht.ui.theme.NeonCyan
 import org.pqchat.dht.ui.util.BatteryOptimizationHelper
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,7 +74,10 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("Ustawienia", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("settings_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Wróć",
@@ -133,7 +137,9 @@ fun SettingsScreen(
                             icon = Icons.Default.BrightnessAuto,
                             isSelected = themeMode == ThemeMode.SYSTEM,
                             onClick = { viewModel.setThemeMode(ThemeMode.SYSTEM) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("theme_system_card")
                         )
 
                         ThemeOptionCard(
@@ -142,7 +148,9 @@ fun SettingsScreen(
                             icon = Icons.Default.DarkMode,
                             isSelected = themeMode == ThemeMode.DARK,
                             onClick = { viewModel.setThemeMode(ThemeMode.DARK) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("theme_dark_card")
                         )
 
                         ThemeOptionCard(
@@ -151,7 +159,9 @@ fun SettingsScreen(
                             icon = Icons.Default.LightMode,
                             isSelected = themeMode == ThemeMode.LIGHT,
                             onClick = { viewModel.setThemeMode(ThemeMode.LIGHT) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("theme_light_card")
                         )
                     }
                 }
@@ -843,7 +853,9 @@ fun SettingsScreen(
                             contentColor = Color.Black
                         ),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_self_notes_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Chat,

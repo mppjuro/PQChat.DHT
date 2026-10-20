@@ -30,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -143,10 +144,13 @@ fun HandshakeScreen(
             TopAppBar(
                 title = { Text("Secure Rendezvous Handshake") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.resetHandshakeState()
-                        onBack()
-                    }) {
+                    IconButton(
+                        onClick = {
+                            viewModel.resetHandshakeState()
+                            onBack()
+                        },
+                        modifier = Modifier.testTag("handshake_back_button")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
@@ -174,7 +178,8 @@ fun HandshakeScreen(
                         viewModel.resetHandshakeState()
                     },
                     text = { Text("Alice (Display QR)") },
-                    icon = { Icon(Icons.Default.QrCode, contentDescription = null) }
+                    icon = { Icon(Icons.Default.QrCode, contentDescription = null) },
+                    modifier = Modifier.testTag("handshake_alice_tab")
                 )
                 Tab(
                     selected = selectedTab == 1,
@@ -188,7 +193,8 @@ fun HandshakeScreen(
                         }
                     },
                     text = { Text("Bob (Scan & Join)") },
-                    icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) }
+                    icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
+                    modifier = Modifier.testTag("handshake_bob_tab")
                 )
             }
 
@@ -224,7 +230,9 @@ fun HandshakeScreen(
                         value = contactName,
                         onValueChange = { contactName = it },
                         label = { Text("Contact Name (e.g. Bob)") },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_alice_name_input"),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = NeonCyan,
                             unfocusedBorderColor = BorderGlass,
@@ -239,7 +247,9 @@ fun HandshakeScreen(
                             onClick = { viewModel.startAliceHandshake(contactName) },
                             colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("handshake_generate_qr_button")
                         ) {
                             Text("Generate ML-KEM-512 QR Code", fontWeight = FontWeight.Bold)
                         }
@@ -292,6 +302,7 @@ fun HandshakeScreen(
                                 modifier = Modifier
                                     .size(280.dp)
                                     .padding(8.dp)
+                                    .testTag("handshake_qr_code_card")
                             ) {
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
@@ -389,7 +400,9 @@ fun HandshakeScreen(
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1.5f)
+                                modifier = Modifier
+                                    .weight(1.5f)
+                                    .testTag("handshake_new_qr_button")
                             ) {
                                 Text("Nowy kod QR", fontWeight = FontWeight.Bold)
                             }
@@ -407,7 +420,9 @@ fun HandshakeScreen(
                         value = contactName,
                         onValueChange = { contactName = it },
                         label = { Text("Contact Name (e.g. Alice)") },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_bob_name_input"),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = NeonCyan,
                             unfocusedBorderColor = BorderGlass,
@@ -482,7 +497,9 @@ fun HandshakeScreen(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
                         border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f)),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_gallery_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.PhotoLibrary,
@@ -580,7 +597,9 @@ fun HandshakeScreen(
                         enabled = isPayloadValid && !isHandshaking,
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen, contentColor = Color.Black),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_encapsulate_button")
                     ) {
                         if (isHandshaking) {
                             CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(18.dp))
@@ -598,7 +617,9 @@ fun HandshakeScreen(
                     // Manual Paste Toggle
                     TextButton(
                         onClick = { isManualInputExpanded = !isManualInputExpanded },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .testTag("handshake_toggle_manual_paste")
                     ) {
                         Icon(
                             imageVector = if (isManualInputExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -625,7 +646,8 @@ fun HandshakeScreen(
                             label = { Text("QR Code Payload (Base64)") },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(120.dp),
+                                .height(120.dp)
+                                .testTag("handshake_manual_payload_input"),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
                                 unfocusedBorderColor = BorderGlass,
@@ -725,7 +747,9 @@ fun HandshakeScreen(
                             contentColor = Color.Black
                         ),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_confirm_verified_button")
                     ) {
                         Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
@@ -744,7 +768,9 @@ fun HandshakeScreen(
                         ),
                         border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.6f)),
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("handshake_confirm_unverified_button")
                     ) {
                         Text("Przejdź bez weryfikacji", fontWeight = FontWeight.Normal)
                     }

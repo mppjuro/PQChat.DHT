@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -193,7 +195,9 @@ fun ChatScreen(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     IconButton(
                                         onClick = { showSasDialog = true },
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .testTag("chat_sas_button")
                                     ) {
                                         Icon(
                                             imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
@@ -234,7 +238,10 @@ fun ChatScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("chat_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -244,11 +251,27 @@ fun ChatScreen(
                 },
                 actions = {
                     if (isGroup) {
-                        IconButton(onClick = { showGroupMembersDialog = true }) {
+                        IconButton(
+                            onClick = { showGroupMembersDialog = true },
+                            modifier = Modifier.testTag("chat_group_members_button")
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Groups,
                                 contentDescription = "Członkowie grupy",
                                 tint = CryptoPurple
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                viewModel.leaveGroup(contactId)
+                                onBack()
+                            },
+                            modifier = Modifier.testTag("chat_leave_group_icon_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ExitToApp,
+                                contentDescription = "Opuść grupę",
+                                tint = Color(0xFFFF5252)
                             )
                         }
                     }
@@ -342,7 +365,8 @@ fun ChatScreen(
                         placeholder = { Text("Wiadomość (szyfrowana ramka DHT)...", color = appColors.textSecondary) },
                         modifier = Modifier
                             .weight(1f)
-                            .padding(end = 8.dp),
+                            .padding(end = 8.dp)
+                            .testTag("chat_message_input"),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = appColors.primary,
                             unfocusedBorderColor = appColors.border,
@@ -363,7 +387,8 @@ fun ChatScreen(
                             }
                         },
                         modifier = Modifier
-                            .size(48.dp),
+                            .size(48.dp)
+                            .testTag("chat_send_button"),
                         colors = IconButtonDefaults.iconButtonColors(
                             containerColor = appColors.primary,
                             contentColor = Color.Black
@@ -599,6 +624,7 @@ fun ChatScreen(
                             viewModel.toggleContactVerified(contact.id, contact.isVerified)
                             showSasDialog = false
                         },
+                        modifier = Modifier.testTag("sas_verify_toggle_button"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (contact.isVerified) AmberWarning else ElectricGreen,
                             contentColor = Color.Black
@@ -611,7 +637,10 @@ fun ChatScreen(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showSasDialog = false }) {
+                    TextButton(
+                        onClick = { showSasDialog = false },
+                        modifier = Modifier.testTag("sas_dialog_close_button")
+                    ) {
                         Text("Zamknij", color = appColors.textSecondary)
                     }
                 },
@@ -720,8 +749,33 @@ fun ChatScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showGroupMembersDialog = false }) {
-                        Text("Zamknij", color = appColors.primary)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.leaveGroup(group.groupId)
+                                showGroupMembersDialog = false
+                                onBack()
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF5252)),
+                            border = BorderStroke(1.dp, Color(0xFFFF5252)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("leave_group_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Opuść grupę", color = Color(0xFFFF5252))
+                        }
+
+                        TextButton(
+                            onClick = { showGroupMembersDialog = false },
+                            modifier = Modifier.testTag("close_group_dialog_button")
+                        ) {
+                            Text("Zamknij", color = appColors.primary)
+                        }
                     }
                 },
                 containerColor = appColors.surface

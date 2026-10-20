@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -115,6 +117,7 @@ fun ContactListScreen(
                         modifier = Modifier
                             .padding(end = 4.dp)
                             .height(32.dp)
+                            .testTag("contact_list_sync_chip")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -159,14 +162,20 @@ fun ContactListScreen(
                         }
                     }
                     // ───────────────────────────────────────────────────────────────
-                    IconButton(onClick = onDiagnosticsClick) {
+                    IconButton(
+                        onClick = onDiagnosticsClick,
+                        modifier = Modifier.testTag("contact_list_diagnostics_button")
+                    ) {
                         Icon(
                             imageVector = Icons.Default.BarChart,
                             contentDescription = "Diagnostics",
                             tint = appColors.primary
                         )
                     }
-                    IconButton(onClick = onSettingsClick) {
+                    IconButton(
+                        onClick = onSettingsClick,
+                        modifier = Modifier.testTag("contact_list_settings_button")
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings",
@@ -189,7 +198,9 @@ fun ContactListScreen(
                     icon = { Icon(Icons.Default.GroupAdd, contentDescription = null) },
                     text = { Text("Nowa grupa") },
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .testTag("new_group_fab")
                 )
                 ExtendedFloatingActionButton(
                     onClick = onJoinChatClick,
@@ -198,7 +209,9 @@ fun ContactListScreen(
                     icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
                     text = { Text("Scan / Join (Bob)") },
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .testTag("join_chat_fab")
                 )
                 ExtendedFloatingActionButton(
                     onClick = onNewChatClick,
@@ -206,7 +219,8 @@ fun ContactListScreen(
                     contentColor = Color.Black,
                     icon = { Icon(Icons.Default.QrCode, contentDescription = null) },
                     text = { Text("New Chat (Alice)") },
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.testTag("new_chat_fab")
                 )
             }
         }
@@ -740,7 +754,9 @@ fun CreateGroupDialog(
                     onValueChange = { groupName = it },
                     label = { Text("Nazwa grupy") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("create_group_name_input"),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = CryptoPurple,
                         unfocusedBorderColor = appColors.border,
@@ -828,13 +844,17 @@ fun CreateGroupDialog(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = CryptoPurple,
                     contentColor = Color.White
-                )
+                ),
+                modifier = Modifier.testTag("create_group_confirm_button")
             ) {
                 Text("Utwórz grupę")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("create_group_cancel_button")
+            ) {
                 Text("Anuluj", color = appColors.textSecondary)
             }
         },

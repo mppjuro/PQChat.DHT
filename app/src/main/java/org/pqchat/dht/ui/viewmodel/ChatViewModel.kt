@@ -323,6 +323,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun leaveGroup(groupId: String) {
+        viewModelScope.launch {
+            repository.leaveGroup(groupId)
+            if (_selectedContactId.value == groupId) {
+                unselectContact()
+            }
+        }
+    }
+
     /** Trigger an immediate DHT poll (ignores current countdown). */
     fun triggerImmediatePoll() {
         pollingManager.triggerImmediatePoll()
