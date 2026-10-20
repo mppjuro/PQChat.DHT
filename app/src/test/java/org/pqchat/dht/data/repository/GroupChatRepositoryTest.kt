@@ -140,8 +140,8 @@ class GroupChatRepositoryTest {
             groupMap[member.memberId] = member
             getFlow(member.groupId).value = groupMap.values.filter { it.isActive }
         }
-        override suspend fun insertOrUpdateAll(membersList: List<GroupMemberEntity>) {
-            for (m in membersList) {
+        override suspend fun insertOrUpdateAll(members: List<GroupMemberEntity>) {
+            for (m in members) {
                 insertOrUpdate(m)
             }
         }

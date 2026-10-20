@@ -35,6 +35,18 @@ class HandshakeScreenStateTest {
         }
     }
 
+    private fun evaluateUiState(
+        state: HandshakeManager.AliceInitResult?,
+        onButtonVisible: () -> Unit,
+        onQrVisible: (HandshakeManager.AliceInitResult) -> Unit
+    ) {
+        if (state == null) {
+            onButtonVisible()
+        } else {
+            onQrVisible(state)
+        }
+    }
+
     @Test
     fun testAliceScreenInitialStateIsNullAndDoesNotTriggerNpe() {
         var aliceInitState: HandshakeManager.AliceInitResult? = null
@@ -49,13 +61,14 @@ class HandshakeScreenStateTest {
         var qrDisplayVisible = false
         var target0Displayed: String? = null
 
-        if (aliceInitState == null) {
-            generateButtonVisible = true
-        } else {
-            qrDisplayVisible = true
-            val state = aliceInitState
-            target0Displayed = CryptoUtils.toHex(state.target0)
-        }
+        evaluateUiState(
+            aliceInitState,
+            onButtonVisible = { generateButtonVisible = true },
+            onQrVisible = { state ->
+                qrDisplayVisible = true
+                target0Displayed = CryptoUtils.toHex(state.target0)
+            }
+        )
 
         assertTrue("Generate button must be visible when state is null", generateButtonVisible)
         assertFalse("QR display must NOT be visible when state is null", qrDisplayVisible)
@@ -77,13 +90,14 @@ class HandshakeScreenStateTest {
         var qrDisplayVisible = false
         var target0Hex: String? = null
 
-        @Suppress("KotlinConstantConditions")
-        if (aliceInitState == null) {
-            generateButtonVisible = true
-        } else {
-            qrDisplayVisible = true
-            target0Hex = CryptoUtils.toHex(state.target0)
-        }
+        evaluateUiState(
+            state,
+            onButtonVisible = { generateButtonVisible = true },
+            onQrVisible = { activeState ->
+                qrDisplayVisible = true
+                target0Hex = CryptoUtils.toHex(activeState.target0)
+            }
+        )
 
         assertFalse("Generate button must be hidden when QR is active", generateButtonVisible)
         assertTrue("QR display must be active when state is non-null", qrDisplayVisible)
@@ -120,8 +134,12 @@ class HandshakeScreenStateTest {
         assertNull("Alice state must be reset to null", aliceInitState)
 
         // Ensure state falls back to initial screen branch
-        @Suppress("KotlinConstantConditions")
-        val isButtonVisible = (aliceInitState == null)
+        var isButtonVisible = false
+        evaluateUiState(
+            aliceInitState,
+            onButtonVisible = { isButtonVisible = true },
+            onQrVisible = {}
+        )
         assertTrue("UI should transition back to initial generate button", isButtonVisible)
     }
 

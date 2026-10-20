@@ -2867,7 +2867,7 @@ class ChatRepository(
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
                     )
-                    groupMemberDao?.insertOrUpdate(updated)
+                    groupMemberDao.insertOrUpdate(updated)
                 } else {
                     val newMember = GroupMemberEntity(
                         groupId = groupId,
@@ -2897,7 +2897,7 @@ class ChatRepository(
             if (group.myCounterOut > 0 && group.myCounterOut % 50 == 0) {
                 rotateGroupSenderKeyInternal(group)
             }
-            val currentGroup = groupDao?.getGroupById(groupId) ?: group
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
 
             val slot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
             val groupIdBytes = uuidStringToBytes(groupId)
@@ -2933,7 +2933,7 @@ class ChatRepository(
                 )
             )
 
-            groupDao?.updateOutgoingState(
+            groupDao.updateOutgoingState(
                 groupId = groupId,
                 counterOut = currentGroup.myCounterOut + 1,
                 chainKeyOut = EncryptedBlob(slot.nextChainKey, "groups", groupId),
@@ -3083,7 +3083,7 @@ class ChatRepository(
 
                         // Advance incoming chain state for this member.
                         // STRICT REQUIREMENT: DO NOT overwrite with tombstone! Other members must read this same DHT slot.
-                        groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                        groupMemberDao.updateMemberIncomingStateWithBitmap(
                             groupId = groupId,
                             memberId = curMember.memberId,
                             counterIn = slot.counter + 1,

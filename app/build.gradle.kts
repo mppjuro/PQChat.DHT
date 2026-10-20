@@ -192,10 +192,9 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.1")
 
     // Firebase (Master's Thesis Anonymous Research Telemetry - Firestore & Auth only)
-    val firebaseBom = platform("com.google.firebase:firebase-bom:35.0.2")
-    implementation(firebaseBom)
-    implementation("com.google.firebase:firebase-firestore-ktx")
-    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

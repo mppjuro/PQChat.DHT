@@ -123,10 +123,14 @@ class LoopbackMeasurementHarnessTest {
         val initialPuts = fakeDht.putCalls.get()
         val initialGets = fakeDht.getCalls.get()
 
+        var simulatedDelays = 0
         val results = harness.evaluateRetentionScenarios(
             networkEnv = LoopbackMeasurementHarness.NetworkEnvironment.WIFI,
             horizonsHours = listOf(5.0 / 60.0, 1.0),
-            sampleSizePerHorizon = 10
+            sampleSizePerHorizon = 10,
+            delayProvider = { delayMs ->
+                simulatedDelays++
+            }
         )
 
         assertEquals(4, results.size) // 2 horizons * 2 republish modes
@@ -137,9 +141,10 @@ class LoopbackMeasurementHarnessTest {
             assertEquals(1.0, r.survivalRate, 0.001)
         }
 
-        // Verify that real PUT and GET calls were executed on DhtClient
+        // Verify that real PUT and GET calls were executed on DhtClient and delayProvider was invoked
         assertTrue("PUT calls must have been made to DhtClient", fakeDht.putCalls.get() > initialPuts)
         assertTrue("GET calls must have been made to DhtClient", fakeDht.getCalls.get() > initialGets)
+        assertTrue("Delay provider should have been invoked for retention horizons", simulatedDelays > 0)
 
         fakeDht.stop()
     }
