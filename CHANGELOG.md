@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`2103513`](https://github.com/mppjuro/PQChat.DHT/commit/21035136caed2ffd5f5ddbd45cbb88919fcd10f0) (2026-10-20) — **traffic**: enforce strict Poisson traffic shaping and eliminate group correlation vulnerability
 - [`b0640c2`](https://github.com/mppjuro/PQChat.DHT/commit/b0640c2dc02ecaeea2e6db8b913c99aa76426aa8) (2026-10-19) — **group-chat**: implement decentralized Post-Quantum Sender Keys over BEP 44
 - [`b2e150e`](https://github.com/mppjuro/PQChat.DHT/commit/b2e150ed2b7ea5878bd78c0e6c088aa2600599af) (2026-10-19) — **research**: rozbudowa modułu badawczego i telemetrii pod kątem pracy magisterskiej
 - [`e397907`](https://github.com/mppjuro/PQChat.DHT/commit/e3979073102c4622c4e2f11070720d2cd2ce2c9a) (2026-10-19) — **traffic**: implement strict Poisson traffic shaping and statistical tests
@@ -58,6 +59,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`076398a`](https://github.com/mppjuro/PQChat.DHT/commit/076398a234951b91d1743e52f31e8d699ede27e7) (2026-10-20) — **test**: use deterministic seeded PRNG for Kolmogorov-Smirnov Poisson tests
 - [`20c9d80`](https://github.com/mppjuro/PQChat.DHT/commit/20c9d80b5266abea92e8d5e651481fd9ac0a3af3) (2026-10-20) — **test**: resolve loopback retention test assertion, remove compiler warnings, and migrate Firebase ktx deps
 - [`7c17622`](https://github.com/mppjuro/PQChat.DHT/commit/7c17622504ac3d157ab26bcb25ba7cdb07ac1b42) (2026-10-19) — **research-integrity**: eliminate synthetic generator records and calibrate 100-run testbed correlation
 - [`ec1773b`](https://github.com/mppjuro/PQChat.DHT/commit/ec1773b65c82ee684d4002cd060f40f4ad318224) (2026-10-18) — **ui**: resolve NullPointerException and disappearing QR code in HandshakeScreen Alice flow
@@ -139,6 +141,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`c9d864b`](https://github.com/mppjuro/PQChat.DHT/commit/c9d864b5eac0926f938748a51518d9ca04616667) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c007000`](https://github.com/mppjuro/PQChat.DHT/commit/c007000818a18cdec1adf141f0d456ca1b756950) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9060c74`](https://github.com/mppjuro/PQChat.DHT/commit/9060c7432fcc16997dce74e080bf781f49f7b927) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`fe91c94`](https://github.com/mppjuro/PQChat.DHT/commit/fe91c94c35cbc9baf37fea984480c833a140776f) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
