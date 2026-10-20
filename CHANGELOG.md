@@ -61,6 +61,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`71cdcf9`](https://github.com/mppjuro/PQChat.DHT/commit/71cdcf99da56473851c0cb04f8699efa1e694fdb) (2026-10-20) — **service**: implement Android 14/15 targetSdk 35 FGS onTimeout, clean docs and remove duplicates
 - [`fa87eff`](https://github.com/mppjuro/PQChat.DHT/commit/fa87eff385394ec48292ed376bbf6e913f000838) (2026-10-20) — **traffic**: align decoy PUT slot payload to 900 bytes and isolate republish pool in group tests
 - [`99edaa6`](https://github.com/mppjuro/PQChat.DHT/commit/99edaa6d0e1d4ba08e6028ead1a99f3886967fa2) (2026-10-20) — **tor**: enforce cold-start fail-closed policy to prevent clearnet IP leaks
 - [`dc79c94`](https://github.com/mppjuro/PQChat.DHT/commit/dc79c9473b7ccd3d889f9f10b013962264d1f127) (2026-10-20) — Room DB row-swap attack with entity AAD binding validation and wipe plaintext memory
@@ -146,6 +147,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`5c54580`](https://github.com/mppjuro/PQChat.DHT/commit/5c54580cbecc9411d0efbd355e97a94097496410) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`81b5bfa`](https://github.com/mppjuro/PQChat.DHT/commit/81b5bfa9f33b2a9a61a5d81cb460cdc3fe6f6dc8) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`16bc81f`](https://github.com/mppjuro/PQChat.DHT/commit/16bc81f27d00c7bd8b788efb0516952af3c857ba) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`4276474`](https://github.com/mppjuro/PQChat.DHT/commit/42764740cf58b559f2e153451db3199092e570ea) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
