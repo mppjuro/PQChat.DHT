@@ -98,6 +98,9 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📦 Budowanie i Zależności (Build & CI)
 
+- [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
+- [`abb1c4d`](https://github.com/mppjuro/PQChat.DHT/commit/abb1c4dc9d3caff04c48ff5057153f2a614e7123) (2026-10-19) — **deps**: bump actions/checkout from 4 to 7
+- [`d2da711`](https://github.com/mppjuro/PQChat.DHT/commit/d2da71125de7e4fcc521fa23aa2aa8220b6205a8) (2026-10-19) — **deps**: bump actions/setup-python from 5 to 7
 - [`98579ec`](https://github.com/mppjuro/PQChat.DHT/commit/98579ec67438ca3e1ae1eaff7638a957bca92427) (2026-10-19) — **retention**: fix multi-line indentation syntax error in dht_retention_24h.yml
 - [`bb245e9`](https://github.com/mppjuro/PQChat.DHT/commit/bb245e97aec91e9529ec24af3c72aa386dcf30a2) (2026-10-19) — **nightly**: prefix nightly release APKs with ISO 8601 build date and set schedule to midnight (22:00 UTC)
 - [`5909593`](https://github.com/mppjuro/PQChat.DHT/commit/590959339c8774483b78c65225f317b3df13967f) (2026-10-17) — **nightly**: split slow tests into parallel jobs, add timeouts, advance schedule 8h, and optimize loopback leaf node
@@ -134,6 +137,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`9060c74`](https://github.com/mppjuro/PQChat.DHT/commit/9060c7432fcc16997dce74e080bf781f49f7b927) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`fe91c94`](https://github.com/mppjuro/PQChat.DHT/commit/fe91c94c35cbc9baf37fea984480c833a140776f) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`5d2678c`](https://github.com/mppjuro/PQChat.DHT/commit/5d2678c5625fd873b2760531783b3987afde8dac) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`b30239e`](https://github.com/mppjuro/PQChat.DHT/commit/b30239e3a35f9fde7f5c91b8e925470736fce6d7) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
