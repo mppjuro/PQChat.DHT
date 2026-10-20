@@ -11,9 +11,11 @@ set -euo pipefail
 #   (2) Secrecy & Key Confirmation (Dual Ratchet Chains & Hybrid Handshake).
 #   (3) Forward Secrecy of Past Messages after subsequent state compromise.
 #   (4) Post-Compromise Security (PCS / Self-Healing) via Hybrid KEM Rekey.
-#   (5) Anti-Replay Injective Agreement for Handshake & Data Packets.
+#       (5) Anti-Replay Injective Agreement for Handshake & Data Packets.
 #   (6) Target Unlinkability & 900-Byte Safe Tombstone / Cover Traffic
 #       Indistinguishability (Observational Equivalence).
+#   (7) Group Chat Protocol & Key Rotation (PCS/FS, Frame 0x06 Secrecy,
+#       and Group AAD Binding).
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,17 +79,23 @@ echo "==========================================================================
 run_model() {
     local pv_file="$1"
     local full_path="${SCRIPT_DIR}/${pv_file}"
-    if [[ "${PROVERIF_CMD}" == wsl* ]]; then
-        local wsl_path
+    local target_path="${full_path}"
+
+    if [[ "${PROVERIF_CMD}" == *.exe ]]; then
         if command -v wslpath >/dev/null 2>&1; then
-            wsl_path="$(wslpath -u "${full_path}")"
-        else
-            wsl_path="$(echo "${full_path}" | sed -E 's|^([A-Za-z]):|/mnt/\L\1|; s|\\|/|g')"
+            target_path="$(wslpath -w "${full_path}")"
+        elif command -v cygpath >/dev/null 2>&1; then
+            target_path="$(cygpath -w "${full_path}")"
         fi
-        ${PROVERIF_CMD} "${wsl_path}"
-    else
-        ${PROVERIF_CMD} "${full_path}"
+    elif [[ "${PROVERIF_CMD}" == wsl* ]]; then
+        if command -v wslpath >/dev/null 2>&1; then
+            target_path="$(wslpath -u "${full_path}")"
+        else
+            target_path="$(echo "${full_path}" | sed -E 's|^([A-Za-z]):|/mnt/\L\1|; s|\\|/|g')"
+        fi
     fi
+
+    ${PROVERIF_CMD} "${target_path}"
 }
 
 rm -f "${REPORT_FILE}"
@@ -128,18 +136,23 @@ Summary of Verified Security Lemmas:
     - Lemma 5.2: Injective Message Delivery (Type 0x02)
 (6) pqchat_unlinkability.pv (Target & 900B Tombstone Indistinguishability):
     - Lemma 6.1: Observational Equivalence of Ephemeral Targets & 900B Tombstones
+(7) pqchat_group_protocol.pv (Group Chat Protocol & Key Rotation Model):
+    - Lemma 7.1: Secrecy of senderGroupChainKey (Type 0x06 over 1-on-1 Hybrid Channel)
+    - Lemma 7.2: Authenticity of Group Messages with AAD Binding
+    - Lemma 7.3: Forward Secrecy of Past Group Messages
+    - Lemma 7.4: Post-Compromise Security (PCS) in Epoch + 1
 ------------------------------------------------------------------------------
 
 EOF
 
-echo "[*] 1/6 Verifying Unified Protocol (pqchat_protocol.pv)..."
+echo "[*] 1/7 Verifying Unified Protocol (pqchat_protocol.pv)..."
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "1. Unified Protocol Model (pqchat_protocol.pv)" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 OUT_PROTOCOL="$(run_model "pqchat_protocol.pv" 2>&1)"
 echo "${OUT_PROTOCOL}" >> "${REPORT_FILE}"
 
-echo "[*] 2/6 Verifying Secrecy & Confirmation (pqchat_secrecy.pv)..."
+echo "[*] 2/7 Verifying Secrecy & Confirmation (pqchat_secrecy.pv)..."
 echo "" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "2. Secrecy & Confirmation Model (pqchat_secrecy.pv)" >> "${REPORT_FILE}"
@@ -147,7 +160,7 @@ echo "==========================================================================
 OUT_SECRECY="$(run_model "pqchat_secrecy.pv" 2>&1)"
 echo "${OUT_SECRECY}" >> "${REPORT_FILE}"
 
-echo "[*] 3/6 Verifying Forward Secrecy (pqchat_forward_secrecy.pv)..."
+echo "[*] 3/7 Verifying Forward Secrecy (pqchat_forward_secrecy.pv)..."
 echo "" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "3. Forward Secrecy Model (pqchat_forward_secrecy.pv)" >> "${REPORT_FILE}"
@@ -155,7 +168,7 @@ echo "==========================================================================
 OUT_FS="$(run_model "pqchat_forward_secrecy.pv" 2>&1)"
 echo "${OUT_FS}" >> "${REPORT_FILE}"
 
-echo "[*] 4/6 Verifying Post-Compromise Security (pqchat_post_compromise.pv)..."
+echo "[*] 4/7 Verifying Post-Compromise Security (pqchat_post_compromise.pv)..."
 echo "" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "4. Post-Compromise Security Model (pqchat_post_compromise.pv)" >> "${REPORT_FILE}"
@@ -163,7 +176,7 @@ echo "==========================================================================
 OUT_PCS="$(run_model "pqchat_post_compromise.pv" 2>&1)"
 echo "${OUT_PCS}" >> "${REPORT_FILE}"
 
-echo "[*] 5/6 Verifying Anti-Replay Injective Agreement (pqchat_replay.pv)..."
+echo "[*] 5/7 Verifying Anti-Replay Injective Agreement (pqchat_replay.pv)..."
 echo "" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "5. Anti-Replay Model (pqchat_replay.pv)" >> "${REPORT_FILE}"
@@ -171,13 +184,21 @@ echo "==========================================================================
 OUT_REPLAY="$(run_model "pqchat_replay.pv" 2>&1)"
 echo "${OUT_REPLAY}" >> "${REPORT_FILE}"
 
-echo "[*] 6/6 Verifying Target Unlinkability & 900B Tombstones (pqchat_unlinkability.pv)..."
+echo "[*] 6/7 Verifying Target Unlinkability & 900B Tombstones (pqchat_unlinkability.pv)..."
 echo "" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 echo "6. Target Unlinkability & Tombstone Indistinguishability (pqchat_unlinkability.pv)" >> "${REPORT_FILE}"
 echo "==============================================================================" >> "${REPORT_FILE}"
 OUT_UNLINK="$(run_model "pqchat_unlinkability.pv" 2>&1)"
 echo "${OUT_UNLINK}" >> "${REPORT_FILE}"
+
+echo "[*] 7/7 Verifying Group Chat Protocol & Key Rotation (pqchat_group_protocol.pv)..."
+echo "" >> "${REPORT_FILE}"
+echo "==============================================================================" >> "${REPORT_FILE}"
+echo "7. Group Chat Protocol & Key Rotation Model (pqchat_group_protocol.pv)" >> "${REPORT_FILE}"
+echo "==============================================================================" >> "${REPORT_FILE}"
+OUT_GROUP="$(run_model "pqchat_group_protocol.pv" 2>&1)"
+echo "${OUT_GROUP}" >> "${REPORT_FILE}"
 
 # Validation of all lemmas
 ERRORS=0
@@ -230,20 +251,26 @@ validate_result "${OUT_REPLAY}" "RESULT inj-event(MessageAccepted(target_2,seq,m
 echo "--- 6. Target Unlinkability & 900B Tombstones ---"
 validate_result "${OUT_UNLINK}" "RESULT Observational equivalence is true." "Lemma 6.1: Target Unlinkability & Tombstone Indistinguishability"
 
+echo "--- 7. Group Chat Protocol & Key Rotation Model ---"
+validate_result "${OUT_GROUP}" "RESULT not attacker(secret_sender_group_chain_key\[\]) is true." "Lemma 7.1: Secrecy of Group Sender Key (Type 0x06)"
+validate_result "${OUT_GROUP}" "RESULT inj-event(BobRecvGroupMsg(target_x,g_id,sender_id,msg)) ==> inj-event(AliceSentGroupMsg(target_x,g_id,sender_id,msg)) is true." "Lemma 7.2: Authenticity of Group Messages with AAD Binding"
+validate_result "${OUT_GROUP}" "RESULT not attacker(secret_group_msg_pre_leave\[\]) is true." "Lemma 7.3: Forward Secrecy of Past Group Messages"
+validate_result "${OUT_GROUP}" "RESULT not attacker(secret_group_msg_post_leave\[\]) is true." "Lemma 7.4: Post-Compromise Security in Epoch + 1"
+
 cat << EOF >> "${REPORT_FILE}"
 
 ==============================================================================
 FINAL AUDIT VERDICT:
 ==============================================================================
 $([ ${ERRORS} -eq 0 ] && echo "STATUS: ALL LEMMAS FORMALLY PROVED (PASS)" || echo "STATUS: VERIFICATION FAILED WITH ${ERRORS} ERRORS")
-Total Lemmas Tested: 20
+Total Lemmas Tested: 24
 Failed: ${ERRORS}
 ==============================================================================
 EOF
 
 echo "=============================================================================="
 if [[ ${ERRORS} -eq 0 ]]; then
-    echo " [SUCCESS] All 6 formal verification models PROVED successfully (20/20 lemmas passed)."
+    echo " [SUCCESS] All 7 formal verification models PROVED successfully (24/24 lemmas passed)."
     echo " Detailed report written to: ${REPORT_FILE}"
     echo "=============================================================================="
     exit 0

@@ -32,6 +32,7 @@ object BinaryFrameCodec {
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
     const val GROUP_SUBTYPE_LEAVE: Byte = 0x03
+    const val GROUP_REKEY_MESSAGE_INTERVAL = 50
 
     // Type 0x01 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + Salt (24 B) + Tag (32 B) = 856 <= 859
     const val T1_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
@@ -355,6 +356,52 @@ object BinaryFrameCodec {
 
         return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
     }
+
+    fun encodeGroupRekey(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        groupId: ByteArray,
+        groupEpoch: Long,
+        senderMemberId: ByteArray,
+        senderGroupChainKey: ByteArray,
+        currentCounter: Long,
+        groupName: String = ""
+    ): ByteArray = encodeGroupControl(
+        seqNum = seqNum,
+        ackNum = ackNum,
+        timestampUTC = timestampUTC,
+        controlSubType = GROUP_SUBTYPE_REKEY,
+        groupId = groupId,
+        groupEpoch = groupEpoch,
+        senderMemberId = senderMemberId,
+        senderGroupChainKey = senderGroupChainKey,
+        currentCounter = currentCounter,
+        groupName = groupName,
+        members = emptyList()
+    )
+
+    fun encodeGroupLeave(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        groupId: ByteArray,
+        groupEpoch: Long,
+        senderMemberId: ByteArray,
+        groupName: String = ""
+    ): ByteArray = encodeGroupControl(
+        seqNum = seqNum,
+        ackNum = ackNum,
+        timestampUTC = timestampUTC,
+        controlSubType = GROUP_SUBTYPE_LEAVE,
+        groupId = groupId,
+        groupEpoch = groupEpoch,
+        senderMemberId = senderMemberId,
+        senderGroupChainKey = ByteArray(64),
+        currentCounter = 0L,
+        groupName = groupName,
+        members = emptyList()
+    )
 
     private fun packPlaintext(
         msgType: Byte,

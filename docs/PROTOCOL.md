@@ -258,7 +258,13 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
 
 ### 7.3. Nagłówek Wewnętrzny Ładunku (13 bajtów Plaintextu)
 1. `MsgType` (1 B): identyfikator typu komunikatu.
-2. `SeqNum` (2 B, UInt16 BE): numer sekwencyjny nadawcy $Counter_{out}$.
+   * `0x01` – Handshake Online Finalize
+   * `0x02` – Standardowa wiadomość tekstowa
+   * `0x03` – PQC Rekey Offer (Nowy klucz publiczny)
+   * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
+   * `0x05` – Segment transferu blokowego (Chunk)
+   * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+2. `SeqNum` (2 B, UInt16 BE): numer sekwencyjny nadawcy $`Counter_{out}`$.
 3. `AckNum` (2 B, UInt16 BE): ostatnio odebrany numer sekwencyjny rozmówcy.
 4. `TimestampUTC` (8 B, Int64 BE): uniksowy znacznik czasu w milisekundach.
 
@@ -269,9 +275,9 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `Key Confirmation Tag`: 32 B
   * `CSPRNG Padding`: 3 B (859 - 856)
 * **Typ 0x02 (Wiadomość Tekstowa):**
-  * `TextLength` ($L$): 2 B (UInt16, wartość $\le 857$)
-  * `UTF-8 Payload`: $L$ bajtów (maksymalnie 857 B czystego tekstu)
-  * `CSPRNG Padding`: $857 - L$ bajtów
+  * `TextLength` ($`L`$): 2 B (UInt16, wartość $`\le 857`$)
+  * `UTF-8 Payload`: $`L`$ bajtów (maksymalnie 857 B czystego tekstu)
+  * `CSPRNG Padding`: $`857 - L`$ bajtów
 * **Typ 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
   * `Combined PublicKey`: 832 B (800 B ML-KEM-512 + 32 B X25519)
@@ -284,40 +290,132 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `TransferID`: 16 B (UUID)
   * `ChunkIndex`: 2 B (UInt16 BE)
   * `TotalChunks`: 2 B (UInt16 BE)
-  * `ChunkLength` ($C$): 2 B (UInt16, wartość $\le 837$)
-  * `BinaryData`: $C$ bajtów
-  * `CSPRNG Padding`: $837 - C$ bajtów
+  * `ChunkLength` ($`C`$): 2 B (UInt16, wartość $`\le 837`$)
+  * `BinaryData`: $`C`$ bajtów
+  * `CSPRNG Padding`: $`837 - C`$ bajtów
+* **Typ 0x06 (Kontrola Grupy — TYPE_GROUP_CONTROL):**
+  * `ControlSubType`: 1 B (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
+  * `GroupID`: 16 B (UUID grupy)
+  * `GroupEpoch`: 4 B (UInt32 BE)
+  * `SenderMemberID`: 16 B (UUID nadawcy w grupie)
+  * `SenderGroupChainKey`: 64 B (bieżący łańcuch nadawcy grupy)
+  * `CurrentCounter`: 4 B (UInt32 BE)
+  * `GroupNameLength` ($`N`$): 2 B (UInt16, wartość $`\le 64`$)
+  * `GroupName`: $`N`$ bajtów UTF-8 (maksymalnie 64 bajty)
+  * `MemberCount` ($`M`$): 2 B (UInt16, liczba uczestników, wartość $`\le 64`$)
+  * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
+  * `CSPRNG Padding`: $`859 - \text{długość}`$ bajtów
 
 ### 7.5. Dodatkowe Typy Rekordów o Stałym Rozmiarze 900 B
-* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $Target_{ACK}$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).
+* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).
 * **Cover Traffic Dummy:** Nieskoordynowany rekord 900 bajtów wypełniony czystym szumem CSPRNG (`DhtLeafNode.sendCoverTrafficDummy`).
 * **Bezpieczny Tombstone (Czyszczenie slotu po odebraniu):** Zastąpienie skonsumowanej wiadomości rekordem o sztywnym rozmiarze dokładnie 900 bajtów czystego szumu CSPRNG pod `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). Zastępuje to podatny wariant 0 B, który ujawniał węzłom i podsłuchiwaczom fakt oraz dokładny moment dostarczenia wiadomości. Dzięki zachowaniu stałego rozmiaru 900 B (904 B w Bencode) operacja tombstone jest całkowicie nierozróżnialna od normalnego zapisu lub ruchu maskującego.
 
 ---
 
-## 8. Epoki Sekwencji i Okno Wyprzedzające (Lookahead Window)
+## 8. Czaty Grupowe, Dystrybucja Kluczy i Tabele Bazy Danych
 
-Z uwagi na asynchroniczny charakter sieci UDP i DHT, pakiety mogą docierać z opóźnieniem lub w zmienionej kolejności.
+Architektura czatów grupowych w PQChat.DHT opiera się na zdecentralizowanym protokole **Sender Keys** transportowanym w całości przez bezpieczne kanały punkt-punkt (1-na-1) chronione hybrydowym KEM (ML-KEM-512 + X25519) i AES-256-GCM.
 
-1. **Okno Wyprzedzające (Lookahead Window $n \dots n+4$):**
-   * Odbiorca, którego bieżący licznik to $Counter_{in} = n$, oblicza klucze i odpytuje DHT o sloty $Target_n, Target_{n+1}, \dots, Target_{n+4}$.
-   * Jeśli nadejdzie wiadomość $n+2$, klucze dla slotów $n$ oraz $n+1$ są zapisywane w bezpiecznej tabeli `skipped_keys` (zaszyfrowane Keystore'em) na wypadek późniejszego dotarcia tych pakietów.
-2. **Mapa Bitowa Odebranych Wiadomości (Sliding Bitmap Window):**
-   * Do wykrywania i odrzucania duplikatów (Anti-Replay) służy 1024-bitowa przesuwna mapa bitowa w `ContactEntity`.
-   * Wiadomości o numerze $SeqNum < Counter_{in} - 1024$ są bezwzględnie odrzucane.
+### 8.1. Dystrybucja Kluczy Grupowych (Ramka Typu 0x06)
+1. Każdy uczestnik generuje niezależny, własny 64-bajtowy stan łańcucha nadawczego $`myChainKeyOut`$.
+2. Klucz nadawcy ($`senderGroupChainKey`$) jest dystrybuowany do innych członków za pomocą ramki Typu `0x06` (`TYPE_GROUP_CONTROL`):
+   * `GROUP_SUBTYPE_INVITE` (`0x01`): zaproszenie do grupy, lista członków oraz początkowy klucz nadawcy.
+   * `GROUP_SUBTYPE_REKEY` (`0x02`): rotacja klucza nadawcy (nowa epoka $`groupEpoch + 1`$, licznik zresetowany do 0).
+   * `GROUP_SUBTYPE_LEAVE` (`0x03`): opuszczenie grupy przez członka.
+3. Ramki Typu `0x06` są przesyłane wyłącznie w torach 1-na-1 pomiędzy zweryfikowanymi kontaktami, co gwarantuje pełną poufność kluczy grupowych (udowodnione w lemacie 7.1 ProVerif).
+
+### 8.2. Adresowanie bez Śledzenia Grupy (Individual Recipient Slots)
+Aby wyeliminować korelację obserwatorów sieciowych DHT monitorujących zapytania (Group Follower Correlation), nadawca generuje **unikalny, niezależny adres docelowy DHT dla każdego odbiorcy wiadomości grupowej**:
+$`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)`$
+Dzięki temu operacja nadania wiadomości do $`k`$ odbiorców skutkuje $`k`$ odrębnymi zapisami pod pseudolosowe adresy, a żaden węzeł DHT nie jest w stanie powiązać ze sobą slotów ani ustalić składu grupy.
+
+### 8.3. Wiązanie Kontekstu AEAD (Group AAD Binding)
+Każda wiadomość grupowa (tekst Typu `0x02` lub chunk Typu `0x05`) szyfrowana jest algorytmem AES-256-GCM z dowiązaniem AAD o sztywnej strukturze:
+$`\text{AAD} = \text{Target} \ (20\text{ B}) \parallel GroupID \ (16\text{ B}) \parallel SenderMemberID \ (16\text{ B})`$
+Próba przekierowania rekordu do innej grupy lub podszycia się pod innego członka powoduje natychmiastowy błąd weryfikacji taga AEAD (`AEADBadTagException`).
+
+### 8.4. Rotacja Kluczy Grupowych: Forward Secrecy i Post-Compromise Security (PCS)
+1. **Automatyczna rotacja co 50 wiadomości:**
+   Gdy $`Counter_{out} > 0`$ oraz $`Counter_{out} \equiv 0 \pmod{50}`$ (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), nadawca generuje nowy klucz CSPRNG, zwiększa epokę $`groupEpoch + 1`$, zeruje licznik i rozsyła `GROUP_SUBTYPE_REKEY` do wszystkich aktywnych członków.
+2. **Wymuszona rotacja przy odejściu członka (`GROUP_SUBTYPE_LEAVE`):**
+   Gdy dowolny uczestnik opuszcza grupę i nadaje `GROUP_SUBTYPE_LEAVE`:
+   * Wszyscy pozostali członkowie natychmiast oznaczają go w bazie danych jako nieaktywnego (`isActive = false`).
+   * Każdy aktywny członek natychmiast rotuje swój $`myChainKeyOut`$ do nowej epoki $`groupEpoch + 1`$.
+   * Ramka `GROUP_SUBTYPE_REKEY` jest transmitowana **wyłącznie do pozostałych, aktywnych członków** (`if (!member.isActive || member.memberId == myMemberId) continue`).
+   * Zapewnia to **Post-Compromise Security / Post-Leave Secrecy**: wychodzący uczestnik nie ma dostępu do nowego stanu łańcucha i nie jest w stanie odszyfrować żadnej przyszłej wiadomości grupowej. Jednocześnie jednokierunkowość KDF chroni wiadomości przeszłe (**Forward Secrecy**).
+
+### 8.5. Schemat Tabel Bazy Danych Room
+
+#### Tabela `groups`:
+```sql
+CREATE TABLE IF NOT EXISTS groups (
+    groupId TEXT NOT NULL PRIMARY KEY,
+    groupName TEXT NOT NULL,
+    myMemberId TEXT NOT NULL,
+    myChainKeyOut BLOB NOT NULL,
+    myCounterOut INTEGER NOT NULL DEFAULT 0,
+    groupEpoch INTEGER NOT NULL DEFAULT 1,
+    createdAt INTEGER NOT NULL,
+    lastActive INTEGER NOT NULL,
+    isActive INTEGER NOT NULL DEFAULT 1
+);
+```
+* `myChainKeyOut`: 64-bajtowy stan łańcucha wyjściowego chroniony przez `EncryptedBlob` kluczem z Android Keystore powiązanym z wierszem `groups_${groupId}`.
+* `groupEpoch`: numer epoki klucza (inkrementowany przy każdym rekeyu lub odejściu członka).
+
+#### Tabela `group_members`:
+```sql
+CREATE TABLE IF NOT EXISTS group_members (
+    groupId TEXT NOT NULL,
+    memberId TEXT NOT NULL,
+    contactId TEXT,
+    memberName TEXT NOT NULL,
+    chainKeyIn BLOB NOT NULL,
+    counterIn INTEGER NOT NULL DEFAULT 0,
+    joinedAt INTEGER NOT NULL,
+    isActive INTEGER NOT NULL DEFAULT 1,
+    receivedBitmapBase INTEGER NOT NULL DEFAULT 0,
+    receivedBitmap BLOB NOT NULL,
+    PRIMARY KEY(groupId, memberId)
+);
+CREATE INDEX IF NOT EXISTS index_group_members_groupId ON group_members (groupId);
+CREATE INDEX IF NOT EXISTS index_group_members_contactId ON group_members (contactId);
+```
+* `chainKeyIn`: 64-bajtowy stan łańcucha wejściowego danego członka chroniony przez `EncryptedBlob` powiązany z `group_members_${groupId}_${memberId}`.
+* `isActive`: flaga aktywności (`1` = aktywny, `0` = opuścił grupę / usunięty).
+* `receivedBitmap`: przesuwna mapa bitowa replay protection zapobiegająca duplikacji pakietów grupowych.
 
 ---
 
-## 9. Formalna Weryfikacja Bezpieczeństwa (docs/formal/)
+## 9. Epoki Sekwencji i Okno Wyprzedzające (Lookahead Window)
 
-Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/` (20 lematów w 6 modelach):
+Z uwagi na asynchroniczny charakter sieci UDP i DHT, pakiety mogą docierać z opóźnieniem lub w zmienionej kolejności.
 
-1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $MasterKey$, stanów łańcucha $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
-2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt, obronę dualną **Hybrid KEM (ML-KEM-512 + X25519)** oraz zobowiązanie SAS ($Commitment$).
-3. **Forward Secrecy (Poufność Przeszła):** Dowiedziono (`pqchat_forward_secrecy.pv`), że wyciek stanu łańcucha $ChainKey_1$ nie pozwala na odszyfrowanie wcześniejszych wiadomości ($msg_0$).
+1. **Okno Wyprzedzające (Lookahead Window $`n \dots n+4`$):**
+   * Odbiorca, którego bieżący licznik to $`Counter_{in} = n`$, oblicza klucze i odpytuje DHT o sloty $`Target_n, Target_{n+1}, \dots, Target_{n+4}`$.
+   * Jeśli nadejdzie wiadomość $`n+2`$, klucze dla slotów $`n`$ oraz $`n+1`$ są zapisywane w bezpiecznej tabeli `skipped_keys` (zaszyfrowane Keystore'em) na wypadek późniejszego dotarcia tych pakietów.
+2. **Mapa Bitowa Odebranych Wiadomości (Sliding Bitmap Window):**
+   * Do wykrywania i odrzucania duplikatów (Anti-Replay) służy 1024-bitowa przesuwna mapa bitowa w `ContactEntity` oraz `GroupMemberEntity`.
+   * Wiadomości o numerze $`SeqNum < Counter_{in} - 1024`$ są bezwzględnie odrzucane.
+
+---
+
+## 10. Formalna Weryfikacja Bezpieczeństwa (docs/formal/)
+
+Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/` (24 lematy w 7 modelach):
+
+1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $`MasterKey`$, stanów łańcucha $`ChainKey_{A \to B}, ChainKey_{B \to A}`$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
+2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt, obronę dualną **Hybrid KEM (ML-KEM-512 + X25519)** oraz zobowiązanie SAS ($`Commitment`$).
+3. **Forward Secrecy (Poufność Przeszła):** Dowiedziono (`pqchat_forward_secrecy.pv`), że wyciek stanu łańcucha $`ChainKey_1`$ nie pozwala na odszyfrowanie wcześniejszych wiadomości ($`msg_0`$).
 4. **Post-Compromise Security (PCS / Samoleczenie):** Dowiedziono (`pqchat_post_compromise.pv`), że po wycieku kluczy łańcucha asymetryczna rotacja hybrydowa KEM przywraca pełną poufność kolejnych wiadomości.
 5. **Odporność na Replay (Anti-Replay):** Dowiedziono injektywnej akceptacji pakietów (`pqchat_replay.pv` i `pqchat_protocol.pv`), uniemożliwiającej adwersarzowi wstrzyknięcie zduplikowanych ramek w sieci DHT oraz dowiedziono bezpiecznego unieważniania slotu pod sekwencją monotoniczną.
-6. **Brak powiązania z tożsamością i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability):** Dowiedziono równoważności obserwacyjnej (`diff-equivalence` w `pqchat_unlinkability.pv`) gwarantującej, że adresy $\text{Target}_i = \text{SHA-1}(pk_i)$ nie ujawniają tożsamości stron (Metadata-Free Rendezvous), a 900-bajtowe rekordy Tombstone (szum CSPRNG) są nierozróżnialne od normalnych ramek i ruchu maskującego.
+6. **Brak powiązania z tożsamością i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability):** Dowiedziono równoważności obserwacyjnej (`diff-equivalence` w `pqchat_unlinkability.pv`) gwarantującej, że adresy $`\text{Target}_i = \text{SHA-1}(pk_i)`$ nie ujawniają tożsamości stron (Metadata-Free Rendezvous), a 900-bajtowe rekordy Tombstone (szum CSPRNG) są nierozróżnialne od normalnych ramek i ruchu maskującego.
+7. **Czaty Grupowe i Rotacja Kluczy (Group Protocol & PCS/FS):** Dowiedziono (`pqchat_group_protocol.pv`):
+   * poufności klucza łańcucha nadawcy grupy dystrybuowanego w ramce Typu `0x06` (`TYPE_GROUP_CONTROL`) przez hybrydowy kanał 1-na-1 (ML-KEM-512 + X25519),
+   * autentyczności wiadomości grupowych z wiązaniem AAD ($`\text{Target} \parallel GroupID \parallel SenderMemberID`$),
+   * Forward Secrecy dawnych wiadomości grupowych przed odejściem członka,
+   * Post-Compromise Security / Post-Leave Secrecy wiadomości w nowej epoce $`groupEpoch + 1`$ po odejściu członka (`GROUP_SUBTYPE_LEAVE`) i rotacji kluczy.
 
 Uruchomienie weryfikacji formalnej:
 ```bash
@@ -326,7 +424,7 @@ bash docs/formal/run_verification.sh
 
 ---
 
-## 10. Strategia Testowania
+## 11. Strategia Testowania
 
 Zgodnie z wytycznymi projektu testy podzielono na dwie kategorie:
 

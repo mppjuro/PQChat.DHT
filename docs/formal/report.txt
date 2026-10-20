@@ -1,6 +1,6 @@
 ==============================================================================
 PQChat.DHT Protocol Formal Verification Report
-Generated: 2026-10-15 20:46:14 UTC
+Generated: 2026-10-20 14:18:24 UTC
 Verifier: ProVerif 2.05 (Symbolic Dolev-Yao Protocol Analyzer)
 ==============================================================================
 
@@ -32,6 +32,11 @@ Summary of Verified Security Lemmas:
     - Lemma 5.2: Injective Message Delivery (Type 0x02)
 (6) pqchat_unlinkability.pv (Target & 900B Tombstone Indistinguishability):
     - Lemma 6.1: Observational Equivalence of Ephemeral Targets & 900B Tombstones
+(7) pqchat_group_protocol.pv (Group Chat Protocol & Key Rotation Model):
+    - Lemma 7.1: Secrecy of senderGroupChainKey (Type 0x06 over 1-on-1 Hybrid Channel)
+    - Lemma 7.2: Authenticity of Group Messages with AAD Binding
+    - Lemma 7.3: Forward Secrecy of Past Group Messages
+    - Lemma 7.4: Post-Compromise Security (PCS) in Epoch + 1
 ------------------------------------------------------------------------------
 
 ==============================================================================
@@ -396,6 +401,7 @@ Query inj-event(AliceRecvReply(target_2,seq,msg)) ==> inj-event(BobSentReply(tar
 
 --------------------------------------------------------------
 
+
 ==============================================================================
 2. Secrecy & Confirmation Model (pqchat_secrecy.pv)
 ==============================================================================
@@ -644,6 +650,7 @@ Query inj-event(AliceFinished(pkA_kem,pkA_x,seed,ckA2B,ckB2A)) ==> inj-event(Bob
 
 --------------------------------------------------------------
 
+
 ==============================================================================
 3. Forward Secrecy Model (pqchat_forward_secrecy.pv)
 ==============================================================================
@@ -801,6 +808,7 @@ Query not attacker(secret_msg_1[]) is false.
 
 --------------------------------------------------------------
 
+
 ==============================================================================
 4. Post-Compromise Security Model (pqchat_post_compromise.pv)
 ==============================================================================
@@ -905,6 +913,7 @@ Query not attacker(secret_new_chain_key[]) is true.
 Query not attacker(secret_msg_post_rekey[]) is true.
 
 --------------------------------------------------------------
+
 
 ==============================================================================
 5. Anti-Replay Model (pqchat_replay.pv)
@@ -1103,6 +1112,7 @@ Query inj-event(MessageAccepted(target_2,seq,msg)) ==> inj-event(MessageSent(tar
 
 --------------------------------------------------------------
 
+
 ==============================================================================
 6. Target Unlinkability & Tombstone Indistinguishability (pqchat_unlinkability.pv)
 ==============================================================================
@@ -1187,10 +1197,227 @@ Observational equivalence is true.
 
 --------------------------------------------------------------
 
+
+==============================================================================
+7. Group Chat Protocol & Key Rotation Model (pqchat_group_protocol.pv)
+==============================================================================
+Linear part:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Completing equations...
+Completed equations:
+x_ecdh(a,x_pk(b)) = x_ecdh(b,x_pk(a))
+Convergent part: No equation.
+Process 0 (that is, the initial process):
+{1}new sk_kem_a: kem_skey;
+{2}let pk_kem_a: kem_pkey = kem_pk(sk_kem_a) in
+{3}new sk_x_a: x_skey;
+{4}let pk_x_a: x_pkey = x_pk(sk_x_a) in
+{5}new r_kem: bitstring;
+{6}let ct_kem: kem_ct = kem_encap_ct(pk_kem_a,r_kem) in
+{7}let ss_kem: bitstring = kem_encap_ss(pk_kem_a,r_kem) in
+{8}new sk_x_b: x_skey;
+{9}let pk_x_b: x_pkey = x_pk(sk_x_b) in
+{10}let ss_x: bitstring = x_ecdh(sk_x_b,pk_x_a) in
+{11}let ss_1on1: bitstring = hybrid_combine(ss_x,ss_kem) in
+{12}out(c_dht, (ct_kem,pk_x_b));
+{13}let ss_kem_dec: bitstring = kem_decap(sk_kem_a,ct_kem) in
+{14}let ss_x_dec: bitstring = x_ecdh(sk_x_a,pk_x_b) in
+{15}let ss_1on1_dec: bitstring = hybrid_combine(ss_x_dec,ss_kem_dec) in
+{16}let k_1on1: bitstring = get_msg_key(hkdf_expand(ss_1on1,TAG_1ON1_HANDSHAKE)) in
+{17}new group_id: bitstring;
+{18}new alice_member_id: bitstring;
+{19}new bob_member_id: bitstring;
+{20}new charlie_member_id: bitstring;
+{21}new epoch_1: bitstring;
+{22}new iv_ctrl: bitstring;
+{23}new target_1on1: bitstring;
+{24}let aad_ctrl: bitstring = (target_1on1,TAG_1ON1_DIRECTION) in
+{25}let control_payload: bitstring = (TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id,epoch_1,alice_member_id,secret_sender_group_chain_key) in
+{26}let c_ctrl: bitstring = aead_enc(k_1on1,iv_ctrl,control_payload,aad_ctrl) in
+{27}out(c_dht, (target_1on1,c_ctrl,iv_ctrl));
+{28}in(c_dht, (=target_1on1,in_c_ctrl: bitstring,in_iv_ctrl: bitstring));
+{29}let (=TYPE_GROUP_CONTROL,=SUBTYPE_INVITE,=group_id,=epoch_1,=alice_member_id,recv_sender_chain_key: bitstring) = aead_dec(k_1on1,in_iv_ctrl,in_c_ctrl,aad_ctrl) in
+{30}let entropy_grp_0: bitstring = hkdf_expand(secret_sender_group_chain_key,TAG_GRP_STEP_0) in
+{31}let k_grp_msg_0: bitstring = get_msg_key(entropy_grp_0) in
+{32}let ed_seed_grp_0: bitstring = get_ed_seed(entropy_grp_0) in
+{33}let next_alice_chain_key: bitstring = get_next_chain(entropy_grp_0) in
+{34}let ed_sk_grp_0: ed_skey = ed_derive_sk(ed_seed_grp_0) in
+{35}let target_grp_0: bitstring = sha1(ed_pk(ed_sk_grp_0)) in
+{36}let aad_grp_0: bitstring = (target_grp_0,group_id,alice_member_id) in
+{37}new iv_grp_0: bitstring;
+{38}event AliceSentGroupMsg(target_grp_0,group_id,alice_member_id,secret_group_msg_pre_leave);
+{39}let c_grp_0: bitstring = aead_enc(k_grp_msg_0,iv_grp_0,secret_group_msg_pre_leave,aad_grp_0) in
+{40}let sig_grp_0: bitstring = ed_sign(ed_sk_grp_0,(target_grp_0,c_grp_0)) in
+{41}out(c_dht, (target_grp_0,c_grp_0,iv_grp_0,sig_grp_0));
+{42}in(c_dht, (=target_grp_0,in_c_grp: bitstring,in_iv_grp: bitstring,in_sig_grp: bitstring));
+{43}let entropy_b_0: bitstring = hkdf_expand(recv_sender_chain_key,TAG_GRP_STEP_0) in
+{44}let k_b_0: bitstring = get_msg_key(entropy_b_0) in
+{45}let ed_seed_b_0: bitstring = get_ed_seed(entropy_b_0) in
+{46}let target_b_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_b_0))) in
+{47}let aad_b_0: bitstring = (target_b_0,group_id,alice_member_id) in
+{48}let dec_grp_msg: bitstring = aead_dec(k_b_0,in_iv_grp,in_c_grp,aad_b_0) in
+{49}event BobRecvGroupMsg(target_b_0,group_id,alice_member_id,dec_grp_msg);
+{50}out(c_dht, (TYPE_GROUP_CONTROL,SUBTYPE_LEAVE,group_id,epoch_1,alice_member_id));
+{51}out(c_leak, (alice_member_id,next_alice_chain_key));
+{52}new fresh_bob_sender_chain_key_epoch_2: bitstring;
+{53}new epoch_2: bitstring;
+{54}new k_1on1_bob_charlie: bitstring;
+{55}new iv_rekey: bitstring;
+{56}new target_rekey: bitstring;
+{57}let aad_rekey: bitstring = (target_rekey,TAG_1ON1_DIRECTION) in
+{58}let rekey_payload: bitstring = (TYPE_GROUP_CONTROL,SUBTYPE_REKEY,group_id,epoch_2,bob_member_id,fresh_bob_sender_chain_key_epoch_2) in
+{59}let c_rekey: bitstring = aead_enc(k_1on1_bob_charlie,iv_rekey,rekey_payload,aad_rekey) in
+{60}out(c_dht, (target_rekey,c_rekey,iv_rekey));
+{61}let entropy_post: bitstring = hkdf_expand(fresh_bob_sender_chain_key_epoch_2,TAG_GRP_STEP_POST) in
+{62}let k_post: bitstring = get_msg_key(entropy_post) in
+{63}let ed_seed_post: bitstring = get_ed_seed(entropy_post) in
+{64}let target_post: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_post))) in
+{65}let aad_post: bitstring = (target_post,group_id,bob_member_id) in
+{66}new iv_post: bitstring;
+{67}let c_post: bitstring = aead_enc(k_post,iv_post,secret_group_msg_post_leave,aad_post) in
+{68}let sig_post: bitstring = ed_sign(ed_derive_sk(ed_seed_post),(target_post,c_post)) in
+{69}out(c_dht, (target_post,c_post,iv_post,sig_post))
+
+--  Process 1 (that is, process 0, with let moved downwards):
+{1}new sk_kem_a: kem_skey;
+{3}new sk_x_a: x_skey;
+{5}new r_kem: bitstring;
+{8}new sk_x_b: x_skey;
+{9}let pk_x_b: x_pkey = x_pk(sk_x_b) in
+{2}let pk_kem_a: kem_pkey = kem_pk(sk_kem_a) in
+{6}let ct_kem: kem_ct = kem_encap_ct(pk_kem_a,r_kem) in
+{12}out(c_dht, (ct_kem,pk_x_b));
+{13}let ss_kem_dec: bitstring = kem_decap(sk_kem_a,ct_kem) in
+{17}new group_id: bitstring;
+{18}new alice_member_id: bitstring;
+{19}new bob_member_id: bitstring;
+{20}new charlie_member_id: bitstring;
+{21}new epoch_1: bitstring;
+{22}new iv_ctrl: bitstring;
+{23}new target_1on1: bitstring;
+{25}let control_payload: bitstring = (TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id,epoch_1,alice_member_id,secret_sender_group_chain_key) in
+{24}let aad_ctrl: bitstring = (target_1on1,TAG_1ON1_DIRECTION) in
+{4}let pk_x_a: x_pkey = x_pk(sk_x_a) in
+{10}let ss_x: bitstring = x_ecdh(sk_x_b,pk_x_a) in
+{7}let ss_kem: bitstring = kem_encap_ss(pk_kem_a,r_kem) in
+{11}let ss_1on1: bitstring = hybrid_combine(ss_x,ss_kem) in
+{16}let k_1on1: bitstring = get_msg_key(hkdf_expand(ss_1on1,TAG_1ON1_HANDSHAKE)) in
+{26}let c_ctrl: bitstring = aead_enc(k_1on1,iv_ctrl,control_payload,aad_ctrl) in
+{27}out(c_dht, (target_1on1,c_ctrl,iv_ctrl));
+{28}in(c_dht, (=target_1on1,in_c_ctrl: bitstring,in_iv_ctrl: bitstring));
+{29}let (=TYPE_GROUP_CONTROL,=SUBTYPE_INVITE,=group_id,=epoch_1,=alice_member_id,recv_sender_chain_key: bitstring) = aead_dec(k_1on1,in_iv_ctrl,in_c_ctrl,aad_ctrl) in
+{37}new iv_grp_0: bitstring;
+{30}let entropy_grp_0: bitstring = hkdf_expand(secret_sender_group_chain_key,TAG_GRP_STEP_0) in
+{32}let ed_seed_grp_0: bitstring = get_ed_seed(entropy_grp_0) in
+{34}let ed_sk_grp_0: ed_skey = ed_derive_sk(ed_seed_grp_0) in
+{35}let target_grp_0: bitstring = sha1(ed_pk(ed_sk_grp_0)) in
+{38}event AliceSentGroupMsg(target_grp_0,group_id,alice_member_id,secret_group_msg_pre_leave);
+{36}let aad_grp_0: bitstring = (target_grp_0,group_id,alice_member_id) in
+{31}let k_grp_msg_0: bitstring = get_msg_key(entropy_grp_0) in
+{39}let c_grp_0: bitstring = aead_enc(k_grp_msg_0,iv_grp_0,secret_group_msg_pre_leave,aad_grp_0) in
+{40}let sig_grp_0: bitstring = ed_sign(ed_sk_grp_0,(target_grp_0,c_grp_0)) in
+{41}out(c_dht, (target_grp_0,c_grp_0,iv_grp_0,sig_grp_0));
+{42}in(c_dht, (=target_grp_0,in_c_grp: bitstring,in_iv_grp: bitstring,in_sig_grp: bitstring));
+{43}let entropy_b_0: bitstring = hkdf_expand(recv_sender_chain_key,TAG_GRP_STEP_0) in
+{45}let ed_seed_b_0: bitstring = get_ed_seed(entropy_b_0) in
+{46}let target_b_0: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_b_0))) in
+{47}let aad_b_0: bitstring = (target_b_0,group_id,alice_member_id) in
+{44}let k_b_0: bitstring = get_msg_key(entropy_b_0) in
+{48}let dec_grp_msg: bitstring = aead_dec(k_b_0,in_iv_grp,in_c_grp,aad_b_0) in
+{49}event BobRecvGroupMsg(target_b_0,group_id,alice_member_id,dec_grp_msg);
+{50}out(c_dht, (TYPE_GROUP_CONTROL,SUBTYPE_LEAVE,group_id,epoch_1,alice_member_id));
+{33}let next_alice_chain_key: bitstring = get_next_chain(entropy_grp_0) in
+{51}out(c_leak, (alice_member_id,next_alice_chain_key));
+{52}new fresh_bob_sender_chain_key_epoch_2: bitstring;
+{53}new epoch_2: bitstring;
+{54}new k_1on1_bob_charlie: bitstring;
+{55}new iv_rekey: bitstring;
+{56}new target_rekey: bitstring;
+{58}let rekey_payload: bitstring = (TYPE_GROUP_CONTROL,SUBTYPE_REKEY,group_id,epoch_2,bob_member_id,fresh_bob_sender_chain_key_epoch_2) in
+{57}let aad_rekey: bitstring = (target_rekey,TAG_1ON1_DIRECTION) in
+{59}let c_rekey: bitstring = aead_enc(k_1on1_bob_charlie,iv_rekey,rekey_payload,aad_rekey) in
+{60}out(c_dht, (target_rekey,c_rekey,iv_rekey));
+{66}new iv_post: bitstring;
+{61}let entropy_post: bitstring = hkdf_expand(fresh_bob_sender_chain_key_epoch_2,TAG_GRP_STEP_POST) in
+{63}let ed_seed_post: bitstring = get_ed_seed(entropy_post) in
+{64}let target_post: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_post))) in
+{65}let aad_post: bitstring = (target_post,group_id,bob_member_id) in
+{62}let k_post: bitstring = get_msg_key(entropy_post) in
+{67}let c_post: bitstring = aead_enc(k_post,iv_post,secret_group_msg_post_leave,aad_post) in
+{68}let sig_post: bitstring = ed_sign(ed_derive_sk(ed_seed_post),(target_post,c_post)) in
+{69}out(c_dht, (target_post,c_post,iv_post,sig_post))
+
+-- Query not attacker(secret_sender_group_chain_key[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 180 rules (45 with conclusion selected). Queue: 53 rules.
+400 rules inserted. Base: 252 rules (52 with conclusion selected). Queue: 104 rules.
+600 rules inserted. Base: 346 rules (52 with conclusion selected). Queue: 92 rules.
+800 rules inserted. Base: 500 rules (84 with conclusion selected). Queue: 81 rules.
+1000 rules inserted. Base: 658 rules (84 with conclusion selected). Queue: 48 rules.
+Starting query not attacker(secret_sender_group_chain_key[])
+RESULT not attacker(secret_sender_group_chain_key[]) is true.
+-- Query inj-event(BobRecvGroupMsg(target_x,g_id,sender_id,msg)) ==> inj-event(AliceSentGroupMsg(target_x,g_id,sender_id,msg)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 186 rules (45 with conclusion selected). Queue: 62 rules.
+400 rules inserted. Base: 284 rules (53 with conclusion selected). Queue: 134 rules.
+600 rules inserted. Base: 418 rules (53 with conclusion selected). Queue: 166 rules.
+800 rules inserted. Base: 571 rules (53 with conclusion selected). Queue: 164 rules.
+1000 rules inserted. Base: 718 rules (93 with conclusion selected). Queue: 136 rules.
+1200 rules inserted. Base: 914 rules (93 with conclusion selected). Queue: 172 rules.
+1400 rules inserted. Base: 1053 rules (93 with conclusion selected). Queue: 154 rules.
+1600 rules inserted. Base: 1210 rules (93 with conclusion selected). Queue: 71 rules.
+1800 rules inserted. Base: 1206 rules (93 with conclusion selected). Queue: 36 rules.
+Starting query inj-event(BobRecvGroupMsg(target_x,g_id,sender_id,msg)) ==> inj-event(AliceSentGroupMsg(target_x,g_id,sender_id,msg))
+goal reachable: b-inj-event(AliceSentGroupMsg(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),group_id[],alice_member_id[],secret_group_msg_pre_leave[]),@occ38_1) && attacker(in_sig_grp_1) && b-event(@p_act(@occ42[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),aead_enc(get_msg_key(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0)),iv_grp_0_1,secret_group_msg_pre_leave[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),group_id[],alice_member_id[])),iv_grp_0_1,in_sig_grp_1))) && b-inj-event(AliceSentGroupMsg(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),group_id[],alice_member_id[],secret_group_msg_pre_leave[]),@occ38_2) -> inj-event(BobRecvGroupMsg(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),group_id[],alice_member_id[],secret_group_msg_pre_leave[]),@occ49_1)
+The 1st, 3rd, 4th hypotheses occur strictly before the conclusion.
+The 2nd hypothesis occurs before the conclusion.
+Abbreviations:
+iv_grp_0_1 = iv_grp_0[in_iv_ctrl = iv_ctrl[],in_c_ctrl = aead_enc(get_msg_key(hkdf_expand(hybrid_combine(x_ecdh(sk_x_b[],x_pk(sk_x_a[])),kem_encap_ss(kem_pk(sk_kem_a[]),r_kem[])),TAG_1ON1_HANDSHAKE)),iv_ctrl[],(TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id[],epoch_1[],alice_member_id[],secret_sender_group_chain_key[]),(target_1on1[],TAG_1ON1_DIRECTION))]
+@occ49_1 = @occ49[in_sig_grp = in_sig_grp_1,in_iv_grp = iv_grp_0_1,in_c_grp = aead_enc(get_msg_key(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0)),iv_grp_0_1,secret_group_msg_pre_leave[],(sha1(ed_pk(ed_derive_sk(get_ed_seed(hkdf_expand(secret_sender_group_chain_key[],TAG_GRP_STEP_0))))),group_id[],alice_member_id[])),in_iv_ctrl = iv_ctrl[],in_c_ctrl = aead_enc(get_msg_key(hkdf_expand(hybrid_combine(x_ecdh(sk_x_a[],x_pk(sk_x_b[])),kem_encap_ss(kem_pk(sk_kem_a[]),r_kem[])),TAG_1ON1_HANDSHAKE)),iv_ctrl[],(TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id[],epoch_1[],alice_member_id[],secret_sender_group_chain_key[]),(target_1on1[],TAG_1ON1_DIRECTION))]
+@occ38_1 = @occ38[in_iv_ctrl = iv_ctrl[],in_c_ctrl = aead_enc(get_msg_key(hkdf_expand(hybrid_combine(x_ecdh(sk_x_b[],x_pk(sk_x_a[])),kem_encap_ss(kem_pk(sk_kem_a[]),r_kem[])),TAG_1ON1_HANDSHAKE)),iv_ctrl[],(TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id[],epoch_1[],alice_member_id[],secret_sender_group_chain_key[]),(target_1on1[],TAG_1ON1_DIRECTION))]
+@occ38_2 = @occ38[in_iv_ctrl = iv_ctrl[],in_c_ctrl = aead_enc(get_msg_key(hkdf_expand(hybrid_combine(x_ecdh(sk_x_a[],x_pk(sk_x_b[])),kem_encap_ss(kem_pk(sk_kem_a[]),r_kem[])),TAG_1ON1_HANDSHAKE)),iv_ctrl[],(TYPE_GROUP_CONTROL,SUBTYPE_INVITE,group_id[],epoch_1[],alice_member_id[],secret_sender_group_chain_key[]),(target_1on1[],TAG_1ON1_DIRECTION))]
+RESULT inj-event(BobRecvGroupMsg(target_x,g_id,sender_id,msg)) ==> inj-event(AliceSentGroupMsg(target_x,g_id,sender_id,msg)) is true.
+-- Query not attacker(secret_group_msg_pre_leave[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 180 rules (45 with conclusion selected). Queue: 53 rules.
+400 rules inserted. Base: 252 rules (52 with conclusion selected). Queue: 104 rules.
+600 rules inserted. Base: 346 rules (52 with conclusion selected). Queue: 92 rules.
+800 rules inserted. Base: 500 rules (84 with conclusion selected). Queue: 81 rules.
+1000 rules inserted. Base: 658 rules (84 with conclusion selected). Queue: 48 rules.
+Starting query not attacker(secret_group_msg_pre_leave[])
+RESULT not attacker(secret_group_msg_pre_leave[]) is true.
+-- Query not attacker(secret_group_msg_post_leave[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+200 rules inserted. Base: 180 rules (45 with conclusion selected). Queue: 53 rules.
+400 rules inserted. Base: 252 rules (52 with conclusion selected). Queue: 104 rules.
+600 rules inserted. Base: 346 rules (52 with conclusion selected). Queue: 92 rules.
+800 rules inserted. Base: 500 rules (84 with conclusion selected). Queue: 81 rules.
+1000 rules inserted. Base: 658 rules (84 with conclusion selected). Queue: 48 rules.
+Starting query not attacker(secret_group_msg_post_leave[])
+RESULT not attacker(secret_group_msg_post_leave[]) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query not attacker(secret_sender_group_chain_key[]) is true.
+
+Query inj-event(BobRecvGroupMsg(target_x,g_id,sender_id,msg)) ==> inj-event(AliceSentGroupMsg(target_x,g_id,sender_id,msg)) is true.
+
+Query not attacker(secret_group_msg_pre_leave[]) is true.
+
+Query not attacker(secret_group_msg_post_leave[]) is true.
+
+--------------------------------------------------------------
+
+
 ==============================================================================
 FINAL AUDIT VERDICT:
 ==============================================================================
 STATUS: ALL LEMMAS FORMALLY PROVED (PASS)
-Total Lemmas Tested: 20
+Total Lemmas Tested: 24
 Failed: 0
 ==============================================================================

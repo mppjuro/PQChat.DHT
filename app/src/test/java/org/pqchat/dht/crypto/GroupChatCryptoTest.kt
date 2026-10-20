@@ -95,12 +95,13 @@ class GroupChatCryptoTest {
         val senderMemberId = uuidToBytes(UUID.randomUUID())
         val newChainKey = CryptoUtils.secureRandomBytes(64)
 
-        // Rekey subtype
-        val rekeyPlaintext = BinaryFrameCodec.encodeGroupControl(
+        assertEquals(50, BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL)
+
+        // Rekey subtype using helper
+        val rekeyPlaintext = BinaryFrameCodec.encodeGroupRekey(
             seqNum = 51,
             ackNum = 42,
             timestampUTC = 1718000000000L,
-            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
             groupId = groupId,
             groupEpoch = 2L,
             senderMemberId = senderMemberId,
@@ -119,23 +120,21 @@ class GroupChatCryptoTest {
         assertEquals(2L, decodedRekey.groupEpoch)
         assertArrayEquals(newChainKey, decodedRekey.senderGroupChainKey)
 
-        // Leave subtype
-        val leavePlaintext = BinaryFrameCodec.encodeGroupControl(
+        // Leave subtype using helper
+        val leavePlaintext = BinaryFrameCodec.encodeGroupLeave(
             seqNum = 52,
             ackNum = 42,
             timestampUTC = 1718000000000L,
-            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_LEAVE,
             groupId = groupId,
             groupEpoch = 2L,
             senderMemberId = senderMemberId,
-            senderGroupChainKey = ByteArray(64),
-            currentCounter = 0L,
             groupName = ""
         )
         val frameLeave = BinaryFrameCodec.packAeadFrame(msgKey, leavePlaintext, target, "AtoB")
         val decodedLeave = BinaryFrameCodec.unpackAeadFrame(msgKey, frameLeave, target, "AtoB").payload as BinaryFrameCodec.DecodedPayload.GroupControl
 
         assertEquals(BinaryFrameCodec.GROUP_SUBTYPE_LEAVE, decodedLeave.controlSubType)
+        assertEquals(2L, decodedLeave.groupEpoch)
     }
 
     @Test

@@ -73,7 +73,8 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
    * `0x03` – PQC Rekey Offer (Nowy klucz publiczny)
    * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
    * `0x05` – Segment transferu blokowego (Chunk)
-2. `SeqNum` (2 bajty, UInt16 Big-Endian): Licznik $Counter_{out}$ nadawcy.
+   * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+2. `SeqNum` (2 bajty, UInt16 Big-Endian): Licznik $`Counter_{out}`$ nadawcy.
 3. `AckNum` (2 bajty, UInt16 Big-Endian): Ostatnio odebrany numer sekwencyjny partnera.
 4. `TimestampUTC` (8 bajtów, Int64 Big-Endian): Czas uniksowy nadania w milisekundach.
 
@@ -85,9 +86,9 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `Key Confirmation Tag`: 32 bajty
   * `CSPRNG Padding`: 3 bajty (859 - 856)
 * **Typ 0x02 (Tekst):**
-  * `TextLength` ($L$): 2 bajty (UInt16, wartość $\le 857$)
-  * `UTF-8 Payload`: $L$ bajtów (maksymalnie 857 bajtów tekstu)
-  * `CSPRNG Padding`: $857 - L$ bajtów
+  * `TextLength` ($`L`$): 2 bajty (UInt16, wartość $`\le 857`$)
+  * `UTF-8 Payload`: $`L`$ bajtów (maksymalnie 857 bajtów tekstu)
+  * `CSPRNG Padding`: $`857 - L`$ bajtów
 * **Typ 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 bajty (UInt32)
   * `Combined PublicKey`: 832 bajty (800 B ML-KEM-512 + 32 B X25519)
@@ -100,12 +101,44 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `TransferID`: 16 bajtów (UUID transferu)
   * `ChunkIndex`: 2 bajty (UInt16)
   * `TotalChunks`: 2 bajty (UInt16)
-  * `ChunkLength` ($C$): 2 bajty (UInt16, wartość $\le 837$)
-  * `BinaryData`: $C$ bajtów
-  * `CSPRNG Padding`: $837 - C$ bajtów
+  * `ChunkLength` ($`C`$): 2 bajty (UInt16, wartość $`\le 837`$)
+  * `BinaryData`: $`C`$ bajtów
+  * `CSPRNG Padding`: $`837 - C`$ bajtów
+* **Typ 0x06 (Group Control – ramka kontrolna grupy):**
+  * `ControlSubType`: 1 bajt (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
+  * `GroupID`: 16 bajtów (UUID grupy)
+  * `GroupEpoch`: 4 bajty (UInt32 Big-Endian)
+  * `SenderMemberID`: 16 bajtów (UUID nadawcy w grupie)
+  * `SenderGroupChainKey`: 64 bajty (bieżący łańcuch nadawcy grupy)
+  * `CurrentCounter`: 4 bajty (UInt32 Big-Endian)
+  * `GroupNameLength` ($`N`$): 2 bajty (UInt16, wartość $`\le 64`$)
+  * `GroupName`: $`N`$ bajtów UTF-8 (maksymalnie 64 bajty)
+  * `MemberCount` ($`M`$): 2 bajty (UInt16, liczba uczestników, wartość $`\le 64`$)
+  * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
+  * `CSPRNG Padding`: wypełnienie do 859 bajtów.
+
+### Czaty Grupowe i Tabele Bazy Danych (`groups` i `group_members`):
+* **Model Dystrybucji i Adresowania:** Każdy uczestnik posiada własny łańcuch nadawczy ($`myChainKeyOut`$). Wiadomości grupowe nadawane są na indywidualne sloty odbiorców:
+  $`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)`$
+  co całkowicie eliminuje korelację obserwatorów (Group Follower Correlation).
+* **Wiązanie AAD:** Szyfrowanie ładunku grupowego AEAD AES-256-GCM wiąże kontekst:
+  $`AAD = \text{Target} \parallel GroupID \parallel SenderMemberID`$
+  co uniemożliwia podmianę nadawcy, grupy lub slotu docelowego.
+* **Rotacja Automatyczna Nadawcy:** Następuje automatycznie co 50 wysłanych wiadomości grupowych (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), generując świeży 64-bajtowy klucz CSPRNG, nową epokę $`groupEpoch + 1`$, zerując licznik wyjściowy i transmitując ramkę Typu `0x06` (`GROUP_SUBTYPE_REKEY`) do wszystkich aktywnych członków.
+* **Wymuszona Rotacja Klucza przy Odejściu Członka (Forward Secrecy & PCS):** Po odebraniu ramki `GROUP_SUBTYPE_LEAVE` od dowolnego członka grupy następuje natychmiastowe oznaczenie wychodzącego członka jako nieaktywnego (`isActive = 0`), rotacja własnego klucza $`myChainKeyOut`$ do nowej epoki $`groupEpoch + 1`$ oraz rozesłanie ramki `GROUP_SUBTYPE_REKEY` wyłącznie do pozostałych, aktywnych członków grupy. Wyklucza to wychodzącego członka z dostępu do jakichkolwiek przyszłych wiadomości (Post-Compromise Security / Post-Leave Secrecy), chroniąc jednocześnie wiadomości przeszłe (Forward Secrecy).
+* **Tabela `groups`:**
+  * `groupId` (TEXT, PRIMARY KEY, UUID), `groupName` (TEXT), `myMemberId` (TEXT, UUID)
+  * `myChainKeyOut` (BLOB, `EncryptedBlob` powiązany z wierszem w Keystore), `myCounterOut` (INTEGER), `groupEpoch` (INTEGER)
+  * `createdAt` (INTEGER), `lastActive` (INTEGER), `isActive` (INTEGER, BOOLEAN)
+* **Tabela `group_members`:**
+  * `groupId` (TEXT), `memberId` (TEXT), PRIMARY KEY (`groupId`, `memberId`)
+  * `contactId` (TEXT, NULLABLE — klucz obcy do kontaktu 1-na-1), `memberName` (TEXT)
+  * `chainKeyIn` (BLOB, `EncryptedBlob` powiązany z wierszem w Keystore), `counterIn` (INTEGER)
+  * `joinedAt` (INTEGER), `isActive` (INTEGER, BOOLEAN)
+  * `receivedBitmapBase` (INTEGER), `receivedBitmap` (BLOB — przesuwna mapa bitowa replay protection)
 
 ### Dodatkowe Typy Rekordów o Tożsamym Rozmiarze 900 B:
-* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $Target_{ACK}$, o stałym rozmiarze 900 bajtów (`CoverAckProtocol`).
+* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, o stałym rozmiarze 900 bajtów (`CoverAckProtocol`).
 * **Cover Traffic Dummy:** Nieskoordynowany rekord 900 bajtów wypełniony czystym szumem CSPRNG (`DhtLeafNode.sendCoverTrafficDummy`).
 * **Bezpieczny Tombstone (Czyszczenie slotu po odebraniu):** Zastąpienie skonsumowanej wiadomości rekordem o sztywnym rozmiarze dokładnie 900 bajtów czystego szumu CSPRNG pod `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). Zastępuje to podatny wariant 0 B, który ujawniał węzłom i podsłuchiwaczom fakt oraz moment dostarczenia wiadomości. Dzięki zachowaniu stałego rozmiaru 900 B (904 B w Bencode) operacja tombstone jest całkowicie nierozróżnialna od normalnego zapisu lub ruchu maskującego.
 
@@ -207,7 +240,7 @@ app/src/main/java/org/pqchat/dht/
 5. **Strategia Testowania i Praca z Repozytorium:**
    * **Podstawowe testy co commit (Fast Unit Tests):** Przed każdym commitem uruchamiaj standardowe testy jednostkowe: `.\gradlew.bat testDebugUnitTest`. Testy te pomijają czasochłonne scenariusze (`@Tag("slow")`) i wykonują się w kilkadziesiąt sekund. Gdy testy trwają dłużej niż 3 minuty napisz jaki jest status testów oraz rozważ wrzucenie czasochłonnego testu do testów czasochłonnych ("slow"), żeby zrobiły się w ramach testów nightly, a nie od razu, i poinformuj o tym fakcie.
    * **Testy czasochłonne (Slow Tests):** Testy repozytorium (`org.pqchat.dht.data.repository.*`), testy statystyczne Monte Carlo oraz symulacje loopback są oznaczone tagiem `@Tag("slow")`. Są one wykonywane automatycznie jako nocne zadanie CI w GitHub Workflows (`.github/workflows/nightly.yml`) oraz lokalnie na żądanie za pomocą: `.\gradlew.bat testDebugUnitTest -DrunSlowTests=true` lub `.\gradlew.bat slowTest`.
-   * **Weryfikacja modeli formalnych:** Modele formalne ProVerif znajdujące się w `docs/formal/` weryfikuje się skryptem `bash docs/formal/run_verification.sh`. Obejmują one 6 modeli (.pv) weryfikujących 20 lematów (m.in. poufność kluczy i ładunków, uwierzytelnienie i transkrypt SAS anti-grinding, hybrydowy KEM ML-KEM-512 + X25519, Forward Secrecy, Post-Compromise Security, odporność na replay oraz nierozróżnialność 900-bajtowych tombstone'ów i cover traffic).
+   * **Weryfikacja modeli formalnych:** Modele formalne ProVerif znajdujące się w `docs/formal/` weryfikuje się skryptem `bash docs/formal/run_verification.sh`. Obejmują one 7 modeli (.pv) weryfikujących 24 lematy (m.in. poufność kluczy i ładunków, uwierzytelnienie i transkrypt SAS anti-grinding, hybrydowy KEM ML-KEM-512 + X25519, Forward Secrecy, Post-Compromise Security, odporność na replay, nierozróżnialność 900-bajtowych tombstone'ów i cover traffic oraz poufność dystrybucji kluczy grupowych w ramce 0x06, autentyczność wiadomości grupowych z wiązaniem AAD i grupowe PCS/FS po odejściu członka).
    * **Pliki tekstowe:** W plikach README oraz innych plikach .md wyrażenia matematyczne muszą być w znacznikach $`wyrażenie\_pierwsze_{abc}`$ (jest to metoda bardziej odporna niż $wyrażenie\_pierwsze_{abc}$)
    * **Weryfikacja w emulatorze:** Każdą istotną zmianę interfejsu lub logiki czatu przetestuj w emulatorze (np. instalacja przez `.\gradlew.bat installDebug`, uruchomienie aktywności, zrobienie screenshotu do analizy).
    * **Zatwierdzanie zmian:** Po pomyślnym zakończeniu testów zrób commit z precyzyjnym opisem, a następnie push do repozytorium zdalnego.

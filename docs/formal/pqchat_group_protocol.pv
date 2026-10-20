@@ -1,0 +1,220 @@
+(* ============================================================================== *)
+(* PQChat.DHT Protocol — Group Chat & Key Rotation Formal Model (ProVerif 2.05)    *)
+(*                                                                                *)
+(* Verified Properties:                                                           *)
+(* 1. Poufność (Secrecy): senderGroupChainKey przesyłany w ramce 0x06 (Type       *)
+(*    GROUP_CONTROL) przez hybrydowy kanał 1-na-1 (ML-KEM-512 + X25519).          *)
+(* 2. Autentyczność (Authenticity & Injective Agreement): wiadomości grupowe z     *)
+(*    wiązaniem AAD = (target || groupId || senderMemberId).                      *)
+(* 3. Forward Secrecy: dawne wiadomości grupowe (pre-leave) pozostają poufne      *)
+(*    po odejściu / kompromitacji członka grupy.                                  *)
+(* 4. Post-Compromise Security (PCS / Post-Leave Secrecy): wiadomości nadawane     *)
+(*    w nowej epoce (groupEpoch + 1) po odejściu są poufne przed byłym członkiem. *)
+(* ============================================================================== *)
+
+type kem_skey.
+type kem_pkey.
+type kem_ct.
+type x_skey.
+type x_pkey.
+type ed_skey.
+type ed_pkey.
+
+(* --- ML-KEM-512 Key Encapsulation Mechanism (FIPS 203) --- *)
+fun kem_pk(kem_skey): kem_pkey.
+fun kem_encap_ct(kem_pkey, bitstring): kem_ct.
+fun kem_encap_ss(kem_pkey, bitstring): bitstring [private].
+reduc forall sk: kem_skey, r: bitstring; kem_decap(sk, kem_encap_ct(kem_pk(sk), r)) = kem_encap_ss(kem_pk(sk), r).
+
+(* --- Classical X25519 Ephemeral Key Agreement (RFC 7748) --- *)
+fun x_pk(x_skey): x_pkey.
+fun x_ecdh(x_skey, x_pkey): bitstring.
+equation forall a: x_skey, b: x_skey; x_ecdh(a, x_pk(b)) = x_ecdh(b, x_pk(a)).
+
+(* --- Hybrid Secret Combiner --- *)
+fun hybrid_combine(bitstring, bitstring): bitstring.
+
+(* --- Ed25519 Ephemeral Signature & Key Derivation --- *)
+fun ed_pk(ed_skey): ed_pkey.
+fun ed_derive_sk(bitstring): ed_skey.
+fun ed_sign(ed_skey, bitstring): bitstring.
+reduc forall sk: ed_skey, m: bitstring; ed_verify(ed_pk(sk), m, ed_sign(sk, m)) = true.
+
+(* --- Cryptographic Hash & KDF (One-Way Functions) --- *)
+fun sha1(ed_pkey): bitstring.
+fun hkdf_expand(bitstring, bitstring): bitstring.
+fun get_msg_key(bitstring): bitstring.
+fun get_ed_seed(bitstring): bitstring.
+fun get_next_chain(bitstring): bitstring.
+
+(* --- AEAD (AES-256-GCM) with AAD Binding --- *)
+fun aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
+  aead_dec(k, iv, aead_enc(k, iv, pt, aad), aad) = pt.
+
+(* --- Protocol Constants --- *)
+const TAG_1ON1_HANDSHAKE: bitstring.
+const TAG_1ON1_DIRECTION: bitstring.
+const TAG_GRP_STEP_0: bitstring.
+const TAG_GRP_STEP_POST: bitstring.
+const TYPE_GROUP_CONTROL: bitstring.
+const SUBTYPE_INVITE: bitstring.
+const SUBTYPE_REKEY: bitstring.
+const SUBTYPE_LEAVE: bitstring.
+
+(* --- Channels --- *)
+free c_dht: channel.             (* Public untrusted DHT transport (Dolev-Yao attacker) *)
+free c_leak: channel.            (* Channel modeling compromise/state of leaving member *)
+
+(* --- Secret Terms to Prove Confidential --- *)
+free secret_sender_group_chain_key: bitstring [private].
+free secret_group_msg_pre_leave: bitstring [private].
+free secret_group_msg_post_leave: bitstring [private].
+
+(* --- Correspondence Events for Group Message Authenticity --- *)
+event AliceSentGroupMsg(bitstring, bitstring, bitstring, bitstring). (* target, groupId, senderMemberId, msg *)
+event BobRecvGroupMsg(bitstring, bitstring, bitstring, bitstring).
+
+(* ============================================================================== *)
+(* SECURITY QUERIES                                                               *)
+(* ============================================================================== *)
+
+(* Lemma 7.1: Secrecy of senderGroupChainKey transmitted in frame 0x06 over 1-on-1 Hybrid Channel *)
+query attacker(secret_sender_group_chain_key).
+
+(* Lemma 7.2: Authenticity of Group Messages with AAD Binding (target || groupId || senderMemberId) *)
+query target_x: bitstring, g_id: bitstring, sender_id: bitstring, msg: bitstring;
+  inj-event(BobRecvGroupMsg(target_x, g_id, sender_id, msg)) ==>
+  inj-event(AliceSentGroupMsg(target_x, g_id, sender_id, msg)).
+
+(* Lemma 7.3: Forward Secrecy of Past Group Messages (prior to member leave / state compromise) *)
+query attacker(secret_group_msg_pre_leave).
+
+(* Lemma 7.4: Post-Compromise Security (PCS) / Post-Leave Secrecy of Group Messages in Epoch + 1 *)
+query attacker(secret_group_msg_post_leave).
+
+(* ============================================================================== *)
+(* PROTOCOL PROCESS                                                               *)
+(* ============================================================================== *)
+
+process
+  (* ---------------------------------------------------------------------------- *)
+  (* 1. Alice and Bob establish a pairwise 1-on-1 Hybrid KEM channel               *)
+  (* ---------------------------------------------------------------------------- *)
+  new sk_kem_a: kem_skey;
+  let pk_kem_a = kem_pk(sk_kem_a) in
+  new sk_x_a: x_skey;
+  let pk_x_a = x_pk(sk_x_a) in
+
+  (* Bob performs hybrid encapsulation against Alice's public keys *)
+  new r_kem: bitstring;
+  let ct_kem = kem_encap_ct(pk_kem_a, r_kem) in
+  let ss_kem = kem_encap_ss(pk_kem_a, r_kem) in
+  new sk_x_b: x_skey;
+  let pk_x_b = x_pk(sk_x_b) in
+  let ss_x = x_ecdh(sk_x_b, pk_x_a) in
+  let ss_1on1 = hybrid_combine(ss_x, ss_kem) in
+
+  (* Transport of hybrid ciphertext over DHT *)
+  out(c_dht, (ct_kem, pk_x_b));
+
+  (* Alice decapsulates to recover identical shared secret *)
+  let ss_kem_dec = kem_decap(sk_kem_a, ct_kem) in
+  let ss_x_dec = x_ecdh(sk_x_a, pk_x_b) in
+  let ss_1on1_dec = hybrid_combine(ss_x_dec, ss_kem_dec) in
+
+  (* Derive 1-on-1 pairwise ratchet encryption key *)
+  let k_1on1 = get_msg_key(hkdf_expand(ss_1on1, TAG_1ON1_HANDSHAKE)) in
+
+  (* ---------------------------------------------------------------------------- *)
+  (* 2. Group Creation & Sender Key Distribution via Frame 0x06                   *)
+  (* ---------------------------------------------------------------------------- *)
+  new group_id: bitstring;
+  new alice_member_id: bitstring;
+  new bob_member_id: bitstring;
+  new charlie_member_id: bitstring;
+  new epoch_1: bitstring;
+
+  (* Alice distributes her secret_sender_group_chain_key to Bob via Type 0x06 *)
+  new iv_ctrl: bitstring;
+  new target_1on1: bitstring;
+  let aad_ctrl = (target_1on1, TAG_1ON1_DIRECTION) in
+  let control_payload = (TYPE_GROUP_CONTROL, SUBTYPE_INVITE, group_id, epoch_1, alice_member_id, secret_sender_group_chain_key) in
+  let c_ctrl = aead_enc(k_1on1, iv_ctrl, control_payload, aad_ctrl) in
+
+  out(c_dht, (target_1on1, c_ctrl, iv_ctrl));
+
+  (* Bob receives and decrypts control frame 0x06 *)
+  in(c_dht, (=target_1on1, in_c_ctrl: bitstring, in_iv_ctrl: bitstring));
+  let (=TYPE_GROUP_CONTROL, =SUBTYPE_INVITE, =group_id, =epoch_1, =alice_member_id, recv_sender_chain_key: bitstring) =
+    aead_dec(k_1on1, in_iv_ctrl, in_c_ctrl, aad_ctrl) in
+
+  (* ---------------------------------------------------------------------------- *)
+  (* 3. Group Message Emission with AAD Binding (target || groupId || senderMemberId) *)
+  (* ---------------------------------------------------------------------------- *)
+  let entropy_grp_0 = hkdf_expand(secret_sender_group_chain_key, TAG_GRP_STEP_0) in
+  let k_grp_msg_0 = get_msg_key(entropy_grp_0) in
+  let ed_seed_grp_0 = get_ed_seed(entropy_grp_0) in
+  let next_alice_chain_key = get_next_chain(entropy_grp_0) in
+  let ed_sk_grp_0 = ed_derive_sk(ed_seed_grp_0) in
+  let target_grp_0 = sha1(ed_pk(ed_sk_grp_0)) in
+
+  (* AAD binding explicitly includes target, groupId, and senderMemberId *)
+  let aad_grp_0 = (target_grp_0, group_id, alice_member_id) in
+  new iv_grp_0: bitstring;
+
+  event AliceSentGroupMsg(target_grp_0, group_id, alice_member_id, secret_group_msg_pre_leave);
+  let c_grp_0 = aead_enc(k_grp_msg_0, iv_grp_0, secret_group_msg_pre_leave, aad_grp_0) in
+  let sig_grp_0 = ed_sign(ed_sk_grp_0, (target_grp_0, c_grp_0)) in
+
+  out(c_dht, (target_grp_0, c_grp_0, iv_grp_0, sig_grp_0));
+
+  (* Bob receives and verifies Alice's group message *)
+  in(c_dht, (=target_grp_0, in_c_grp: bitstring, in_iv_grp: bitstring, in_sig_grp: bitstring));
+  let entropy_b_0 = hkdf_expand(recv_sender_chain_key, TAG_GRP_STEP_0) in
+  let k_b_0 = get_msg_key(entropy_b_0) in
+  let ed_seed_b_0 = get_ed_seed(entropy_b_0) in
+  let target_b_0 = sha1(ed_pk(ed_derive_sk(ed_seed_b_0))) in
+  let aad_b_0 = (target_b_0, group_id, alice_member_id) in
+  let dec_grp_msg = aead_dec(k_b_0, in_iv_grp, in_c_grp, aad_b_0) in
+  event BobRecvGroupMsg(target_b_0, group_id, alice_member_id, dec_grp_msg);
+
+  (* ---------------------------------------------------------------------------- *)
+  (* 4. Member Leaves Group (GROUP_SUBTYPE_LEAVE) & State Compromise               *)
+  (* ---------------------------------------------------------------------------- *)
+  (* Alice leaves the group *)
+  out(c_dht, (TYPE_GROUP_CONTROL, SUBTYPE_LEAVE, group_id, epoch_1, alice_member_id));
+
+  (* Adversary compromises leaving member Alice's state *)
+  out(c_leak, (alice_member_id, next_alice_chain_key));
+
+  (* ---------------------------------------------------------------------------- *)
+  (* 5. Bob executes Automatic Rekey to Epoch 2 (PCS / Post-Leave Secrecy)        *)
+  (* ---------------------------------------------------------------------------- *)
+  (* Bob marks Alice inactive and immediately generates fresh sender chain key *)
+  new fresh_bob_sender_chain_key_epoch_2: bitstring;
+  new epoch_2: bitstring;
+
+  (* Bob establishes a 1-on-1 pairwise key with remaining active member Charlie *)
+  new k_1on1_bob_charlie: bitstring;
+
+  (* Bob broadcasts REKEY frame 0x06 ONLY to Charlie (Alice is excluded) *)
+  new iv_rekey: bitstring;
+  new target_rekey: bitstring;
+  let aad_rekey = (target_rekey, TAG_1ON1_DIRECTION) in
+  let rekey_payload = (TYPE_GROUP_CONTROL, SUBTYPE_REKEY, group_id, epoch_2, bob_member_id, fresh_bob_sender_chain_key_epoch_2) in
+  let c_rekey = aead_enc(k_1on1_bob_charlie, iv_rekey, rekey_payload, aad_rekey) in
+  out(c_dht, (target_rekey, c_rekey, iv_rekey));
+
+  (* Bob sends a confidential message in Epoch 2 *)
+  let entropy_post = hkdf_expand(fresh_bob_sender_chain_key_epoch_2, TAG_GRP_STEP_POST) in
+  let k_post = get_msg_key(entropy_post) in
+  let ed_seed_post = get_ed_seed(entropy_post) in
+  let target_post = sha1(ed_pk(ed_derive_sk(ed_seed_post))) in
+  let aad_post = (target_post, group_id, bob_member_id) in
+  new iv_post: bitstring;
+
+  let c_post = aead_enc(k_post, iv_post, secret_group_msg_post_leave, aad_post) in
+  let sig_post = ed_sign(ed_derive_sk(ed_seed_post), (target_post, c_post)) in
+
+  out(c_dht, (target_post, c_post, iv_post, sig_post))

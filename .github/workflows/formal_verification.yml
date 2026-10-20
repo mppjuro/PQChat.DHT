@@ -28,7 +28,7 @@ jobs:
           sudo cp proverif /usr/local/bin/proverif
           sudo chmod +x /usr/local/bin/proverif
 
-      - name: Run Formal Verification Suite (20 Lemmas / 6 Models)
+      - name: Run Formal Verification Suite (24 Lemmas / 7 Models)
         run: bash docs/formal/run_verification.sh
 
       - name: Upload Formal Verification Report

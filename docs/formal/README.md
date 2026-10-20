@@ -58,8 +58,19 @@ Weryfikacji poddano sześć fundamentalnych filarów bezpieczeństwa:
 ### (6) Anonimowość i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability)
 * **Równoważność Obserwacyjna (`pqchat_unlinkability.pv`):**
   * `Query Observational equivalence is true`
-  * Węzły sieci DHT obserwujące zapytania pod adresy $\text{Target}_i = \text{SHA-1}(pk_i)$ nie są w stanie odróżnić zapytań sesji $(Alice, Bob)$ od zapytań sesji $(Charlie, Dave)$ (Metadata-Free Rendezvous).
+  * Węzły sieci DHT obserwujące zapytania pod adresy $`\text{Target}_i = \text{SHA-1}(pk_i)`$ nie są w stanie odróżnić zapytań sesji $`(Alice, Bob)`$ od zapytań sesji $`(Charlie, Dave)`$ (Metadata-Free Rendezvous).
   * Sztywny 900-bajtowy rekord Tombstone (CSPRNG noise) zapisywany po odebraniu wiadomości jest matematycznie nierozróżnialny od normalnej 900-bajtowej ramki zaszyfrowanej AES-256-GCM ani od 900-bajtowego pakietu ruchu maskującego (Poisson cover traffic dummy).
+
+### (7) Czaty Grupowe i Rotacja Kluczy (Group Chat Protocol & PCS/FS)
+* **Poufność Klucza Łańcucha Grupowego (`pqchat_group_protocol.pv`):**
+  * `Query not attacker(secret_sender_group_chain_key[]) is true`
+  * Dystrybucja klucza łańcucha nadawcy grupy w ramce Typu `0x06` (`TYPE_GROUP_CONTROL`, subtype `0x01` INVITE / `0x02` REKEY) przez hybrydowy kanał 1-na-1 (ML-KEM-512 + X25519) gwarantuje pełną poufność przed adwersarzem sieciowym Dolev-Yao.
+* **Autentyczność Wiadomości Grupowych z Wiązaniem AAD:**
+  * `Query inj-event(BobRecvGroupMsg(target_x, g_id, sender_id, msg)) ==> inj-event(AliceSentGroupMsg(target_x, g_id, sender_id, msg)) is true`
+  * Wiązanie AAD $`AAD = \text{Target} \parallel GroupID \parallel SenderMemberID`$ w szyfrowaniu AES-256-GCM zapobiega podmianie nadawcy, identyfikatora grupy lub celu slotu przez atakującego.
+* **Forward Secrecy i Post-Compromise Security (PCS) w Grupie:**
+  * `Query not attacker(secret_group_msg_pre_leave[]) is true` (Forward Secrecy: dawne wiadomości grupowe pozostają poufne po odejściu członka)
+  * `Query not attacker(secret_group_msg_post_leave[]) is true` (Post-Compromise Security: wiadomości nadane w nowej epoce $`groupEpoch + 1`$ po odejściu członka `GROUP_SUBTYPE_LEAVE` i rotacji kluczy są poufne przed byłym członkiem grupy).
 
 ---
 
@@ -68,28 +79,29 @@ Weryfikacji poddano sześć fundamentalnych filarów bezpieczeństwa:
 | Plik | Opis i Weryfikowane Własności |
 | :--- | :--- |
 | `pqchat_protocol.pv` | **Główny, zunifikowany model protokołu:** dowodzi poufności klucza głównego i łańcuchów, ładunków wiadomości, injektywnego uwierzytelnienia z dowiązaniem SAS i transcriptu, dwukierunkowej wymiany z AAD oraz odporności na replay i bezpiecznych 900-bajtowych tombstone'ów. |
-| `pqchat_secrecy.pv` | **Dedykowany model poufności i potwierdzenia klucza:** weryfikacja $ChainKey_{A \to B}, ChainKey_{B \to A}$, poufności ładunków oraz injektywnego porozumienia stron z handshake'iem hybrydowym X25519 + ML-KEM-512. |
+| `pqchat_secrecy.pv` | **Dedykowany model poufności i potwierdzenia klucza:** weryfikacja $`ChainKey_{A \to B}, ChainKey_{B \to A}`$, poufności ładunków oraz injektywnego porozumienia stron z handshake'iem hybrydowym X25519 + ML-KEM-512. |
 | `pqchat_forward_secrecy.pv` | **Model Forward Secrecy:** formalny dowód ochrony przeszłych wiadomości przy wycieku późniejszych stanów łańcucha w pamięci RAM. |
 | `pqchat_post_compromise.pv` | **Model Post-Compromise Security (PCS):** formalny dowód samoleczenia stanu po rotacji hybrydowej X25519 + ML-KEM-512. |
 | `pqchat_replay.pv` | **Model Anti-Replay:** dowód injektywnej akceptacji pakietów handshake i transmisji danych z unieważnianiem slotu. |
 | `pqchat_unlinkability.pv` | **Model Unlinkability & Tombstones:** dowód równoważności obserwacyjnej (`diff-equivalence`) dla przeskakiwania targetów oraz nierozróżnialności 900-bajtowych tombstone'ów od normalnych ramek i cover traffic. |
-| `run_verification.sh` | Skrypt automatyzujący uruchomienie dowodów w ProVerif, agregację wyników, rygorystyczne sprawdzenie 20 lematów i generowanie raportu `report.txt`. |
+| `pqchat_group_protocol.pv` | **Model Czatów Grupowych i Rotacji Kluczy:** dowód poufności dystrybucji kluczy nadawcy grupy w ramce `0x06` przez kanał 1-na-1 (ML-KEM-512 + X25519), autentyczności wiadomości grupowych z wiązaniem AAD ($`\text{Target} \parallel GroupID \parallel SenderMemberID`$) oraz Forward Secrecy i Post-Compromise Security po odejściu członka grupy ($`groupEpoch + 1`$). |
+| `run_verification.sh` | Skrypt automatyzujący uruchomienie dowodów w ProVerif, agregację wyników, rygorystyczne sprawdzenie 24 lematów i generowanie raportu `report.txt`. |
 | `report.txt` | Pełny raport z wynikami analizy Dolev-Yao wygenerowany przez ProVerif. |
 
 ---
 
 ## 3. Instrukcja Uruchomienia Dowodów
 
-Do uruchomienia modeli wymagane jest środowisko z zainstalowanym **ProVerif** (wersja $\ge 2.04$):
+Do uruchomienia modeli wymagane jest środowisko z zainstalowanym **ProVerif** (wersja $`\ge 2.04`$):
 
 ```bash
-# Uruchomienie pełnego zestawu dowodów (20 lematów w 6 modelach):
+# Uruchomienie pełnego zestawu dowodów (24 lematy w 7 modelach):
 bash docs/formal/run_verification.sh
 ```
 
 Skrypt automatycznie:
 1. Wykrywa binaria ProVerif w PATH, `/usr/local/bin`, WSL Ubuntu lub kompiluje bezpośrednio ze źródeł Inria w środowisku Linux/CI.
-2. Wykonuje analizę symboliczną każdego z 6 modeli `.pv`.
-3. Weryfikuje dokładne formuły lematów (20/20 PASS).
+2. Wykonuje analizę symboliczną każdego z 7 modeli `.pv`.
+3. Weryfikuje dokładne formuły lematów (24/24 PASS).
 4. Generuje szczegółowy raport w pliku `docs/formal/report.txt`.
 5. Zwraca kod wyjścia `0` w przypadku zdania wszystkich lematów.

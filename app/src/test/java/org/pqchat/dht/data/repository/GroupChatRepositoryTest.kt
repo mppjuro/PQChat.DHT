@@ -598,6 +598,213 @@ class GroupChatRepositoryTest {
     }
 
     @Test
+    fun testGroupAutoRekeyEvery50Messages() = runBlocking {
+        val dhtNode = DhtLeafNode()
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val bobMemberId = UUID.randomUUID().toString()
+        val initialAliceChainKey = CryptoUtils.secureRandomBytes(64)
+
+        // Setup 1-on-1 channel between Alice and Bob
+        val aliceToBobKey = CryptoUtils.secureRandomBytes(64)
+        val bobToAliceKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "bob-contact-id",
+                name = "Bob",
+                chainKeyOut = aliceToBobKey,
+                counterOut = 0,
+                chainKeyIn = bobToAliceKey,
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+
+        // Setup Alice's group state at counter 50 (should trigger auto-rekey on next message)
+        val aliceGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "Auto-Rekey Group",
+            myMemberId = aliceMemberId,
+            myChainKeyOut = initialAliceChainKey,
+            myCounterOut = 50,
+            groupEpoch = 1L
+        )
+        aliceGroupDao.insertOrUpdate(aliceGroup)
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = bobMemberId,
+                contactId = "bob-contact-id",
+                memberName = "Bob",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0,
+                isActive = true
+            )
+        )
+
+        // Alice sends message 51, which should trigger auto-rekey
+        val sent = aliceRepo.sendGroupMessage(groupId, "Message triggering 50-interval rekey")
+        assertTrue("Message send must succeed", sent)
+
+        val updatedAliceGroup = aliceGroupDao.getGroupById(groupId)
+        assertNotNull(updatedAliceGroup)
+        assertEquals("Group epoch must advance to 2", 2L, updatedAliceGroup!!.groupEpoch)
+        assertEquals("myCounterOut must be 1 after sending 1 message in new epoch", 1, updatedAliceGroup.myCounterOut)
+        assertFalse(
+            "Alice's sender chain key must be rotated",
+            initialAliceChainKey.contentEquals(updatedAliceGroup.rawMyChainKeyOut)
+        )
+
+        // Verify Bob's contact channel counter was stepped because REKEY frame (0x06) was sent
+        val aliceBobContact = aliceContactDao.getContactById("bob-contact-id")
+        assertNotNull(aliceBobContact)
+        assertEquals("Alice must have transmitted REKEY over Bob's 1-on-1 channel", 1, aliceBobContact!!.counterOut)
+    }
+
+    @Test
+    fun testGroupMemberLeaveForcesAutoRekeyAndPCS() = runBlocking {
+        val dhtNode = DhtLeafNode()
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val bobMemberId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val charlieMemberId = UUID.randomUUID().toString()
+        val initialBobChainKey = CryptoUtils.secureRandomBytes(64)
+
+        // Setup Bob's contacts: Alice (leaving member) and Charlie (remaining member)
+        bobContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "alice-contact-id",
+                name = "Alice",
+                chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                counterOut = 0,
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+        bobContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "charlie-contact-id",
+                name = "Charlie",
+                chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                counterOut = 0,
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+
+        // Setup Bob's group state (epoch 1)
+        val bobGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "Forward Secrecy Group",
+            myMemberId = bobMemberId,
+            myChainKeyOut = initialBobChainKey,
+            myCounterOut = 10,
+            groupEpoch = 1L
+        )
+        bobGroupDao.insertOrUpdate(bobGroup)
+
+        // Add Alice and Charlie as members
+        bobGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 5,
+                isActive = true
+            )
+        )
+        bobGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = charlieMemberId,
+                contactId = "charlie-contact-id",
+                memberName = "Charlie",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 3,
+                isActive = true
+            )
+        )
+
+        // Simulate incoming GROUP_SUBTYPE_LEAVE control frame from Alice
+        val leaveControl = BinaryFrameCodec.DecodedPayload.GroupControl(
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_LEAVE,
+            groupId = RatchetChain.uuidStringToBytes(groupId),
+            groupEpoch = 1L,
+            senderMemberId = RatchetChain.uuidStringToBytes(aliceMemberId),
+            senderGroupChainKey = ByteArray(64),
+            currentCounter = 0L,
+            groupName = "Forward Secrecy Group"
+        )
+
+        bobRepo.processIncomingGroupControl("alice-contact-id", leaveControl)
+
+        // 1. Verify Alice was marked inactive
+        val aliceMember = bobGroupMemberDao.getMember(groupId, aliceMemberId)
+        assertNotNull(aliceMember)
+        assertFalse("Alice must be marked inactive after LEAVE", aliceMember!!.isActive)
+
+        // 2. Verify Bob's sender key was rotated to new epoch (PCS / Post-Leave Secrecy)
+        val updatedBobGroup = bobGroupDao.getGroupById(groupId)
+        assertNotNull(updatedBobGroup)
+        assertEquals("Group epoch must advance to 2 after member leaves", 2L, updatedBobGroup!!.groupEpoch)
+        assertEquals("myCounterOut must be reset to 0 in new epoch", 0, updatedBobGroup.myCounterOut)
+        assertFalse(
+            "Bob's sender chain key must be rotated to guarantee PCS",
+            initialBobChainKey.contentEquals(updatedBobGroup.rawMyChainKeyOut)
+        )
+
+        // 3. Verify Charlie received REKEY (counterOut incremented on Charlie's 1-on-1 channel)
+        val charlieContact = bobContactDao.getContactById("charlie-contact-id")
+        assertNotNull(charlieContact)
+        assertEquals("Charlie (remaining active member) must receive REKEY", 1, charlieContact!!.counterOut)
+
+        // 4. CRITICAL: Verify Alice did NOT receive REKEY (counterOut remained 0 on Alice's channel)
+        val aliceContact = bobContactDao.getContactById("alice-contact-id")
+        assertNotNull(aliceContact)
+        assertEquals("Alice (leaving member) must NOT receive REKEY (PCS)", 0, aliceContact!!.counterOut)
+    }
+
+    @Test
     fun testGroupChat_StrictPoissonShaping_StatisticalKolmogorovSmirnov() = runBlocking {
         val fakeDht = FakeDht()
         fakeDht.start()

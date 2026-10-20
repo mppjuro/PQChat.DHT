@@ -43,6 +43,9 @@ __pycache__/
 # Ephemeral DHT measurement state (stored only in metrics-retention branch)
 *dht_state.json
 
+# Local ProVerif binary
+docs/formal/bin/
+
 # Firebase service credentials (NEVER commit)
 app/google-services.json
 **/google-services.json

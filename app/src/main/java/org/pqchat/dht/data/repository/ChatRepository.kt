@@ -3082,19 +3082,41 @@ class ChatRepository(
             val contact = contactDao.getContactById(contactId) ?: return@withLock false
             val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
-            val plaintext = BinaryFrameCodec.encodeGroupControl(
-                seqNum = contact.counterOut and 0xFFFF,
-                ackNum = contact.counterIn and 0xFFFF,
-                timestampUTC = System.currentTimeMillis(),
-                controlSubType = controlSubType,
-                groupId = groupIdBytes,
-                groupEpoch = groupEpoch,
-                senderMemberId = myMemberIdBytes,
-                senderGroupChainKey = myChainKeyOut,
-                currentCounter = currentCounter,
-                groupName = groupName,
-                members = emptyList()
-            )
+            val plaintext = when (controlSubType) {
+                BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> BinaryFrameCodec.encodeGroupRekey(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = System.currentTimeMillis(),
+                    groupId = groupIdBytes,
+                    groupEpoch = groupEpoch,
+                    senderMemberId = myMemberIdBytes,
+                    senderGroupChainKey = myChainKeyOut,
+                    currentCounter = currentCounter,
+                    groupName = groupName
+                )
+                BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> BinaryFrameCodec.encodeGroupLeave(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = System.currentTimeMillis(),
+                    groupId = groupIdBytes,
+                    groupEpoch = groupEpoch,
+                    senderMemberId = myMemberIdBytes,
+                    groupName = groupName
+                )
+                else -> BinaryFrameCodec.encodeGroupControl(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = System.currentTimeMillis(),
+                    controlSubType = controlSubType,
+                    groupId = groupIdBytes,
+                    groupEpoch = groupEpoch,
+                    senderMemberId = myMemberIdBytes,
+                    senderGroupChainKey = myChainKeyOut,
+                    currentCounter = currentCounter,
+                    groupName = groupName,
+                    members = emptyList()
+                )
+            }
 
             val frame = BinaryFrameCodec.packAeadFrame(
                 key = slot.msgKey,
@@ -3290,6 +3312,12 @@ class ChatRepository(
             }
             BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> {
                 groupMemberDao?.markMemberInactive(groupId, senderMemberId)
+                getGroupMutex(groupId).withLock {
+                    val existingGroup = groupDao?.getGroupById(groupId)
+                    if (existingGroup != null && existingGroup.isActive) {
+                        rotateGroupSenderKeyInternal(existingGroup)
+                    }
+                }
             }
         }
     }
@@ -3300,7 +3328,7 @@ class ChatRepository(
             if (!group.isActive) return@withLock false
 
             // Auto-rekey every 50 messages
-            if (group.myCounterOut > 0 && group.myCounterOut % 50 == 0) {
+            if (group.myCounterOut > 0 && group.myCounterOut % BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL == 0) {
                 rotateGroupSenderKeyInternal(group)
             }
             val currentGroup = groupDao.getGroupById(groupId) ?: group
@@ -3457,6 +3485,7 @@ class ChatRepository(
         val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
 
         for (member in members) {
+            if (!member.isActive || member.memberId == group.myMemberId) continue
             val contactId = member.contactId ?: continue
             try {
                 sendGroupControlRekeyOrInvite(
@@ -3483,6 +3512,7 @@ class ChatRepository(
             val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
 
             for (member in members) {
+                if (!member.isActive || member.memberId == group.myMemberId) continue
                 val contactId = member.contactId ?: continue
                 try {
                     sendGroupControlRekeyOrInvite(
