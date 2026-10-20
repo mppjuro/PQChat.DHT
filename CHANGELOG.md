@@ -144,10 +144,12 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🧪 Testy (Tests)
 
+- [`4d1d93a`](https://github.com/mppjuro/PQChat.DHT/commit/4d1d93a2b2be5ea9add09e715cf30f55b8111a01) (2026-10-20) — **e2e**: implement multi-emulator orchestration and instrumented physical UI tests
 - [`04b6293`](https://github.com/mppjuro/PQChat.DHT/commit/04b62930a9f063e82c1f20cf14098190f9c8415c) (2026-10-08) — fix recovery round budget and initiator roles in testRandomizedLossAndReorderingProperty
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`2d5a36c`](https://github.com/mppjuro/PQChat.DHT/commit/2d5a36c7393ac44d1c90174c1d9202091ac93315) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`e60963a`](https://github.com/mppjuro/PQChat.DHT/commit/e60963a25ff14e0acefed0fac32af44458655b9b) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`5c54580`](https://github.com/mppjuro/PQChat.DHT/commit/5c54580cbecc9411d0efbd355e97a94097496410) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`81b5bfa`](https://github.com/mppjuro/PQChat.DHT/commit/81b5bfa9f33b2a9a61a5d81cb460cdc3fe6f6dc8) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
