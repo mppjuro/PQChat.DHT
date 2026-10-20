@@ -149,6 +149,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`e6bf068`](https://github.com/mppjuro/PQChat.DHT/commit/e6bf06893e7bb91d9271e3fd8793ee3a60180bb8) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`2d5a36c`](https://github.com/mppjuro/PQChat.DHT/commit/2d5a36c7393ac44d1c90174c1d9202091ac93315) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`e60963a`](https://github.com/mppjuro/PQChat.DHT/commit/e60963a25ff14e0acefed0fac32af44458655b9b) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`5c54580`](https://github.com/mppjuro/PQChat.DHT/commit/5c54580cbecc9411d0efbd355e97a94097496410) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
@@ -207,6 +208,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🛠️ Pozostałe Zmiany (Other Changes)
 
+- [`e968816`](https://github.com/mppjuro/PQChat.DHT/commit/e96881641d7ac62903c0bab46eeffce89886af62) (2026-10-20) — modulu badawczego: metryki ksztaltowania ruchu, retencji BEP 44, czatow grupowych, refaktoryzacja petli pomiarowej, utwardzenie firestore.rules i skrypt research_analyzer.py
 - [`3dcf409`](https://github.com/mppjuro/PQChat.DHT/commit/3dcf409e14239001cd0afbb5cba01242887a9283) (2026-10-18) — decoupled 60-90m republish, ACK tombstones, resend expired messages, adaptive K (16 on LTE/CGNAT), and active chat keepalive (20-25s)
 - [`121515d`](https://github.com/mppjuro/PQChat.DHT/commit/121515d9e077782f83f18679e03d96d150a62f12) (2026-10-07) — DhtClient interface, implement FakeDht, isolate integration tests, and add GitHub Actions CI
 - [`cd50430`](https://github.com/mppjuro/PQChat.DHT/commit/cd50430176153aaae86435296effcd5d279eb09e) (2026-10-05) — commit
