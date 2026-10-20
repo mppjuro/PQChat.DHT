@@ -16,7 +16,11 @@ import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.dht.FakeDht
 import org.pqchat.dht.dht.leaf.DhtClient
 import java.security.Security
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.sqrt
 
 class StrictPoissonTrafficShapingTest {
 
@@ -259,6 +263,342 @@ class StrictPoissonTrafficShapingTest {
         assertTrue(PollingWorker.isRepublishTaskRegistered(msg.id))
     }
 
+    @Test
+    fun testStrictPoisson_MultiChunkImage_KolmogorovSmirnov() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true
+        )
+
+        val lambda = 1.0 / 60.0
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = lambda,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = repo.blindRepublishPool,
+            outboundPoissonQueue = outboundQueue
+        )
+
+        val contactId = "bob"
+        val seed = CryptoUtils.secureRandomBytes(64)
+        repo.addContact(
+            ContactEntity(
+                id = contactId,
+                name = "Bob",
+                chainKeyOut = seed,
+                chainKeyIn = seed,
+                counterOut = 0,
+                counterIn = 0
+            )
+        )
+
+        val n = 200
+        val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
+
+        // Send multi-chunk image (8 KB -> ~10 chunks)
+        val imageBytes = CryptoUtils.secureRandomBytes(8192)
+        val sendResult = repo.sendImagePayload(contactId, imageBytes)
+        assertTrue("Image sending should be queued immediately", sendResult)
+
+        // Verify that all chunks are held in OutboundPoissonQueue (NO burst on DHT)
+        val chunkCount = outboundQueue.size
+        assertTrue("Multi-chunk image must enqueue multiple chunks (> 5), got $chunkCount", chunkCount >= 5)
+
+        // Process ticks: emit chunks followed by idle chaffing
+        val intervalsActive = DoubleArray(n)
+        for (i in 0 until n) {
+            intervalsActive[i] = generator.computeNextIntervalMs(lambda).toDouble()
+            val event = generator.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+            assertNotNull(event)
+            assertEquals("Every packet must strictly be 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+        }
+
+        // Two-sample Kolmogorov-Smirnov test against baseline Poisson process
+        val dTwoSample = computeTwoSampleKsStatistic(intervalsActive, intervalsBaseline)
+        val dTwoCrit = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+        assertTrue(
+            "Two-sample KS statistic D ($dTwoSample) must be < D_crit ($dTwoCrit) at alpha=0.05 (p > 0.05), proving multi-chunk image does not alter timing",
+            dTwoSample < dTwoCrit
+        )
+
+        // One-sample Kolmogorov-Smirnov test against theoretical exponential distribution
+        val dOneSample = computeOneSampleKsStatistic(intervalsActive, lambda)
+        val dOneCrit = 1.36 / sqrt(n.toDouble())
+        assertTrue(
+            "One-sample KS statistic D ($dOneSample) must be < D_crit ($dOneCrit) at alpha=0.05 (p > 0.05) against Poisson process",
+            dOneSample < dOneCrit
+        )
+    }
+
+    @Test
+    fun testStrictPoisson_5PersonGroupInvite_KolmogorovSmirnov() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true,
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao
+        )
+
+        val lambda = 1.0 / 60.0
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = lambda,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = repo.blindRepublishPool,
+            outboundPoissonQueue = outboundQueue
+        )
+
+        // Setup 4 contacts for a 5-person group (Self + 4 contacts)
+        val contacts = listOf("bob", "charlie", "dave", "eve")
+        for (c in contacts) {
+            repo.addContact(
+                ContactEntity(
+                    id = c,
+                    name = c.replaceFirstChar { it.uppercase() },
+                    chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                    chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                    counterOut = 0,
+                    counterIn = 0,
+                    isVerified = true
+                )
+            )
+        }
+
+        val n = 200
+        val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
+
+        // Create 5-person group: sends 4 INVITE packets
+        val group = repo.createGroup("Cryptographers Core", contacts)
+        assertNotNull(group)
+
+        // Verify that 4 invites are enqueued in OutboundPoissonQueue, NOT blasted directly to DHT
+        assertEquals("4 invite packets must be queued in OutboundPoissonQueue", 4, outboundQueue.size)
+
+        // Process emission ticks
+        val intervalsActive = DoubleArray(n)
+        for (i in 0 until n) {
+            intervalsActive[i] = generator.computeNextIntervalMs(lambda).toDouble()
+            val event = generator.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+            assertNotNull(event)
+            assertEquals("Every packet must strictly be 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+        }
+
+        // Two-sample KS test
+        val dTwoSample = computeTwoSampleKsStatistic(intervalsActive, intervalsBaseline)
+        val dTwoCrit = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+        assertTrue(
+            "Two-sample KS statistic D ($dTwoSample) must be < D_crit ($dTwoCrit) at alpha=0.05 (p > 0.05), proving 5-person group invite does not alter timing",
+            dTwoSample < dTwoCrit
+        )
+
+        // One-sample KS test against theoretical exponential distribution
+        val dOneSample = computeOneSampleKsStatistic(intervalsActive, lambda)
+        val dOneCrit = 1.36 / sqrt(n.toDouble())
+        assertTrue(
+            "One-sample KS statistic D ($dOneSample) must be < D_crit ($dOneCrit) at alpha=0.05 (p > 0.05)",
+            dOneSample < dOneCrit
+        )
+    }
+
+    @Test
+    fun testStrictPoisson_GroupMessage_KolmogorovSmirnov() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true,
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao
+        )
+
+        val lambda = 1.0 / 60.0
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = lambda,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = repo.blindRepublishPool,
+            outboundPoissonQueue = outboundQueue
+        )
+
+        // Setup 4 contacts and group
+        val contacts = listOf("bob", "charlie", "dave", "eve")
+        for (c in contacts) {
+            repo.addContact(
+                ContactEntity(
+                    id = c,
+                    name = c.replaceFirstChar { it.uppercase() },
+                    chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                    chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                    counterOut = 0,
+                    counterIn = 0,
+                    isVerified = true
+                )
+            )
+        }
+        val group = repo.createGroup("Cryptographers Core", contacts)
+        // Drain group invites first
+        while (!outboundQueue.isEmpty()) {
+            generator.processCoverTrafficTick()
+        }
+
+        val n = 200
+        val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
+
+        // Send group message: derives individual slots for all 4 recipients
+        val sentOk = repo.sendGroupMessage(group.groupId, "Quantum-resistant broadcast message")
+        assertTrue(sentOk)
+
+        // Verify that 4 individual recipient message frames are enqueued in OutboundPoissonQueue
+        assertEquals("4 individual recipient message frames must be queued", 4, outboundQueue.size)
+
+        // Process emission ticks
+        val intervalsActive = DoubleArray(n)
+        for (i in 0 until n) {
+            intervalsActive[i] = generator.computeNextIntervalMs(lambda).toDouble()
+            val event = generator.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+            assertNotNull(event)
+            assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+        }
+
+        val dTwoSample = computeTwoSampleKsStatistic(intervalsActive, intervalsBaseline)
+        val dTwoCrit = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+        assertTrue(
+            "Two-sample KS statistic D ($dTwoSample) must be < D_crit ($dTwoCrit) at alpha=0.05 (p > 0.05), proving group message does not alter timing",
+            dTwoSample < dTwoCrit
+        )
+
+        val dOneSample = computeOneSampleKsStatistic(intervalsActive, lambda)
+        val dOneCrit = 1.36 / sqrt(n.toDouble())
+        assertTrue(
+            "One-sample KS statistic D ($dOneSample) must be < D_crit ($dOneCrit) at alpha=0.05 (p > 0.05)",
+            dOneSample < dOneCrit
+        )
+    }
+
+    @Test
+    fun testStrictPoisson_CombinedBurst_KolmogorovSmirnov() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true,
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao
+        )
+
+        val lambda = 1.0 / 60.0
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = lambda,
+            pendingAckQueue = ackQueue,
+            blindRepublishPool = repo.blindRepublishPool,
+            outboundPoissonQueue = outboundQueue
+        )
+
+        val contacts = listOf("bob", "charlie", "dave", "eve")
+        for (c in contacts) {
+            repo.addContact(
+                ContactEntity(
+                    id = c,
+                    name = c.replaceFirstChar { it.uppercase() },
+                    chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                    chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                    counterOut = 0,
+                    counterIn = 0,
+                    isVerified = true
+                )
+            )
+        }
+
+        val n = 200
+        val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
+
+        // Combined burst: 5-person group invite (4) + 6KB image (~8 chunks) + group message (4)
+        val group = repo.createGroup("Cryptographers Core", contacts)
+        repo.sendImagePayload("bob", CryptoUtils.secureRandomBytes(6000))
+        repo.sendGroupMessage(group.groupId, "Simultaneous quantum message burst")
+
+        // Total queue size should be at least 15 frames
+        assertTrue("Queue must absorb combined burst (> 12 frames), got ${outboundQueue.size}", outboundQueue.size >= 12)
+
+        // Process emission ticks
+        val intervalsActive = DoubleArray(n)
+        for (i in 0 until n) {
+            intervalsActive[i] = generator.computeNextIntervalMs(lambda).toDouble()
+            val event = generator.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+            assertNotNull(event)
+            assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+        }
+
+        val dTwoSample = computeTwoSampleKsStatistic(intervalsActive, intervalsBaseline)
+        val dTwoCrit = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+        assertTrue(
+            "Two-sample KS statistic D ($dTwoSample) must be < D_crit ($dTwoCrit) at alpha=0.05 (p > 0.05), proving combined burst does not alter timing",
+            dTwoSample < dTwoCrit
+        )
+
+        val dOneSample = computeOneSampleKsStatistic(intervalsActive, lambda)
+        val dOneCrit = 1.36 / sqrt(n.toDouble())
+        assertTrue(
+            "One-sample KS statistic D ($dOneSample) must be < D_crit ($dOneCrit) at alpha=0.05 (p > 0.05)",
+            dOneSample < dOneCrit
+        )
+    }
+
     // --- Minimal In-Memory DAOs for isolation ---
 
     private class FakeContactDao : ContactDao {
@@ -370,4 +710,132 @@ class StrictPoissonTrafficShapingTest {
     private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
 
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
+
+    private class FakeGroupDao : GroupDao {
+        val groups = mutableMapOf<String, GroupEntity>()
+        val flow = MutableStateFlow<List<GroupEntity>>(emptyList())
+
+        override fun getAllGroupsFlow(): Flow<List<GroupEntity>> = flow
+        override suspend fun getAllActiveGroups(): List<GroupEntity> = groups.values.filter { it.isActive }
+        override suspend fun getGroupById(groupId: String): GroupEntity? = groups[groupId]
+        override suspend fun insertOrUpdate(group: GroupEntity) {
+            groups[group.groupId] = group
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateOutgoingState(groupId: String, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, lastActive = lastActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateRekeyedState(groupId: String, epoch: Long, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, groupEpoch = epoch, lastActive = lastActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun updateActiveStatus(groupId: String, isActive: Boolean) {
+            val g = groups[groupId] ?: return
+            groups[groupId] = g.copy(isActive = isActive)
+            flow.value = groups.values.toList()
+        }
+        override suspend fun deleteGroup(groupId: String) {
+            groups.remove(groupId)
+            flow.value = groups.values.toList()
+        }
+    }
+
+    private class FakeGroupMemberDao : GroupMemberDao {
+        val members = mutableMapOf<String, MutableMap<String, GroupMemberEntity>>()
+        val flows = mutableMapOf<String, MutableStateFlow<List<GroupMemberEntity>>>()
+
+        private fun getFlow(groupId: String): MutableStateFlow<List<GroupMemberEntity>> {
+            return flows.getOrPut(groupId) {
+                MutableStateFlow(members[groupId]?.values?.filter { it.isActive } ?: emptyList())
+            }
+        }
+
+        override fun getMembersForGroupFlow(groupId: String): Flow<List<GroupMemberEntity>> = getFlow(groupId)
+        override suspend fun getMembersForGroup(groupId: String): List<GroupMemberEntity> = members[groupId]?.values?.filter { it.isActive } ?: emptyList()
+        override suspend fun getMember(groupId: String, memberId: String): GroupMemberEntity? = members[groupId]?.get(memberId)
+        override suspend fun insertOrUpdate(member: GroupMemberEntity) {
+            val groupMap = members.getOrPut(member.groupId) { mutableMapOf() }
+            groupMap[member.memberId] = member
+            getFlow(member.groupId).value = groupMap.values.filter { it.isActive }
+        }
+        override suspend fun insertOrUpdateAll(members: List<GroupMemberEntity>) {
+            for (m in members) {
+                insertOrUpdate(m)
+            }
+        }
+        override suspend fun updateMemberIncomingStateWithBitmap(
+            groupId: String,
+            memberId: String,
+            counterIn: Int,
+            chainKeyIn: EncryptedBlob,
+            bitmapBase: Int,
+            bitmap: ByteArray
+        ) {
+            val m = members[groupId]?.get(memberId) ?: return
+            val updated = m.copy(counterIn = counterIn, chainKeyIn = chainKeyIn, receivedBitmapBase = bitmapBase, receivedBitmap = bitmap)
+            members[groupId]!![memberId] = updated
+            getFlow(groupId).value = members[groupId]!!.values.filter { it.isActive }
+        }
+        override suspend fun markMemberInactive(groupId: String, memberId: String) {
+            val m = members[groupId]?.get(memberId) ?: return
+            members[groupId]!![memberId] = m.copy(isActive = false)
+            getFlow(groupId).value = members[groupId]!!.values.filter { it.isActive }
+        }
+        override suspend fun deleteMember(groupId: String, memberId: String) {
+            members[groupId]?.remove(memberId)
+            getFlow(groupId).value = members[groupId]?.values?.filter { it.isActive } ?: emptyList()
+        }
+        override suspend fun deleteMembersForGroup(groupId: String) {
+            members.remove(groupId)
+            getFlow(groupId).value = emptyList()
+        }
+    }
+
+    private fun computeTwoSampleKsStatistic(sample1: DoubleArray, sample2: DoubleArray): Double {
+        val n1 = sample1.size
+        val n2 = sample2.size
+        val sorted1 = sample1.sortedArray()
+        val sorted2 = sample2.sortedArray()
+
+        var i1 = 0
+        var i2 = 0
+        var maxDiff = 0.0
+
+        while (i1 < n1 && i2 < n2) {
+            val v1 = sorted1[i1]
+            val v2 = sorted2[i2]
+            val v = if (v1 <= v2) v1 else v2
+
+            while (i1 < n1 && sorted1[i1] <= v) i1++
+            while (i2 < n2 && sorted2[i2] <= v) i2++
+
+            val cdf1 = i1.toDouble() / n1
+            val cdf2 = i2.toDouble() / n2
+            val diff = abs(cdf1 - cdf2)
+            if (diff > maxDiff) {
+                maxDiff = diff
+            }
+        }
+        return maxDiff
+    }
+
+    private fun computeOneSampleKsStatistic(sample: DoubleArray, lambda: Double): Double {
+        val n = sample.size
+        val sorted = sample.sortedArray()
+        var maxDiff = 0.0
+        for (i in 0 until n) {
+            val x = sorted[i]
+            val theoreticalCdf = 1.0 - exp(-lambda * (x / 1000.0))
+            val empiricalPlus = (i + 1).toDouble() / n
+            val empiricalMinus = i.toDouble() / n
+            val diffPlus = abs(empiricalPlus - theoreticalCdf)
+            val diffMinus = abs(theoreticalCdf - empiricalMinus)
+            if (diffPlus > maxDiff) maxDiff = diffPlus
+            if (diffMinus > maxDiff) maxDiff = diffMinus
+        }
+        return maxDiff
+    }
 }

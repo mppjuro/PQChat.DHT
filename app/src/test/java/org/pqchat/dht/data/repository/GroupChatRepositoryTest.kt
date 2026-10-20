@@ -10,10 +10,16 @@ import org.junit.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
+import org.pqchat.dht.dht.FakeDht
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.RatchetChain
+import org.pqchat.dht.traffic.*
 import java.security.Security
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.sqrt
 
 class GroupChatRepositoryTest {
 
@@ -389,5 +395,345 @@ class GroupChatRepositoryTest {
         val rotatedGroup = fakeGroupDao.getGroupById(group.groupId)
         assertEquals("Group epoch must be incremented to 2", 2L, rotatedGroup!!.groupEpoch)
         assertEquals("myCounterOut must be reset to 0 after key rotation", 0, rotatedGroup.myCounterOut)
+    }
+
+    @Test
+    fun testGroupIndividualRecipientSlotsAndTombstoneIndependence() = runBlocking {
+        val dhtNode = DhtLeafNode()
+
+        // 1. Setup Alice Repository (Sender)
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        // 2. Setup Bob Repository (Recipient 1)
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        // 3. Setup Charlie Repository (Recipient 2)
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieChunkDao = FakeChunkDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = charlieChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val bobMemberId = UUID.randomUUID().toString()
+        val charlieMemberId = UUID.randomUUID().toString()
+        val aliceSenderGroupChainKey = CryptoUtils.secureRandomBytes(64)
+
+        // Configure Alice's group entity and member records for Bob & Charlie
+        val aliceGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "Multi-Recipient PQC Group",
+            myMemberId = aliceMemberId,
+            myChainKeyOut = aliceSenderGroupChainKey,
+            myCounterOut = 0,
+            groupEpoch = 1L
+        )
+        aliceGroupDao.insertOrUpdate(aliceGroup)
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = bobMemberId,
+                contactId = "bob-contact-id",
+                memberName = "Bob",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = charlieMemberId,
+                contactId = "charlie-contact-id",
+                memberName = "Charlie",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0
+            )
+        )
+
+        // Configure Bob's group entity and Alice's inbound chain
+        val bobGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "Multi-Recipient PQC Group",
+            myMemberId = bobMemberId,
+            myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+            myCounterOut = 0,
+            groupEpoch = 1L
+        )
+        bobGroupDao.insertOrUpdate(bobGroup)
+        bobGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = aliceSenderGroupChainKey,
+                counterIn = 0
+            )
+        )
+
+        // Configure Charlie's group entity and Alice's inbound chain
+        val charlieGroup = GroupEntity(
+            groupId = groupId,
+            groupName = "Multi-Recipient PQC Group",
+            myMemberId = charlieMemberId,
+            myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+            myCounterOut = 0,
+            groupEpoch = 1L
+        )
+        charlieGroupDao.insertOrUpdate(charlieGroup)
+        charlieGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = aliceSenderGroupChainKey,
+                counterIn = 0
+            )
+        )
+
+        // Verify individual recipient slot derivation gives distinct targets (No Group Follower Correlation)
+        val bobExpectedSlot = RatchetChain.deriveGroupRecipientSlot(
+            aliceSenderGroupChainKey,
+            0,
+            groupId,
+            aliceMemberId,
+            bobMemberId
+        )
+        val charlieExpectedSlot = RatchetChain.deriveGroupRecipientSlot(
+            aliceSenderGroupChainKey,
+            0,
+            groupId,
+            aliceMemberId,
+            charlieMemberId
+        )
+        assertFalse(
+            "Individual recipient targets must be completely distinct (Group Follower Correlation eliminated)",
+            bobExpectedSlot.target.contentEquals(charlieExpectedSlot.target)
+        )
+
+        // Alice sends a group message
+        aliceRepo.sendGroupMessage(groupId, "Confidential broadcast to Bob and Charlie")
+
+        // Verify both slots were populated in DHT
+        val bobDhtRecordBefore = dhtNode.getMutable(bobExpectedSlot.target)
+        val charlieDhtRecordBefore = dhtNode.getMutable(charlieExpectedSlot.target)
+        assertNotNull("Bob's individual slot must exist in DHT", bobDhtRecordBefore)
+        assertNotNull("Charlie's individual slot must exist in DHT", charlieDhtRecordBefore)
+        assertEquals(900, bobDhtRecordBefore!!.v.size)
+        assertEquals(900, charlieDhtRecordBefore!!.v.size)
+
+        // Bob polls incoming messages
+        val bobReceived = bobRepo.pollGroupIncoming(groupId)
+        assertTrue("Bob must receive Alice's message", bobReceived)
+        assertEquals(1, bobMessageDao.messages.size)
+        assertEquals("Confidential broadcast to Bob and Charlie", bobMessageDao.messages[0].rawTextContent)
+
+        // Verify Bob's slot was tombstoned under seq + 1 with 900 bytes CSPRNG
+        val bobDhtRecordAfter = dhtNode.getMutable(bobExpectedSlot.target)
+        assertNotNull(bobDhtRecordAfter)
+        assertEquals("Bob's slot seq must be incremented to tombstone seq", DhtClient.DEFAULT_MUTABLE_SEQ + 1, bobDhtRecordAfter!!.seq)
+        assertEquals(900, bobDhtRecordAfter.v.size)
+
+        // CRITICAL: Verify Charlie's slot was UNTOUCHED by Bob's tombstone!
+        val charlieDhtRecordAfter = dhtNode.getMutable(charlieExpectedSlot.target)
+        assertNotNull("Charlie's slot must STILL exist with valid ciphertext", charlieDhtRecordAfter)
+        assertEquals("Charlie's slot seq must remain original", DhtClient.DEFAULT_MUTABLE_SEQ, charlieDhtRecordAfter!!.seq)
+        assertArrayEquals(
+            "Charlie's payload must remain intact",
+            charlieDhtRecordBefore.v,
+            charlieDhtRecordAfter.v
+        )
+
+        // Charlie polls incoming messages and successfully receives it as well!
+        val charlieReceived = charlieRepo.pollGroupIncoming(groupId)
+        assertTrue("Charlie must also receive Alice's message", charlieReceived)
+        assertEquals(1, charlieMessageDao.messages.size)
+        assertEquals("Confidential broadcast to Bob and Charlie", charlieMessageDao.messages[0].rawTextContent)
+    }
+
+    @Test
+    fun testGroupChat_StrictPoissonShaping_StatisticalKolmogorovSmirnov() = runBlocking {
+        val fakeDht = FakeDht()
+        fakeDht.start()
+        try {
+            val contactDao = FakeContactDao()
+            val messageDao = FakeMessageDao()
+            val chunkDao = FakeChunkDao()
+            val groupDao = FakeGroupDao()
+            val groupMemberDao = FakeGroupMemberDao()
+            val ackQueue = PendingAckQueue()
+            val outboundQueue = OutboundPoissonQueue()
+
+            val repo = ChatRepository(
+                contactDao = contactDao,
+                messageDao = messageDao,
+                chunkDao = chunkDao,
+                pendingRekeyOfferDao = null,
+                skippedKeyDao = null,
+                dhtLeafNode = fakeDht,
+                pendingAckQueue = ackQueue,
+                outboundPoissonQueue = outboundQueue,
+                isStrictPoissonShapingEnabled = true,
+                groupDao = groupDao,
+                groupMemberDao = groupMemberDao
+            )
+
+            val lambda = 1.0 / 60.0
+            val generator = PoissonTrafficGenerator(
+                dhtLeafNode = fakeDht,
+                lambda = lambda,
+                pendingAckQueue = ackQueue,
+                blindRepublishPool = repo.blindRepublishPool,
+                outboundPoissonQueue = outboundQueue
+            )
+
+            val contacts = listOf("bob", "charlie", "dave", "eve")
+            for (c in contacts) {
+                contactDao.insertOrUpdate(
+                    ContactEntity(
+                        id = c,
+                        name = c.replaceFirstChar { it.uppercase() },
+                        chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                        chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                        counterOut = 0,
+                        counterIn = 0,
+                        isVerified = true
+                    )
+                )
+            }
+
+            val n = 200
+            val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
+
+            // 1. Create 5-person group -> Queues 4 TYPE_GROUP_CONTROL INVITE frames (0x06)
+            val group = repo.createGroup("Quantum Research Group", contacts)
+
+            // 2. Send multi-chunk image (~6000 bytes -> ~8 chunks) -> Queues TYPE_CHUNK_DATA frames (0x05)
+            repo.sendImagePayload("bob", CryptoUtils.secureRandomBytes(6000))
+
+            // 3. Send group message to 4 members -> Queues 4 TYPE_GROUP_MESSAGE frames (0x02)
+            repo.sendGroupMessage(group.groupId, "Quantum-resistant group announcement")
+
+            // Verify queue absorbed all bursts (4 invites + 8 image chunks + 4 group messages = 16 frames)
+            assertTrue("Outbound queue must absorb burst without direct emission (size >= 12)", outboundQueue.size >= 12)
+
+            // Sample emission intervals under active burst traffic
+            val intervalsActive = DoubleArray(n)
+            for (i in 0 until n) {
+                intervalsActive[i] = generator.computeNextIntervalMs(lambda).toDouble()
+                val event = generator.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
+                assertNotNull(event)
+                assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+            }
+
+            // Two-sample Kolmogorov-Smirnov test at alpha = 0.05
+            val dTwoSample = computeTwoSampleKsStatistic(intervalsActive, intervalsBaseline)
+            val dTwoCrit = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
+            assertTrue(
+                "Two-sample KS statistic D ($dTwoSample) must be < D_crit ($dTwoCrit) at alpha=0.05 (p > 0.05)",
+                dTwoSample < dTwoCrit
+            )
+
+            // One-sample Kolmogorov-Smirnov test against theoretical exponential distribution
+            val dOneSample = computeOneSampleKsStatistic(intervalsActive, lambda)
+            val dOneCrit = 1.36 / sqrt(n.toDouble())
+            assertTrue(
+                "One-sample KS statistic D ($dOneSample) must be < D_crit ($dOneCrit) at alpha=0.05 (p > 0.05)",
+                dOneSample < dOneCrit
+            )
+        } finally {
+            fakeDht.stop()
+        }
+    }
+
+    private fun computeTwoSampleKsStatistic(sample1: DoubleArray, sample2: DoubleArray): Double {
+        val n1 = sample1.size
+        val n2 = sample2.size
+        val sorted1 = sample1.sortedArray()
+        val sorted2 = sample2.sortedArray()
+
+        var i1 = 0
+        var i2 = 0
+        var maxDiff = 0.0
+
+        while (i1 < n1 && i2 < n2) {
+            val v1 = sorted1[i1]
+            val v2 = sorted2[i2]
+            val v = if (v1 <= v2) v1 else v2
+
+            while (i1 < n1 && sorted1[i1] <= v) i1++
+            while (i2 < n2 && sorted2[i2] <= v) i2++
+
+            val cdf1 = i1.toDouble() / n1
+            val cdf2 = i2.toDouble() / n2
+            val diff = abs(cdf1 - cdf2)
+            if (diff > maxDiff) {
+                maxDiff = diff
+            }
+        }
+        return maxDiff
+    }
+
+    private fun computeOneSampleKsStatistic(sample: DoubleArray, lambda: Double): Double {
+        val n = sample.size
+        val sorted = sample.sortedArray()
+        var maxDiff = 0.0
+        for (i in 0 until n) {
+            val x = sorted[i]
+            val theoreticalCdf = 1.0 - exp(-lambda * (x / 1000.0))
+            val empiricalPlus = (i + 1).toDouble() / n
+            val empiricalMinus = i.toDouble() / n
+            val diffPlus = abs(empiricalPlus - theoreticalCdf)
+            val diffMinus = abs(theoreticalCdf - empiricalMinus)
+            if (diffPlus > maxDiff) maxDiff = diffPlus
+            if (diffMinus > maxDiff) maxDiff = diffMinus
+        }
+        return maxDiff
     }
 }

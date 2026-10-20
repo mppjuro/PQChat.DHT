@@ -2861,13 +2861,26 @@ class ChatRepository(
             BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> {
                 val existingGroup = groupDao?.getGroupById(groupId) ?: return@withContext
                 val existingMember = groupMemberDao?.getMember(groupId, senderMemberId)
+                val allMembers = groupMemberDao?.getMembersForGroup(groupId) ?: emptyList()
+                val placeholderMember = allMembers.firstOrNull { it.contactId == contactId && it.memberId != senderMemberId }
+
                 if (existingMember != null) {
                     val updated = existingMember.copy(
+                        contactId = contactId,
                         chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}"),
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
                     )
-                    groupMemberDao.insertOrUpdate(updated)
+                    groupMemberDao?.insertOrUpdate(updated)
+                } else if (placeholderMember != null) {
+                    groupMemberDao?.deleteMember(groupId, placeholderMember.memberId)
+                    val updated = placeholderMember.copy(
+                        memberId = senderMemberId,
+                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}"),
+                        counterIn = control.currentCounter.toInt(),
+                        isActive = true
+                    )
+                    groupMemberDao?.insertOrUpdate(updated)
                 } else {
                     val newMember = GroupMemberEntity(
                         groupId = groupId,
@@ -2899,7 +2912,7 @@ class ChatRepository(
             }
             val currentGroup = groupDao.getGroupById(groupId) ?: group
 
-            val slot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
             val groupIdBytes = uuidStringToBytes(groupId)
             val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
 
@@ -2910,13 +2923,27 @@ class ChatRepository(
                 text = text
             )
 
-            val frame = BinaryFrameCodec.packGroupAeadFrame(
-                key = slot.msgKey,
-                plaintext = plaintext,
-                target = slot.target,
-                groupId = groupIdBytes,
-                senderMemberId = myMemberIdBytes
-            )
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            // Derive target slots: individual recipient slot for each active group member
+            // (context: groupId || senderMemberId || recipientMemberId || seqNum),
+            // or fallback to base slot if no other members registered yet.
+            val targetSlots = if (activeMembers.isNotEmpty()) {
+                activeMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
 
             val msgId = messageDao.insertMessage(
                 MessageEntity(
@@ -2933,50 +2960,81 @@ class ChatRepository(
                 )
             )
 
+            // Advance sender's ratchet chain using baseSlot.nextChainKey
             groupDao.updateOutgoingState(
                 groupId = groupId,
                 counterOut = currentGroup.myCounterOut + 1,
-                chainKeyOut = EncryptedBlob(slot.nextChainKey, "groups", groupId),
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId),
                 lastActive = System.currentTimeMillis()
             )
 
+            val framesRemaining = java.util.concurrent.atomic.AtomicInteger(targetSlots.size)
+            val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+
             if (isStrictPoissonShaping()) {
-                outboundPoissonQueue.enqueue(
-                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                for (slot in targetSlots) {
+                    val frame = BinaryFrameCodec.packGroupAeadFrame(
+                        key = slot.msgKey,
+                        plaintext = plaintext,
                         target = slot.target,
-                        payload = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false,
-                        seqNum = currentGroup.myCounterOut,
-                        messageId = msgId,
-                        contactId = groupId,
-                        onSent = { success ->
-                            if (success) {
-                                decoyTargetPool.registerPopulatedTarget(slot.target)
-                                messageDao.updateStatus(msgId, "SENT_DHT")
-                            }
-                        }
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes
                     )
-                )
+                    outboundPoissonQueue.enqueue(
+                        org.pqchat.dht.traffic.OutboundPoissonFrame(
+                            target = slot.target,
+                            payload = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = false,
+                            seqNum = currentGroup.myCounterOut,
+                            messageId = msgId,
+                            contactId = groupId,
+                            onSent = { success ->
+                                if (success) {
+                                    anySuccess.set(true)
+                                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                                }
+                                if (framesRemaining.decrementAndGet() == 0) {
+                                    if (anySuccess.get()) {
+                                        messageDao.updateStatus(msgId, "SENT_DHT")
+                                    }
+                                }
+                            }
+                        )
+                    )
+                }
                 return@withLock true
             }
 
-            val success = dhtLeafNode.putMutable(
-                target = slot.target,
-                v = frame,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = false
-            )
+            var overallSuccess = false
+            for (slot in targetSlots) {
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    overallSuccess = true
+                }
+            }
 
-            if (success) {
-                decoyTargetPool.registerPopulatedTarget(slot.target)
+            if (overallSuccess) {
                 messageDao.updateStatus(msgId, "SENT_DHT")
             }
-            success
+            overallSuccess
         }
     }
 
@@ -3022,11 +3080,40 @@ class ChatRepository(
         }
     }
 
+    suspend fun leaveGroup(groupId: String): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            groupDao.updateActiveStatus(groupId, false)
+
+            val members = groupMemberDao?.getMembersForGroup(groupId) ?: emptyList()
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+
+            for (member in members) {
+                val contactId = member.contactId ?: continue
+                try {
+                    sendGroupControlRekeyOrInvite(
+                        contactId = contactId,
+                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_LEAVE,
+                        groupIdBytes = groupIdBytes,
+                        groupEpoch = group.groupEpoch,
+                        myMemberIdBytes = myMemberIdBytes,
+                        myChainKeyOut = group.rawMyChainKeyOut,
+                        currentCounter = group.myCounterOut.toLong(),
+                        groupName = group.groupName
+                    )
+                } catch (_: Exception) {}
+            }
+            true
+        }
+    }
+
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
         getGroupMutex(groupId).withLock {
             val group = groupDao?.getGroupById(groupId) ?: return@withLock false
             val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withLock false
             val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
             var anyReceived = false
 
             for (member in members) {
@@ -3036,36 +3123,57 @@ class ChatRepository(
                 var curMember = member
                 var consecutive = 0
                 while (consecutive < 10) {
-                    val slot = RatchetChain.deriveSlot(curMember.rawChainKeyIn, curMember.counterIn)
                     val memberIdBytes = uuidStringToBytes(curMember.memberId)
+                    val baseSlot = RatchetChain.deriveSlot(curMember.rawChainKeyIn, curMember.counterIn)
+                    val individualSlot = RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = curMember.rawChainKeyIn,
+                        counter = curMember.counterIn,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes,
+                        recipientMemberId = myMemberIdBytes
+                    )
 
-                    val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = false) ?: break
+                    // First probe the individual recipient slot (Group Follower Correlation Defense)
+                    var item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false)
+                    val (activeSlot, isIndividualSlot) = if (item != null) {
+                        Pair(individualSlot, true)
+                    } else {
+                        // Fallback to legacy shared slot if publisher used single slot
+                        val legacyItem = dhtLeafNode.getMutable(baseSlot.target, skipLocalStore = false)
+                        if (legacyItem != null) {
+                            item = legacyItem
+                            Pair(baseSlot, false)
+                        } else {
+                            break
+                        }
+                    }
+
                     try {
                         val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(
-                            key = slot.msgKey,
+                            key = activeSlot.msgKey,
                             frame = item.v,
-                            target = slot.target,
+                            target = activeSlot.target,
                             groupId = groupIdBytes,
                             senderMemberId = memberIdBytes
                         )
 
                         val bitmap = SlidingWindowBitmap(curMember.receivedBitmapBase, 1024, curMember.receivedBitmap)
 
-                        if (!bitmap.isReceived(slot.counter)) {
-                            bitmap.markReceived(slot.counter)
+                        if (!bitmap.isReceived(activeSlot.counter)) {
+                            bitmap.markReceived(activeSlot.counter)
 
                             when (frameMsg.msgType) {
                                 BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
                                     val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
-                                    val seqEpoch = slot.counter / 65536
-                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)
+                                    val seqEpoch = activeSlot.counter / 65536
+                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
                                     if (!alreadyExists) {
                                         messageDao.insertMessage(
                                             MessageEntity(
                                                 contactId = groupId,
                                                 isOutgoing = false,
                                                 seqEpoch = seqEpoch,
-                                                seqNum = slot.counter,
+                                                seqNum = activeSlot.counter,
                                                 ackNum = frameMsg.ackNum,
                                                 timestamp = frameMsg.timestampUTC,
                                                 textContent = textPayload.text,
@@ -3081,27 +3189,42 @@ class ChatRepository(
                             }
                         }
 
-                        // Advance incoming chain state for this member.
-                        // STRICT REQUIREMENT: DO NOT overwrite with tombstone! Other members must read this same DHT slot.
+                        // Advance incoming chain state for this member
                         groupMemberDao.updateMemberIncomingStateWithBitmap(
                             groupId = groupId,
                             memberId = curMember.memberId,
-                            counterIn = slot.counter + 1,
-                            chainKeyIn = EncryptedBlob(slot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            counterIn = activeSlot.counter + 1,
+                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
                             bitmapBase = bitmap.windowBase,
                             bitmap = bitmap.toByteArray()
                         )
 
                         curMember = curMember.copy(
-                            counterIn = slot.counter + 1,
-                            chainKeyIn = EncryptedBlob(slot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            counterIn = activeSlot.counter + 1,
+                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
                             receivedBitmapBase = bitmap.windowBase,
                             receivedBitmap = bitmap.toByteArray()
                         )
+
+                        // For individual recipient slot: safe to overwrite with 900B CSPRNG noise tombstone!
+                        // Other group members have their own distinct derived slots so their messages remain intact.
+                        if (isIndividualSlot) {
+                            try {
+                                dhtLeafNode.putMutable(
+                                    target = activeSlot.target,
+                                    v = BinaryFrameCodec.createTombstonePayload(),
+                                    seq = item.seq + 1,
+                                    salt = null,
+                                    sk = activeSlot.edPrivateKeySeed,
+                                    skipLocalStore = false
+                                )
+                            } catch (_: Exception) {}
+                        }
+
                         anyReceived = true
                         consecutive++
                     } catch (_: Exception) {
-                        harvestUndecryptableItem(slot.target, item)
+                        harvestUndecryptableItem(activeSlot.target, item)
                         break
                     }
                 }
