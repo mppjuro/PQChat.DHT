@@ -204,6 +204,180 @@ data class RepublishAnalysisSummary(
     }
 }
 
+/**
+ * Telemetry record for group chat operations (multi-recipient broadcast, delivery latency,
+ * fan-out delivery skew, and key rotation convergence).
+ */
+data class GroupTelemetryEvent(
+    val eventId: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val timestampEpochMs: Long = System.currentTimeMillis(),
+    val isoTimestamp: String = formatEpochIso(timestampEpochMs),
+    val eventType: String, // "BROADCAST", "RECEIVE", "FAN_OUT_SKEW", "KEY_ROTATION"
+    val groupIdPrefix: String, // 8 hex chars
+    val groupSizeM: Int,
+    val latencyMs: Long = 0L,
+    val fanOutSkewMs: Long = 0L,
+    val keyRotationConvergenceMs: Long = 0L,
+    val epoch: Long = 1L
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "eventId" to eventId,
+        "sessionId" to sessionId,
+        "timestampEpochMs" to timestampEpochMs,
+        "isoTimestamp" to isoTimestamp,
+        "eventType" to eventType,
+        "groupIdPrefix" to groupIdPrefix,
+        "groupSizeM" to groupSizeM,
+        "latencyMs" to latencyMs,
+        "fanOutSkewMs" to fanOutSkewMs,
+        "keyRotationConvergenceMs" to keyRotationConvergenceMs,
+        "epoch" to epoch
+    )
+
+    fun toCsvRow(): String {
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,$eventType,$groupIdPrefix,$groupSizeM,$latencyMs,$fanOutSkewMs,$keyRotationConvergenceMs,$epoch"
+    }
+
+    fun toMasterCsvRow(): String {
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,GROUP_EVENT,$eventType,$groupIdPrefix,1,900,$latencyMs,$groupSizeM,$groupSizeM,0,true,0,0,\"\",\"\",8,0.0,0,100,false,true,\"\",$latencyMs,\"epoch=$epoch;skew=$fanOutSkewMs;rekey=$keyRotationConvergenceMs\""
+    }
+
+    companion object {
+        const val CSV_HEADER =
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,event_type,group_id_prefix,group_size_m,latency_ms,fan_out_skew_ms,key_rotation_convergence_ms,epoch"
+    }
+}
+
+/**
+ * Empirical traffic shaping and anonymity efficacy metrics.
+ */
+data class TrafficShapingStats(
+    val sampleCount: Int,
+    val meanInterPacketMs: Double,
+    val varianceInterPacketMs: Double,
+    val coefficientOfVariation: Double,
+    val kolmogorovSmirnovD: Double,
+    val realMsgCount: Int,
+    val coverDummyCount: Int,
+    val blindRepublishCount: Int,
+    val decoyGetCount: Int,
+    val tombstoneCount: Int,
+    val totalOutboundPackets: Int,
+    val realMsgPercent: Double,
+    val coverDummyPercent: Double,
+    val blindRepublishPercent: Double,
+    val decoyGetPercent: Double,
+    val tombstonePercent: Double,
+    val targetEntropyBits: Double,
+    val targetEntropyNormalized: Double
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "sampleCount" to sampleCount,
+        "meanInterPacketMs" to meanInterPacketMs,
+        "varianceInterPacketMs" to varianceInterPacketMs,
+        "coefficientOfVariation" to coefficientOfVariation,
+        "kolmogorovSmirnovD" to kolmogorovSmirnovD,
+        "realMsgCount" to realMsgCount,
+        "coverDummyCount" to coverDummyCount,
+        "blindRepublishCount" to blindRepublishCount,
+        "decoyGetCount" to decoyGetCount,
+        "tombstoneCount" to tombstoneCount,
+        "totalOutboundPackets" to totalOutboundPackets,
+        "realMsgPercent" to realMsgPercent,
+        "coverDummyPercent" to coverDummyPercent,
+        "blindRepublishPercent" to blindRepublishPercent,
+        "decoyGetPercent" to decoyGetPercent,
+        "tombstonePercent" to tombstonePercent,
+        "targetEntropyBits" to targetEntropyBits,
+        "targetEntropyNormalized" to targetEntropyNormalized
+    )
+}
+
+/**
+ * Network RTT percentiles partitioned by physical network environment.
+ */
+data class NetworkTypeRttStats(
+    val networkType: String,
+    val sampleCount: Int,
+    val minMs: Long,
+    val maxMs: Long,
+    val avgMs: Double,
+    val p50Ms: Long,
+    val p90Ms: Long,
+    val p99Ms: Long
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "networkType" to networkType,
+        "sampleCount" to sampleCount,
+        "minMs" to minMs,
+        "maxMs" to maxMs,
+        "avgMs" to avgMs,
+        "p50Ms" to p50Ms,
+        "p90Ms" to p90Ms,
+        "p99Ms" to p99Ms
+    )
+}
+
+/**
+ * Resumption success rate for multi-chunk media and document transfers.
+ */
+data class ChunkResumptionStats(
+    val totalTransfers: Int,
+    val resumedTransfers: Int,
+    val successfulResumptions: Int,
+    val resumptionSuccessRate: Double
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "totalTransfers" to totalTransfers,
+        "resumedTransfers" to resumedTransfers,
+        "successfulResumptions" to successfulResumptions,
+        "resumptionSuccessRate" to resumptionSuccessRate
+    )
+}
+
+/**
+ * Empirical group messaging latency and key rotation convergence metrics.
+ */
+data class GroupChatResearchStats(
+    val latencyByGroupSize: Map<String, Double>,
+    val avgFanOutDeliverySkewMs: Double,
+    val maxFanOutDeliverySkewMs: Long,
+    val avgKeyRotationConvergenceMs: Double,
+    val totalGroupMessagesTracked: Int,
+    val totalKeyRotationsTracked: Int
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "latencyByGroupSize" to latencyByGroupSize,
+        "avgFanOutDeliverySkewMs" to avgFanOutDeliverySkewMs,
+        "maxFanOutDeliverySkewMs" to maxFanOutDeliverySkewMs,
+        "avgKeyRotationConvergenceMs" to avgKeyRotationConvergenceMs,
+        "totalGroupMessagesTracked" to totalGroupMessagesTracked,
+        "totalKeyRotationsTracked" to totalKeyRotationsTracked
+    )
+}
+
+/**
+ * Retention survival curve data point in function of elapsed hours since initial PUT.
+ */
+data class RetentionSurvivalPoint(
+    val horizonLabel: String,
+    val horizonHours: Double,
+    val totalSamples: Int,
+    val aliveSamples: Int,
+    val survivalRatePercent: Double,
+    val republishActive: Boolean
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "horizonLabel" to horizonLabel,
+        "horizonHours" to horizonHours,
+        "totalSamples" to totalSamples,
+        "aliveSamples" to aliveSamples,
+        "survivalRatePercent" to survivalRatePercent,
+        "republishActive" to republishActive
+    )
+}
+
 object ResearchCsvSchema {
     const val MASTER_CSV_HEADER =
         "record_id,session_id,timestamp_epoch_ms,iso_timestamp,record_type,packet_role,target_prefix,seq_num,payload_bytes,rtt_ms,nodes_queried,nodes_responded,lookup_hops,success,republish_attempt,message_age_ms,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct,republish_active,is_alive,elapsed_hours,e2e_latency_ms,error_or_status"

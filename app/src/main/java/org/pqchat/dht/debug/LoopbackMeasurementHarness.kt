@@ -352,131 +352,16 @@ class LoopbackMeasurementHarness(
     ): List<RetentionPointResult> = withContext(Dispatchers.IO) {
         val results = mutableListOf<RetentionPointResult>()
 
-        for (hours in horizonsHours) {
-            for (republish in listOf(false, true)) {
-                var surviving = 0
-                val rtts = mutableListOf<Double>()
-                // Multi-hour retention (1h–24h) cannot be reported as MEASURED unless delayProvider actually waited or real time elapsed
-                val dataSource = if (dhtClient != null && (hours <= 5.0 / 60.0 || delayProvider != null)) DataSource.MEASURED else DataSource.SIMULATED
-
-                for (i in 0 until sampleSizePerHorizon) {
-                    val survived: Boolean
-                    val retrieveRttMs: Long
-                    val errCode: String?
-
-                    if (dhtClient != null) {
-                        // Live DhtClient execution
-                        val probeSeed = CryptoUtils.secureRandomBytes(32)
-                        val probeKeyPair = Ed25519Engine.generateKeyPairFromSeed(probeSeed)
-                        val target = Ed25519Engine.computeTarget(probeKeyPair.publicKey)
-                        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
-
-                        // 1. Initial PUT
-                        val t0 = System.currentTimeMillis()
-                        val putOk = try {
-                            var ok = dhtClient.putMutable(
-                                target = target,
-                                v = payload,
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = probeSeed,
-                                skipLocalStore = true
-                            )
-                            if (!ok) {
-                                kotlinx.coroutines.delay(1000)
-                                ok = dhtClient.putMutable(
-                                    target = target,
-                                    v = payload,
-                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                    salt = null,
-                                    sk = probeSeed,
-                                    skipLocalStore = true
-                                )
-                            }
-                            ok
-                        } catch (e: Exception) {
-                            false
-                        }
-                        val rttPut = max(1L, System.currentTimeMillis() - t0)
-
-                        // 2. Simulated delay or real-time progression if delayProvider supplied
-                        if (delayProvider != null) {
-                            val horizonMs = (hours * 3600 * 1000).toLong()
-                            delayProvider(horizonMs)
-                        }
-
-                        // 3. Optional republication refresh if enabled
-                        if (republish && putOk) {
-                            try {
-                                dhtClient.putMutable(
-                                    target = target,
-                                    v = payload,
-                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
-                                    salt = null,
-                                    sk = probeSeed,
-                                    skipLocalStore = true
-                                )
-                            } catch (_: Exception) {}
-                        }
-
-                        // 4. Retrieve record via GET
-                        val t2 = System.currentTimeMillis()
-                        val getTimeout = when (networkEnv) {
-                            NetworkEnvironment.WIFI -> DhtLeafNode.TIMEOUT_MS
-                            NetworkEnvironment.LTE -> 4500L
-                            NetworkEnvironment.RESTRICTIVE_NAT -> 5000L
-                        }
-                        var retrieved = try {
-                            dhtClient.getMutable(
-                                target = target,
-                                salt = null,
-                                skipLocalStore = true,
-                                timeoutMs = getTimeout
-                            )
-                        } catch (e: Exception) {
-                            null
-                        }
-                        if (retrieved == null) {
-                            retrieved = try {
-                                dhtClient.getMutable(
-                                    target = target,
-                                    salt = null,
-                                    skipLocalStore = true,
-                                    timeoutMs = getTimeout
-                                )
-                            } catch (e: Exception) {
-                                null
-                            }
-                        }
-                        val t3 = System.currentTimeMillis()
-                        retrieveRttMs = max(1L, t3 - t2)
-                        survived = putOk && retrieved != null && retrieved.v.contentEquals(payload)
-                        errCode = if (!survived) "RETENTION_GET_FAILED" else null
-
-                        // Record metric
-                        val metric = TelemetryMetric(
-                            measurementId = idCounter.getAndIncrement(),
-                            timestampEpochMs = System.currentTimeMillis(),
-                            dataSource = DataSource.MEASURED,
-                            networkEnv = networkEnv,
-                            operation = "RETENTION_PROBE",
-                            rttPutMs = rttPut,
-                            rttGetMs = retrieveRttMs,
-                            rttTotalMs = rttPut + retrieveRttMs,
-                            deliverySuccess = survived,
-                            retransmissions = if (survived) 0 else 1,
-                            retentionHours = hours,
-                            republishEnabled = republish,
-                            nodesQueried = 16,
-                            nodesResponded = if (survived) ((dhtClient as? DhtLeafNode)?.remoteStoredPeers?.get(CryptoUtils.toHex(target))?.size ?: 4) else 0,
-                            errorCode = errCode
-                        )
-                        synchronized(collectedMetrics) {
-                            collectedMetrics.add(metric)
-                        }
-                    } else {
-                        // Simulated Kademlia Churn Model
-                        survived = simulateRetentionSurvival(hours, republish, networkEnv, random)
+        if (dhtClient == null) {
+            // Simulated Kademlia Churn Model
+            for (hours in horizonsHours) {
+                for (republish in listOf(false, true)) {
+                    var surviving = 0
+                    val rtts = mutableListOf<Double>()
+                    for (i in 0 until sampleSizePerHorizon) {
+                        val survived = simulateRetentionSurvival(hours, republish, networkEnv, random)
+                        val retrieveRttMs: Long
+                        val errCode: String?
                         if (survived) {
                             val hop = simulateNetworkHop(networkEnv, isPut = false, random)
                             retrieveRttMs = hop.rttMs
@@ -506,15 +391,201 @@ class LoopbackMeasurementHarness(
                         synchronized(collectedMetrics) {
                             collectedMetrics.add(metric)
                         }
+
+                        if (survived) {
+                            surviving++
+                            rtts.add(retrieveRttMs.toDouble())
+                        }
                     }
 
-                    if (survived) {
-                        surviving++
-                        rtts.add(retrieveRttMs.toDouble())
+                    val survivalRate = surviving.toDouble() / sampleSizePerHorizon
+                    val meanRtt = if (rtts.isNotEmpty()) rtts.average() else 0.0
+                    results.add(
+                        RetentionPointResult(
+                            hours = hours,
+                            republishEnabled = republish,
+                            dataSource = DataSource.SIMULATED,
+                            survivalRate = survivalRate,
+                            testedRecords = sampleSizePerHorizon,
+                            survivingRecords = surviving,
+                            meanRetrieveRttMs = meanRtt
+                        )
+                    )
+                }
+            }
+            return@withContext results
+        }
+
+        // MEASURED mode with live DhtClient: parallel initial PUT at t=0, parallel sampling per horizon
+        class MeasuredRetentionProbe(
+            val seed: ByteArray,
+            val target: ByteArray,
+            val payload: ByteArray,
+            var putOk: Boolean = false,
+            var rttPutMs: Long = 0L
+        )
+
+        val getTimeout = when (networkEnv) {
+            NetworkEnvironment.WIFI -> DhtLeafNode.TIMEOUT_MS
+            NetworkEnvironment.LTE -> 4500L
+            NetworkEnvironment.RESTRICTIVE_NAT -> 5000L
+        }
+
+        for (republish in listOf(false, true)) {
+            // 1. Initial PUT for the entire sample pool concurrently at t=0
+            val probes = (0 until sampleSizePerHorizon).map {
+                val probeSeed = CryptoUtils.secureRandomBytes(32)
+                val probeKeyPair = Ed25519Engine.generateKeyPairFromSeed(probeSeed)
+                val target = Ed25519Engine.computeTarget(probeKeyPair.publicKey)
+                val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+                MeasuredRetentionProbe(probeSeed, target, payload)
+            }
+
+            val putSemaphore = Semaphore(16)
+            coroutineScope {
+                probes.map { probe ->
+                    async {
+                        putSemaphore.withPermit {
+                            val t0 = System.currentTimeMillis()
+                            var ok = try {
+                                dhtClient.putMutable(
+                                    target = probe.target,
+                                    v = probe.payload,
+                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                    salt = null,
+                                    sk = probe.seed,
+                                    skipLocalStore = true
+                                )
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!ok) {
+                                delay(200)
+                                ok = try {
+                                    dhtClient.putMutable(
+                                        target = probe.target,
+                                        v = probe.payload,
+                                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                        salt = null,
+                                        sk = probe.seed,
+                                        skipLocalStore = true
+                                    )
+                                } catch (_: Exception) {
+                                    false
+                                }
+                            }
+                            probe.putOk = ok
+                            probe.rttPutMs = max(1L, System.currentTimeMillis() - t0)
+                        }
+                    }
+                }.awaitAll()
+            }
+
+            // 2. Progression through horizons with concurrent sampling
+            var currentSequence = DhtClient.DEFAULT_MUTABLE_SEQ
+            for (hours in horizonsHours) {
+                val dataSource = if (hours <= 5.0 / 60.0 || delayProvider != null) DataSource.MEASURED else DataSource.SIMULATED
+
+                if (delayProvider != null) {
+                    val horizonMs = (hours * 3600 * 1000).toLong()
+                    delayProvider(horizonMs)
+                }
+
+                // Concurrent republication refresh if enabled
+                if (republish) {
+                    currentSequence += 1L
+                    val refreshSeq = currentSequence
+                    val republishSemaphore = Semaphore(16)
+                    coroutineScope {
+                        probes.filter { it.putOk }.map { probe ->
+                            async {
+                                republishSemaphore.withPermit {
+                                    try {
+                                        dhtClient.putMutable(
+                                            target = probe.target,
+                                            v = probe.payload,
+                                            seq = refreshSeq,
+                                            salt = null,
+                                            sk = probe.seed,
+                                            skipLocalStore = true
+                                        )
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        }.awaitAll()
                     }
                 }
 
-                // Compute exact empirical survival rate (NO hardcoded clamp like max(0.85))
+                // Concurrent GET retrieval without blocking individual records
+                val getSemaphore = Semaphore(16)
+                var surviving = 0
+                val rtts = mutableListOf<Double>()
+
+                val probeMetrics = coroutineScope {
+                    probes.map { probe ->
+                        async {
+                            getSemaphore.withPermit {
+                                val t2 = System.currentTimeMillis()
+                                var retrieved = try {
+                                    dhtClient.getMutable(
+                                        target = probe.target,
+                                        salt = null,
+                                        skipLocalStore = true,
+                                        timeoutMs = getTimeout
+                                    )
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                if (retrieved == null) {
+                                    retrieved = try {
+                                        dhtClient.getMutable(
+                                            target = probe.target,
+                                            salt = null,
+                                            skipLocalStore = true,
+                                            timeoutMs = getTimeout
+                                        )
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                }
+                                val t3 = System.currentTimeMillis()
+                                val retrieveRttMs = max(1L, t3 - t2)
+                                val survived = probe.putOk && retrieved != null && retrieved.v.contentEquals(probe.payload)
+                                val errCode = if (!survived) "RETENTION_GET_FAILED" else null
+
+                                val metric = TelemetryMetric(
+                                    measurementId = idCounter.getAndIncrement(),
+                                    timestampEpochMs = System.currentTimeMillis(),
+                                    dataSource = DataSource.MEASURED,
+                                    networkEnv = networkEnv,
+                                    operation = "RETENTION_PROBE",
+                                    rttPutMs = probe.rttPutMs,
+                                    rttGetMs = retrieveRttMs,
+                                    rttTotalMs = probe.rttPutMs + retrieveRttMs,
+                                    deliverySuccess = survived,
+                                    retransmissions = if (survived) 0 else 1,
+                                    retentionHours = hours,
+                                    republishEnabled = republish,
+                                    nodesQueried = 16,
+                                    nodesResponded = if (survived) ((dhtClient as? DhtLeafNode)?.remoteStoredPeers?.get(CryptoUtils.toHex(probe.target))?.size ?: 4) else 0,
+                                    errorCode = errCode
+                                )
+                                Triple(metric, survived, retrieveRttMs)
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                synchronized(collectedMetrics) {
+                    for ((metric, survived, retrieveRttMs) in probeMetrics) {
+                        collectedMetrics.add(metric)
+                        if (survived) {
+                            surviving++
+                            rtts.add(retrieveRttMs.toDouble())
+                        }
+                    }
+                }
+
                 val survivalRate = surviving.toDouble() / sampleSizePerHorizon
                 val meanRtt = if (rtts.isNotEmpty()) rtts.average() else 0.0
 

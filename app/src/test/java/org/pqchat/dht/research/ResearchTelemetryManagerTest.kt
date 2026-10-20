@@ -450,5 +450,183 @@ class ResearchTelemetryManagerTest {
         assertTrue("Master CSV should contain FOREGROUND_CHAT", masterCsv.contains("FOREGROUND_CHAT"))
         assertTrue("Master CSV should contain 123456", masterCsv.contains(",123456,"))
     }
+
+    @Test
+    fun `test zero sensitive data in all telemetry bundles and payloads`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        // Sensitive mock artifacts that must NEVER be leaked to research telemetry
+        val sensitiveSeed = CryptoUtils.secureRandomBytes(32)
+        val sensitiveSeedHex = CryptoUtils.toHex(sensitiveSeed)
+        val sensitivePrivateKey = CryptoUtils.secureRandomBytes(32)
+        val sensitiveKeyHex = CryptoUtils.toHex(sensitivePrivateKey)
+        val sensitivePlaintext = "TopSecretUltraConfidentialMessage123"
+        val sensitiveContactName = "SpecialAgentAliceSmith"
+        val sensitiveIpAddress = "192.168.1.188"
+        val fullTarget = CryptoUtils.secureRandomBytes(20)
+        val fullTargetHex = CryptoUtils.toHex(fullTarget)
+
+        // 1. Record normal operations
+        manager.recordPacketEvent(
+            role = PacketRole.FIRST_SEND,
+            target = fullTarget,
+            seqNum = 1L,
+            payloadBytes = 900,
+            rttMs = 35L,
+            success = true
+        )
+        manager.recordDecoyGet(
+            target = CryptoUtils.secureRandomBytes(20),
+            rttMs = 45L
+        )
+        manager.recordGroupMessageDelivery(
+            groupId = CryptoUtils.secureRandomBytes(16),
+            groupSizeM = 5,
+            latencyMs = 120L,
+            fanOutSkewMs = 15L
+        )
+        manager.recordKeyRotationConvergence(
+            groupId = CryptoUtils.secureRandomBytes(16),
+            groupSizeM = 5,
+            convergenceMs = 85L
+        )
+        manager.recordDeliveryAck(fullTarget)
+
+        val bundleZip = manager.buildCompressedResearchBundle()
+        assertTrue("Bundle zip file must exist and be non-empty", bundleZip.exists() && bundleZip.length() > 0)
+
+        val filesToCheck = listOf(
+            manager.masterCsvFile,
+            manager.packetEventsCsvFile,
+            manager.groupEventsCsvFile,
+            manager.ttlSamplesCsvFile,
+            manager.republishSummaryCsvFile,
+            manager.resourceProfileCsvFile,
+            File(tempDir, "session_manifest.json")
+        )
+
+        for (file in filesToCheck) {
+            if (!file.exists()) continue
+            val content = file.readText()
+
+            assertFalse("File ${file.name} must NOT contain sensitive seed hex", content.contains(sensitiveSeedHex))
+            assertFalse("File ${file.name} must NOT contain sensitive key hex", content.contains(sensitiveKeyHex))
+            assertFalse("File ${file.name} must NOT contain plaintext message", content.contains(sensitivePlaintext))
+            assertFalse("File ${file.name} must NOT contain contact name", content.contains(sensitiveContactName))
+            assertFalse("File ${file.name} must NOT contain IP address", content.contains(sensitiveIpAddress))
+            // The full 40-character target hex must NOT appear; only the 8-character prefix is permitted
+            assertFalse("File ${file.name} must NOT contain full target hex", content.contains(fullTargetHex))
+        }
+
+        // Check Firestore payload maps
+        val (deviceInfo, metrics) = manager.computeSessionPayload()
+        val metricsJson = metrics.toString()
+        val deviceJson = deviceInfo.toString()
+
+        assertFalse("Metrics payload must NOT contain sensitive seed hex", metricsJson.contains(sensitiveSeedHex))
+        assertFalse("Metrics payload must NOT contain sensitive key hex", metricsJson.contains(sensitiveKeyHex))
+        assertFalse("Metrics payload must NOT contain plaintext message", metricsJson.contains(sensitivePlaintext))
+        assertFalse("Metrics payload must NOT contain contact name", metricsJson.contains(sensitiveContactName))
+        assertFalse("Metrics payload must NOT contain IP address", metricsJson.contains(sensitiveIpAddress))
+        assertFalse("DeviceInfo must NOT contain IP address", deviceJson.contains(sensitiveIpAddress))
+    }
+
+    @Test
+    fun `test traffic shaping metrics, Kolmogorov-Smirnov test and Shannon entropy`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        // Emit packets with diverse roles and diverse target prefixes
+        val targets = (0 until 10).map { i ->
+            val b = ByteArray(20)
+            b[0] = (i * 25).toByte()
+            b
+        }
+
+        for (t in targets) {
+            manager.recordPacketEvent(role = PacketRole.FIRST_SEND, target = t, rttMs = 30L, nodesQueried = 16, nodesResponded = 8)
+            manager.recordPacketEvent(role = PacketRole.COVER_DUMMY_SENT, target = t, rttMs = 25L, nodesQueried = 16, nodesResponded = 8)
+            manager.recordDecoyGet(target = t, rttMs = 20L, nodesQueried = 16, nodesResponded = 8)
+            manager.recordPacketEvent(role = PacketRole.TOMBSTONE_SENT, target = t, rttMs = 35L, nodesQueried = 16, nodesResponded = 8)
+            manager.recordPacketEvent(role = PacketRole.CROWD_REPUBLISH, target = t, rttMs = 40L, nodesQueried = 16, nodesResponded = 8)
+        }
+
+        val stats = manager.computeTrafficShapingStats()
+
+        assertEquals(50, stats.totalOutboundPackets)
+        assertEquals(10, stats.realMsgCount)
+        assertEquals(10, stats.coverDummyCount)
+        assertEquals(10, stats.decoyGetCount)
+        assertEquals(10, stats.tombstoneCount)
+        assertEquals(10, stats.blindRepublishCount)
+
+        assertEquals(20.0, stats.realMsgPercent, 0.01)
+        assertEquals(20.0, stats.coverDummyPercent, 0.01)
+        assertEquals(20.0, stats.decoyGetPercent, 0.01)
+        assertEquals(20.0, stats.tombstonePercent, 0.01)
+        assertEquals(20.0, stats.blindRepublishPercent, 0.01)
+
+        // Shannon entropy: 10 distinct prefixes uniformly distributed -> H(X) = log2(10) ~ 3.32 bits
+        assertTrue("Shannon entropy bits should be positive", stats.targetEntropyBits > 3.0)
+        assertTrue("Shannon entropy bits must not exceed theoretical 8.0 bits", stats.targetEntropyBits <= 8.0)
+        assertTrue("Entropy normalized uniformity must be between 0 and 100", stats.targetEntropyNormalized in 0.0..100.0)
+
+        // KS test D statistic
+        assertTrue("Kolmogorov-Smirnov D statistic must be non-negative", stats.kolmogorovSmirnovD >= 0.0)
+
+        // Ed25519 signature stats
+        val sigStats = manager.computeEd25519SignatureStats()
+        assertEquals(50, sigStats["totalQueries"])
+        assertEquals(50 * 16, sigStats["totalNodesQueried"])
+        assertEquals(50 * 8, sigStats["totalNodesValid"])
+        assertEquals(50.0, sigStats["validSignatureRatioPercent"])
+    }
+
+    @Test
+    fun `test group chat and chunk transfer resumption research metrics`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        // Group chat messages for various sizes
+        val gId = CryptoUtils.secureRandomBytes(16)
+        manager.recordGroupMessageDelivery(groupId = gId, groupSizeM = 3, latencyMs = 80L, fanOutSkewMs = 12L)
+        manager.recordGroupMessageDelivery(groupId = gId, groupSizeM = 3, latencyMs = 90L, fanOutSkewMs = 16L)
+        manager.recordGroupMessageDelivery(groupId = gId, groupSizeM = 7, latencyMs = 150L, fanOutSkewMs = 28L)
+        manager.recordKeyRotationConvergence(groupId = gId, groupSizeM = 7, convergenceMs = 110L)
+
+        val groupStats = manager.computeGroupChatStats()
+        assertEquals(3, groupStats.totalGroupMessagesTracked)
+        assertEquals(1, groupStats.totalKeyRotationsTracked)
+        assertEquals(85.0, groupStats.latencyByGroupSize["size_3"] ?: 0.0, 0.01)
+        assertEquals(150.0, groupStats.latencyByGroupSize["size_7"] ?: 0.0, 0.01)
+        assertTrue("Fan-out skew average must be positive", groupStats.avgFanOutDeliverySkewMs > 0.0)
+        assertEquals(28L, groupStats.maxFanOutDeliverySkewMs)
+        assertEquals(110.0, groupStats.avgKeyRotationConvergenceMs, 0.01)
+
+        // Chunk transfer resumption
+        manager.recordChunkTransfer(wasResumed = false, wasSuccessful = true)
+        manager.recordChunkTransfer(wasResumed = true, wasSuccessful = true)
+        manager.recordChunkTransfer(wasResumed = true, wasSuccessful = false)
+
+        val chunkStats = manager.computeChunkResumptionStats()
+        assertEquals(3, chunkStats.totalTransfers)
+        assertEquals(2, chunkStats.resumedTransfers)
+        assertEquals(1, chunkStats.successfulResumptions)
+        assertEquals(50.0, chunkStats.resumptionSuccessRate, 0.01)
+    }
 }
+
 

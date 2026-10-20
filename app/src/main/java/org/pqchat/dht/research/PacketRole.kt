@@ -50,5 +50,10 @@ enum class PacketRole(val displayName: String) {
     /**
      * Empirical DHT retention probe checking if a historical record is still alive on DHT.
      */
-    TTL_PROBE("Próbka retencji DHT (TTL)")
+    TTL_PROBE("Próbka retencji DHT (TTL)"),
+
+    /**
+     * Decoy target query emitted to disguise real contact rendezvous.
+     */
+    DECOY_GET("Odpytanie celu maskującego (Decoy GET)")
 }

@@ -212,7 +212,8 @@ class FirebaseResearchSync(
                 "sessionId" to sessionId,
                 "timestamp" to now,
                 "deviceInfo" to deviceInfo,
-                "metrics" to metrics
+                "metrics" to metrics,
+                "schemaVersion" to 2
             )
 
             val docId = if (!hasSynced) sessionId else "${sessionId}_${now}"

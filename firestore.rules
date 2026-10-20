@@ -1,10 +1,42 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /research_sessions/{sessionId} {
-      allow create: if request.auth != null 
-                    && request.resource.data.keys().hasAll(['timestamp', 'deviceInfo', 'metrics'])
-                    && request.resource.data.metrics is map;
+    match /research_sessions/{sessionDocId} {
+      // Academic Research Telemetry: Strictly write-only (create-only) for authenticated devices.
+      // Defends against Data Poisoning via strict schema constraints, key limiting, and size boundaries.
+      allow create: if request.auth != null
+                    // Top-level schema key enforcement
+                    && request.resource.data.keys().hasAll(['sessionId', 'timestamp', 'deviceInfo', 'metrics', 'schemaVersion'])
+                    && request.resource.data.keys().hasOnly(['sessionId', 'timestamp', 'deviceInfo', 'metrics', 'schemaVersion'])
+                    // Field types and validation
+                    && request.resource.data.sessionId is string
+                    && request.resource.data.sessionId.size() >= 8
+                    && request.resource.data.sessionId.size() <= 64
+                    && request.resource.data.timestamp is int
+                    && request.resource.data.timestamp > 1700000000000
+                    && request.resource.data.schemaVersion is int
+                    && request.resource.data.schemaVersion >= 1
+                    // Device info map validation
+                    && request.resource.data.deviceInfo is map
+                    && request.resource.data.deviceInfo.keys().hasAll(['sessionId', 'deviceModel', 'androidVersion', 'appVersion', 'versionCode'])
+                    && request.resource.data.deviceInfo.deviceModel is string
+                    && request.resource.data.deviceInfo.androidVersion is int
+                    && request.resource.data.deviceInfo.versionCode is int
+                    // Metrics map validation
+                    && request.resource.data.metrics is map
+                    && request.resource.data.metrics.keys().hasAll(['totalEvents', 'firstSendCount', 'ownRepublishCount', 'crowdRepublishCount', 'packetsReceivedCount', 'ttlSamplesCount'])
+                    && request.resource.data.metrics.totalEvents is int
+                    && request.resource.data.metrics.totalEvents >= 0
+                    && request.resource.data.metrics.firstSendCount is int
+                    && request.resource.data.metrics.ownRepublishCount is int
+                    && request.resource.data.metrics.crowdRepublishCount is int
+                    && request.resource.data.metrics.packetsReceivedCount is int
+                    && request.resource.data.metrics.ttlSamplesCount is int
+                    // Payload size constraints (protects against oversized uploads / resource exhaustion)
+                    && (!('bundleZipSizeBytes' in request.resource.data.metrics) || (request.resource.data.metrics.bundleZipSizeBytes is int && request.resource.data.metrics.bundleZipSizeBytes <= 700000))
+                    && (!('bundleZipBase64' in request.resource.data.metrics) || (request.resource.data.metrics.bundleZipBase64 is string && request.resource.data.metrics.bundleZipBase64.size() <= 950000));
+
+      // Strictly deny public reads, updates, and deletes to protect research integrity
       allow read, update, delete: if false;
     }
   }
