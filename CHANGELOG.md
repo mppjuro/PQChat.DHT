@@ -59,6 +59,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`dc79c94`](https://github.com/mppjuro/PQChat.DHT/commit/dc79c9473b7ccd3d889f9f10b013962264d1f127) (2026-10-20) — Room DB row-swap attack with entity AAD binding validation and wipe plaintext memory
 - [`076398a`](https://github.com/mppjuro/PQChat.DHT/commit/076398a234951b91d1743e52f31e8d699ede27e7) (2026-10-20) — **test**: use deterministic seeded PRNG for Kolmogorov-Smirnov Poisson tests
 - [`20c9d80`](https://github.com/mppjuro/PQChat.DHT/commit/20c9d80b5266abea92e8d5e651481fd9ac0a3af3) (2026-10-20) — **test**: resolve loopback retention test assertion, remove compiler warnings, and migrate Firebase ktx deps
 - [`7c17622`](https://github.com/mppjuro/PQChat.DHT/commit/7c17622504ac3d157ab26bcb25ba7cdb07ac1b42) (2026-10-19) — **research-integrity**: eliminate synthetic generator records and calibrate 100-run testbed correlation
@@ -141,6 +142,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`2cabcb1`](https://github.com/mppjuro/PQChat.DHT/commit/2cabcb14c17e38b6d58f26d6f34b22f9d56807d1) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c9d864b`](https://github.com/mppjuro/PQChat.DHT/commit/c9d864b5eac0926f938748a51518d9ca04616667) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`c007000`](https://github.com/mppjuro/PQChat.DHT/commit/c007000818a18cdec1adf141f0d456ca1b756950) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9060c74`](https://github.com/mppjuro/PQChat.DHT/commit/9060c7432fcc16997dce74e080bf781f49f7b927) (2026-10-19) — **changelog**: auto-update CHANGELOG.md [skip ci]
