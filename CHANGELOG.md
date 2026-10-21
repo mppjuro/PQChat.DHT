@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`16100a3`](https://github.com/mppjuro/PQChat.DHT/commit/16100a3383e22ed678aaf6056d4b9fc3693f8cba) (2026-10-21) — add PNG8 handshake steganography and Duress PIN Keystore wipe with decoy view
 - [`0412c7b`](https://github.com/mppjuro/PQChat.DHT/commit/0412c7b1af243c84da9b300f0bb018af3a84d68a) (2026-10-21) — add single-frame cryptographic micro-payloads for message reactions and location pins
 - [`ebcc8d7`](https://github.com/mppjuro/PQChat.DHT/commit/ebcc8d70619f02d048bb6db0c3b0eaabc1a2b62a) (2026-10-21) — **ephemeral**: implement disappearing messages with safe 900-byte DHT tombstones and SQLite wiping
 - [`80e45e7`](https://github.com/mppjuro/PQChat.DHT/commit/80e45e7f1dba7784160d844f070b6ba772e00dcb) (2026-10-20) — **group**: implement unique BEP 44 recipient targets to prevent group follower correlation
@@ -66,6 +67,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`726f50d`](https://github.com/mppjuro/PQChat.DHT/commit/726f50d3271294d60c3cac2512a0f5f5c93a1911) (2026-10-21) — **crypto**: handle IV collision with row-bound magic bytes during Keystore raw decryption
 - [`ef55043`](https://github.com/mppjuro/PQChat.DHT/commit/ef550431f9d4fe42d400fa18365c39ba03aabeba) (2026-10-21) — **group**: eliminate fan-out burst, add group epoch catch-up retransmission, and expand edge-case tests
 - [`528d195`](https://github.com/mppjuro/PQChat.DHT/commit/528d195433a566b8a23f318a6a1823ad8f2c6186) (2026-10-21) — **test**: resolve instrumented UI test failures, dialog window bounds, and message row-binding validation
 - [`bc34ed6`](https://github.com/mppjuro/PQChat.DHT/commit/bc34ed67ecd2aedf311a70ec8ee8dc68bf8aec23) (2026-10-21) — **group**: fix group control serialization, eliminate burst fan-out, add rekey catch-up and optimize test runtime
