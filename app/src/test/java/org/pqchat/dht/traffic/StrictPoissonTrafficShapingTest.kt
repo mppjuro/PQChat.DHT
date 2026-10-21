@@ -99,6 +99,103 @@ class StrictPoissonTrafficShapingTest {
     }
 
     @Test
+    fun testOutboundPoissonQueue_WeightedFairQueuingNoHeadOfLineBlocking() {
+        val queue = OutboundPoissonQueue()
+
+        // 1. Enqueue 10 image chunks first
+        for (i in 0 until 10) {
+            queue.enqueue(
+                OutboundPoissonFrame(
+                    target = ByteArray(20) { 0x10 },
+                    payload = ByteArray(900) { 0x10 },
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = ByteArray(32) { 0x10 },
+                    seqNum = i,
+                    messageId = 100L + i,
+                    contactId = "alice",
+                    packetClass = PacketClass.IMAGE_CHUNK
+                )
+            )
+        }
+
+        // 2. Enqueue 5 group messages
+        for (i in 0 until 5) {
+            queue.enqueue(
+                OutboundPoissonFrame(
+                    target = ByteArray(20) { 0x20 },
+                    payload = ByteArray(900) { 0x20 },
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = ByteArray(32) { 0x20 },
+                    seqNum = i,
+                    messageId = 200L + i,
+                    contactId = "group_quantum",
+                    packetClass = PacketClass.GROUP_MESSAGE
+                )
+            )
+        }
+
+        // 3. Enqueue 1 direct 1-on-1 message
+        queue.enqueue(
+            OutboundPoissonFrame(
+                target = ByteArray(20) { 0x30 },
+                payload = ByteArray(900) { 0x30 },
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = ByteArray(32) { 0x30 },
+                seqNum = 0,
+                messageId = 300L,
+                contactId = "bob",
+                packetClass = PacketClass.DIRECT_MESSAGE
+            )
+        )
+
+        // 4. Enqueue 1 urgent control (Rekey Offer)
+        queue.enqueue(
+            OutboundPoissonFrame(
+                target = ByteArray(20) { 0x40 },
+                payload = ByteArray(900) { 0x40 },
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = ByteArray(32) { 0x40 },
+                seqNum = 0,
+                messageId = 400L,
+                contactId = "bob",
+                packetClass = PacketClass.URGENT_CONTROL
+            )
+        )
+
+        assertEquals(17, queue.size)
+
+        // Polling order:
+        // First: Urgent control MUST jump ahead of all queued frames
+        val poll1 = queue.poll()
+        assertNotNull(poll1)
+        assertEquals(400L, poll1?.messageId)
+        assertEquals(PacketClass.URGENT_CONTROL, poll1?.packetClass)
+
+        // Second: Direct message MUST be scheduled immediately in the DIRECT slot,
+        // without being head-of-line blocked behind the 10 image chunks!
+        val poll2 = queue.poll()
+        assertNotNull(poll2)
+        assertEquals(300L, poll2?.messageId)
+        assertEquals(PacketClass.DIRECT_MESSAGE, poll2?.packetClass)
+
+        // Third: Group message (next slot in WFQ cycle)
+        val poll3 = queue.poll()
+        assertNotNull(poll3)
+        assertEquals(200L, poll3?.messageId)
+        assertEquals(PacketClass.GROUP_MESSAGE, poll3?.packetClass)
+
+        // Fourth: Image chunk
+        val poll4 = queue.poll()
+        assertNotNull(poll4)
+        assertEquals(100L, poll4?.messageId)
+        assertEquals(PacketClass.IMAGE_CHUNK, poll4?.packetClass)
+    }
+
+    @Test
     fun testProcessCoverTrafficTick_StrictEmissionPriority() = runBlocking {
         val outboundQueue = OutboundPoissonQueue()
         val ackQueue = PendingAckQueue()

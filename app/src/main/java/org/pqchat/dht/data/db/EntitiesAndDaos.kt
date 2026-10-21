@@ -75,8 +75,8 @@ data class ContactEntity(
     ) : this(
         id = id,
         name = EncryptedText(name, "contacts", id, "name"),
-        chainKeyOut = chainKeyOut,
-        chainKeyIn = chainKeyIn,
+        chainKeyOut = if (chainKeyOut.boundColumn == null) EncryptedBlob(chainKeyOut.raw, "contacts", id, "chainKeyOut") else chainKeyOut,
+        chainKeyIn = if (chainKeyIn.boundColumn == null) EncryptedBlob(chainKeyIn.raw, "contacts", id, "chainKeyIn") else chainKeyIn,
         counterOut = counterOut,
         counterIn = counterIn,
         rekeyEpoch = rekeyEpoch,
@@ -94,23 +94,11 @@ data class ContactEntity(
     }
 
     fun validateRowBinding() {
-        fun checkBlob(blob: EncryptedBlob, col: String) {
-            if (blob.boundTable == "contacts" && blob.boundId == id && blob.boundColumn == null) {
-                return
-            }
-            blob.validateRowBinding("contacts", id, col, col)
-        }
-        fun checkText(text: EncryptedText, col: String) {
-            if (text.boundTable == "contacts" && text.boundId == id && text.boundColumn == null) {
-                return
-            }
-            text.validateRowBinding("contacts", id, col, col)
-        }
-        checkBlob(chainKeyOut, "chainKeyOut")
-        checkBlob(chainKeyIn, "chainKeyIn")
-        checkText(name, "name")
-        checkText(sas, "sas")
-        checkText(fingerprint, "fingerprint")
+        chainKeyOut.validateRowBinding("contacts", id, "chainKeyOut", "chainKeyOut")
+        chainKeyIn.validateRowBinding("contacts", id, "chainKeyIn", "chainKeyIn")
+        name.validateRowBinding("contacts", id, "name", "name")
+        sas.validateRowBinding("contacts", id, "sas", "sas")
+        fingerprint.validateRowBinding("contacts", id, "fingerprint", "fingerprint")
     }
 
     val rawName: String get() = name.raw
@@ -178,9 +166,9 @@ data class MessageEntity(
     val slotEdSeed: EncryptedBlob? = null,
     val senderMemberId: EncryptedText? = null,
     val senderName: EncryptedText? = null,
-    val ephemeralTtlSeconds: Long = 0L,
-    val expiresAtTimestamp: Long? = null,
-    val reaction: String? = null
+    val ephemeralTtlSeconds: EncryptedLong = EncryptedLong(0L, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "ephemeralTtlSeconds"),
+    val expiresAtTimestamp: EncryptedLong? = null,
+    val reaction: EncryptedText? = null
 ) {
     companion object {
         fun computeMessageRowId(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): String =
@@ -244,9 +232,13 @@ data class MessageEntity(
         senderName = senderName?.let {
             EncryptedText(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "senderName")
         },
-        ephemeralTtlSeconds = ephemeralTtlSeconds,
-        expiresAtTimestamp = expiresAtTimestamp,
-        reaction = reaction
+        ephemeralTtlSeconds = EncryptedLong(ephemeralTtlSeconds, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "ephemeralTtlSeconds"),
+        expiresAtTimestamp = expiresAtTimestamp?.let {
+            EncryptedLong(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "expiresAtTimestamp")
+        },
+        reaction = reaction?.let {
+            EncryptedText(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "reaction")
+        }
     )
 
     @Ignore
@@ -301,29 +293,17 @@ data class MessageEntity(
 
     fun validateRowBinding() {
         val expectedId = messageRowId
-        val legacyId1 = "${contactId}_${seqNum}"
-        val legacyId2 = contactId
 
         fun checkBlob(blob: EncryptedBlob?, col: String) {
-            if (blob == null) return
-            if (blob.boundTable == "messages" && (blob.boundId == expectedId || blob.boundId == legacyId1 || blob.boundId == legacyId2)) {
-                if (blob.boundColumn != null && blob.boundColumn != col) {
-                    blob.validateRowBinding("messages", expectedId, col, col)
-                }
-                return
-            }
-            blob.validateRowBinding("messages", expectedId, col, col)
+            blob?.validateRowBinding("messages", expectedId, col, col)
         }
 
         fun checkText(text: EncryptedText?, col: String) {
-            if (text == null) return
-            if (text.boundTable == "messages" && (text.boundId == expectedId || text.boundId == legacyId1 || text.boundId == legacyId2)) {
-                if (text.boundColumn != null && text.boundColumn != col) {
-                    text.validateRowBinding("messages", expectedId, col, col)
-                }
-                return
-            }
-            text.validateRowBinding("messages", expectedId, col, col)
+            text?.validateRowBinding("messages", expectedId, col, col)
+        }
+
+        fun checkLong(num: EncryptedLong?, col: String) {
+            num?.validateRowBinding("messages", expectedId, col, col)
         }
 
         checkText(textContent, "textContent")
@@ -332,6 +312,9 @@ data class MessageEntity(
         checkBlob(slotEdSeed, "slotEdSeed")
         checkText(senderMemberId, "senderMemberId")
         checkText(senderName, "senderName")
+        checkLong(ephemeralTtlSeconds, "ephemeralTtlSeconds")
+        checkLong(expiresAtTimestamp, "expiresAtTimestamp")
+        checkText(reaction, "reaction")
     }
 
     val rawTextContent: String? get() = textContent?.raw
@@ -340,6 +323,9 @@ data class MessageEntity(
     val rawSlotEdSeed: ByteArray? get() = slotEdSeed?.raw
     val rawSenderMemberId: String? get() = senderMemberId?.raw
     val rawSenderName: String? get() = senderName?.raw
+    val rawEphemeralTtlSeconds: Long get() = ephemeralTtlSeconds.raw
+    val rawExpiresAtTimestamp: Long? get() = expiresAtTimestamp?.raw
+    val rawReaction: String? get() = reaction?.raw
 }
 
 @Entity(
@@ -383,14 +369,8 @@ data class SkippedKeyEntity(
 
     fun validateRowBinding() {
         val expectedId = "${contactId}_${slotIndex}"
-        fun checkBlob(blob: EncryptedBlob, col: String) {
-            if (blob.boundTable == "skipped_keys" && blob.boundId == expectedId && blob.boundColumn == null) {
-                return
-            }
-            blob.validateRowBinding("skipped_keys", expectedId, col, col)
-        }
-        checkBlob(msgKey, "msgKey")
-        checkBlob(edPrivateKeySeed, "edPrivateKeySeed")
+        msgKey.validateRowBinding("skipped_keys", expectedId, "msgKey", "msgKey")
+        edPrivateKeySeed.validateRowBinding("skipped_keys", expectedId, "edPrivateKeySeed", "edPrivateKeySeed")
     }
 
     val rawMsgKey: ByteArray get() = msgKey.raw
@@ -491,9 +471,6 @@ data class PendingRekeyOfferEntity(
     }
 
     fun validateRowBinding() {
-        if (skNew.boundTable == "pending_rekey_offers" && skNew.boundId == contactId && skNew.boundColumn == null) {
-            return
-        }
         skNew.validateRowBinding("pending_rekey_offers", contactId, "skNew", "skNew")
     }
 
@@ -581,9 +558,6 @@ data class ChunkEntity(
 
     fun validateRowBinding() {
         val expectedId = "${transferId}_${chunkIndex}"
-        if (data.boundTable == "chunks" && data.boundId == expectedId && data.boundColumn == null) {
-            return
-        }
         data.validateRowBinding("chunks", expectedId, "data", "data")
     }
 
@@ -611,7 +585,7 @@ data class PendingChunkTransferEntity(
     val contactId: String,
     val seqNum: Int,
     val totalChunks: Int,
-    val missingIndices: String,
+    val missingIndices: EncryptedText,
     val baseEdSeed: EncryptedBlob,
     val baseMsgKey: EncryptedBlob,
     val direction: String,
@@ -641,9 +615,71 @@ data class PendingChunkTransferEntity(
         contactId = contactId,
         seqNum = seqNum,
         totalChunks = totalChunks,
-        missingIndices = missingIndices.joinToString(","),
+        missingIndices = EncryptedText(missingIndices.joinToString(","), "pending_chunk_transfers", transferId, "missingIndices"),
         baseEdSeed = EncryptedBlob(baseEdSeed, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed"),
         baseMsgKey = EncryptedBlob(baseMsgKey, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey"),
+        direction = direction,
+        isSelf = isSelf,
+        ackNum = ackNum,
+        timestampUTC = timestampUTC,
+        createdAt = createdAt,
+        expiresAt = expiresAt
+    )
+
+    @Ignore
+    constructor(
+        transferId: String,
+        contactId: String,
+        seqNum: Int,
+        totalChunks: Int,
+        missingIndices: String,
+        baseEdSeed: ByteArray,
+        baseMsgKey: ByteArray,
+        direction: String,
+        isSelf: Boolean = false,
+        ackNum: Int = 0,
+        timestampUTC: Long = System.currentTimeMillis(),
+        createdAt: Long = System.currentTimeMillis(),
+        expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+    ) : this(
+        transferId = transferId,
+        contactId = contactId,
+        seqNum = seqNum,
+        totalChunks = totalChunks,
+        missingIndices = EncryptedText(missingIndices, "pending_chunk_transfers", transferId, "missingIndices"),
+        baseEdSeed = EncryptedBlob(baseEdSeed, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed"),
+        baseMsgKey = EncryptedBlob(baseMsgKey, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey"),
+        direction = direction,
+        isSelf = isSelf,
+        ackNum = ackNum,
+        timestampUTC = timestampUTC,
+        createdAt = createdAt,
+        expiresAt = expiresAt
+    )
+
+    @Ignore
+    constructor(
+        transferId: String,
+        contactId: String,
+        seqNum: Int,
+        totalChunks: Int,
+        missingIndices: String,
+        baseEdSeed: EncryptedBlob,
+        baseMsgKey: EncryptedBlob,
+        direction: String,
+        isSelf: Boolean = false,
+        ackNum: Int = 0,
+        timestampUTC: Long = System.currentTimeMillis(),
+        createdAt: Long = System.currentTimeMillis(),
+        expiresAt: Long = System.currentTimeMillis() + 72 * 3600 * 1000L
+    ) : this(
+        transferId = transferId,
+        contactId = contactId,
+        seqNum = seqNum,
+        totalChunks = totalChunks,
+        missingIndices = EncryptedText(missingIndices, "pending_chunk_transfers", transferId, "missingIndices"),
+        baseEdSeed = if (baseEdSeed.boundColumn == null) EncryptedBlob(baseEdSeed.raw, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed") else baseEdSeed,
+        baseMsgKey = if (baseMsgKey.boundColumn == null) EncryptedBlob(baseMsgKey.raw, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey") else baseMsgKey,
         direction = direction,
         isSelf = isSelf,
         ackNum = ackNum,
@@ -657,22 +693,18 @@ data class PendingChunkTransferEntity(
     }
 
     fun validateRowBinding() {
-        fun checkBlob(blob: EncryptedBlob, id: String, col: String) {
-            if (blob.boundTable == "pending_chunk_transfers" && blob.boundId == id && blob.boundColumn == null) {
-                return
-            }
-            blob.validateRowBinding("pending_chunk_transfers", id, col, col)
-        }
-        checkBlob(baseEdSeed, "${transferId}_seed", "baseEdSeed")
-        checkBlob(baseMsgKey, "${transferId}_key", "baseMsgKey")
+        baseEdSeed.validateRowBinding("pending_chunk_transfers", "${transferId}_seed", "baseEdSeed", "baseEdSeed")
+        baseMsgKey.validateRowBinding("pending_chunk_transfers", "${transferId}_key", "baseMsgKey", "baseMsgKey")
+        missingIndices.validateRowBinding("pending_chunk_transfers", transferId, "missingIndices", "missingIndices")
     }
 
     val rawBaseEdSeed: ByteArray get() = baseEdSeed.raw
     val rawBaseMsgKey: ByteArray get() = baseMsgKey.raw
+    val rawMissingIndices: String get() = missingIndices.raw
 
     fun parseMissingIndices(): List<Int> {
-        if (missingIndices.isBlank()) return emptyList()
-        return missingIndices.split(",").mapNotNull { it.trim().toIntOrNull() }
+        if (missingIndices.raw.isBlank()) return emptyList()
+        return missingIndices.raw.split(",").mapNotNull { it.trim().toIntOrNull() }
     }
 }
 
@@ -722,7 +754,11 @@ interface ChunkDao {
     suspend fun getAllPendingTransfers(): List<PendingChunkTransferEntity>
 
     @Query("UPDATE pending_chunk_transfers SET missingIndices = :missingIndices WHERE transferId = :transferId")
-    suspend fun updateMissingIndices(transferId: String, missingIndices: String)
+    suspend fun updateMissingIndices(transferId: String, missingIndices: EncryptedText)
+
+    suspend fun updateMissingIndices(transferId: String, missingIndices: String) {
+        updateMissingIndices(transferId, EncryptedText(missingIndices, "pending_chunk_transfers", transferId, "missingIndices"))
+    }
 
     @Query("DELETE FROM pending_chunk_transfers WHERE transferId = :transferId")
     suspend fun deletePendingTransfer(transferId: String)
@@ -875,26 +911,71 @@ interface MessageDao {
         imageBytes: EncryptedBlob? = null
     )
 
-    @Query("SELECT * FROM messages WHERE expiresAtTimestamp IS NOT NULL AND expiresAtTimestamp <= :now")
-    suspend fun getExpiredMessages(now: Long = System.currentTimeMillis()): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE expiresAtTimestamp IS NOT NULL")
+    suspend fun getMessagesWithExpiration(): List<MessageEntity>
+
+    suspend fun getExpiredMessages(now: Long = System.currentTimeMillis()): List<MessageEntity> {
+        return getMessagesWithExpiration().filter { msg ->
+            val exp = msg.rawExpiresAtTimestamp
+            exp != null && exp <= now
+        }
+    }
 
     @Query("UPDATE messages SET expiresAtTimestamp = :expiresAt WHERE id = :id AND expiresAtTimestamp IS NULL")
-    suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long)
+    suspend fun updateExpiresAtTimestampById(id: Long, expiresAt: EncryptedLong)
 
-    @Query("SELECT * FROM messages WHERE contactId = :contactId AND ephemeralTtlSeconds > 0 AND expiresAtTimestamp IS NULL")
-    suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity>
+    suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long) {
+        val msg = getMessageById(id) ?: return
+        if (msg.expiresAtTimestamp != null) return
+        val encryptedExpiresAt = EncryptedLong(expiresAt, "messages", msg.messageRowId, "expiresAtTimestamp")
+        updateExpiresAtTimestampById(id, encryptedExpiresAt)
+    }
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND expiresAtTimestamp IS NULL")
+    suspend fun getMessagesWithoutExpirationForContact(contactId: String): List<MessageEntity>
+
+    suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity> {
+        return getMessagesWithoutExpirationForContact(contactId).filter { msg ->
+            msg.rawEphemeralTtlSeconds > 0
+        }
+    }
 
     @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage, reaction = NULL WHERE id = :id")
     suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?)
 
     @Query("UPDATE messages SET reaction = :reaction WHERE id = :id")
-    suspend fun updateMessageReactionById(id: Long, reaction: String?)
+    suspend fun updateMessageReactionById(id: Long, reaction: EncryptedText?)
+
+    suspend fun updateMessageReactionById(id: Long, reaction: String?) {
+        val msg = getMessageById(id) ?: return
+        val encReaction = reaction?.let {
+            EncryptedText(it, "messages", msg.messageRowId, "reaction")
+        }
+        updateMessageReactionById(id, encReaction)
+    }
 
     @Query("UPDATE messages SET reaction = :reaction WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum AND isOutgoing = :isOutgoing")
-    suspend fun updateMessageReaction(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean, reaction: String?)
+    suspend fun updateMessageReaction(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean, reaction: EncryptedText?)
 
-    @Query("UPDATE messages SET reaction = :reaction WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum")
-    suspend fun updateMessageReactionAnyDirection(contactId: String, seqEpoch: Int, seqNum: Int, reaction: String?)
+    suspend fun updateMessageReaction(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean, reaction: String?) {
+        val rowId = MessageEntity.computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing)
+        val encReaction = reaction?.let {
+            EncryptedText(it, "messages", rowId, "reaction")
+        }
+        updateMessageReaction(contactId, seqEpoch, seqNum, isOutgoing, encReaction)
+    }
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum LIMIT 1")
+    suspend fun getMessageByContactAndSeq(contactId: String, seqEpoch: Int, seqNum: Int): MessageEntity?
+
+    suspend fun updateMessageReactionAnyDirection(contactId: String, seqEpoch: Int, seqNum: Int, reaction: String?) {
+        val msg = getMessageByContactAndSeq(contactId, seqEpoch, seqNum) ?: return
+        val rowId = MessageEntity.computeMessageRowId(contactId, seqEpoch, seqNum, msg.isOutgoing)
+        val encReaction = reaction?.let {
+            EncryptedText(it, "messages", rowId, "reaction")
+        }
+        updateMessageReaction(contactId, seqEpoch, seqNum, msg.isOutgoing, encReaction)
+    }
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteMessageById(id: Long)
@@ -1018,7 +1099,7 @@ data class GroupEntity(
         groupId = groupId,
         groupName = EncryptedText(groupName, "groups", groupId, "groupName"),
         myMemberId = myMemberId,
-        myChainKeyOut = myChainKeyOut,
+        myChainKeyOut = if (myChainKeyOut.boundColumn == null) EncryptedBlob(myChainKeyOut.raw, "groups", groupId, "myChainKeyOut") else myChainKeyOut,
         myCounterOut = myCounterOut,
         groupEpoch = groupEpoch,
         createdAt = createdAt,
@@ -1031,12 +1112,8 @@ data class GroupEntity(
     }
 
     fun validateRowBinding() {
-        if (!(myChainKeyOut.boundTable == "groups" && myChainKeyOut.boundId == groupId && myChainKeyOut.boundColumn == null)) {
-            myChainKeyOut.validateRowBinding("groups", groupId, "myChainKeyOut", "myChainKeyOut")
-        }
-        if (!(groupName.boundTable == "groups" && groupName.boundId == groupId && groupName.boundColumn == null)) {
-            groupName.validateRowBinding("groups", groupId, "groupName", "groupName")
-        }
+        myChainKeyOut.validateRowBinding("groups", groupId, "myChainKeyOut", "myChainKeyOut")
+        groupName.validateRowBinding("groups", groupId, "groupName", "groupName")
     }
 
     val rawGroupName: String get() = groupName.raw
@@ -1121,7 +1198,7 @@ data class GroupMemberEntity(
         memberId = memberId,
         contactId = contactId,
         memberName = EncryptedText(memberName, "group_members", "${groupId}_${memberId}", "memberName"),
-        chainKeyIn = chainKeyIn,
+        chainKeyIn = if (chainKeyIn.boundColumn == null) EncryptedBlob(chainKeyIn.raw, "group_members", "${groupId}_${memberId}", "chainKeyIn") else chainKeyIn,
         counterIn = counterIn,
         receivedBitmapBase = receivedBitmapBase,
         receivedBitmap = receivedBitmap,
@@ -1135,12 +1212,8 @@ data class GroupMemberEntity(
 
     fun validateRowBinding() {
         val expectedId = "${groupId}_${memberId}"
-        if (!(chainKeyIn.boundTable == "group_members" && chainKeyIn.boundId == expectedId && chainKeyIn.boundColumn == null)) {
-            chainKeyIn.validateRowBinding("group_members", expectedId, "chainKeyIn", "chainKeyIn")
-        }
-        if (!(memberName.boundTable == "group_members" && memberName.boundId == expectedId && memberName.boundColumn == null)) {
-            memberName.validateRowBinding("group_members", expectedId, "memberName", "memberName")
-        }
+        chainKeyIn.validateRowBinding("group_members", expectedId, "chainKeyIn", "chainKeyIn")
+        memberName.validateRowBinding("group_members", expectedId, "memberName", "memberName")
     }
 
     val rawMemberName: String get() = memberName.raw

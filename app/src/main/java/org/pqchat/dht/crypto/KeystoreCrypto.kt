@@ -312,11 +312,15 @@ object KeystoreCrypto {
         }
         val secretKey = getOrCreateSecretKey()
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+        var iv: ByteArray
+        do {
+            iv = CryptoUtils.secureRandomBytes(GCM_IV_LENGTH_BYTES)
+        } while (iv[0] == MAGIC_ROW_BOUND || iv[0] == MAGIC_ROW_BOUND_V2)
+        val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, spec)
         if (aad != null && aad.isNotEmpty()) {
             cipher.updateAAD(aad)
         }
-        val iv = cipher.iv
         val ciphertext = cipher.doFinal(plaintext)
         val result = ByteArray(iv.size + ciphertext.size)
         System.arraycopy(iv, 0, result, 0, iv.size)
@@ -543,5 +547,24 @@ private fun tryDecryptRaw(
         val bytes = CryptoUtils.fromHex(ciphertextHex)
         val decrypted = decrypt(bytes, aad) ?: return null
         return String(decrypted, Charsets.UTF_8)
+    }
+
+    /**
+     * Encrypts a 64-bit Long into a hex-encoded string of the encrypted bytes with row/column binding.
+     */
+    fun encryptLong(value: Long, table: String, id: String, column: String): String {
+        val buf = java.nio.ByteBuffer.allocate(8).putLong(value).array()
+        val enc = encrypt(buf, table, id, column) ?: throw IllegalStateException("Encryption failed")
+        return CryptoUtils.toHex(enc)
+    }
+
+    /**
+     * Decrypts a hex-encoded ciphertext string into the original 64-bit Long with row/column binding.
+     */
+    fun decryptLong(ciphertextHex: String?, table: String, id: String, column: String): Long? {
+        if (ciphertextHex == null) return null
+        val bytes = CryptoUtils.fromHex(ciphertextHex)
+        val dec = decrypt(bytes, table, id, column) ?: return null
+        return java.nio.ByteBuffer.wrap(dec).long
     }
 }

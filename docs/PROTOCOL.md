@@ -327,10 +327,10 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `Longitude`: 8 B (Double IEEE 754 BE)
   * `Altitude`: 8 B (Double IEEE 754 BE)
   * `Accuracy`: 4 B (Float IEEE 754 BE)
-  * `EphemeralTtlSeconds`: 4 B (UInt32 BE)
-  * `NoteLength` ($`P`$): 2 B (UInt16 BE, wartość $`\le 829`$)
-  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów)
-  * `CSPRNG Padding`: $`829 - P`$ bajtów (wypełnienie do 859 B)
+  * `NoteLength` ($`P`$): 2 B (UInt16 BE, wartość $`\le 829`$, lub $`\le 817`$ dla wiadomości efemerycznych)
+  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów, lub $`\le 817`$)
+  * `Opcjonalny Nagłówek Efemeryczny`: `MAGIC_EPHEMERAL` (8 bajtów, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bajty, UInt32 Big-Endian) – obecny wyłącznie gdy $`TTL > 0`$
+  * `CSPRNG Padding`: wypełnienie do 859 B ($`829 - P`$ lub $`817 - P`$ bajtów)
 
 ### 7.5. Dodatkowe Typy Rekordów o Stałym Rozmiarze 900 B
 * **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).

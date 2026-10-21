@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GroupEntity::class,
         GroupMemberEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -478,6 +478,164 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Recreate messages table with TEXT columns for ephemeralTtlSeconds, expiresAtTimestamp, reaction
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS messages_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        contactId TEXT NOT NULL,
+                        isOutgoing INTEGER NOT NULL,
+                        seqEpoch INTEGER NOT NULL,
+                        seqNum INTEGER NOT NULL,
+                        ackNum INTEGER NOT NULL,
+                        timestamp INTEGER NOT NULL,
+                        textContent TEXT,
+                        imageBytes BLOB,
+                        status TEXT NOT NULL,
+                        retryCount INTEGER NOT NULL,
+                        lastAttemptTimestamp INTEGER NOT NULL,
+                        ackTarget BLOB,
+                        ackRatchetKey BLOB,
+                        slotTarget BLOB,
+                        slotEdSeed BLOB,
+                        senderMemberId TEXT,
+                        senderName TEXT,
+                        ephemeralTtlSeconds TEXT NOT NULL,
+                        expiresAtTimestamp TEXT,
+                        reaction TEXT
+                    )
+                """.trimIndent())
+
+                val converters = KeystoreConverters()
+
+                val cursorMessages = db.query("""
+                    SELECT id, contactId, isOutgoing, seqEpoch, seqNum, ackNum, timestamp,
+                           textContent, imageBytes, status, retryCount, lastAttemptTimestamp,
+                           ackTarget, ackRatchetKey, slotTarget, slotEdSeed,
+                           senderMemberId, senderName, ephemeralTtlSeconds, expiresAtTimestamp, reaction
+                    FROM messages
+                """.trimIndent())
+
+                while (cursorMessages.moveToNext()) {
+                    val id = cursorMessages.getLong(0)
+                    val contactId = cursorMessages.getString(1)
+                    val isOutgoing = cursorMessages.getInt(2)
+                    val seqEpoch = cursorMessages.getInt(3)
+                    val seqNum = cursorMessages.getInt(4)
+                    val ackNum = cursorMessages.getInt(5)
+                    val timestamp = cursorMessages.getLong(6)
+                    val textContent = if (cursorMessages.isNull(7)) null else cursorMessages.getString(7)
+                    val imageBytes = if (cursorMessages.isNull(8)) null else cursorMessages.getBlob(8)
+                    val status = cursorMessages.getString(9)
+                    val retryCount = cursorMessages.getInt(10)
+                    val lastAttemptTimestamp = cursorMessages.getLong(11)
+                    val ackTarget = if (cursorMessages.isNull(12)) null else cursorMessages.getBlob(12)
+                    val ackRatchetKey = if (cursorMessages.isNull(13)) null else cursorMessages.getBlob(13)
+                    val slotTarget = if (cursorMessages.isNull(14)) null else cursorMessages.getBlob(14)
+                    val slotEdSeed = if (cursorMessages.isNull(15)) null else cursorMessages.getBlob(15)
+                    val senderMemberId = if (cursorMessages.isNull(16)) null else cursorMessages.getString(16)
+                    val senderName = if (cursorMessages.isNull(17)) null else cursorMessages.getString(17)
+
+                    val ephemeralTtlRaw = if (cursorMessages.isNull(18)) 0L else cursorMessages.getLong(18)
+                    val expiresAtRaw = if (cursorMessages.isNull(19)) null else cursorMessages.getLong(19)
+                    val reactionRaw = if (cursorMessages.isNull(20)) null else cursorMessages.getString(20)
+
+                    val rowId = MessageEntity.computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing != 0)
+
+                    val encEphemeralTtlHex = converters.toDatabaseLong(
+                        EncryptedLong(ephemeralTtlRaw, "messages", rowId, "ephemeralTtlSeconds")
+                    )!!
+
+                    val encExpiresAtHex = expiresAtRaw?.let {
+                        converters.toDatabaseLong(
+                            EncryptedLong(it, "messages", rowId, "expiresAtTimestamp")
+                        )
+                    }
+
+                    val encReactionHex = reactionRaw?.let {
+                        val plainReaction = try {
+                            val dec = org.pqchat.dht.crypto.KeystoreCrypto.decryptString(it, "messages", rowId, "reaction")
+                            dec ?: it
+                        } catch (_: Throwable) {
+                            it
+                        }
+                        converters.toDatabaseText(
+                            EncryptedText(plainReaction, "messages", rowId, "reaction")
+                        )
+                    }
+
+                    db.execSQL("""
+                        INSERT INTO messages_new (
+                            id, contactId, isOutgoing, seqEpoch, seqNum, ackNum, timestamp,
+                            textContent, imageBytes, status, retryCount, lastAttemptTimestamp,
+                            ackTarget, ackRatchetKey, slotTarget, slotEdSeed,
+                            senderMemberId, senderName, ephemeralTtlSeconds, expiresAtTimestamp, reaction
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """.trimIndent(), arrayOf(
+                        id, contactId, isOutgoing, seqEpoch, seqNum, ackNum, timestamp,
+                        textContent, imageBytes, status, retryCount, lastAttemptTimestamp,
+                        ackTarget, ackRatchetKey, slotTarget, slotEdSeed,
+                        senderMemberId, senderName, encEphemeralTtlHex, encExpiresAtHex, encReactionHex
+                    ))
+                }
+                cursorMessages.close()
+
+                db.execSQL("DROP TABLE messages")
+                db.execSQL("ALTER TABLE messages_new RENAME TO messages")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_contactId_seqEpoch_seqNum ON messages (contactId, seqEpoch, seqNum)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_timestamp ON messages (timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_expiresAtTimestamp ON messages (expiresAtTimestamp)")
+
+                // 2. Encrypt missingIndices in pending_chunk_transfers
+                val cursorTransfers = db.query("SELECT transferId, missingIndices FROM pending_chunk_transfers")
+                while (cursorTransfers.moveToNext()) {
+                    val transferId = cursorTransfers.getString(0)
+                    val rawMissing = cursorTransfers.getString(1)
+                    val plainMissing = try {
+                        val dec = org.pqchat.dht.crypto.KeystoreCrypto.decryptString(rawMissing, "pending_chunk_transfers", transferId, "missingIndices")
+                        dec ?: rawMissing
+                    } catch (_: Throwable) {
+                        rawMissing
+                    }
+                    val encMissingHex = converters.toDatabaseText(
+                        EncryptedText(plainMissing, "pending_chunk_transfers", transferId, "missingIndices")
+                    )
+                    db.execSQL(
+                        "UPDATE pending_chunk_transfers SET missingIndices = ? WHERE transferId = ?",
+                        arrayOf(encMissingHex, transferId)
+                    )
+                }
+                cursorTransfers.close()
+
+                // 3. Ensure chunks.data is encrypted with MAGIC_ROW_BOUND_V2 (table+id+column)
+                val cursorChunks = db.query("SELECT transferId, chunkIndex, data FROM chunks")
+                while (cursorChunks.moveToNext()) {
+                    val transferId = cursorChunks.getString(0)
+                    val chunkIndex = cursorChunks.getInt(1)
+                    val oldData = cursorChunks.getBlob(2)
+                    val rowId = "${transferId}_${chunkIndex}"
+
+                    val plainData = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldData, "chunks", rowId, "data") ?: oldData
+                    } catch (_: Throwable) {
+                        try {
+                            org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldData, "chunks", rowId) ?: oldData
+                        } catch (_: Throwable) {
+                            oldData
+                        }
+                    }
+
+                    val newData = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainData, "chunks", rowId, "data")
+                    db.execSQL(
+                        "UPDATE chunks SET data = ? WHERE transferId = ? AND chunkIndex = ?",
+                        arrayOf(newData, transferId, chunkIndex)
+                    )
+                }
+                cursorChunks.close()
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -485,7 +643,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                 INSTANCE = instance

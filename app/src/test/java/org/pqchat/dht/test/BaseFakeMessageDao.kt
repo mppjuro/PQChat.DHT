@@ -3,6 +3,7 @@ package org.pqchat.dht.test
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.pqchat.dht.data.db.EncryptedBlob
+import org.pqchat.dht.data.db.EncryptedLong
 import org.pqchat.dht.data.db.EncryptedText
 import org.pqchat.dht.data.db.MessageDao
 import org.pqchat.dht.data.db.MessageEntity
@@ -123,6 +124,13 @@ open class BaseFakeMessageDao : MessageDao {
             val updatedSenderName = old.senderName?.raw?.let {
                 EncryptedText(it, "messages", newRowId, "senderName")
             }
+            val updatedEphemeralTtl = EncryptedLong(old.rawEphemeralTtlSeconds, "messages", newRowId, "ephemeralTtlSeconds")
+            val updatedExpiresAt = old.rawExpiresAtTimestamp?.let {
+                EncryptedLong(it, "messages", newRowId, "expiresAtTimestamp")
+            }
+            val updatedReaction = old.rawReaction?.let {
+                EncryptedText(it, "messages", newRowId, "reaction")
+            }
             messages[idx] = old.copy(
                 status = status,
                 seqNum = seqNum,
@@ -136,23 +144,45 @@ open class BaseFakeMessageDao : MessageDao {
                 textContent = updatedText,
                 imageBytes = updatedImage,
                 senderMemberId = updatedSenderMemberId,
-                senderName = updatedSenderName
+                senderName = updatedSenderName,
+                ephemeralTtlSeconds = updatedEphemeralTtl,
+                expiresAtTimestamp = updatedExpiresAt,
+                reaction = updatedReaction
             )
         }
     }
 
-    override suspend fun getExpiredMessages(now: Long): List<MessageEntity> =
-        messages.filter { it.expiresAtTimestamp != null && it.expiresAtTimestamp <= now }
+    override suspend fun getMessagesWithExpiration(): List<MessageEntity> =
+        messages.filter { it.expiresAtTimestamp != null }
 
-    override suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long) {
+    override suspend fun updateExpiresAtTimestampById(id: Long, expiresAt: EncryptedLong) {
         val idx = messages.indexOfFirst { it.id == id }
         if (idx >= 0 && messages[idx].expiresAtTimestamp == null) {
             messages[idx] = messages[idx].copy(expiresAtTimestamp = expiresAt)
         }
     }
 
+    override suspend fun getMessagesWithoutExpirationForContact(contactId: String): List<MessageEntity> =
+        messages.filter { it.contactId == contactId && it.expiresAtTimestamp == null }
+
+    override suspend fun getMessageByContactAndSeq(contactId: String, seqEpoch: Int, seqNum: Int): MessageEntity? =
+        messages.firstOrNull { it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum }
+
+    override suspend fun getExpiredMessages(now: Long): List<MessageEntity> =
+        messages.filter { it.expiresAtTimestamp != null && (it.rawExpiresAtTimestamp ?: Long.MAX_VALUE) <= now }
+
+    override suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long) {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0 && messages[idx].expiresAtTimestamp == null) {
+            val rowId = messages[idx].messageRowId
+            messages[idx] = messages[idx].copy(
+                expiresAtTimestamp = EncryptedLong(expiresAt, "messages", rowId, "expiresAtTimestamp")
+            )
+        }
+    }
+
     override suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity> =
-        messages.filter { it.contactId == contactId && it.ephemeralTtlSeconds > 0 && it.expiresAtTimestamp == null }
+        messages.filter { it.contactId == contactId && it.rawEphemeralTtlSeconds > 0 && it.expiresAtTimestamp == null }
 
     override suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?) {
         val idx = messages.indexOfFirst { it.id == id }
@@ -165,8 +195,31 @@ open class BaseFakeMessageDao : MessageDao {
         messages.removeIf { it.id == id }
     }
 
+    override suspend fun updateMessageReactionById(id: Long, reaction: EncryptedText?) {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            messages[idx] = messages[idx].copy(reaction = reaction)
+        }
+    }
+
     override suspend fun updateMessageReactionById(id: Long, reaction: String?) {
         val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            val enc = reaction?.let { EncryptedText(it, "messages", messages[idx].messageRowId, "reaction") }
+            messages[idx] = messages[idx].copy(reaction = enc)
+        }
+    }
+
+    override suspend fun updateMessageReaction(
+        contactId: String,
+        seqEpoch: Int,
+        seqNum: Int,
+        isOutgoing: Boolean,
+        reaction: EncryptedText?
+    ) {
+        val idx = messages.indexOfFirst {
+            it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing
+        }
         if (idx >= 0) {
             messages[idx] = messages[idx].copy(reaction = reaction)
         }
@@ -183,7 +236,8 @@ open class BaseFakeMessageDao : MessageDao {
             it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing
         }
         if (idx >= 0) {
-            messages[idx] = messages[idx].copy(reaction = reaction)
+            val enc = reaction?.let { EncryptedText(it, "messages", messages[idx].messageRowId, "reaction") }
+            messages[idx] = messages[idx].copy(reaction = enc)
         }
     }
 
@@ -197,7 +251,8 @@ open class BaseFakeMessageDao : MessageDao {
             it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum
         }
         if (idx >= 0) {
-            messages[idx] = messages[idx].copy(reaction = reaction)
+            val enc = reaction?.let { EncryptedText(it, "messages", messages[idx].messageRowId, "reaction") }
+            messages[idx] = messages[idx].copy(reaction = enc)
         }
     }
 }

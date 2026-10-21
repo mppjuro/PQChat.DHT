@@ -250,6 +250,92 @@ class MicroPayloadsTest {
         assertNull(LocationPinData.parse(null))
     }
 
+    @Test
+    fun testChunkDataEqualsAndHashCodeIncludesEphemeralTtl() {
+        val transferId = ByteArray(16) { 0x01 }
+        val transferId2 = ByteArray(16) { 0x02 }
+        val data = ByteArray(100) { 0xAA.toByte() }
+
+        val chunk1 = BinaryFrameCodec.DecodedPayload.ChunkData(transferId, 0, 5, data, 60L)
+        val chunk2 = BinaryFrameCodec.DecodedPayload.ChunkData(transferId.copyOf(), 0, 5, data.copyOf(), 60L)
+        val chunk3DiffTtl = BinaryFrameCodec.DecodedPayload.ChunkData(transferId.copyOf(), 0, 5, data.copyOf(), 120L)
+        val chunk4DiffTransfer = BinaryFrameCodec.DecodedPayload.ChunkData(transferId2, 0, 5, data.copyOf(), 60L)
+
+        assertEquals(chunk1, chunk2)
+        assertEquals(chunk1.hashCode(), chunk2.hashCode())
+
+        assertNotEquals(chunk1, chunk3DiffTtl)
+        assertNotEquals(chunk1.hashCode(), chunk3DiffTtl.hashCode())
+
+        assertNotEquals(chunk1, chunk4DiffTransfer)
+    }
+
+    @Test
+    fun testReactionEmojiLength1ByteAndBoundaryValidation() {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val direction = "AliceToBob"
+
+        // 1. Emoji exceeding 64 bytes must be rejected at encoding
+        val oversizedEmoji = "🔥".repeat(40) // 40 * 4 = 160 bytes > 64
+        assertThrows(IllegalArgumentException::class.java) {
+            BinaryFrameCodec.encodeReaction(1, 0, 1000L, 0, 1, oversizedEmoji)
+        }
+
+        // 2. Normal 1-byte length roundtrip
+        val emoji = "🚀"
+        val payload = BinaryFrameCodec.encodeReaction(1, 0, 1000L, 0, 1, emoji)
+        // Header is 13 B, reaction body: targetEpoch(4) + targetSeq(2) + emojiLen(1) = 7 B
+        val emojiLenInPayload = payload[13 + 6].toInt() and 0xFF
+        assertEquals(emoji.toByteArray(Charsets.UTF_8).size, emojiLenInPayload)
+
+        val frame = BinaryFrameCodec.packAeadFrame(key, payload, target, direction)
+        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction)
+        assertTrue(decoded.payload is BinaryFrameCodec.DecodedPayload.Reaction)
+        assertEquals(emoji, (decoded.payload as BinaryFrameCodec.DecodedPayload.Reaction).emoji)
+    }
+
+    @Test
+    fun testLocationPinWithEphemeralTtlAndBoundaryValidation() {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val direction = "BobToAlice"
+
+        val lat = 50.0647
+        val lon = 19.9450
+        val alt = 219.0
+        val acc = 2.0f
+        val note = "Baza operacyjna"
+        val ttl = 3600L
+
+        val payload = BinaryFrameCodec.encodeLocationPin(
+            seqNum = 1,
+            ackNum = 0,
+            timestampUTC = 1000L,
+            latitude = lat,
+            longitude = lon,
+            altitude = alt,
+            accuracy = acc,
+            note = note,
+            ephemeralTtlSeconds = ttl
+        )
+
+        val frame = BinaryFrameCodec.packAeadFrame(key, payload, target, direction)
+        val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction)
+        assertTrue(decoded.payload is BinaryFrameCodec.DecodedPayload.LocationPin)
+        val pin = decoded.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+        assertEquals(lat, pin.latitude, 0.0001)
+        assertEquals(lon, pin.longitude, 0.0001)
+        assertEquals(note, pin.note)
+        assertEquals(ttl, pin.ephemeralTtlSeconds)
+
+        // Oversized note validation
+        val hugeNote = "A".repeat(850)
+        assertThrows(IllegalArgumentException::class.java) {
+            BinaryFrameCodec.encodeLocationPin(1, 0, 1000L, lat, lon, alt, acc, hugeNote, ttl)
+        }
+    }
+
     private fun calculateShannonEntropy(data: ByteArray): Double {
         val frequencies = IntArray(256)
         for (b in data) {

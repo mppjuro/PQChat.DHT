@@ -586,5 +586,219 @@ class AppDatabaseMigrationTest {
         assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN expiresAtTimestamp") })
         assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_messages_expiresAtTimestamp ON messages") })
     }
+
+    @Test
+    fun testMigration13To14EncryptsRemainingSensitiveColumnsWithV2Binding() {
+        data class TestMessageRow(
+            val id: Long,
+            val contactId: String,
+            val isOutgoing: Int,
+            val seqEpoch: Int,
+            val seqNum: Int,
+            val ackNum: Int,
+            val timestamp: Long,
+            val textContent: String?,
+            val imageBytes: ByteArray?,
+            val status: String,
+            val retryCount: Int,
+            val lastAttemptTimestamp: Long,
+            val ackTarget: ByteArray?,
+            val ackRatchetKey: ByteArray?,
+            val slotTarget: ByteArray?,
+            val slotEdSeed: ByteArray?,
+            val senderMemberId: String?,
+            val senderName: String?,
+            val ephemeralTtlSeconds: Long,
+            val expiresAtTimestamp: Long?,
+            val reaction: String?
+        )
+
+        data class NewMessageRow(
+            val id: Long,
+            val contactId: String,
+            val isOutgoing: Int,
+            val seqEpoch: Int,
+            val seqNum: Int,
+            val ackNum: Int,
+            val timestamp: Long,
+            val textContent: String?,
+            val imageBytes: ByteArray?,
+            val status: String,
+            val retryCount: Int,
+            val lastAttemptTimestamp: Long,
+            val ackTarget: ByteArray?,
+            val ackRatchetKey: ByteArray?,
+            val slotTarget: ByteArray?,
+            val slotEdSeed: ByteArray?,
+            val senderMemberId: String?,
+            val senderName: String?,
+            val ephemeralTtlSeconds: String,
+            val expiresAtTimestamp: String?,
+            val reaction: String?
+        )
+
+        val oldMessages = listOf(
+            TestMessageRow(
+                id = 1L,
+                contactId = "alice",
+                isOutgoing = 1,
+                seqEpoch = 0,
+                seqNum = 5,
+                ackNum = 0,
+                timestamp = 1000L,
+                textContent = "Sample Text",
+                imageBytes = null,
+                status = "SENT",
+                retryCount = 0,
+                lastAttemptTimestamp = 1000L,
+                ackTarget = null,
+                ackRatchetKey = null,
+                slotTarget = null,
+                slotEdSeed = null,
+                senderMemberId = null,
+                senderName = null,
+                ephemeralTtlSeconds = 60L,
+                expiresAtTimestamp = 1060L,
+                reaction = "🔥"
+            )
+        )
+
+        data class TransferRow(val transferId: String, var missingIndices: String)
+        val transfers = mutableListOf(
+            TransferRow("transfer_abc", "0,1,2")
+        )
+
+        data class ChunkItem(val transferId: String, val chunkIndex: Int, var data: ByteArray)
+        val rawChunkData = "Raw image payload".toByteArray(Charsets.UTF_8)
+        val chunkItems = mutableListOf(
+            ChunkItem("transfer_abc", 0, rawChunkData.copyOf())
+        )
+
+        val newMessages = mutableListOf<NewMessageRow>()
+        val executedSql = mutableListOf<String>()
+
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                when (method.name) {
+                    "query" -> {
+                        val sql = args[0] as String
+                        when {
+                            sql.contains("FROM messages") -> {
+                                val rows = oldMessages.map { m ->
+                                    listOf(
+                                        m.id, m.contactId, m.isOutgoing, m.seqEpoch, m.seqNum, m.ackNum, m.timestamp,
+                                        m.textContent, m.imageBytes, m.status, m.retryCount, m.lastAttemptTimestamp,
+                                        m.ackTarget, m.ackRatchetKey, m.slotTarget, m.slotEdSeed,
+                                        m.senderMemberId, m.senderName, m.ephemeralTtlSeconds, m.expiresAtTimestamp, m.reaction
+                                    )
+                                }
+                                createCursor(rows)
+                            }
+                            sql.contains("FROM pending_chunk_transfers") -> {
+                                val rows = transfers.map { t -> listOf(t.transferId, t.missingIndices) }
+                                createCursor(rows)
+                            }
+                            sql.contains("FROM chunks") -> {
+                                val rows = chunkItems.map { c -> listOf(c.transferId, c.chunkIndex, c.data) }
+                                createCursor(rows)
+                            }
+                            else -> createCursor(emptyList())
+                        }
+                    }
+                    "execSQL" -> {
+                        val sql = args[0] as String
+                        executedSql.add(sql)
+                        if (args.size > 1 && args[1] is Array<*>) {
+                            val bindArgs = args[1] as Array<*>
+                            if (sql.contains("INSERT INTO messages_new")) {
+                                newMessages.add(
+                                    NewMessageRow(
+                                        id = (bindArgs[0] as Number).toLong(),
+                                        contactId = bindArgs[1] as String,
+                                        isOutgoing = (bindArgs[2] as Number).toInt(),
+                                        seqEpoch = (bindArgs[3] as Number).toInt(),
+                                        seqNum = (bindArgs[4] as Number).toInt(),
+                                        ackNum = (bindArgs[5] as Number).toInt(),
+                                        timestamp = (bindArgs[6] as Number).toLong(),
+                                        textContent = bindArgs[7] as? String,
+                                        imageBytes = bindArgs[8] as? ByteArray,
+                                        status = bindArgs[9] as String,
+                                        retryCount = (bindArgs[10] as Number).toInt(),
+                                        lastAttemptTimestamp = (bindArgs[11] as Number).toLong(),
+                                        ackTarget = bindArgs[12] as? ByteArray,
+                                        ackRatchetKey = bindArgs[13] as? ByteArray,
+                                        slotTarget = bindArgs[14] as? ByteArray,
+                                        slotEdSeed = bindArgs[15] as? ByteArray,
+                                        senderMemberId = bindArgs[16] as? String,
+                                        senderName = bindArgs[17] as? String,
+                                        ephemeralTtlSeconds = bindArgs[18] as String,
+                                        expiresAtTimestamp = bindArgs[19] as? String,
+                                        reaction = bindArgs[20] as? String
+                                    )
+                                )
+                            } else if (sql.contains("UPDATE pending_chunk_transfers SET missingIndices = ?")) {
+                                val encHex = bindArgs[0] as String
+                                val transferId = bindArgs[1] as String
+                                transfers.first { it.transferId == transferId }.missingIndices = encHex
+                            } else if (sql.contains("UPDATE chunks SET data = ?")) {
+                                val data = bindArgs[0] as ByteArray
+                                val transferId = bindArgs[1] as String
+                                val chunkIndex = (bindArgs[2] as Number).toInt()
+                                chunkItems.first { it.transferId == transferId && it.chunkIndex == chunkIndex }.data = data
+                            }
+                        }
+                        null
+                    }
+                    else -> null
+                }
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_13_14.migrate(dbProxy)
+
+        // Verify table recreation executed
+        assertTrue(executedSql.any { it.contains("DROP TABLE messages") })
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages_new RENAME TO messages") })
+
+        // Verify messages encrypted values
+        assertEquals(1, newMessages.size)
+        val migratedMsg = newMessages.first()
+        val expectedMsgRowId = MessageEntity.computeMessageRowId("alice", 0, 5, true)
+
+        // ephemeralTtlSeconds
+        val decTtl = KeystoreCrypto.decryptLong(migratedMsg.ephemeralTtlSeconds, "messages", expectedMsgRowId, "ephemeralTtlSeconds")
+        assertEquals(60L, decTtl)
+
+        // expiresAtTimestamp
+        assertNotNull(migratedMsg.expiresAtTimestamp)
+        val decExpires = KeystoreCrypto.decryptLong(migratedMsg.expiresAtTimestamp!!, "messages", expectedMsgRowId, "expiresAtTimestamp")
+        assertEquals(1060L, decExpires)
+
+        // reaction
+        assertNotNull(migratedMsg.reaction)
+        val decReaction = KeystoreCrypto.decryptString(migratedMsg.reaction!!, "messages", expectedMsgRowId, "reaction")
+        assertEquals("🔥", decReaction)
+
+        // Intra-row column-swap attack resistance
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decryptString(migratedMsg.reaction!!, "messages", expectedMsgRowId, "textContent")
+        }
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decryptLong(migratedMsg.ephemeralTtlSeconds, "messages", expectedMsgRowId, "expiresAtTimestamp")
+        }
+
+        // pending_chunk_transfers missingIndices
+        val updatedTransfer = transfers.first()
+        val decMissing = KeystoreCrypto.decryptString(updatedTransfer.missingIndices, "pending_chunk_transfers", "transfer_abc", "missingIndices")
+        assertEquals("0,1,2", decMissing)
+
+        // chunks data
+        val updatedChunk = chunkItems.first()
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, updatedChunk.data[0])
+        val decData = KeystoreCrypto.decrypt(updatedChunk.data, "chunks", "transfer_abc_0", "data")
+        assertArrayEquals(rawChunkData, decData)
+    }
 }
 

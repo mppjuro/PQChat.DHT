@@ -139,13 +139,15 @@ object BinaryFrameCodec {
                 return transferId.contentEquals(other.transferId) &&
                         chunkIndex == other.chunkIndex &&
                         totalChunks == other.totalChunks &&
-                        data.contentEquals(other.data)
+                        data.contentEquals(other.data) &&
+                        ephemeralTtlSeconds == other.ephemeralTtlSeconds
             }
             override fun hashCode(): Int {
                 var result = transferId.contentHashCode()
                 result = 31 * result + chunkIndex
                 result = 31 * result + totalChunks
                 result = 31 * result + data.contentHashCode()
+                result = 31 * result + ephemeralTtlSeconds.hashCode()
                 return result
             }
         }
@@ -512,7 +514,7 @@ object BinaryFrameCodec {
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.putInt(targetSeqEpoch)
         buffer.putShort((targetSeqNum and 0xFFFF).toShort())
-        buffer.putShort(emojiBytes.size.toShort())
+        buffer.put((emojiBytes.size and 0xFF).toByte())
         buffer.put(emojiBytes)
 
         val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
@@ -753,24 +755,26 @@ object BinaryFrameCodec {
                     )
                 }
                 TYPE_REACTION -> {
+                    require(buffer.remaining() >= 7) { "Malformed reaction payload: expected at least 7 bytes" }
                     val targetEpoch = buffer.int
                     val targetSeq = buffer.short.toInt() and 0xFFFF
-                    val emojiLen = buffer.short.toInt() and 0xFFFF
+                    val emojiLen = buffer.get().toInt() and 0xFF
                     require(emojiLen in 0..T7_MAX_EMOJI_SIZE && emojiLen <= buffer.remaining()) {
-                        "Invalid emoji length: $emojiLen"
+                        "Invalid emoji length: $emojiLen (remaining: ${buffer.remaining()})"
                     }
                     val emojiBytes = ByteArray(emojiLen)
                     buffer.get(emojiBytes)
                     DecodedPayload.Reaction(targetEpoch, targetSeq, String(emojiBytes, Charsets.UTF_8))
                 }
                 TYPE_LOCATION_PIN -> {
+                    require(buffer.remaining() >= 30) { "Malformed location pin payload: expected at least 30 bytes" }
                     val lat = buffer.double
                     val lon = buffer.double
                     val alt = buffer.double
                     val acc = buffer.float
                     val noteLen = buffer.short.toInt() and 0xFFFF
                     require(noteLen in 0..T8_MAX_NOTE_SIZE && noteLen <= buffer.remaining()) {
-                        "Invalid note length: $noteLen"
+                        "Invalid note length: $noteLen (remaining: ${buffer.remaining()})"
                     }
                     val noteBytes = ByteArray(noteLen)
                     buffer.get(noteBytes)

@@ -40,9 +40,15 @@ open class BaseFakeChunkDao : ChunkDao {
     override suspend fun getAllPendingTransfers(): List<PendingChunkTransferEntity> =
         pendingTransfers.sortedBy { it.createdAt }
 
-    override suspend fun updateMissingIndices(transferId: String, missingIndices: String) {
+    override suspend fun updateMissingIndices(transferId: String, missingIndices: org.pqchat.dht.data.db.EncryptedText) {
         val existing = pendingTransfers.firstOrNull { it.transferId == transferId } ?: return
-        val updated = existing.copy(missingIndices = missingIndices)
+        val bound = org.pqchat.dht.data.db.EncryptedText(
+            raw = missingIndices.raw,
+            boundTable = "pending_chunk_transfers",
+            boundId = transferId,
+            boundColumn = "missingIndices"
+        )
+        val updated = existing.copy(missingIndices = bound)
         pendingTransfers.removeAll { it.transferId == transferId }
         pendingTransfers.add(updated)
     }

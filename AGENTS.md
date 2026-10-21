@@ -129,10 +129,10 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `Longitude`: 8 bajtów (Double IEEE 754 Big-Endian)
   * `Altitude`: 8 bajtów (Double IEEE 754 Big-Endian)
   * `Accuracy`: 4 bajty (Float IEEE 754 Big-Endian)
-  * `EphemeralTtlSeconds`: 4 bajty (UInt32 Big-Endian)
-  * `NoteLength` ($`P`$): 2 bajty (UInt16 Big-Endian, wartość $`\le 829`$)
-  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów)
-  * `CSPRNG Padding`: $`829 - P`$ bajtów (wypełnienie do 859 B)
+  * `NoteLength` ($`P`$): 2 bajty (UInt16 Big-Endian, wartość $`\le 829`$, lub $`\le 817`$ dla wiadomości efemerycznych)
+  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów, lub $`\le 817`$)
+  * `Opcjonalny Nagłówek Efemeryczny`: `MAGIC_EPHEMERAL` (8 bajtów, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bajty, UInt32 Big-Endian) – obecny wyłącznie gdy $`TTL > 0`$
+  * `CSPRNG Padding`: wypełnienie do 859 B ($`829 - P`$ lub $`817 - P`$ bajtów)
 
 ### Czaty Grupowe i Tabele Bazy Danych (`groups` i `group_members`):
 * **Model Dystrybucji i Adresowania:** Każdy uczestnik posiada własny łańcuch nadawczy ($`myChainKeyOut`$). Wiadomości grupowe nadawane są na indywidualne sloty odbiorców:

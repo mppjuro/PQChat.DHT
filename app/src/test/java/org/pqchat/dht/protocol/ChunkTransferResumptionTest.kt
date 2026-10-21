@@ -145,7 +145,7 @@ class ChunkTransferResumptionTest {
         val transferIdHex = CryptoUtils.toHex(chunks[0].transferId)
         val pending = chunkDao.getPendingTransfer(transferIdHex)
         assertNotNull("Pending transfer must be stored in DB", pending)
-        assertEquals("Missing indices should be 0 and 2", "0,2", pending?.missingIndices)
+        assertEquals("Missing indices should be 0 and 2", "0,2", pending?.rawMissingIndices)
 
         // Verify image download progress is reported (1 of 3)
         val progressMap = repository.imageDownloadProgress.value

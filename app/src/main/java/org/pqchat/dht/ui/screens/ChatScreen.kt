@@ -1165,7 +1165,7 @@ fun MessageBubble(
                         modifier = Modifier.testTag("reaction_badge_${message.id}")
                     ) {
                         Text(
-                            text = message.reaction ?: "",
+                            text = message.rawReaction ?: "",
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                             fontSize = 15.sp
                         )
@@ -1234,13 +1234,14 @@ fun MessageBubble(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (message.ephemeralTtlSeconds > 0L) {
-                            val ttlLabel = when (message.ephemeralTtlSeconds) {
+                        val rawTtl = message.rawEphemeralTtlSeconds
+                        if (rawTtl > 0L) {
+                            val ttlLabel = when (rawTtl) {
                                 60L -> "1m"
                                 900L -> "15m"
                                 3600L -> "1h"
                                 86400L -> "24h"
-                                else -> "${message.ephemeralTtlSeconds}s"
+                                else -> "${rawTtl}s"
                             }
                             Icon(
                                 imageVector = Icons.Default.HourglassBottom,

@@ -6,6 +6,7 @@ import org.junit.Before
 import org.junit.Test
 import org.pqchat.dht.data.db.ContactEntity
 import org.pqchat.dht.data.db.EncryptedBlob
+import org.pqchat.dht.data.db.EncryptedLong
 import org.pqchat.dht.data.db.EncryptedText
 import org.pqchat.dht.data.db.GroupEntity
 import org.pqchat.dht.data.db.KeystoreConverters
@@ -179,23 +180,24 @@ class KeystoreCryptoTest {
     fun testKeystoreConvertersWithRowBinding() {
         val converters = KeystoreConverters()
 
-        // 1. Row-bound EncryptedBlob
+        // 1. Row-and-column-bound EncryptedBlob (MAGIC_ROW_BOUND_V2)
         val rawBlob = ByteArray(32) { (it * 3).toByte() }
-        val blob = EncryptedBlob(rawBlob, "skipped_keys", "alice_1")
+        val blob = EncryptedBlob(rawBlob, "skipped_keys", "alice_1", "msgKey")
 
         val dbBlob = converters.toDatabaseBlob(blob)
         assertNotNull(dbBlob)
-        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND, dbBlob!![0])
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, dbBlob!![0])
 
         val restoredBlob = converters.fromDatabaseBlob(dbBlob)
         assertNotNull(restoredBlob)
         assertArrayEquals(rawBlob, restoredBlob!!.raw)
         assertEquals("skipped_keys", restoredBlob.boundTable)
         assertEquals("alice_1", restoredBlob.boundId)
+        assertEquals("msgKey", restoredBlob.boundColumn)
 
-        // 2. Row-bound EncryptedText
+        // 2. Row-and-column-bound EncryptedText (MAGIC_ROW_BOUND_V2)
         val rawText = "Secret message content"
-        val text = EncryptedText(rawText, "messages", "contact_seq_42")
+        val text = EncryptedText(rawText, "messages", "contact_seq_42", "textContent")
 
         val dbText = converters.toDatabaseText(text)
         assertNotNull(dbText)
@@ -205,6 +207,21 @@ class KeystoreCryptoTest {
         assertEquals(rawText, restoredText!!.raw)
         assertEquals("messages", restoredText.boundTable)
         assertEquals("contact_seq_42", restoredText.boundId)
+        assertEquals("textContent", restoredText.boundColumn)
+
+        // 3. Row-and-column-bound EncryptedLong (MAGIC_ROW_BOUND_V2)
+        val rawLong = 86400L
+        val encLong = EncryptedLong(rawLong, "messages", "contact_seq_42", "ephemeralTtlSeconds")
+
+        val dbLong = converters.toDatabaseLong(encLong)
+        assertNotNull(dbLong)
+
+        val restoredLong = converters.fromDatabaseLong(dbLong)
+        assertNotNull(restoredLong)
+        assertEquals(rawLong, restoredLong!!.raw)
+        assertEquals("messages", restoredLong.boundTable)
+        assertEquals("contact_seq_42", restoredLong.boundId)
+        assertEquals("ephemeralTtlSeconds", restoredLong.boundColumn)
     }
 
     @Test

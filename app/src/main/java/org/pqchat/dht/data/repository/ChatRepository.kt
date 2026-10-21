@@ -1225,6 +1225,7 @@ class ChatRepository(
                                 seqNum = currentContact.counterOut,
                                 messageId = msg.id,
                                 contactId = contactId,
+                                packetClass = org.pqchat.dht.traffic.PacketClass.IMAGE_CHUNK,
                                 onSent = { success ->
                                     decoyTargetPool.registerPopulatedTarget(c.target)
                                     if (!success) {
@@ -1322,7 +1323,7 @@ class ChatRepository(
                     ackNum = currentContact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
                     text = msg.textContent.raw,
-                    ephemeralTtlSeconds = msg.ephemeralTtlSeconds
+                    ephemeralTtlSeconds = msg.rawEphemeralTtlSeconds
                 )
                 val frame = BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -1349,6 +1350,7 @@ class ChatRepository(
                             seqNum = currentContact.counterOut,
                             messageId = msg.id,
                             contactId = contactId,
+                            packetClass = org.pqchat.dht.traffic.PacketClass.IMAGE_CHUNK,
                             onSent = { success ->
                                 if (success) {
                                     decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -1467,6 +1469,7 @@ class ChatRepository(
                     skipLocalStore = isSelf,
                     seqNum = contact.counterOut,
                     contactId = contact.id,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
                     onSent = { success ->
                         if (success) {
                             decoyTargetPool.registerPopulatedTarget(nextTarget)
@@ -2059,6 +2062,7 @@ class ChatRepository(
                                 skipLocalStore = isSelf,
                                 seqNum = currentContact.counterOut,
                                 contactId = contactId,
+                                packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
                                 onSent = { success ->
                                     if (success) {
                                         decoyTargetPool.registerPopulatedTarget(outSlot.target)
@@ -3976,6 +3980,7 @@ class ChatRepository(
                     skipLocalStore = isSelf,
                     seqNum = contact.counterOut,
                     contactId = contactId,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
                     onSent = { success ->
                         if (success) {
                             decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -4139,6 +4144,7 @@ class ChatRepository(
                     skipLocalStore = isSelf,
                     seqNum = contact.counterOut,
                     contactId = contactId,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
                     onSent = { success ->
                         if (success) {
                             decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -4544,6 +4550,7 @@ class ChatRepository(
                         seqNum = currentGroup.myCounterOut,
                         messageId = msgId,
                         contactId = groupId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
                         onSent = { success ->
                             if (success) {
                                 anySuccess.set(true)
@@ -4675,6 +4682,7 @@ class ChatRepository(
                         seqNum = currentGroup.myCounterOut,
                         messageId = -1L,
                         contactId = groupId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
                         onSent = { success ->
                             if (success) {
                                 anySuccess.set(true)
@@ -4821,6 +4829,7 @@ class ChatRepository(
                         seqNum = currentGroup.myCounterOut,
                         messageId = msgId,
                         contactId = groupId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
                         onSent = { success ->
                             if (success) {
                                 anySuccess.set(true)

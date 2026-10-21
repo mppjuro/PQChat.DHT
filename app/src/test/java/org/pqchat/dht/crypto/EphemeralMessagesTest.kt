@@ -217,7 +217,7 @@ class EphemeralMessagesTest {
 
         // Outgoing message timestamp was already set and unchanged
         val stored3 = messageDao.getMessageById(id3)
-        assertEquals(1000L + 60_000L, stored3?.expiresAtTimestamp)
+        assertEquals(1000L + 60_000L, stored3?.rawExpiresAtTimestamp)
     }
 
     @Test
