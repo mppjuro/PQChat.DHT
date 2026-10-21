@@ -565,5 +565,26 @@ class AppDatabaseMigrationTest {
         assertArrayEquals(rawBaseSeed, KeystoreCrypto.decrypt(pct.baseEdSeed, "pending_chunk_transfers", "transfer_42_seed", "baseEdSeed"))
         assertArrayEquals(rawBaseKey, KeystoreCrypto.decrypt(pct.baseMsgKey, "pending_chunk_transfers", "transfer_42_key", "baseMsgKey"))
     }
+
+    @Test
+    fun testMigration11To12AddsEphemeralColumnsAndIndex() {
+        val executedSql = mutableListOf<String>()
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                if (method.name == "execSQL") {
+                    executedSql.add(args[0] as String)
+                }
+                null
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_11_12.migrate(dbProxy)
+
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN ephemeralTtlSeconds") })
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN expiresAtTimestamp") })
+        assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_messages_expiresAtTimestamp ON messages") })
+    }
 }
 

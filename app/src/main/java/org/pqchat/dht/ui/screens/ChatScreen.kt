@@ -85,6 +85,8 @@ fun ChatScreen(
     var showGroupMembersDialog by remember { mutableStateOf(false) }
     var editedContactName by remember { mutableStateOf("") }
     var fullscreenImageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    val ephemeralTtlSeconds by viewModel.ephemeralTtlSeconds.collectAsState()
+    var showEphemeralMenu by remember { mutableStateOf(false) }
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
@@ -341,64 +343,195 @@ fun ChatScreen(
                 color = appColors.surface,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Attachment button for sending real pictures/files over 900B DHT chunks
-                    IconButton(
-                        onClick = { imagePickerLauncher.launch("image/*") },
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = "Attach Image",
-                            tint = appColors.primary
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = textInput,
-                        onValueChange = { textInput = it },
-                        placeholder = { Text("Wiadomość (szyfrowana ramka DHT)...", color = appColors.textSecondary) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp)
-                            .testTag("chat_message_input"),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = appColors.primary,
-                            unfocusedBorderColor = appColors.border,
-                            focusedTextColor = appColors.textPrimary,
-                            unfocusedTextColor = appColors.textPrimary,
-                            focusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f),
-                            unfocusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f)
-                        ),
-                        shape = RoundedCornerShape(24.dp),
-                        maxLines = 4
-                    )
-
-                    IconButton(
-                        onClick = {
-                            if (textInput.isNotBlank()) {
-                                viewModel.sendMessage(textInput)
-                                textInput = ""
+                Column {
+                    if (ephemeralTtlSeconds > 0L) {
+                        val ttlLabel = when (ephemeralTtlSeconds) {
+                            60L -> "1 min"
+                            900L -> "15 min"
+                            3600L -> "1 godzina"
+                            86400L -> "24 godziny"
+                            else -> "${ephemeralTtlSeconds}s"
+                        }
+                        Surface(
+                            color = AmberWarning.copy(alpha = 0.12f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.HourglassTop,
+                                        contentDescription = null,
+                                        tint = AmberWarning,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Znikające wiadomości: znikną po $ttlLabel od przeczytania",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AmberWarning,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Text(
+                                    text = "Wyłącz",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable { viewModel.setEphemeralTtl(0L) }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
                             }
-                        },
+                        }
+                    }
+                    Row(
                         modifier = Modifier
-                            .size(48.dp)
-                            .testTag("chat_send_button"),
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = appColors.primary,
-                            contentColor = Color.Black
-                        )
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = Color.Black
+                        // Attachment button for sending real pictures/files over 900B DHT chunks
+                        IconButton(
+                            onClick = { imagePickerLauncher.launch("image/*") },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddPhotoAlternate,
+                                contentDescription = "Attach Image",
+                                tint = appColors.primary
+                            )
+                        }
+
+                        // Ephemeral Messages TTL Switcher
+                        Box {
+                            IconButton(
+                                onClick = { showEphemeralMenu = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .testTag("chat_ephemeral_ttl_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (ephemeralTtlSeconds > 0) Icons.Default.HourglassTop else Icons.Default.HourglassEmpty,
+                                    contentDescription = "Czas życia wiadomości",
+                                    tint = if (ephemeralTtlSeconds > 0) AmberWarning else appColors.textSecondary
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showEphemeralMenu,
+                                onDismissRequest = { showEphemeralMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Znikające wiadomości: Wyłączone") },
+                                    onClick = {
+                                        viewModel.setEphemeralTtl(0L)
+                                        showEphemeralMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (ephemeralTtlSeconds == 0L) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("1 minuta") },
+                                    onClick = {
+                                        viewModel.setEphemeralTtl(60L)
+                                        showEphemeralMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (ephemeralTtlSeconds == 60L) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("15 minut") },
+                                    onClick = {
+                                        viewModel.setEphemeralTtl(900L)
+                                        showEphemeralMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (ephemeralTtlSeconds == 900L) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("1 godzina") },
+                                    onClick = {
+                                        viewModel.setEphemeralTtl(3600L)
+                                        showEphemeralMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (ephemeralTtlSeconds == 3600L) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("24 godziny") },
+                                    onClick = {
+                                        viewModel.setEphemeralTtl(86400L)
+                                        showEphemeralMenu = false
+                                    },
+                                    leadingIcon = {
+                                        if (ephemeralTtlSeconds == 86400L) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = textInput,
+                            onValueChange = { textInput = it },
+                            placeholder = { Text("Wiadomość (szyfrowana ramka DHT)...", color = appColors.textSecondary) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                                .testTag("chat_message_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = appColors.primary,
+                                unfocusedBorderColor = appColors.border,
+                                focusedTextColor = appColors.textPrimary,
+                                unfocusedTextColor = appColors.textPrimary,
+                                focusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f),
+                                unfocusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            shape = RoundedCornerShape(24.dp),
+                            maxLines = 4
                         )
+
+                        IconButton(
+                            onClick = {
+                                if (textInput.isNotBlank()) {
+                                    viewModel.sendMessage(textInput)
+                                    textInput = ""
+                                }
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("chat_send_button"),
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = appColors.primary,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = Color.Black
+                            )
+                        }
                     }
                 }
             }
@@ -933,6 +1066,30 @@ fun MessageBubble(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (message.ephemeralTtlSeconds > 0L) {
+                            val ttlLabel = when (message.ephemeralTtlSeconds) {
+                                60L -> "1m"
+                                900L -> "15m"
+                                3600L -> "1h"
+                                86400L -> "24h"
+                                else -> "${message.ephemeralTtlSeconds}s"
+                            }
+                            Icon(
+                                imageVector = Icons.Default.HourglassBottom,
+                                contentDescription = "Znikająca wiadomość ($ttlLabel)",
+                                tint = AmberWarning,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = ttlLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmberWarning,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
                         Text(
                             text = statusText,
                             style = MaterialTheme.typography.labelSmall,

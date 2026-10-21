@@ -140,4 +140,28 @@ open class BaseFakeMessageDao : MessageDao {
             )
         }
     }
+
+    override suspend fun getExpiredMessages(now: Long): List<MessageEntity> =
+        messages.filter { it.expiresAtTimestamp != null && it.expiresAtTimestamp <= now }
+
+    override suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long) {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0 && messages[idx].expiresAtTimestamp == null) {
+            messages[idx] = messages[idx].copy(expiresAtTimestamp = expiresAt)
+        }
+    }
+
+    override suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity> =
+        messages.filter { it.contactId == contactId && it.ephemeralTtlSeconds > 0 && it.expiresAtTimestamp == null }
+
+    override suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?) {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            messages[idx] = messages[idx].copy(textContent = wipedText, imageBytes = wipedImage)
+        }
+    }
+
+    override suspend fun deleteMessageById(id: Long) {
+        messages.removeIf { it.id == id }
+    }
 }

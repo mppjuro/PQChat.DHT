@@ -231,6 +231,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 delay(2000L)
             }
         }
+
+        // Periodic purge of expired ephemeral messages
+        viewModelScope.launch {
+            while (isActive) {
+                try {
+                    repository.purgeExpiredMessages()
+                } catch (_: Throwable) {}
+                delay(1000L)
+            }
+        }
     }
 
     fun setThemeMode(mode: org.pqchat.dht.data.settings.ThemeMode) {
@@ -302,10 +312,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _ephemeralTtlSeconds = MutableStateFlow(0L)
+    val ephemeralTtlSeconds: StateFlow<Long> = _ephemeralTtlSeconds.asStateFlow()
+
+    fun setEphemeralTtl(seconds: Long) {
+        _ephemeralTtlSeconds.value = seconds
+    }
+
     fun selectContact(contactId: String) {
         _selectedContactId.value = contactId
         pollingManager.onChatOpened(contactId)
         viewModelScope.launch {
+            repository.markIncomingMessagesAsRead(contactId)
             repository.pollConstantBatch(contactId)
         }
     }
@@ -341,12 +359,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val contactId = _selectedContactId.value ?: return
         if (text.isBlank()) return
 
+        val ttl = _ephemeralTtlSeconds.value
         viewModelScope.launch {
             val group = repository.getGroup(contactId)
             if (group != null) {
-                repository.sendGroupMessage(contactId, text)
+                repository.sendGroupMessage(contactId, text, ttl)
             } else {
-                repository.sendTextMessage(contactId, text)
+                repository.sendTextMessage(contactId, text, ttl)
             }
         }
     }

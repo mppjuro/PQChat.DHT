@@ -55,6 +55,9 @@ object BinaryFrameCodec {
     const val T5_TRANSFER_ID_SIZE = 16
     const val T5_MAX_CHUNK_SIZE = 837 // 859 - 22
 
+    const val MAGIC_EPHEMERAL: Long = 0x5051435F4550484DL // "PQC_EPHM"
+    const val EPHEMERAL_HEADER_SIZE = 12 // 8 bytes magic + 4 bytes TTL seconds
+
     sealed class DecodedPayload {
         data class HandshakeFinalize(
             val hybridCiphertext: ByteArray,
@@ -80,7 +83,8 @@ object BinaryFrameCodec {
         }
 
         data class TextMessage(
-            val text: String
+            val text: String,
+            val ephemeralTtlSeconds: Long = 0L
         ) : DecodedPayload()
 
         data class RekeyOffer(
@@ -121,7 +125,8 @@ object BinaryFrameCodec {
             val transferId: ByteArray,
             val chunkIndex: Int,
             val totalChunks: Int,
-            val data: ByteArray
+            val data: ByteArray,
+            val ephemeralTtlSeconds: Long = 0L
         ) : DecodedPayload() {
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
@@ -228,17 +233,29 @@ object BinaryFrameCodec {
         seqNum: Int,
         ackNum: Int,
         timestampUTC: Long,
-        text: String
+        text: String,
+        ephemeralTtlSeconds: Long = 0L
     ): ByteArray {
         val textBytes = text.toByteArray(Charsets.UTF_8)
-        require(textBytes.size <= T2_MAX_TEXT_SIZE) {
-            "Text exceeds maximum size of $T2_MAX_TEXT_SIZE bytes (was ${textBytes.size})"
+        val maxText = if (ephemeralTtlSeconds > 0) {
+            T2_MAX_TEXT_SIZE - EPHEMERAL_HEADER_SIZE
+        } else {
+            T2_MAX_TEXT_SIZE
+        }
+        require(textBytes.size <= maxText) {
+            "Text exceeds maximum size of $maxText bytes (was ${textBytes.size})"
         }
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.putShort(textBytes.size.toShort())
         buffer.put(textBytes)
-        val paddingNeeded = T2_MAX_TEXT_SIZE - textBytes.size
+
+        if (ephemeralTtlSeconds > 0) {
+            buffer.putLong(MAGIC_EPHEMERAL)
+            buffer.putInt(ephemeralTtlSeconds.toInt())
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
         if (paddingNeeded > 0) {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
@@ -287,10 +304,18 @@ object BinaryFrameCodec {
         transferId: ByteArray,
         chunkIndex: Int,
         totalChunks: Int,
-        chunkData: ByteArray
+        chunkData: ByteArray,
+        ephemeralTtlSeconds: Long = 0L
     ): ByteArray {
         require(transferId.size == T5_TRANSFER_ID_SIZE)
-        require(chunkData.size <= T5_MAX_CHUNK_SIZE)
+        val maxChunk = if (ephemeralTtlSeconds > 0) {
+            T5_MAX_CHUNK_SIZE - EPHEMERAL_HEADER_SIZE
+        } else {
+            T5_MAX_CHUNK_SIZE
+        }
+        require(chunkData.size <= maxChunk) {
+            "Chunk size ${chunkData.size} exceeds maximum $maxChunk"
+        }
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.put(transferId)
@@ -298,7 +323,13 @@ object BinaryFrameCodec {
         buffer.putShort(totalChunks.toShort())
         buffer.putShort(chunkData.size.toShort())
         buffer.put(chunkData)
-        val paddingNeeded = T5_MAX_CHUNK_SIZE - chunkData.size
+
+        if (ephemeralTtlSeconds > 0) {
+            buffer.putLong(MAGIC_EPHEMERAL)
+            buffer.putInt(ephemeralTtlSeconds.toInt())
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
         if (paddingNeeded > 0) {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
@@ -548,7 +579,17 @@ object BinaryFrameCodec {
                     require(len <= T2_MAX_TEXT_SIZE) { "Text length $len exceeds $T2_MAX_TEXT_SIZE" }
                     val textBytes = ByteArray(len)
                     buffer.get(textBytes)
-                    DecodedPayload.TextMessage(String(textBytes, Charsets.UTF_8))
+                    var ttl = 0L
+                    if (buffer.remaining() >= EPHEMERAL_HEADER_SIZE) {
+                        val mark = buffer.position()
+                        val magic = buffer.long
+                        if (magic == MAGIC_EPHEMERAL) {
+                            ttl = buffer.int.toLong() and 0xFFFFFFFFL
+                        } else {
+                            buffer.position(mark)
+                        }
+                    }
+                    DecodedPayload.TextMessage(String(textBytes, Charsets.UTF_8), ttl)
                 }
                 TYPE_REKEY_OFFER -> {
                     val epoch = buffer.int.toLong() and 0xFFFFFFFFL
@@ -571,7 +612,17 @@ object BinaryFrameCodec {
                     require(chunkLen <= T5_MAX_CHUNK_SIZE) { "Chunk length $chunkLen exceeds $T5_MAX_CHUNK_SIZE" }
                     val data = ByteArray(chunkLen)
                     buffer.get(data)
-                    DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data)
+                    var ttl = 0L
+                    if (buffer.remaining() >= EPHEMERAL_HEADER_SIZE) {
+                        val mark = buffer.position()
+                        val magic = buffer.long
+                        if (magic == MAGIC_EPHEMERAL) {
+                            ttl = buffer.int.toLong() and 0xFFFFFFFFL
+                        } else {
+                            buffer.position(mark)
+                        }
+                    }
+                    DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data, ttl)
                 }
                 TYPE_GROUP_CONTROL -> {
                     val subType = buffer.get()

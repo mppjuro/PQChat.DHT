@@ -154,7 +154,8 @@ data class ContactEntity(
     tableName = "messages",
     indices = [
         Index(value = ["contactId", "seqEpoch", "seqNum"]),
-        Index(value = ["timestamp"])
+        Index(value = ["timestamp"]),
+        Index(value = ["expiresAtTimestamp"])
     ]
 )
 data class MessageEntity(
@@ -176,7 +177,9 @@ data class MessageEntity(
     val slotTarget: ByteArray? = null,
     val slotEdSeed: EncryptedBlob? = null,
     val senderMemberId: EncryptedText? = null,
-    val senderName: EncryptedText? = null
+    val senderName: EncryptedText? = null,
+    val ephemeralTtlSeconds: Long = 0L,
+    val expiresAtTimestamp: Long? = null
 ) {
     companion object {
         fun computeMessageRowId(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): String =
@@ -205,7 +208,9 @@ data class MessageEntity(
         slotTarget: ByteArray? = null,
         slotEdSeed: ByteArray? = null,
         senderMemberId: String? = null,
-        senderName: String? = null
+        senderName: String? = null,
+        ephemeralTtlSeconds: Long = 0L,
+        expiresAtTimestamp: Long? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -236,7 +241,9 @@ data class MessageEntity(
         },
         senderName = senderName?.let {
             EncryptedText(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "senderName")
-        }
+        },
+        ephemeralTtlSeconds = ephemeralTtlSeconds,
+        expiresAtTimestamp = expiresAtTimestamp
     )
 
     @Ignore
@@ -257,7 +264,9 @@ data class MessageEntity(
         slotTarget: ByteArray? = null,
         slotEdSeed: ByteArray? = null,
         senderMemberId: String? = null,
-        senderName: String? = null
+        senderName: String? = null,
+        ephemeralTtlSeconds: Long = 0L,
+        expiresAtTimestamp: Long? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -276,7 +285,9 @@ data class MessageEntity(
         slotTarget = slotTarget,
         slotEdSeed = slotEdSeed,
         senderMemberId = senderMemberId,
-        senderName = senderName
+        senderName = senderName,
+        ephemeralTtlSeconds = ephemeralTtlSeconds,
+        expiresAtTimestamp = expiresAtTimestamp
     )
 
     init {
@@ -858,6 +869,21 @@ interface MessageDao {
         textContent: EncryptedText? = null,
         imageBytes: EncryptedBlob? = null
     )
+
+    @Query("SELECT * FROM messages WHERE expiresAtTimestamp IS NOT NULL AND expiresAtTimestamp <= :now")
+    suspend fun getExpiredMessages(now: Long = System.currentTimeMillis()): List<MessageEntity>
+
+    @Query("UPDATE messages SET expiresAtTimestamp = :expiresAt WHERE id = :id AND expiresAtTimestamp IS NULL")
+    suspend fun markMessageReadAndStartTtl(id: Long, expiresAt: Long)
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND ephemeralTtlSeconds > 0 AND expiresAtTimestamp IS NULL")
+    suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity>
+
+    @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage WHERE id = :id")
+    suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?)
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteMessageById(id: Long)
 }
 
 

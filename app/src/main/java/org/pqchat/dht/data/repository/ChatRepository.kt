@@ -438,9 +438,14 @@ class ChatRepository(
      * Sends a text message to contact via DHT with key hopping and 900-byte frame.
      * Protected by per-contact Mutex and backed by Room outbox queue.
      */
-    suspend fun sendTextMessage(contactId: String, text: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun sendTextMessage(
+        contactId: String,
+        text: String,
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean = withContext(Dispatchers.IO) {
         getContactMutex(contactId).withLock {
             val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
 
             // 1. Drain existing outbox if any messages are queued
             val queued = messageDao.getQueuedMessagesForContact(contactId)
@@ -458,7 +463,9 @@ class ChatRepository(
                             ackNum = contact.counterIn,
                             timestamp = System.currentTimeMillis(),
                             textContent = text,
-                            status = "QUEUED"
+                            status = "QUEUED",
+                            ephemeralTtlSeconds = ephemeralTtlSeconds,
+                            expiresAtTimestamp = expiresAt
                         )
                     )
                     return@withLock false
@@ -476,7 +483,9 @@ class ChatRepository(
                         ackNum = contact.counterIn,
                         timestamp = System.currentTimeMillis(),
                         textContent = text,
-                        status = "QUEUED"
+                        status = "QUEUED",
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
                     )
                 )
                 return@withLock false
@@ -495,7 +504,9 @@ class ChatRepository(
                         ackNum = updatedContact.counterIn,
                         timestamp = System.currentTimeMillis(),
                         textContent = text,
-                        status = "QUEUED"
+                        status = "QUEUED",
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
                     )
                 )
                 return@withLock false
@@ -509,7 +520,8 @@ class ChatRepository(
                 seqNum = contact.counterOut and 0xFFFF,
                 ackNum = contact.counterIn and 0xFFFF,
                 timestampUTC = System.currentTimeMillis(),
-                text = text
+                text = text,
+                ephemeralTtlSeconds = ephemeralTtlSeconds
             )
             val frame = BinaryFrameCodec.packAeadFrame(
                 key = slot.msgKey,
@@ -545,7 +557,9 @@ class ChatRepository(
                         ackTarget = targetAck,
                         ackRatchetKey = slot.msgKey,
                         slotTarget = slot.target,
-                        slotEdSeed = slot.edPrivateKeySeed
+                        slotEdSeed = slot.edPrivateKeySeed,
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
                     )
                 )
 
@@ -611,7 +625,9 @@ class ChatRepository(
                     ackTarget = targetAck,
                     ackRatchetKey = slot.msgKey,
                     slotTarget = slot.target,
-                    slotEdSeed = slot.edPrivateKeySeed
+                    slotEdSeed = slot.edPrivateKeySeed,
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
                 )
             )
 
@@ -1117,7 +1133,8 @@ class ChatRepository(
                     seqNum = currentContact.counterOut and 0xFFFF,
                     ackNum = currentContact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
-                    text = msg.textContent.raw
+                    text = msg.textContent.raw,
+                    ephemeralTtlSeconds = msg.ephemeralTtlSeconds
                 )
                 val frame = BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -1334,6 +1351,7 @@ class ChatRepository(
                         val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
                         val seqEpoch = sk.slotIndex / 65536
                         if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, sk.slotIndex, false)) {
+                            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(sk.rawMsgKey, "${sk.slotIndex}")
                             messageDao.insertMessage(
                                 MessageEntity(
                                     contactId = contactId,
@@ -1343,7 +1361,13 @@ class ChatRepository(
                                     ackNum = frameMsg.ackNum,
                                     timestamp = frameMsg.timestampUTC,
                                     textContent = textPayload.text,
-                                    status = "DELIVERED"
+                                    status = "DELIVERED",
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = sk.rawMsgKey,
+                                    slotTarget = sk.target,
+                                    slotEdSeed = sk.rawEdPrivateKeySeed,
+                                    ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                    expiresAtTimestamp = null
                                 )
                             )
                             onIncomingMessageDelivered?.invoke(contactId, textPayload.text, false)
@@ -1691,6 +1715,7 @@ class ChatRepository(
                         val seqEpoch = slot.counter / 65536
                         val alreadyExists = messageDao.existsMessageWithEpoch(contactId, seqEpoch, slot.counter, false)
                         if (!alreadyExists) {
+                            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${slot.counter}")
                             messageDao.insertMessage(
                                 MessageEntity(
                                     contactId = contactId,
@@ -1700,7 +1725,13 @@ class ChatRepository(
                                     ackNum = frameMsg.ackNum,
                                     timestamp = frameMsg.timestampUTC,
                                     textContent = textPayload.text,
-                                    status = "DELIVERED"
+                                    status = "DELIVERED",
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = slot.msgKey,
+                                    slotTarget = slot.target,
+                                    slotEdSeed = slot.edPrivateKeySeed,
+                                    ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                    expiresAtTimestamp = null
                                 )
                             )
 
@@ -2609,8 +2640,12 @@ class ChatRepository(
                                         timestamp = frameMsg.timestampUTC,
                                         textContent = textPayload.text,
                                         status = "DELIVERED",
+                                        slotTarget = slot.target,
+                                        slotEdSeed = slot.edPrivateKeySeed,
                                         senderMemberId = member.memberId,
-                                        senderName = member.rawMemberName
+                                        senderName = member.rawMemberName,
+                                        ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                        expiresAtTimestamp = null
                                     )
                                 )
                                 onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
@@ -3987,7 +4022,11 @@ class ChatRepository(
         }
     }
 
-    suspend fun sendGroupMessage(groupId: String, text: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun sendGroupMessage(
+        groupId: String,
+        text: String,
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean = withContext(Dispatchers.IO) {
         getGroupMutex(groupId).withLock {
             val group = groupDao?.getGroupById(groupId) ?: return@withLock false
             if (!group.isActive) return@withLock false
@@ -4001,12 +4040,14 @@ class ChatRepository(
             val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
             val groupIdBytes = uuidStringToBytes(groupId)
             val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
 
             val plaintext = BinaryFrameCodec.encodeTextMessage(
                 seqNum = currentGroup.myCounterOut and 0xFFFF,
                 ackNum = 0,
                 timestampUTC = System.currentTimeMillis(),
-                text = text
+                text = text,
+                ephemeralTtlSeconds = ephemeralTtlSeconds
             )
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
@@ -4052,7 +4093,9 @@ class ChatRepository(
                     textContent = text,
                     status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
                     senderMemberId = currentGroup.myMemberId,
-                    senderName = "Ja"
+                    senderName = "Ja",
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
                 )
             )
 
@@ -4290,8 +4333,12 @@ class ChatRepository(
                                                 timestamp = frameMsg.timestampUTC,
                                                 textContent = textPayload.text,
                                                 status = "DELIVERED",
+                                                slotTarget = activeSlot.target,
+                                                slotEdSeed = activeSlot.edPrivateKeySeed,
                                                 senderMemberId = curMember.memberId,
-                                                senderName = curMember.rawMemberName
+                                                senderName = curMember.rawMemberName,
+                                                ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                                expiresAtTimestamp = null
                                             )
                                         )
                                         onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
@@ -4352,6 +4399,82 @@ class ChatRepository(
                 pollGroupIncoming(group.groupId)
             }
         }.awaitAll()
+    }
+
+    /**
+     * Marks unread ephemeral messages for a contact as read, setting their
+     * expiration timestamp based on ephemeralTtlSeconds from the moment of opening/display.
+     */
+    suspend fun markIncomingMessagesAsRead(contactId: String) = withContext(Dispatchers.IO) {
+        val unread = messageDao.getUnreadEphemeralMessagesForContact(contactId)
+        val now = System.currentTimeMillis()
+        for (msg in unread) {
+            val expiresAt = now + msg.ephemeralTtlSeconds * 1000L
+            messageDao.markMessageReadAndStartTtl(msg.id, expiresAt)
+        }
+    }
+
+    /**
+     * Purges all expired ephemeral messages:
+     * 1. Overwrites encrypted blobs in SQLite with cryptographically secure random bytes
+     * 2. Deletes row from SQLite
+     * 3. Emits 900-byte CSPRNG Tombstones (seq + 1) to DHT for both slotTarget and ackTarget
+     */
+    suspend fun purgeExpiredMessages(now: Long = System.currentTimeMillis()): Int = withContext(Dispatchers.IO) {
+        val expired = messageDao.getExpiredMessages(now)
+        var count = 0
+        for (msg in expired) {
+            purgeSingleExpiredMessage(msg)
+            count++
+        }
+        count
+    }
+
+    suspend fun purgeSingleExpiredMessage(msg: MessageEntity) = withContext(Dispatchers.IO) {
+        // 1. Wipe encrypted content in SQLite with cryptographically secure random bytes
+        val rowId = MessageEntity.computeMessageRowId(msg.contactId, msg.seqEpoch, msg.seqNum, msg.isOutgoing)
+        val noiseText = CryptoUtils.toHex(CryptoUtils.secureRandomBytes(32))
+        val noiseBytes = CryptoUtils.secureRandomBytes(64)
+        val wipedEncText = EncryptedText(noiseText, "messages", rowId, "textContent")
+        val wipedEncBlob = EncryptedBlob(noiseBytes, "messages", rowId, "imageBytes")
+        messageDao.wipeMessageContent(msg.id, wipedEncText, wipedEncBlob)
+
+        // 2. Delete row from SQLite
+        messageDao.deleteMessageById(msg.id)
+
+        // 3. Emit 900-byte CSPRNG Tombstones (seq + 1) to DHT for both slotTarget and ackTarget
+        val tombstonePayload = BinaryFrameCodec.createTombstonePayload()
+        val isSelf = msg.contactId == SELF_CONTACT_ID
+
+        // Message slot tombstone
+        if (msg.slotTarget != null && msg.slotEdSeed != null) {
+            try {
+                dhtLeafNode.putMutable(
+                    target = msg.slotTarget,
+                    v = tombstonePayload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
+                    salt = null,
+                    sk = msg.slotEdSeed.raw,
+                    skipLocalStore = isSelf
+                )
+            } catch (_: Exception) {}
+        }
+
+        // ACK slot tombstone
+        if (msg.ackRatchetKey != null) {
+            try {
+                val ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(msg.ackRatchetKey.raw, "${msg.seqNum}")
+                val ackTarget = msg.ackTarget ?: org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(msg.ackRatchetKey.raw, "${msg.seqNum}")
+                dhtLeafNode.putMutable(
+                    target = ackTarget,
+                    v = tombstonePayload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
+                    salt = null,
+                    sk = ackSeed,
+                    skipLocalStore = isSelf
+                )
+            } catch (_: Exception) {}
+        }
     }
 }
 
