@@ -1388,8 +1388,19 @@ class ChatRepository(
                             bitmapBase = bitmap.windowBase,
                             bitmap = bitmap.toByteArray()
                         )
+                        val rawRatchetKey = sk.rawMsgKey.copyOf()
                         sk.destroy()
                         skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        if (!isSelf) {
+                            pendingAckQueue.enqueue(
+                                org.pqchat.dht.traffic.PendingAck(
+                                    contactId = contactId,
+                                    messageId = "${sk.slotIndex}",
+                                    ratchetKey = rawRatchetKey,
+                                    seqNum = sk.slotIndex
+                                )
+                            )
+                        }
                         anyProcessed = true
                     }
                     else -> {}
@@ -1517,7 +1528,14 @@ class ChatRepository(
             contact = contactDao.getContactById(contactId) ?: break
         }
 
-        if (anyProcessed) {
+        if (!anyProcessed) {
+            checkLookaheadWindowInternal(contactId)
+            val updatedContact = contactDao.getContactById(contactId)
+            if (updatedContact != null && updatedContact.counterIn > contact.counterIn) {
+                anyProcessed = true
+                drainOutboxInternal(contactId, force = true)
+            }
+        } else {
             drainOutboxInternal(contactId, force = true)
             triggerLookaheadWindowAsync(contactId)
         }
@@ -1542,63 +1560,67 @@ class ChatRepository(
      */
     suspend fun checkLookaheadWindow(contactId: String) = withContext(Dispatchers.IO) {
         getContactMutex(contactId).withLock {
-            val isSelf = contactId == SELF_CONTACT_ID
-            var currentContact = contactDao.getContactById(contactId) ?: return@withLock
-            var hasMore = true
+            checkLookaheadWindowInternal(contactId)
+        }
+    }
 
-            while (hasMore) {
-                hasMore = false
-                val lookaheadSlots = RatchetChain.computeLookaheadSlots(
-                    startChainKey = currentContact.chainKeyIn,
-                    startCounter = currentContact.counterIn,
-                    windowSize = 4
-                )
+    private suspend fun checkLookaheadWindowInternal(contactId: String) {
+        val isSelf = contactId == SELF_CONTACT_ID
+        var currentContact = contactDao.getContactById(contactId) ?: return
+        var hasMore = true
 
-                for (idx in lookaheadSlots.indices) {
-                    val slot = lookaheadSlots[idx]
-                    val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
+        while (hasMore) {
+            hasMore = false
+            val lookaheadSlots = RatchetChain.computeLookaheadSlots(
+                startChainKey = currentContact.chainKeyIn,
+                startCounter = currentContact.counterIn,
+                windowSize = 4
+            )
 
-                    // If slot.counter > currentContact.counterIn, preserve skipped slots n..k-1
-                    if (slot.counter > currentContact.counterIn) {
-                        for (skipIdx in 0 until idx) {
-                            val skippedSlot = lookaheadSlots[skipIdx]
-                            val bitmap = SlidingWindowBitmap(currentContact.receivedBitmapBase, 1024, currentContact.receivedBitmap)
-                            if (!bitmap.isReceived(skippedSlot.counter)) {
-                                if (skippedKeyDao != null) {
-                                    val count = skippedKeyDao.countSkippedKeys(contactId)
-                                    if (count >= MAX_SKIPPED_KEYS_PER_CONTACT) {
-                                        skippedKeyDao.deleteOldestSkippedKeys(contactId, count - MAX_SKIPPED_KEYS_PER_CONTACT + 1)
-                                    }
-                                    skippedKeyDao.insertOrUpdate(
-                                        SkippedKeyEntity(
-                                            contactId = contactId,
-                                            slotIndex = skippedSlot.counter,
-                                            msgKey = skippedSlot.msgKey,
-                                            target = skippedSlot.target,
-                                            edPrivateKeySeed = skippedSlot.edPrivateKeySeed
-                                        )
-                                    )
+            for (idx in lookaheadSlots.indices) {
+                val slot = lookaheadSlots[idx]
+                val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
+
+                // If slot.counter > currentContact.counterIn, preserve skipped slots n..k-1
+                if (slot.counter > currentContact.counterIn) {
+                    for (skipIdx in 0 until idx) {
+                        val skippedSlot = lookaheadSlots[skipIdx]
+                        val bitmap = SlidingWindowBitmap(currentContact.receivedBitmapBase, 1024, currentContact.receivedBitmap)
+                        if (!bitmap.isReceived(skippedSlot.counter)) {
+                            if (skippedKeyDao != null) {
+                                val count = skippedKeyDao.countSkippedKeys(contactId)
+                                if (count >= MAX_SKIPPED_KEYS_PER_CONTACT) {
+                                    skippedKeyDao.deleteOldestSkippedKeys(contactId, count - MAX_SKIPPED_KEYS_PER_CONTACT + 1)
                                 }
+                                skippedKeyDao.insertOrUpdate(
+                                    SkippedKeyEntity(
+                                        contactId = contactId,
+                                        slotIndex = skippedSlot.counter,
+                                        msgKey = skippedSlot.msgKey,
+                                        target = skippedSlot.target,
+                                        edPrivateKeySeed = skippedSlot.edPrivateKeySeed
+                                    )
+                                )
                             }
                         }
                     }
+                }
 
-                    val success = processIncomingItem(contactId, slot, item, isSelf)
-                    if (success) {
-                        val updated = contactDao.getContactById(contactId)
-                        if (updated != null && updated.counterIn > currentContact.counterIn) {
-                            currentContact = updated
-                            hasMore = true
-                            break
-                        }
-                    } else {
-                        harvestUndecryptableItem(slot.target, item)
+                val success = processIncomingItem(contactId, slot, item, isSelf)
+                if (success) {
+                    val updated = contactDao.getContactById(contactId)
+                    if (updated != null && updated.counterIn > currentContact.counterIn) {
+                        currentContact = updated
+                        hasMore = true
+                        break
                     }
+                } else {
+                    harvestUndecryptableItem(slot.target, item)
                 }
             }
-
-            drainOutboxInternal(contactId, force = true)
         }
+
+        drainOutboxInternal(contactId, force = true)
     }
 
     /**
@@ -1831,6 +1853,16 @@ class ChatRepository(
                         bitmap = bitmap.toByteArray()
                     )
                     preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                    if (!isSelf) {
+                        pendingAckQueue.enqueue(
+                            org.pqchat.dht.traffic.PendingAck(
+                                contactId = contactId,
+                                messageId = "${slot.counter}",
+                                ratchetKey = slot.msgKey,
+                                seqNum = slot.counter
+                            )
+                        )
+                    }
                     true
                 }
                 else -> false
@@ -2128,6 +2160,79 @@ class ChatRepository(
         return@withContext anyCompleted
     }
 
+    data class PendingGroupControlRecord(
+        val taskId: Long,
+        val groupId: String,
+        val contactId: String,
+        val controlSubType: Byte,
+        val groupEpoch: Long,
+        val targetAck: ByteArray,
+        val ackRatchetKey: ByteArray,
+        val seqNum: Int,
+        val slotTarget: ByteArray,
+        val slotEdSeed: ByteArray,
+        val payload: ByteArray,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
+    private val pendingGroupControls = ConcurrentHashMap<Long, PendingGroupControlRecord>()
+    private val nextControlTaskId = java.util.concurrent.atomic.AtomicLong(-1000L)
+
+    fun getPendingGroupControls(): List<PendingGroupControlRecord> = pendingGroupControls.values.toList()
+
+    fun getPendingGroupControlCount(): Int = pendingGroupControls.size
+
+    fun clearPendingGroupControls() {
+        pendingGroupControls.clear()
+    }
+
+    suspend fun checkPendingGroupControlAcks(contactId: String? = null): Int = withContext(Dispatchers.IO) {
+        val targets = if (contactId != null) {
+            pendingGroupControls.values.filter { it.contactId == contactId }
+        } else {
+            pendingGroupControls.values.toList()
+        }
+        if (targets.isEmpty()) return@withContext 0
+
+        var acksFound = 0
+        for (record in targets) {
+            val isSelf = record.contactId == SELF_CONTACT_ID
+            val ackItem = dhtLeafNode.getMutable(record.targetAck, skipLocalStore = isSelf) ?: continue
+            val isValid = org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(
+                ratchetKey = record.ackRatchetKey,
+                frame = ackItem.v,
+                expectedMessageId = "${record.seqNum}",
+                expectedSeqNum = record.seqNum
+            )
+            if (isValid) {
+                org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(record.taskId)
+                pendingGroupControls.remove(record.taskId)
+                onRepublishTaskUpdated?.invoke()
+
+                researchTelemetry?.recordDeliveryAck(record.slotTarget)
+
+                try {
+                    val tombOk = dhtLeafNode.putMutable(
+                        target = record.slotTarget,
+                        v = BinaryFrameCodec.createTombstonePayload(),
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
+                        salt = null,
+                        sk = record.slotEdSeed,
+                        skipLocalStore = isSelf
+                    )
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
+                        target = record.slotTarget,
+                        payloadBytes = 900,
+                        success = tombOk
+                    )
+                } catch (_: Exception) {}
+                acksFound++
+            }
+        }
+        acksFound
+    }
+
     /**
      * Checks Target_ACK ephemeral slots for messages in PENDING_DELIVERY (or SENT_DHT) status.
      * When a valid Cover-Traffic ACK is detected:
@@ -2141,9 +2246,10 @@ class ChatRepository(
         } else {
             messageDao.getAllPendingDeliveryMessages()
         }
-        if (pending.isEmpty()) return@withContext 0
+        val controlAcks = checkPendingGroupControlAcks(contactId)
+        if (pending.isEmpty()) return@withContext controlAcks
 
-        var acksFound = 0
+        var acksFound = controlAcks
         for (msg in pending) {
             val targetAck = msg.ackTarget ?: continue
             val ratchetKey = msg.ackRatchetKey?.raw ?: continue
@@ -2966,8 +3072,14 @@ class ChatRepository(
             groupMemberDao?.insertOrUpdateAll(memberEntities)
         }
 
-        // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact
-        for (contactId in invitedContactIds) {
+        // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact with random permutation and interleaved queuing
+        val shuffledContactIds = if (invitedContactIds.size > 1) {
+            invitedContactIds.shuffled(CryptoUtils.secureRandom)
+        } else {
+            invitedContactIds
+        }
+        val inviteFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
+        for (contactId in shuffledContactIds) {
             try {
                 sendGroupControlInvite(
                     contactId = contactId,
@@ -2977,9 +3089,13 @@ class ChatRepository(
                     myChainKeyOut = myChainKeyOut,
                     currentCounter = 0L,
                     groupName = groupName,
-                    membersSummary = membersSummary
+                    membersSummary = membersSummary,
+                    outboundCollector = if (isStrictPoissonShaping()) inviteFrames else null
                 )
             } catch (_: Exception) {}
+        }
+        if (inviteFrames.isNotEmpty()) {
+            outboundPoissonQueue.enqueueInterleaved(inviteFrames)
         }
 
         group
@@ -2993,7 +3109,8 @@ class ChatRepository(
         myChainKeyOut: ByteArray,
         currentCounter: Long,
         groupName: String,
-        membersSummary: List<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>
+        membersSummary: List<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>,
+        outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
     ): Boolean {
         return getContactMutex(contactId).withLock {
             val contact = contactDao.getContactById(contactId) ?: return@withLock false
@@ -3021,29 +3138,61 @@ class ChatRepository(
             )
 
             val isSelf = contactId == SELF_CONTACT_ID
+            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+            val controlTaskId = nextControlTaskId.decrementAndGet()
+
+            if (!isSelf) {
+                val republishTask = org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                    messageId = controlTaskId,
+                    contactId = contactId,
+                    target = slot.target,
+                    payload = frame,
+                    edPrivateKeySeed = slot.edPrivateKeySeed,
+                    initialSentTimestamp = System.currentTimeMillis()
+                )
+                org.pqchat.dht.service.DhtWorker.registerRepublishTask(republishTask)
+                pendingGroupControls[controlTaskId] = PendingGroupControlRecord(
+                    taskId = controlTaskId,
+                    groupId = bytesToUuidString(groupIdBytes),
+                    contactId = contactId,
+                    controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+                    groupEpoch = groupEpoch,
+                    targetAck = targetAck,
+                    ackRatchetKey = slot.msgKey,
+                    seqNum = contact.counterOut,
+                    slotTarget = slot.target,
+                    slotEdSeed = slot.edPrivateKeySeed,
+                    payload = frame
+                )
+                onRepublishTaskUpdated?.invoke()
+            }
+
             if (isStrictPoissonShaping()) {
                 contactDao.updateOutgoingState(
                     id = contactId,
                     counterOut = contact.counterOut + 1,
                     chainKeyOut = slot.nextChainKey
                 )
-                outboundPoissonQueue.enqueue(
-                    org.pqchat.dht.traffic.OutboundPoissonFrame(
-                        target = slot.target,
-                        payload = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
-                        seqNum = contact.counterOut,
-                        contactId = contactId,
-                        onSent = { success ->
-                            if (success) {
-                                decoyTargetPool.registerPopulatedTarget(slot.target)
-                            }
+                val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = slot.target,
+                    payload = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf,
+                    seqNum = contact.counterOut,
+                    contactId = contactId,
+                    onSent = { success ->
+                        if (success) {
+                            decoyTargetPool.registerPopulatedTarget(slot.target)
                         }
-                    )
+                    }
                 )
+                if (outboundCollector != null) {
+                    outboundCollector.add(outboundFrame)
+                } else {
+                    outboundPoissonQueue.enqueue(outboundFrame)
+                }
                 return@withLock true
             }
 
@@ -3076,11 +3225,37 @@ class ChatRepository(
         myMemberIdBytes: ByteArray,
         myChainKeyOut: ByteArray,
         currentCounter: Long,
-        groupName: String
+        groupName: String,
+        outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
     ): Boolean {
         return getContactMutex(contactId).withLock {
-            val contact = contactDao.getContactById(contactId) ?: return@withLock false
-            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+            sendGroupControlRekeyOrInviteInternal(
+                contactId,
+                controlSubType,
+                groupIdBytes,
+                groupEpoch,
+                myMemberIdBytes,
+                myChainKeyOut,
+                currentCounter,
+                groupName,
+                outboundCollector
+            )
+        }
+    }
+
+    private suspend fun sendGroupControlRekeyOrInviteInternal(
+        contactId: String,
+        controlSubType: Byte,
+        groupIdBytes: ByteArray,
+        groupEpoch: Long,
+        myMemberIdBytes: ByteArray,
+        myChainKeyOut: ByteArray,
+        currentCounter: Long,
+        groupName: String,
+        outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
+    ): Boolean {
+        val contact = contactDao.getContactById(contactId) ?: return false
+        val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
             val plaintext = when (controlSubType) {
                 BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> BinaryFrameCodec.encodeGroupRekey(
@@ -3126,30 +3301,62 @@ class ChatRepository(
             )
 
             val isSelf = contactId == SELF_CONTACT_ID
+            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+            val controlTaskId = nextControlTaskId.decrementAndGet()
+
+            if (!isSelf && controlSubType != BinaryFrameCodec.GROUP_SUBTYPE_LEAVE) {
+                val republishTask = org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                    messageId = controlTaskId,
+                    contactId = contactId,
+                    target = slot.target,
+                    payload = frame,
+                    edPrivateKeySeed = slot.edPrivateKeySeed,
+                    initialSentTimestamp = System.currentTimeMillis()
+                )
+                org.pqchat.dht.service.DhtWorker.registerRepublishTask(republishTask)
+                pendingGroupControls[controlTaskId] = PendingGroupControlRecord(
+                    taskId = controlTaskId,
+                    groupId = bytesToUuidString(groupIdBytes),
+                    contactId = contactId,
+                    controlSubType = controlSubType,
+                    groupEpoch = groupEpoch,
+                    targetAck = targetAck,
+                    ackRatchetKey = slot.msgKey,
+                    seqNum = contact.counterOut,
+                    slotTarget = slot.target,
+                    slotEdSeed = slot.edPrivateKeySeed,
+                    payload = frame
+                )
+                onRepublishTaskUpdated?.invoke()
+            }
+
             if (isStrictPoissonShaping()) {
                 contactDao.updateOutgoingState(
                     id = contactId,
                     counterOut = contact.counterOut + 1,
                     chainKeyOut = slot.nextChainKey
                 )
-                outboundPoissonQueue.enqueue(
-                    org.pqchat.dht.traffic.OutboundPoissonFrame(
-                        target = slot.target,
-                        payload = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
-                        seqNum = contact.counterOut,
-                        contactId = contactId,
-                        onSent = { success ->
-                            if (success) {
-                                decoyTargetPool.registerPopulatedTarget(slot.target)
-                            }
+                val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = slot.target,
+                    payload = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf,
+                    seqNum = contact.counterOut,
+                    contactId = contactId,
+                    onSent = { success ->
+                        if (success) {
+                            decoyTargetPool.registerPopulatedTarget(slot.target)
                         }
-                    )
+                    }
                 )
-                return@withLock true
+                if (outboundCollector != null) {
+                    outboundCollector.add(outboundFrame)
+                } else {
+                    outboundPoissonQueue.enqueue(outboundFrame)
+                }
+                return true
             }
 
             val success = dhtLeafNode.putMutable(
@@ -3169,8 +3376,33 @@ class ChatRepository(
                 )
                 decoyTargetPool.registerPopulatedTarget(slot.target)
             }
-            success
+            return success
+    }
+
+    suspend fun retransmitGroupRekeyToOfflineMember(groupId: String, memberContactId: String): Boolean {
+        val group = groupDao?.getGroupById(groupId) ?: return false
+        val groupIdBytes = uuidStringToBytes(groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+
+        // Cancel previous unconfirmed rekey tasks for this member in this group
+        val previousTasks = pendingGroupControls.values.filter {
+            it.groupId == groupId && it.contactId == memberContactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_REKEY
         }
+        for (task in previousTasks) {
+            org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(task.taskId)
+            pendingGroupControls.remove(task.taskId)
+        }
+
+        return sendGroupControlRekeyOrInvite(
+            contactId = memberContactId,
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+            groupIdBytes = groupIdBytes,
+            groupEpoch = group.groupEpoch,
+            myMemberIdBytes = myMemberIdBytes,
+            myChainKeyOut = group.rawMyChainKeyOut,
+            currentCounter = group.myCounterOut.toLong(),
+            groupName = group.groupName
+        )
     }
 
     suspend fun processIncomingGroupControl(
@@ -3249,7 +3481,7 @@ class ChatRepository(
                     // Respond back with our own Sender Key so inviter can receive our group messages
                     val myMemberIdBytes = uuidStringToBytes(myMemberId)
                     val groupIdBytes = control.groupId
-                    sendGroupControlRekeyOrInvite(
+                    sendGroupControlRekeyOrInviteInternal(
                         contactId = contactId,
                         controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
                         groupIdBytes = groupIdBytes,
@@ -3348,14 +3580,21 @@ class ChatRepository(
                 it.memberId != currentGroup.myMemberId && it.isActive
             } ?: emptyList()
 
+            // Eliminate Group Fan-Out Burst: randomize recipient order via secure permutation
+            val shuffledMembers = if (activeMembers.size > 1) {
+                activeMembers.shuffled(CryptoUtils.secureRandom)
+            } else {
+                activeMembers
+            }
+
             // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
             // Zamiast jednego target = RatchetChain.deriveSlot(myChainKeyOut, counterOut) używanego dla wszystkich członków,
             // wyprowadzamy unikalny slot dla każdego członka:
             // memberTarget = HKDF-Expand(myChainKeyOut, "group_target:" || groupId || counterOut || memberId, 32)
             // a następnie RatchetChain.deriveSlot z odpowiednim msgKey/edSeed per członek.
             // Wykonujemy osobne putMutable pod każdym unikalnym targetem (N targetów dla N członków).
-            val targetSlots = if (activeMembers.isNotEmpty()) {
-                activeMembers.map { member ->
+            val targetSlots = if (shuffledMembers.isNotEmpty()) {
+                shuffledMembers.map { member ->
                     val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
                     RatchetChain.deriveGroupRecipientSlot(
                         chainKey = currentGroup.rawMyChainKeyOut,
@@ -3396,7 +3635,7 @@ class ChatRepository(
             val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
 
             if (isStrictPoissonShaping()) {
-                for (slot in targetSlots) {
+                val outboundFrames = targetSlots.map { slot ->
                     val frame = BinaryFrameCodec.packGroupAeadFrame(
                         key = slot.msgKey,
                         plaintext = plaintext,
@@ -3404,36 +3643,39 @@ class ChatRepository(
                         groupId = groupIdBytes,
                         senderMemberId = myMemberIdBytes
                     )
-                    outboundPoissonQueue.enqueue(
-                        org.pqchat.dht.traffic.OutboundPoissonFrame(
-                            target = slot.target,
-                            payload = frame,
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                            salt = null,
-                            sk = slot.edPrivateKeySeed,
-                            skipLocalStore = false,
-                            seqNum = currentGroup.myCounterOut,
-                            messageId = msgId,
-                            contactId = groupId,
-                            onSent = { success ->
-                                if (success) {
-                                    anySuccess.set(true)
-                                    decoyTargetPool.registerPopulatedTarget(slot.target)
-                                }
-                                if (framesRemaining.decrementAndGet() == 0) {
-                                    if (anySuccess.get()) {
-                                        messageDao.updateStatus(msgId, "SENT_DHT")
-                                    }
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = false,
+                        seqNum = currentGroup.myCounterOut,
+                        messageId = msgId,
+                        contactId = groupId,
+                        onSent = { success ->
+                            if (success) {
+                                anySuccess.set(true)
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                            if (framesRemaining.decrementAndGet() == 0) {
+                                if (anySuccess.get()) {
+                                    messageDao.updateStatus(msgId, "SENT_DHT")
                                 }
                             }
-                        )
+                        }
                     )
                 }
+                outboundPoissonQueue.enqueueInterleaved(outboundFrames)
                 return@withLock true
             }
 
             var overallSuccess = false
-            for (slot in targetSlots) {
+            for ((idx, slot) in targetSlots.withIndex()) {
+                if (idx > 0) {
+                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    kotlinx.coroutines.delay(jitterMs)
+                }
                 val frame = BinaryFrameCodec.packGroupAeadFrame(
                     key = slot.msgKey,
                     plaintext = plaintext,
@@ -3487,8 +3729,14 @@ class ChatRepository(
         val groupIdBytes = uuidStringToBytes(group.groupId)
         val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
 
-        for (member in members) {
-            if (!member.isActive || member.memberId == group.myMemberId) continue
+        val eligibleMembers = members.filter {
+            it.isActive && it.memberId != group.myMemberId && it.contactId != null
+        }.let {
+            if (it.size > 1) it.shuffled(CryptoUtils.secureRandom) else it
+        }
+
+        val rekeyFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
+        for (member in eligibleMembers) {
             val contactId = member.contactId ?: continue
             try {
                 sendGroupControlRekeyOrInvite(
@@ -3499,9 +3747,13 @@ class ChatRepository(
                     myMemberIdBytes = myMemberIdBytes,
                     myChainKeyOut = newChainKeyOut,
                     currentCounter = 0L,
-                    groupName = group.groupName
+                    groupName = group.groupName,
+                    outboundCollector = if (isStrictPoissonShaping()) rekeyFrames else null
                 )
             } catch (_: Exception) {}
+        }
+        if (rekeyFrames.isNotEmpty()) {
+            outboundPoissonQueue.enqueueInterleaved(rekeyFrames)
         }
     }
 
@@ -3514,8 +3766,14 @@ class ChatRepository(
             val groupIdBytes = uuidStringToBytes(groupId)
             val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
 
-            for (member in members) {
-                if (!member.isActive || member.memberId == group.myMemberId) continue
+            val eligibleMembers = members.filter {
+                it.isActive && it.memberId != group.myMemberId && it.contactId != null
+            }.let {
+                if (it.size > 1) it.shuffled(CryptoUtils.secureRandom) else it
+            }
+
+            val leaveFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
+            for (member in eligibleMembers) {
                 val contactId = member.contactId ?: continue
                 try {
                     sendGroupControlRekeyOrInvite(
@@ -3526,9 +3784,13 @@ class ChatRepository(
                         myMemberIdBytes = myMemberIdBytes,
                         myChainKeyOut = group.rawMyChainKeyOut,
                         currentCounter = group.myCounterOut.toLong(),
-                        groupName = group.groupName
+                        groupName = group.groupName,
+                        outboundCollector = if (isStrictPoissonShaping()) leaveFrames else null
                     )
                 } catch (_: Exception) {}
+            }
+            if (leaveFrames.isNotEmpty()) {
+                outboundPoissonQueue.enqueueInterleaved(leaveFrames)
             }
             true
         }

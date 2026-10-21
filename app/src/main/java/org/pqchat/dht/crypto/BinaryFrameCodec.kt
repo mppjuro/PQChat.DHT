@@ -323,8 +323,25 @@ object BinaryFrameCodec {
         require(senderMemberId.size == 16) { "senderMemberId must be 16 bytes" }
         require(senderGroupChainKey.size == 64) { "senderGroupChainKey must be 64 bytes" }
 
-        val nameBytes = groupName.toByteArray(Charsets.UTF_8).let {
-            if (it.size > 64) it.copyOf(64) else it
+        val nameBytes = truncateUtf8ToMaxBytes(groupName, 64)
+
+        // Pre-calculate exact member count that fits into the remaining buffer.
+        // Fixed payload before member list:
+        // controlSubType (1) + groupId (16) + groupEpoch (4) + senderMemberId (16) +
+        // senderGroupChainKey (64) + currentCounter (4) + nameBytesLen (2) + nameBytes (N) +
+        // memberCount (2) = 109 + N bytes.
+        val fixedHeaderSize = 1 + 16 + 4 + 16 + 64 + 4 + 2 + nameBytes.size + 2
+        var remainingBytes = INNER_PAYLOAD_SIZE - fixedHeaderSize
+
+        val eligibleMembers = mutableListOf<Pair<ByteArray, ByteArray>>()
+        for (m in members) {
+            if (eligibleMembers.size >= 64) break
+            val mNameBytes = truncateUtf8ToMaxBytes(m.memberName, 32)
+            val required = 16 + 1 + mNameBytes.size
+            if (remainingBytes < required) break
+            val mId = if (m.memberId.size == 16) m.memberId else m.memberId.copyOf(16)
+            eligibleMembers.add(Pair(mId, mNameBytes))
+            remainingBytes -= required
         }
 
         val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
@@ -337,14 +354,10 @@ object BinaryFrameCodec {
         buffer.putShort(nameBytes.size.toShort())
         buffer.put(nameBytes)
 
-        buffer.putShort(members.size.toShort())
-        for (m in members) {
-            val mNameBytes = m.memberName.toByteArray(Charsets.UTF_8).let {
-                if (it.size > 32) it.copyOf(32) else it
-            }
-            val required = 16 + 1 + mNameBytes.size
-            if (buffer.remaining() < required) break
-            buffer.put(m.memberId.let { if (it.size == 16) it else it.copyOf(16) })
+        // Write the EXACT number of members that actually fit
+        buffer.putShort(eligibleMembers.size.toShort())
+        for ((mId, mNameBytes) in eligibleMembers) {
+            buffer.put(mId)
             buffer.put(mNameBytes.size.toByte())
             buffer.put(mNameBytes)
         }
@@ -355,6 +368,35 @@ object BinaryFrameCodec {
         }
 
         return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
+    /**
+     * Safely truncates a UTF-8 string to at most [maxBytes] without splitting
+     * multi-byte characters or surrogate pairs (Unicode code points).
+     */
+    fun truncateUtf8ToMaxBytes(input: String, maxBytes: Int): ByteArray {
+        if (maxBytes <= 0 || input.isEmpty()) return ByteArray(0)
+        val raw = input.toByteArray(Charsets.UTF_8)
+        if (raw.size <= maxBytes) return raw
+
+        var byteCount = 0
+        var lastValidIndex = 0
+        var offset = 0
+        while (offset < input.length) {
+            val codePoint = input.codePointAt(offset)
+            val charCount = Character.charCount(codePoint)
+            val cpLen = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+            if (byteCount + cpLen > maxBytes) break
+            byteCount += cpLen
+            offset += charCount
+            lastValidIndex = offset
+        }
+        return input.substring(0, lastValidIndex).toByteArray(Charsets.UTF_8)
     }
 
     fun encodeGroupRekey(
@@ -554,8 +596,8 @@ object BinaryFrameCodec {
                         val mId = ByteArray(16)
                         buffer.get(mId)
                         val mNameLen = buffer.get().toInt() and 0xFF
-                        val actualLen = minOf(mNameLen, buffer.remaining())
-                        val mNameBytes = ByteArray(actualLen)
+                        if (mNameLen > 32 || buffer.remaining() < mNameLen) break
+                        val mNameBytes = ByteArray(mNameLen)
                         buffer.get(mNameBytes)
                         memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
                     }

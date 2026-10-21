@@ -350,4 +350,29 @@ object RatchetChain {
         groupId: String,
         memberId: String
     ): ByteArray = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId).target
+
+    /**
+     * Computes group slots in a lookahead window [fromCounter, fromCounter + windowSize] for a given recipient.
+     * Useful for checking out-of-order slots on receiver side in group chats.
+     */
+    fun computeGroupLookaheadSlots(
+        startChainKey: ByteArray,
+        startCounter: Int,
+        groupId: ByteArray,
+        recipientMemberId: ByteArray,
+        windowSize: Int = 4
+    ): List<SlotParameters> {
+        val slots = ArrayList<SlotParameters>(windowSize + 1)
+        var currentChain = startChainKey
+        var currentCounter = startCounter
+
+        for (k in 0..windowSize) {
+            val slot = deriveGroupRecipientSlot(currentChain, currentCounter, groupId, recipientMemberId)
+            slots.add(slot)
+            currentChain = slot.nextChainKey
+            currentCounter++
+        }
+
+        return slots
+    }
 }

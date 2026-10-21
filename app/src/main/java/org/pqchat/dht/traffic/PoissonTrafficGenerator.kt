@@ -97,10 +97,11 @@ class PoissonTrafficGenerator(
                 sk = outboundFrame.sk,
                 skipLocalStore = outboundFrame.skipLocalStore
             )
+            val isDummy = outboundFrame.isDummyCover
             val rttMs = System.currentTimeMillis() - tStart
             try {
                 researchTelemetryProvider?.invoke()?.recordPacketEvent(
-                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    role = if (isDummy) org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT else org.pqchat.dht.research.PacketRole.FIRST_SEND,
                     target = outboundFrame.target,
                     seqNum = outboundFrame.seqNum.toLong(),
                     payloadBytes = outboundFrame.payload.size,
@@ -122,7 +123,7 @@ class PoissonTrafficGenerator(
                 intervalSeconds = delayMs / 1000.0,
                 isAck = false,
                 isBlindRepublish = false,
-                isFirstSend = true,
+                isFirstSend = !isDummy,
                 payloadSize = outboundFrame.payload.size
             )
         } else {

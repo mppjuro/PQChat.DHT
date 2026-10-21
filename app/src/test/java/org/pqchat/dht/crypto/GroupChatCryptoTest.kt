@@ -219,4 +219,161 @@ class GroupChatCryptoTest {
             // Expected
         }
     }
+
+    @Test
+    fun testTruncateUtf8ToMaxBytes_CodePointBoundaries() {
+        // 1. ASCII within limit
+        val ascii = "Hello, World!"
+        val asciiTrunc = BinaryFrameCodec.truncateUtf8ToMaxBytes(ascii, 20)
+        assertEquals(ascii, String(asciiTrunc, Charsets.UTF_8))
+
+        // 2. Polish multi-byte characters: "Zażółć gęślą jaźń"
+        // 'Z' (1), 'a' (1), 'ż' (2), 'ó' (2) = 6 bytes.
+        // 'ł' is 2 bytes -> total 8 bytes.
+        // If maxBytes = 7, it must truncate at 6 bytes ("Zażó") rather than splitting 'ł'
+        val polish = "Zażółć gęślą jaźń"
+        val polishTrunc7 = BinaryFrameCodec.truncateUtf8ToMaxBytes(polish, 7)
+        assertEquals(6, polishTrunc7.size)
+        assertEquals("Zażó", String(polishTrunc7, Charsets.UTF_8))
+
+        // 3. 4-byte Emojis (Surrogate pairs in Java/Kotlin CharSequence)
+        // 🚀 (U+1F680) is 4 bytes in UTF-8
+        // 🛡️ (U+1F6E1 + U+FE0F) is 4 + 3 = 7 bytes
+        val emojis = "🚀🛡️🇵🇱"
+        // Rocket alone is 4 bytes. If maxBytes = 5, cannot fit shield (7 bytes), so only rocket fits (4 bytes)
+        val emojiTrunc5 = BinaryFrameCodec.truncateUtf8ToMaxBytes(emojis, 5)
+        assertEquals(4, emojiTrunc5.size)
+        assertEquals("🚀", String(emojiTrunc5, Charsets.UTF_8))
+
+        // Empty string and 0 limit
+        assertEquals(0, BinaryFrameCodec.truncateUtf8ToMaxBytes("", 10).size)
+        assertEquals(0, BinaryFrameCodec.truncateUtf8ToMaxBytes("Test", 0).size)
+    }
+
+    @Test
+    fun testGroupControlWithEmojisAndUnicodeNamesRoundtrip() {
+        val groupId = uuidToBytes(UUID.randomUUID())
+        val senderMemberId = uuidToBytes(UUID.randomUUID())
+        val bobId = uuidToBytes(UUID.randomUUID())
+        val charlieId = uuidToBytes(UUID.randomUUID())
+        val chainKey = CryptoUtils.secureRandomBytes(64)
+
+        val unicodeGroupName = "🛡️ Post-Quantum Squad 🇵🇱"
+        val memberSummaries = listOf(
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(senderMemberId, "Alicja 🚀"),
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(bobId, "Bober 🦆"),
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(charlieId, "Grzegorz Brzęczyszczykiewicz")
+        )
+
+        val plaintext = BinaryFrameCodec.encodeGroupControl(
+            seqNum = 1,
+            ackNum = 0,
+            timestampUTC = System.currentTimeMillis(),
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+            groupId = groupId,
+            groupEpoch = 1L,
+            senderMemberId = senderMemberId,
+            senderGroupChainKey = chainKey,
+            currentCounter = 0L,
+            groupName = unicodeGroupName,
+            members = memberSummaries
+        )
+
+        val msgKey = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext, target, "AtoB")
+        val decoded = BinaryFrameCodec.unpackAeadFrame(msgKey, frame, target, "AtoB").payload as BinaryFrameCodec.DecodedPayload.GroupControl
+
+        assertEquals(unicodeGroupName, decoded.groupName)
+        assertEquals(3, decoded.members.size)
+        assertEquals("Alicja 🚀", decoded.members[0].memberName)
+        assertEquals("Bober 🦆", decoded.members[1].memberName)
+        assertEquals("Grzegorz Brzęczyszczykiewicz", decoded.members[2].memberName)
+    }
+
+    @Test
+    fun testGroupControlMemberCountPrecalculationAndPaddingNoiseSafety() {
+        val groupId = uuidToBytes(UUID.randomUUID())
+        val senderMemberId = uuidToBytes(UUID.randomUUID())
+        val chainKey = CryptoUtils.secureRandomBytes(64)
+
+        // Generate 64 members with short names to test maximum member capability
+        val memberSummaries = (1..64).map { i ->
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(
+                memberId = uuidToBytes(UUID.randomUUID()),
+                memberName = "M$i"
+            )
+        }
+
+        val plaintext = BinaryFrameCodec.encodeGroupControl(
+            seqNum = 5,
+            ackNum = 2,
+            timestampUTC = System.currentTimeMillis(),
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+            groupId = groupId,
+            groupEpoch = 1L,
+            senderMemberId = senderMemberId,
+            senderGroupChainKey = chainKey,
+            currentCounter = 0L,
+            groupName = "Max Member Group",
+            members = memberSummaries
+        )
+
+        val msgKey = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext, target, "AtoB")
+        val decoded = BinaryFrameCodec.unpackAeadFrame(msgKey, frame, target, "AtoB").payload as BinaryFrameCodec.DecodedPayload.GroupControl
+
+        // Fixed header: 109 + 16 ("Max Member Group") = 125 B.
+        // Remaining buffer: 859 - 125 = 734 B.
+        // Each member entry: 16 (UUID) + 1 (Len) + 2..3 (Name) = 19..20 B.
+        // Total fitting members: min(64, floor(734 / 20)) = ~36-38 members.
+        // CRITICAL: decoded.members.size MUST equal the exact number of eligible members encoded,
+        // and must NOT treat the remaining CSPRNG padding as phantom members!
+        assertTrue("Eligible members must fit within 859 B buffer", decoded.members.size in 35..64)
+        for (i in 0 until decoded.members.size) {
+            assertEquals(memberSummaries[i].memberName, decoded.members[i].memberName)
+            assertArrayEquals(memberSummaries[i].memberId, decoded.members[i].memberId)
+        }
+    }
+
+    @Test
+    fun testGroupControlExcessMembersBufferBudgetProtection() {
+        val groupId = uuidToBytes(UUID.randomUUID())
+        val senderMemberId = uuidToBytes(UUID.randomUUID())
+        val chainKey = CryptoUtils.secureRandomBytes(64)
+
+        // Pass 100 members with long names (32 bytes each) to heavily exceed the 859 B buffer
+        val oversizedMemberList = (1..100).map { i ->
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(
+                memberId = uuidToBytes(UUID.randomUUID()),
+                memberName = "Member_With_Long_Name_Number_$i"
+            )
+        }
+
+        val plaintext = BinaryFrameCodec.encodeGroupControl(
+            seqNum = 1,
+            ackNum = 0,
+            timestampUTC = System.currentTimeMillis(),
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+            groupId = groupId,
+            groupEpoch = 1L,
+            senderMemberId = senderMemberId,
+            senderGroupChainKey = chainKey,
+            currentCounter = 0L,
+            groupName = "Oversized Member List Group",
+            members = oversizedMemberList
+        )
+
+        val msgKey = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext, target, "AtoB")
+
+        // Unpack must not throw BufferUnderflowException and must match exact member count
+        val decoded = BinaryFrameCodec.unpackAeadFrame(msgKey, frame, target, "AtoB").payload as BinaryFrameCodec.DecodedPayload.GroupControl
+        assertTrue("Decoded member count must be > 0 and <= oversizedMemberList.size", decoded.members.isNotEmpty() && decoded.members.size < 100)
+        for (i in 0 until decoded.members.size) {
+            assertArrayEquals(oversizedMemberList[i].memberId, decoded.members[i].memberId)
+        }
+    }
 }

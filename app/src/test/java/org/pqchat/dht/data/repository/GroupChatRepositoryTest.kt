@@ -4,11 +4,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.bouncycastle.jce.provider.BouncyCastleProvider
-import org.junit.After
 import org.junit.Assert.*
-import org.junit.Before
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
@@ -23,25 +24,26 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.sqrt
 
+@Tag("slow")
 class GroupChatRepositoryTest {
 
     companion object {
         @JvmStatic
-        @BeforeClass
+        @BeforeAll
         fun setup() {
             Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
             Security.insertProviderAt(BouncyCastleProvider(), 1)
         }
     }
 
-    @Before
+    @BeforeEach
     fun setUp() {
         PollingWorker.clearRepublishTasks()
         BlindRepublishPool.defaultInstance.clear()
         DecoyTargetPool.defaultInstance.clear()
     }
 
-    @After
+    @AfterEach
     fun tearDown() {
         PollingWorker.clearRepublishTasks()
         BlindRepublishPool.defaultInstance.clear()
@@ -202,7 +204,7 @@ class GroupChatRepositoryTest {
         val fakeChunkDao = FakeChunkDao()
         val fakeGroupDao = FakeGroupDao()
         val fakeGroupMemberDao = FakeGroupMemberDao()
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
 
         val repository = ChatRepository(
             contactDao = fakeContactDao,
@@ -255,7 +257,7 @@ class GroupChatRepositoryTest {
 
     @Test
     fun testSendAndReceiveGroupMessageWithoutTombstone() = runBlocking {
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
 
         // 1. Setup Alice Repository (Sender)
         val aliceContactDao = FakeContactDao()
@@ -377,7 +379,7 @@ class GroupChatRepositoryTest {
     @Test
     fun testGroupEachMemberQueriesDistinctTarget() = runBlocking {
         // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
 
         val aliceContactDao = FakeContactDao()
         val aliceMessageDao = FakeMessageDao()
@@ -605,7 +607,7 @@ class GroupChatRepositoryTest {
         val fakeChunkDao = FakeChunkDao()
         val fakeGroupDao = FakeGroupDao()
         val fakeGroupMemberDao = FakeGroupMemberDao()
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
 
         val repository = ChatRepository(
             contactDao = fakeContactDao,
@@ -647,7 +649,7 @@ class GroupChatRepositoryTest {
 
     @Test
     fun testGroupIndividualRecipientSlotsAndTombstoneIndependence() = runBlocking {
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
 
         // 1. Setup Alice Repository (Sender)
         val aliceContactDao = FakeContactDao()
@@ -847,7 +849,7 @@ class GroupChatRepositoryTest {
 
     @Test
     fun testGroupAutoRekeyEvery50Messages() = runBlocking {
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
         val aliceContactDao = FakeContactDao()
         val aliceMessageDao = FakeMessageDao()
         val aliceChunkDao = FakeChunkDao()
@@ -929,7 +931,7 @@ class GroupChatRepositoryTest {
 
     @Test
     fun testGroupMemberLeaveForcesAutoRekeyAndPCS() = runBlocking {
-        val dhtNode = DhtLeafNode()
+        val dhtNode = FakeDht()
         val bobContactDao = FakeContactDao()
         val bobMessageDao = FakeMessageDao()
         val bobChunkDao = FakeChunkDao()
@@ -1193,5 +1195,348 @@ class GroupChatRepositoryTest {
             if (diffMinus > maxDiff) maxDiff = diffMinus
         }
         return maxDiff
+    }
+
+    @Test
+    fun testGroupFanOutBurstInterleavingAndPermutation() {
+        val queue = OutboundPoissonQueue()
+
+        // 1. Pre-populate queue with 4 background frames (e.g. decoy/republish/dummy)
+        val bgFrames = (1..4).map { i ->
+            OutboundPoissonFrame(
+                target = CryptoUtils.secureRandomBytes(20),
+                payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES),
+                sk = CryptoUtils.secureRandomBytes(32),
+                seqNum = i
+            )
+        }
+        for (f in bgFrames) {
+            queue.enqueue(f)
+        }
+        assertEquals(4, queue.size)
+
+        // 2. Interleave 3 group message frames
+        val groupFrames = (1..3).map { i ->
+            OutboundPoissonFrame(
+                target = CryptoUtils.secureRandomBytes(20),
+                payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES),
+                sk = CryptoUtils.secureRandomBytes(32),
+                seqNum = 100 + i
+            )
+        }
+        queue.enqueueInterleaved(groupFrames)
+
+        // Total size must be 4 + 3 = 7 frames
+        assertEquals(7, queue.size)
+        val allEnqueued = queue.getAll()
+
+        // Check that group frames are interleaved, NOT all clustered at the end
+        val groupIndices = allEnqueued.mapIndexedNotNull { index, frame ->
+            if (frame.seqNum >= 100) index else null
+        }
+        assertEquals(3, groupIndices.size)
+
+        // The group frames should not all be contiguous at the end (indices 4, 5, 6)
+        val areAllAtEnd = groupIndices == listOf(4, 5, 6)
+        assertFalse("Group frames must be interleaved across existing queue items to eliminate bursts", areAllAtEnd)
+    }
+
+    @Test
+    fun testGroupControlCoverAckAndRepublishLifecycle() = runBlocking {
+        val dhtNode = FakeDht()
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceAckQueue = PendingAckQueue()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = aliceAckQueue,
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobAckQueue = PendingAckQueue()
+
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = bobAckQueue,
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        // Setup 1-on-1 channel between Alice and Bob
+        val aliceToBobKey = CryptoUtils.secureRandomBytes(64)
+        val bobToAliceKey = CryptoUtils.secureRandomBytes(64)
+
+        aliceContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "bob-contact-id",
+                name = "Bob",
+                chainKeyOut = aliceToBobKey,
+                counterOut = 0,
+                chainKeyIn = bobToAliceKey,
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+        bobContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "alice-contact-id",
+                name = "Alice",
+                chainKeyOut = bobToAliceKey,
+                counterOut = 0,
+                chainKeyIn = aliceToBobKey,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+
+        // 1. Alice creates group and invites Bob
+        val group = aliceRepo.createGroup("Cryptographers Club", listOf("bob-contact-id"))
+
+        // Verify Alice registered a republish task for Bob's invite frame
+        val republishTasks = PollingWorker.getRegisteredRepublishTasks()
+        val bobInviteTask = republishTasks.firstOrNull { it.contactId == "bob-contact-id" }
+        assertNotNull("Alice must register a RepublishTask for the unacknowledged invite", bobInviteTask)
+
+        val pendingControls = aliceRepo.getPendingGroupControls()
+        assertEquals(1, pendingControls.size)
+        val pendingControl = pendingControls[0]
+        assertEquals("bob-contact-id", pendingControl.contactId)
+        assertEquals(BinaryFrameCodec.GROUP_SUBTYPE_INVITE, pendingControl.controlSubType)
+
+        // 2. Bob polls his incoming 1-on-1 channel from Alice
+        val received = bobRepo.pollContactIncoming("alice-contact-id")
+        assertTrue("Bob must receive Alice's invite frame", received)
+
+        // Verify Bob queued a Cover-ACK for Alice's control frame
+        assertEquals("Bob must queue a Cover-ACK upon receiving TYPE_GROUP_CONTROL", 1, bobAckQueue.size)
+        val bobPendingAck = bobAckQueue.poll()
+        assertNotNull(bobPendingAck)
+
+        // 3. Bob emits the Cover-ACK packet to DHT
+        val ackFrame = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(bobPendingAck!!.ratchetKey, bobPendingAck.messageId, bobPendingAck.seqNum)
+        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(bobPendingAck.ratchetKey, bobPendingAck.messageId)
+        val ackEdSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(bobPendingAck.ratchetKey, bobPendingAck.messageId)
+        dhtNode.putMutable(targetAck, ackFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, ackEdSeed)
+
+        val ackDhtRecord = dhtNode.getMutable(targetAck)
+        assertNotNull("Bob's Cover-ACK must exist in DHT", ackDhtRecord)
+
+        // 4. Alice checks pending ACKs for Bob
+        aliceRepo.checkPendingAcks("bob-contact-id")
+
+        // 5. Verify Alice confirmed the control frame, removed the republish task, and tombstoned the ACK
+        val remainingControls = aliceRepo.getPendingGroupControls().filter { it.contactId == "bob-contact-id" }
+        assertTrue("Pending control record must now be removed upon confirmation", remainingControls.isEmpty())
+        val remainingTasks = PollingWorker.getRegisteredRepublishTasks()
+        assertNull("Republish task must be unregistered after Cover-ACK confirmation", remainingTasks.firstOrNull { it.messageId == bobInviteTask!!.messageId })
+
+        val transmissionDhtRecordAfter = dhtNode.getMutable(bobInviteTask!!.target)
+        assertNotNull(transmissionDhtRecordAfter)
+        assertEquals("Alice must have tombstoned the transmission slot", DhtClient.DEFAULT_MUTABLE_SEQ + 1, transmissionDhtRecordAfter!!.seq)
+    }
+
+    @Test
+    fun testOfflineMemberRekeyPacketLossAndRetransmissionCatchUp() = runBlocking {
+        val dhtNode = FakeDht()
+
+        // 1. Alice setup
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceAckQueue = PendingAckQueue()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = aliceAckQueue,
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        // 2. Charlie setup (will simulate being offline during rekey)
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieChunkDao = FakeChunkDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieAckQueue = PendingAckQueue()
+
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = charlieChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = charlieAckQueue,
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val charlieMemberId = UUID.randomUUID().toString()
+
+        val aliceToCharlieKey = CryptoUtils.secureRandomBytes(64)
+        val charlieToAliceKey = CryptoUtils.secureRandomBytes(64)
+        val initialAliceGroupKey = CryptoUtils.secureRandomBytes(64)
+
+        aliceContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "charlie-contact-id",
+                name = "Charlie",
+                chainKeyOut = aliceToCharlieKey,
+                counterOut = 0,
+                chainKeyIn = charlieToAliceKey,
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+        charlieContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "alice-contact-id",
+                name = "Alice",
+                chainKeyOut = charlieToAliceKey,
+                counterOut = 0,
+                chainKeyIn = aliceToCharlieKey,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+
+        // Both Alice and Charlie have the group in Epoch 1
+        aliceGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "Resilient Group",
+                myMemberId = aliceMemberId,
+                myChainKeyOut = initialAliceGroupKey,
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = charlieMemberId,
+                contactId = "charlie-contact-id",
+                memberName = "Charlie",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0,
+                isActive = true
+            )
+        )
+
+        charlieGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "Resilient Group",
+                myMemberId = charlieMemberId,
+                myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        charlieGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = initialAliceGroupKey,
+                counterIn = 0,
+                isActive = true
+            )
+        )
+
+        // 3. Alice rotates sender key to Epoch 2
+        aliceRepo.rotateGroupSenderKey(groupId)
+
+        val aliceGroupEpoch2 = aliceGroupDao.getGroupById(groupId)
+        assertEquals(2L, aliceGroupEpoch2!!.groupEpoch)
+
+        // Simulate Charlie was offline: the packet on DHT expired or was dropped
+        // Charlie's slot 0 on 1-on-1 channel was not consumed, or dropped:
+        val charlieSlot0 = RatchetChain.deriveSlot(aliceToCharlieKey, 0)
+        // Corrupt or remove slot 0 from DHT to simulate packet loss / TTL expiry while Charlie was offline
+        dhtNode.storage.remove(CryptoUtils.toHex(charlieSlot0.target))
+
+        // Charlie tries to poll while missing the rekey: nothing received
+        val charlieReceivedBeforeCatchup = charlieRepo.pollContactIncoming("alice-contact-id")
+        assertFalse("Charlie receives nothing because rekey packet was lost/expired", charlieReceivedBeforeCatchup)
+
+        // 4. Epoch Catch-up mechanism: Alice detects unconfirmed rekey and retransmits
+        val unconfirmedControls = aliceRepo.getPendingGroupControls().filter { it.contactId == "charlie-contact-id" }
+        assertEquals(1, unconfirmedControls.size)
+
+        // Alice retransmits rekey specifically to Charlie
+        val retransmitOk = aliceRepo.retransmitGroupRekeyToOfflineMember(groupId, "charlie-contact-id")
+        assertTrue("Retransmission to offline member must succeed", retransmitOk)
+
+        // 5. Charlie returns online and polls his incoming channel: successfully consumes retransmitted REKEY frame!
+        val charlieReceivedAfterRetransmit = charlieRepo.pollContactIncoming("alice-contact-id")
+        assertTrue("Charlie must successfully receive retransmitted REKEY frame", charlieReceivedAfterRetransmit)
+
+        // Verify Charlie's incoming chain for Alice has been updated to Alice's new Epoch 2 chain key!
+        val charlieAliceMember = charlieGroupMemberDao.getMember(groupId, aliceMemberId)
+        assertNotNull(charlieAliceMember)
+        assertArrayEquals(
+            "Charlie's incoming chain for Alice must match Alice's new Epoch 2 key",
+            aliceGroupEpoch2.rawMyChainKeyOut,
+            charlieAliceMember!!.rawChainKeyIn
+        )
+        assertEquals(0, charlieAliceMember.counterIn)
+
+        // Verify Charlie emitted Cover-ACK for the rekey
+        assertEquals(1, charlieAckQueue.size)
+        val charlieAck = charlieAckQueue.poll()!!
+
+        // Charlie puts ACK on DHT
+        val ackFrame = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(charlieAck.ratchetKey, charlieAck.messageId, charlieAck.seqNum)
+        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(charlieAck.ratchetKey, charlieAck.messageId)
+        val ackEdSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(charlieAck.ratchetKey, charlieAck.messageId)
+        dhtNode.putMutable(targetAck, ackFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, ackEdSeed)
+
+        // Alice checks ACKs: confirms Charlie's synchronization!
+        aliceRepo.checkPendingAcks("charlie-contact-id")
+        val confirmedControls = aliceRepo.getPendingGroupControls().filter { it.contactId == "charlie-contact-id" }
+        assertTrue("Alice must confirm Charlie's retransmission Cover-ACK (removed from pending)", confirmedControls.isEmpty())
+
+        // 6. Verification: Alice sends an Epoch 2 group message, and Charlie receives it!
+        val sentGroupMsgOk = aliceRepo.sendGroupMessage(groupId, "Welcome back online Charlie! Epoch 2 message.")
+        assertTrue("Alice sends group message in epoch 2", sentGroupMsgOk)
+
+        val charlieGotGroupMsg = charlieRepo.pollGroupIncoming(groupId)
+        assertTrue("Charlie must now successfully decrypt Alice's Epoch 2 group message", charlieGotGroupMsg)
+        assertEquals(1, charlieMessageDao.messages.size)
+        assertEquals("Welcome back online Charlie! Epoch 2 message.", charlieMessageDao.messages[0].rawTextContent)
     }
 }
