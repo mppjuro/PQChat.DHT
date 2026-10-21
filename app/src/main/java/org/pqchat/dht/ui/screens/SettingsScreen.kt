@@ -63,6 +63,7 @@ fun SettingsScreen(
     var showDuressPinDialog by remember { mutableStateOf(false) }
     var pinDialogInput by remember { mutableStateOf("") }
     var duressPinDialogInput by remember { mutableStateOf("") }
+    var showResearchConsentDialog by remember { mutableStateOf(false) }
 
     val isStrictPoissonShapingEnabled by viewModel.isStrictPoissonShapingEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
@@ -1052,7 +1053,13 @@ fun SettingsScreen(
                         }
                         Switch(
                             checked = isAnonymousStatsEnabled,
-                            onCheckedChange = { viewModel.setAnonymousStatsEnabled(it) }
+                            onCheckedChange = { enabled ->
+                                if (enabled) {
+                                    showResearchConsentDialog = true
+                                } else {
+                                    viewModel.setAnonymousStatsEnabled(false)
+                                }
+                            }
                         )
                     }
 
@@ -1317,6 +1324,88 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showDuressPinDialog = false }) {
                     Text("Anuluj")
+                }
+            }
+        )
+    }
+
+    if (showResearchConsentDialog) {
+        AlertDialog(
+            onDismissRequest = { showResearchConsentDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🔬 ", fontSize = 20.sp)
+                    Text("Świadoma Zgoda Badawcza\n(Informed Consent)", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Projekt badawczy realizowany w ramach pracy magisterskiej z informatyki (Wydział Informatyki).\nBadanie dotyczy odporności na cenzurę, właściwości maskowania ruchu Poissona oraz empirycznej retencji rekordów w zdecentralizowanej sieci BitTorrent Mainline DHT (BEP 44) z kryptografią post-kwantową.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "🛡️ GWARANCJA ZEROWEGO WYCIEKU (Zero-Leakage):",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF00E676)
+                    )
+                    Text(
+                        "• ŻADNE klucze prywatne (ML-KEM-512, X25519, Ed25519) ani ziarna KDF nigdy nie opuszczają urządzenia.\n" +
+                        "• ŻADNE treści wiadomości, nazwy kontaktów ani tożsamości nie są rejestrowane.\n" +
+                        "• ŻADNE adresy IP użytkowników ani rozmówców nie są przesyłane (hashe slotów DHT są ucinane do 8-znakowych prefiksów).\n" +
+                        "• Dane telemetryczne są w 100% zanonimizowane i przetwarzane lokalnie w plikach CSV.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "📊 JAKIE METRYKI BĘDĄ ZBIERANE:",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = appColors.primary
+                    )
+                    Text(
+                        "1. Kształtowanie ruchu Poissona: interwały pakietów (Δt_actual vs Δt_theoretical), statystyki testu Kołmogorowa-Smirnowa, jitter wybudzeń w trybie Android Doze, rozkład ról pakietów.\n" +
+                        "2. Zbieżność DHT: opóźnienia operacji put/get, odsetek timeoutów KRPC, krzywe przeżywalności replik (TTL decay) oraz entropia podsieci /24.\n" +
+                        "3. Dostarczanie i Rekeying: czasy dostarczenia wiadomości i Cover ACK wg stanów cyklu życia i transportu (Wi-Fi, Cellular, Tor), czas trwania KEM rekeyingu.\n" +
+                        "4. Wykrywanie anomalii: liczniki błędnych podpisów Ed25519, błędnych tagów AEAD, prób cofnięcia sekwencji oraz zablokowanych prób wycieku IP przy zimnym starcie Tora.\n" +
+                        "5. Zużycie energii i zasobów: prąd baterii (μAh), narzut pamięci RAM/PSS oraz sumaryczny transfer UDP.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "Udział jest w pełni dobrowolny. W każdej chwili możesz wyłączyć telemetrię jednym kliknięciem, co natychmiast zatrzyma wszelkie próbkowanie i synchronizację.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = appColors.textPrimary,
+                        fontSize = 11.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.setAnonymousStatsEnabled(true)
+                        showResearchConsentDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = appColors.primary)
+                ) {
+                    Text("Wyrażam zgodę i włączam", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showResearchConsentDialog = false
+                    }
+                ) {
+                    Text("Anuluj", color = appColors.textSecondary)
                 }
             }
         )

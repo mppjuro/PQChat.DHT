@@ -507,6 +507,9 @@ class ResearchTelemetryManagerTest {
             manager.ttlSamplesCsvFile,
             manager.republishSummaryCsvFile,
             manager.resourceProfileCsvFile,
+            manager.trafficIntervalsCsvFile,
+            manager.kademliaConvergenceCsvFile,
+            manager.adversarialEventsCsvFile,
             File(tempDir, "session_manifest.json")
         )
 
@@ -626,6 +629,159 @@ class ResearchTelemetryManagerTest {
         assertEquals(2, chunkStats.resumedTransfers)
         assertEquals(1, chunkStats.successfulResumptions)
         assertEquals(50.0, chunkStats.resumptionSuccessRate, 0.01)
+    }
+
+    @Test
+    fun `test traffic intervals, wake-up jitter and Kolmogorov-Smirnov p-value`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        // Record scheduled vs actual traffic intervals and jitter
+        manager.recordTrafficInterval(
+            role = PacketRole.COVER_DUMMY_SENT,
+            scheduledDelayMs = 4800L,
+            actualDelayMs = 4825L,
+            wakeUpJitterMs = 25L,
+            poissonLambda = 1.0 / 480.0,
+            pollingState = "BACKGROUND_IDLE",
+            isScreenOn = true
+        )
+        manager.recordTrafficInterval(
+            role = PacketRole.FIRST_SEND,
+            scheduledDelayMs = 5000L,
+            actualDelayMs = 5060L,
+            wakeUpJitterMs = 60L,
+            poissonLambda = 1.0 / 480.0,
+            pollingState = "DOZE_SLEEP",
+            isScreenOn = false
+        )
+
+        assertTrue(manager.trafficIntervalsCsvFile.exists())
+        val csvLines = manager.trafficIntervalsCsvFile.readLines()
+        assertTrue(csvLines.size >= 3) // header + 2 rows
+
+        val stats = manager.computeTrafficShapingStats()
+        assertEquals(4900.0, stats.deltaTheoreticalMeanMs, 0.01)
+        assertEquals(42.5, stats.wakeUpJitterMeanMs, 0.01)
+        assertEquals(60L, stats.wakeUpJitterMaxMs)
+
+        // Validate KS p-value asymptotic function directly
+        val pHigh = manager.computeKolmogorovSmirnovPValue(d = 0.05, n = 50)
+        assertTrue("Small D should yield high p-value", pHigh > 0.05)
+        val pLow = manager.computeKolmogorovSmirnovPValue(d = 0.95, n = 50)
+        assertTrue("Large D should yield tiny p-value", pLow < 0.01)
+    }
+
+    @Test
+    fun `test Kademlia convergence, replica survival and subnet entropy`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordDhtConvergence(
+            operation = "PUT",
+            target = target,
+            rttMs = 120L,
+            nodesQueried = 24,
+            nodesResponded = 8,
+            timeouts = 2,
+            preWarmingHit = true,
+            fastTerminated = true,
+            subnets24 = listOf("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+        )
+        manager.recordDhtConvergence(
+            operation = "GET",
+            target = target,
+            rttMs = 80L,
+            nodesQueried = 16,
+            nodesResponded = 8,
+            timeouts = 0,
+            preWarmingHit = false,
+            fastTerminated = false,
+            subnets24 = listOf("192.0.2.0/24", "198.51.100.0/24")
+        )
+
+        val convStats = manager.computeDhtConvergenceStats()
+        assertEquals(14, convStats.ttlDecayCurve.size) // 7 horizons x 2 republish states (with / without)
+        assertEquals(120L, convStats.putLatencyP50Ms)
+        assertEquals(80L, convStats.getLatencyP50Ms)
+        assertEquals(20.0, convStats.avgNodesQueriedPerOp, 0.01)
+        assertEquals(100.0, convStats.krpcTimeoutRatePercent, 0.01) // 2 timeouts across 2 ops
+        assertEquals(50.0, convStats.preWarmingHitRatePercent, 0.01)
+        assertEquals(50.0, convStats.fastTerminationSavingsPercent, 0.01)
+        assertTrue("Subnet entropy should be positive", convStats.subnet24EntropyBits > 0.0)
+    }
+
+    @Test
+    fun `test end-to-end delivery partitioned by lifecycle and transport`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordPacketEvent(role = PacketRole.FIRST_SEND, target = target)
+        manager.recordMessageDelivered(
+            target = target,
+            latencyMs = 450L,
+            lifecycleState = "FOREGROUND_CHAT",
+            networkType = "WIFI"
+        )
+
+        val targetAck = CryptoUtils.secureRandomBytes(20)
+        manager.recordCoverAckReceived(target = targetAck, latencyMs = 620L, lifecycleState = "BACKGROUND_IDLE")
+
+        manager.recordPqcRekeyDuration(14L)
+        manager.recordPqcRekeyDuration(18L)
+        manager.recordGroupKeyRotationDuration(25L)
+
+        val e2eStats = manager.computeE2eDeliveryStats()
+        assertEquals(450.0, e2eStats.deliveryLatencyByLifecycle["FOREGROUND_CHAT"] ?: 0.0, 0.01)
+        assertEquals(450.0, e2eStats.deliveryLatencyByTransport["WIFI"] ?: 0.0, 0.01)
+        assertEquals(620.0, e2eStats.coverAckLatencyByLifecycle["BACKGROUND_IDLE"] ?: 0.0, 0.01)
+        assertEquals(16.0, e2eStats.avgPqcRekeyDurationMs, 0.01)
+        assertEquals(2, e2eStats.totalPqcRekeys)
+        assertEquals(25.0, e2eStats.avgGroupKeyRotationDurationMs, 0.01)
+        assertEquals(1, e2eStats.totalGroupRotations)
+    }
+
+    @Test
+    fun `test adversarial anomaly mitigation tracking`() = runBlocking {
+        settingsManager.setAnonymousStatsEnabled(true)
+        val manager = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = tempDir
+        )
+
+        val target = CryptoUtils.secureRandomBytes(20)
+        manager.recordAdversarialEvent("BAD_ED25519_SIG", target, "Node returned invalid Ed25519 signature")
+        manager.recordAdversarialEvent("BAD_AEAD_TAG", target, "Corrupted ciphertext AEADBadTagException")
+        manager.recordAdversarialEvent("SEQ_ROLLBACK", target, "Received seqNum 2 when counter is 5")
+        manager.recordAdversarialEvent("BITMAP_DUPLICATE", target, "Duplicate packet seq 3 in window")
+        manager.recordAdversarialEvent("BLOCKED_TOR_LEAK", target, "Tor SOCKS5 not ready; packet blocked")
+
+        val advStats = manager.computeAdversarialStats()
+        assertEquals(1, advStats.badEd25519SignatureCount)
+        assertEquals(1, advStats.badAeadTagCount)
+        assertEquals(1, advStats.seqRollbackAttemptsCount)
+        assertEquals(1, advStats.slidingWindowDuplicateRejections)
+        assertEquals(1, advStats.blockedTorColdStartLeaks)
+        assertEquals(5, advStats.totalAdversarialEvents)
+
+        assertTrue(manager.adversarialEventsCsvFile.exists())
+        val lines = manager.adversarialEventsCsvFile.readLines()
+        assertEquals(6, lines.size) // header + 5 events
     }
 }
 

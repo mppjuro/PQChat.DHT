@@ -15,7 +15,7 @@ service cloud.firestore {
                     && request.resource.data.timestamp is int
                     && request.resource.data.timestamp > 1700000000000
                     && request.resource.data.schemaVersion is int
-                    && request.resource.data.schemaVersion >= 1
+                    && request.resource.data.schemaVersion == 2
                     // Device info map validation
                     && request.resource.data.deviceInfo is map
                     && request.resource.data.deviceInfo.keys().hasAll(['sessionId', 'deviceModel', 'androidVersion', 'appVersion', 'versionCode'])

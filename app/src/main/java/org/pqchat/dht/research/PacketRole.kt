@@ -43,6 +43,11 @@ enum class PacketRole(val displayName: String) {
     COVER_ACK_SENT("Potwierdzenie w szumie (Cover ACK)"),
 
     /**
+     * Cover traffic ACK token received from partner's ACK rendezvous target.
+     */
+    COVER_ACK_RECEIVED("Odebranie potwierdzenia w szumie (Cover ACK)"),
+
+    /**
      * Pure synthetic CSPRNG noise packet emitted by Poisson traffic generator.
      */
     COVER_DUMMY_SENT("Syntetyczny pakiet maskujący (Dummy)"),
@@ -55,5 +60,20 @@ enum class PacketRole(val displayName: String) {
     /**
      * Decoy target query emitted to disguise real contact rendezvous.
      */
-    DECOY_GET("Odpytanie celu maskującego (Decoy GET)")
+    DECOY_GET("Odpytanie celu maskującego (Decoy GET)"),
+
+    /**
+     * Group broadcast packet transmission to a single group participant slot (fan-out).
+     */
+    GROUP_FAN_OUT("Wysłanie do grupy (Group Fan-out)"),
+
+    /**
+     * Real scheduled contact polling query in an adaptive batch.
+     */
+    POLL_BATCH_REAL("Odpytanie kontaktu w partii (Poll Batch Real)"),
+
+    /**
+     * Decoy query executed within an adaptive polling batch to mask contact count.
+     */
+    POLL_BATCH_DECOY("Odpytanie celu maskującego w partii (Poll Batch Decoy)")
 }

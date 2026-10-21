@@ -258,6 +258,13 @@ data class TrafficShapingStats(
     val varianceInterPacketMs: Double,
     val coefficientOfVariation: Double,
     val kolmogorovSmirnovD: Double,
+    val kolmogorovSmirnovPValue: Double = 0.0,
+    val deltaTheoreticalMeanMs: Double = 0.0,
+    val deltaActualMeanMs: Double = meanInterPacketMs,
+    val wakeUpJitterMeanMs: Double = 0.0,
+    val wakeUpJitterMaxMs: Long = 0L,
+    val packetRoleDistribution: Map<String, Int> = emptyMap(),
+    val shannonEntropyBits: Double = 0.0,
     val realMsgCount: Int,
     val coverDummyCount: Int,
     val blindRepublishCount: Int,
@@ -278,6 +285,13 @@ data class TrafficShapingStats(
         "varianceInterPacketMs" to varianceInterPacketMs,
         "coefficientOfVariation" to coefficientOfVariation,
         "kolmogorovSmirnovD" to kolmogorovSmirnovD,
+        "kolmogorovSmirnovPValue" to kolmogorovSmirnovPValue,
+        "deltaTheoreticalMeanMs" to deltaTheoreticalMeanMs,
+        "deltaActualMeanMs" to deltaActualMeanMs,
+        "wakeUpJitterMeanMs" to wakeUpJitterMeanMs,
+        "wakeUpJitterMaxMs" to wakeUpJitterMaxMs,
+        "packetRoleDistribution" to packetRoleDistribution,
+        "shannonEntropyBits" to shannonEntropyBits,
         "realMsgCount" to realMsgCount,
         "coverDummyCount" to coverDummyCount,
         "blindRepublishCount" to blindRepublishCount,
@@ -292,6 +306,189 @@ data class TrafficShapingStats(
         "targetEntropyBits" to targetEntropyBits,
         "targetEntropyNormalized" to targetEntropyNormalized
     )
+}
+
+/**
+ * Retention and Kademlia routing convergence metrics.
+ */
+data class DhtRetentionAndConvergenceStats(
+    val putLatencyP50Ms: Long,
+    val putLatencyP90Ms: Long,
+    val putLatencyP95Ms: Long,
+    val putLatencyP99Ms: Long,
+    val getLatencyP50Ms: Long,
+    val getLatencyP90Ms: Long,
+    val getLatencyP95Ms: Long,
+    val getLatencyP99Ms: Long,
+    val avgNodesQueriedPerOp: Double,
+    val krpcTimeoutRatePercent: Double,
+    val replicaSurvivalRateKAliveOverK: Double,
+    val preWarmingHitRatePercent: Double,
+    val fastTerminationSavingsPercent: Double,
+    val subnet24EntropyBits: Double,
+    val ttlDecayCurve: List<Map<String, Any>>
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "putLatencyP50Ms" to putLatencyP50Ms,
+        "putLatencyP90Ms" to putLatencyP90Ms,
+        "putLatencyP95Ms" to putLatencyP95Ms,
+        "putLatencyP99Ms" to putLatencyP99Ms,
+        "getLatencyP50Ms" to getLatencyP50Ms,
+        "getLatencyP90Ms" to getLatencyP90Ms,
+        "getLatencyP95Ms" to getLatencyP95Ms,
+        "getLatencyP99Ms" to getLatencyP99Ms,
+        "avgNodesQueriedPerOp" to avgNodesQueriedPerOp,
+        "krpcTimeoutRatePercent" to krpcTimeoutRatePercent,
+        "replicaSurvivalRateKAliveOverK" to replicaSurvivalRateKAliveOverK,
+        "preWarmingHitRatePercent" to preWarmingHitRatePercent,
+        "fastTerminationSavingsPercent" to fastTerminationSavingsPercent,
+        "subnet24EntropyBits" to subnet24EntropyBits,
+        "ttlDecayCurve" to ttlDecayCurve
+    )
+}
+
+/**
+ * End-to-end delivery and PQC rekeying metrics partitioned by device lifecycle and transport.
+ */
+data class EndToEndDeliveryAndRekeyStats(
+    val deliveryLatencyByLifecycle: Map<String, Double>,
+    val deliveryLatencyByTransport: Map<String, Double>,
+    val coverAckLatencyByLifecycle: Map<String, Double>,
+    val avgPqcRekeyDurationMs: Double,
+    val avgGroupKeyRotationDurationMs: Double,
+    val totalPqcRekeys: Int,
+    val totalGroupRotations: Int
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "deliveryLatencyByLifecycle" to deliveryLatencyByLifecycle,
+        "deliveryLatencyByTransport" to deliveryLatencyByTransport,
+        "coverAckLatencyByLifecycle" to coverAckLatencyByLifecycle,
+        "avgPqcRekeyDurationMs" to avgPqcRekeyDurationMs,
+        "avgGroupKeyRotationDurationMs" to avgGroupKeyRotationDurationMs,
+        "totalPqcRekeys" to totalPqcRekeys,
+        "totalGroupRotations" to totalGroupRotations
+    )
+}
+
+/**
+ * Adversarial anomaly counters and protocol threat mitigation telemetry.
+ */
+data class AdversarialAnomalyStats(
+    val badEd25519SignatureCount: Int,
+    val badAeadTagCount: Int,
+    val seqRollbackAttemptsCount: Int,
+    val slidingWindowDuplicateRejections: Int,
+    val blockedTorColdStartLeaks: Int,
+    val totalAdversarialEvents: Int
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "badEd25519SignatureCount" to badEd25519SignatureCount,
+        "badAeadTagCount" to badAeadTagCount,
+        "seqRollbackAttemptsCount" to seqRollbackAttemptsCount,
+        "slidingWindowDuplicateRejections" to slidingWindowDuplicateRejections,
+        "blockedTorColdStartLeaks" to blockedTorColdStartLeaks,
+        "totalAdversarialEvents" to totalAdversarialEvents
+    )
+}
+
+/**
+ * Hardware and battery impact metrics profiled across Poisson traffic profiles.
+ */
+data class HardwareBatteryStats(
+    val batteryDrainUahPerHour: Double,
+    val batteryPercentPerHour: Double,
+    val ramPssKb: Long,
+    val udpTxBytesPerHour: Long,
+    val udpRxBytesPerHour: Long,
+    val statsByPoissonProfile: Map<String, Map<String, Any>>
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "batteryDrainUahPerHour" to batteryDrainUahPerHour,
+        "batteryPercentPerHour" to batteryPercentPerHour,
+        "ramPssKb" to ramPssKb,
+        "udpTxBytesPerHour" to udpTxBytesPerHour,
+        "udpRxBytesPerHour" to udpRxBytesPerHour,
+        "statsByPoissonProfile" to statsByPoissonProfile
+    )
+}
+
+/**
+ * Raw time-series record for Poisson interval scheduling and wake-up jitter analysis.
+ */
+data class TrafficIntervalEvent(
+    val eventId: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val timestampEpochMs: Long = System.currentTimeMillis(),
+    val isoTimestamp: String = formatEpochIso(timestampEpochMs),
+    val role: PacketRole,
+    val scheduledDelayMs: Long,
+    val actualDelayMs: Long,
+    val wakeUpJitterMs: Long,
+    val poissonLambda: Double,
+    val pollingState: String,
+    val isScreenOn: Boolean
+) {
+    fun toCsvRow(): String {
+        val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,${role.name},$scheduledDelayMs,$actualDelayMs,$wakeUpJitterMs,$lambdaStr,$pollingState,$isScreenOn"
+    }
+
+    companion object {
+        const val CSV_HEADER =
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,role,scheduled_delay_ms,actual_delay_ms,wake_up_jitter_ms,poisson_lambda,polling_state,is_screen_on"
+    }
+}
+
+/**
+ * Raw record for detected protocol violations, tampered frames, or replay attacks.
+ */
+data class AdversarialTelemetryEvent(
+    val eventId: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val timestampEpochMs: Long = System.currentTimeMillis(),
+    val isoTimestamp: String = formatEpochIso(timestampEpochMs),
+    val anomalyType: String,
+    val targetPrefix: String,
+    val details: String,
+    val mitigated: Boolean = true
+) {
+    fun toCsvRow(): String {
+        val safeDetails = details.replace("\"", "\"\"")
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,$anomalyType,$targetPrefix,\"$safeDetails\",$mitigated"
+    }
+
+    companion object {
+        const val CSV_HEADER =
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,anomaly_type,target_prefix,details,mitigated"
+    }
+}
+
+/**
+ * Raw record for Kademlia convergence, replication count, and /24 subnet diversity.
+ */
+data class DhtConvergenceEvent(
+    val eventId: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val timestampEpochMs: Long = System.currentTimeMillis(),
+    val isoTimestamp: String = formatEpochIso(timestampEpochMs),
+    val operation: String,
+    val targetPrefix: String,
+    val rttMs: Long,
+    val nodesQueried: Int,
+    val nodesResponded: Int,
+    val timeouts: Int,
+    val preWarmingHit: Boolean,
+    val fastTerminated: Boolean,
+    val uniqueSubnets24Count: Int
+) {
+    fun toCsvRow(): String {
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,$operation,$targetPrefix,$rttMs,$nodesQueried,$nodesResponded,$timeouts,$preWarmingHit,$fastTerminated,$uniqueSubnets24Count"
+    }
+
+    companion object {
+        const val CSV_HEADER =
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,operation,target_prefix,rtt_ms,nodes_queried,nodes_responded,timeouts,pre_warming_hit,fast_terminated,unique_subnets_24_count"
+    }
 }
 
 /**
