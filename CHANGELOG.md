@@ -57,6 +57,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🔒 Bezpieczeństwo i Kryptografia (Security)
 
+- [`71889c3`](https://github.com/mppjuro/PQChat.DHT/commit/71889c377019859d32df9e28d3096573edca3e61) (2026-10-21) — **db**: eliminate Column-Swap and Intra-Row Swap vulnerabilities and encrypt social graph metadata
 - [`d073c44`](https://github.com/mppjuro/PQChat.DHT/commit/d073c4454b531a032f250c989b6ac3ac37f15243) (2026-10-08) — Bencode and KRPC parsing against untrusted UDP inputs and add Jazzer fuzzing
 - [`1a250a7`](https://github.com/mppjuro/PQChat.DHT/commit/1a250a7cac2fb6815a7a2efe19094a4b35e44ff1) (2026-10-07) — logging behind DEBUG, remove ChainKey hex from diagnostics, add Room migrations, and encrypt sensitive DB fields with Android Keystore
 
@@ -152,6 +153,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`303c48b`](https://github.com/mppjuro/PQChat.DHT/commit/303c48b554cc13d704cb1fde7d68aecea1b1bd7e) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`37ffd6f`](https://github.com/mppjuro/PQChat.DHT/commit/37ffd6f9481b20fced7000017c1f00ad82bc0ad8) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9759c56`](https://github.com/mppjuro/PQChat.DHT/commit/9759c56571ae43208571f86759f2186afc6d884b) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9cf03df`](https://github.com/mppjuro/PQChat.DHT/commit/9cf03dfea4979c8d71e91729e4f30fe91ca1518f) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
