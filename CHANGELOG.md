@@ -67,6 +67,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`55a7687`](https://github.com/mppjuro/PQChat.DHT/commit/55a7687087f7b487e5ab453b0c11c78774f687b4) (2026-10-22) — **crypto,db,traffic**: standardize frame codecs, enforce V2 row binding and implement WFQ traffic shaping
 - [`726f50d`](https://github.com/mppjuro/PQChat.DHT/commit/726f50d3271294d60c3cac2512a0f5f5c93a1911) (2026-10-21) — **crypto**: handle IV collision with row-bound magic bytes during Keystore raw decryption
 - [`ef55043`](https://github.com/mppjuro/PQChat.DHT/commit/ef550431f9d4fe42d400fa18365c39ba03aabeba) (2026-10-21) — **group**: eliminate fan-out burst, add group epoch catch-up retransmission, and expand edge-case tests
 - [`528d195`](https://github.com/mppjuro/PQChat.DHT/commit/528d195433a566b8a23f318a6a1823ad8f2c6186) (2026-10-21) — **test**: resolve instrumented UI test failures, dialog window bounds, and message row-binding validation
