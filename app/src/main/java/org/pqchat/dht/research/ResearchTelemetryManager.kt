@@ -715,8 +715,8 @@ class ResearchTelemetryManager(
         when (anomalyType.uppercase(java.util.Locale.US)) {
             "BAD_ED25519_SIG", "INVALID_SIGNATURE", "BAD_SIGNATURE" -> badEd25519SigCount.incrementAndGet()
             "BAD_AEAD_TAG", "AEAD_BAD_TAG", "INVALID_TAG" -> badAeadTagCount.incrementAndGet()
-            "SEQ_ROLLBACK", "SEQUENCE_ROLLBACK", "ROLLBACK_ATTEMPT" -> seqRollbackCount.incrementAndGet()
-            "BITMAP_DUPLICATE", "SLIDING_WINDOW_DUPLICATE", "REPLAY_ATTACK" -> slidingWindowDuplicateCount.incrementAndGet()
+            "SEQ_ROLLBACK", "SEQUENCE_ROLLBACK", "ROLLBACK_ATTEMPT", "TOMBSTONE_SLOT_DETECTED", "TOMBSTONE_DETECTED" -> seqRollbackCount.incrementAndGet()
+            "BITMAP_DUPLICATE", "SLIDING_WINDOW_DUPLICATE", "REPLAY_ATTACK", "REPLAY_ATTACK_ATTEMPT", "REPLAY_ATTEMPT" -> slidingWindowDuplicateCount.incrementAndGet()
             "BLOCKED_TOR_LEAK", "TOR_COLD_START_LEAK", "IP_LEAK_PREVENTED" -> blockedTorColdStartLeaksCount.incrementAndGet()
             else -> otherAnomalyCount.incrementAndGet()
         }

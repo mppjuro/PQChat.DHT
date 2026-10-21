@@ -52,6 +52,92 @@ class DhtLeafNode(
             Pair("dht.aelitis.com", 6881),
             Pair("dht.libtorrent.org", 25401)
         )
+
+        /**
+         * Extracts the IPv4 /24 (or IPv6 /48) subnet prefix for an address.
+         */
+        fun getSubnet24Prefix(address: InetSocketAddress): String {
+            val inet = address.address
+            if (inet != null) {
+                val raw = inet.address
+                if (raw.size == 4) {
+                    return "${raw[0].toInt() and 0xFF}.${raw[1].toInt() and 0xFF}.${raw[2].toInt() and 0xFF}.0/24"
+                } else if (raw.size == 16) {
+                    return "${raw[0].toInt() and 0xFF}:${raw[1].toInt() and 0xFF}:${raw[2].toInt() and 0xFF}/48"
+                }
+            }
+            val host = address.hostString
+            val parts = host.split(".")
+            return if (parts.size == 4) {
+                "${parts[0]}.${parts[1]}.${parts[2]}.0/24"
+            } else {
+                host
+            }
+        }
+
+        /**
+         * Checks if an address is loopback or local testing network.
+         */
+        fun isLoopbackOrLocal(address: InetSocketAddress): Boolean {
+            val inet = address.address
+            if (inet != null) {
+                return inet.isLoopbackAddress || inet.isSiteLocalAddress
+            }
+            val host = address.hostString
+            return host == "127.0.0.1" || host == "localhost" || host.startsWith("192.168.") || host.startsWith("10.")
+        }
+
+        /**
+         * Diversifies candidate peers by /24 IP subnet bucketing.
+         * Enforces a ceiling of [maxPerSubnet] nodes per /24 subnet to prevent Sybil/Eclipse attackers
+         * from monopolizing the routing table or replication set.
+         */
+        fun diversifyCandidatesBySubnet(
+            candidates: List<DhtPeer>,
+            count: Int,
+            maxPerSubnet: Int = 2
+        ): List<DhtPeer> {
+            if (candidates.size <= count && candidates.all { isLoopbackOrLocal(it.address) }) {
+                return candidates
+            }
+            val selected = mutableListOf<DhtPeer>()
+            val subnetCounts = mutableMapOf<String, Int>()
+            val remaining = mutableListOf<DhtPeer>()
+
+            for (peer in candidates) {
+                val subnet = getSubnet24Prefix(peer.address)
+                val current = subnetCounts.getOrDefault(subnet, 0)
+                if (current < maxPerSubnet && selected.size < count) {
+                    selected.add(peer)
+                    subnetCounts[subnet] = current + 1
+                } else {
+                    remaining.add(peer)
+                }
+            }
+
+            for (peer in remaining) {
+                if (selected.size >= count) break
+                selected.add(peer)
+            }
+
+            return selected
+        }
+
+        fun xorDistance(a: ByteArray, b: ByteArray): ByteArray {
+            val result = ByteArray(20)
+            for (i in 0 until 20) {
+                result[i] = (a[i].toInt() xor b[i].toInt()).toByte()
+            }
+            return result
+        }
+
+        fun compareBytes(a: ByteArray, b: ByteArray): Int {
+            for (i in a.indices) {
+                val diff = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
+                if (diff != 0) return diff
+            }
+            return 0
+        }
     }
 
     /**
@@ -827,21 +913,6 @@ class DhtLeafNode(
         }.take(count)
     }
 
-    private fun xorDistance(a: ByteArray, b: ByteArray): ByteArray {
-        val result = ByteArray(20)
-        for (i in 0 until 20) {
-            result[i] = (a[i].toInt() xor b[i].toInt()).toByte()
-        }
-        return result
-    }
-
-    private fun compareBytes(a: ByteArray, b: ByteArray): Int {
-        for (i in a.indices) {
-            val diff = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
-            if (diff != 0) return diff
-        }
-        return 0
-    }
 
     /**
      * Target Pre-warming:
@@ -1026,8 +1097,9 @@ class DhtLeafNode(
                 compareBytes(distA, distB)
             }
 
-        val nodesToQuery = if (remoteCandidates.isNotEmpty()) {
-            (storedPeers + remoteCandidates).distinctBy { it.address }.take(20)
+        val allCandidates = (storedPeers + remoteCandidates).distinctBy { it.address }
+        val nodesToQuery = if (allCandidates.isNotEmpty()) {
+            diversifyCandidatesBySubnet(allCandidates, count = 20, maxPerSubnet = 2)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(20)
         } else if (autoBootstrap) {
@@ -1059,6 +1131,7 @@ class DhtLeafNode(
         val closerNodeIndicated = java.util.concurrent.atomic.AtomicBoolean(false)
         val verifiedResponses = java.util.concurrent.atomic.AtomicInteger(0)
         val totalResponses = java.util.concurrent.atomic.AtomicInteger(0)
+        val verifiedSubnets = ConcurrentHashMap.newKeySet<String>()
 
         coroutineScope {
             var queryJobs: List<Job> = emptyList()
@@ -1072,14 +1145,34 @@ class DhtLeafNode(
                         val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                         if (verified != null) {
                             verifiedResponses.incrementAndGet()
-                            if (foundItem.compareAndSet(null, verified)) {
-                                if (!probeAllReplicas) {
+                            verifiedSubnets.add(getSubnet24Prefix(peer.address))
+
+                            // Always track and prefer the record with the HIGHEST verified seq
+                            while (true) {
+                                val current = foundItem.get()
+                                if (current == null || verified.seq > current.seq) {
+                                    if (foundItem.compareAndSet(current, verified)) {
+                                        break
+                                    }
+                                } else {
+                                    break
+                                }
+                            }
+
+                            if (!probeAllReplicas) {
+                                val currBest = foundItem.get()
+                                val currSeq = currBest?.seq ?: 0L
+                                val minQuorum = minOf(3, nodesToQuery.size)
+                                val canTerminate = (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, nodesToQuery.size)) ||
+                                        (verifiedResponses.get() >= minQuorum && verifiedSubnets.size >= minOf(2, minQuorum)) ||
+                                        (verifiedResponses.get() >= minOf(5, nodesToQuery.size))
+                                if (canTerminate) {
                                     queryJobs.forEach { job ->
                                         if (job != coroutineContext.job) job.cancel()
                                     }
+                                    return@launch
                                 }
                             }
-                            if (!probeAllReplicas) return@launch
                         }
 
                         // Response received without valid 'v'
@@ -1137,9 +1230,14 @@ class DhtLeafNode(
                                 val verified = parseAndVerifyGetResult(resp, salt, peer.address)
                                 if (verified != null) {
                                     verifiedResponses.incrementAndGet()
-                                    if (foundItem.compareAndSet(null, verified)) {
-                                        secondJobs.forEach { job ->
-                                            if (job != coroutineContext.job) job.cancel()
+                                    while (true) {
+                                        val current = foundItem.get()
+                                        if (current == null || verified.seq > current.seq) {
+                                            if (foundItem.compareAndSet(current, verified)) {
+                                                break
+                                            }
+                                        } else {
+                                            break
                                         }
                                     }
                                 }
@@ -1242,7 +1340,7 @@ class DhtLeafNode(
             }
         val maxCandidatesToQuery = maxOf(20, replicationK * 2)
         val nodesToQuery = if (swarmPeers.isNotEmpty()) {
-            swarmPeers.take(maxCandidatesToQuery)
+            diversifyCandidatesBySubnet(swarmPeers, count = maxCandidatesToQuery, maxPerSubnet = 2)
         } else if (localPeers.isNotEmpty()) {
             localPeers.take(maxCandidatesToQuery)
         } else if (autoBootstrap) {

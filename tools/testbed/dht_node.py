@@ -104,13 +104,15 @@ class DhtNode:
         ip: str,
         port: int,
         is_malicious: bool = False,
-        logger: Optional[TelemetryLogger] = None
+        logger: Optional[TelemetryLogger] = None,
+        byzantine_behavior: Optional[str] = None
     ):
         self.node_id = node_id
         self.ip = ip
         self.port = port
         self.is_malicious = is_malicious
         self.logger = logger
+        self.byzantine_behavior = byzantine_behavior
 
         # Routing table: list of known DhtPeers
         self.peers: Dict[bytes, DhtPeer] = {}
@@ -202,11 +204,37 @@ class DhtNode:
                     token = self._generate_token(sender_ip)
                     resp_data["token"] = token
 
-                    if target_hex in self.storage:
+                    if self.byzantine_behavior == "withhold_get":
+                        # Byzantine Withholding Attack: do not return record
+                        resp_data["nodes"] = b""
+                    elif target_hex in self.storage:
                         rec = self.storage[target_hex]
-                        resp_data["v"] = rec.v
-                        resp_data["k"] = rec.k
-                        resp_data["sig"] = rec.sig
+                        v_out = rec.v
+                        sig_out = rec.sig
+                        k_out = rec.k
+
+                        if self.byzantine_behavior == "mutate_bit_flip" and len(v_out) > 0:
+                            v_arr = bytearray(v_out)
+                            v_arr[0] ^= 0x01
+                            v_out = bytes(v_arr)
+                        elif self.byzantine_behavior == "mutate_bad_signature" and len(sig_out) > 0:
+                            sig_arr = bytearray(sig_out)
+                            sig_arr[0] ^= 0xFF
+                            sig_out = bytes(sig_arr)
+                        elif self.byzantine_behavior == "mutate_bad_key" and len(k_out) > 0:
+                            k_arr = bytearray(k_out)
+                            k_arr[0] ^= 0xFF
+                            k_out = bytes(k_arr)
+                        elif self.byzantine_behavior == "inject_bad_size_0b":
+                            v_out = b""
+                        elif self.byzantine_behavior == "inject_bad_size_899b":
+                            v_out = rec.v[:899]
+                        elif self.byzantine_behavior == "inject_bad_size_1000b":
+                            v_out = rec.v + b"\x00" * 100
+
+                        resp_data["v"] = v_out
+                        resp_data["k"] = k_out
+                        resp_data["sig"] = sig_out
                         resp_data["seq"] = rec.seq
                         seq_val = rec.seq
                         if rec.salt:
@@ -237,8 +265,11 @@ class DhtNode:
                     seq_val = int(seq)
                     salt_bytes = salt if isinstance(salt, bytes) else None
 
+                    # Byzantine Drop Attack: accept token but do not store
+                    if self.byzantine_behavior == "drop_put":
+                        pass
                     # Verify write token
-                    if self._validate_token(token, sender_ip):
+                    elif self._validate_token(token, sender_ip):
                         # Verify Ed25519 signature
                         sign_data = bencode.encode_bep44_sign_data(v, seq_val, salt_bytes)
                         if ed25519.verify(k, sign_data, sig):
@@ -247,7 +278,10 @@ class DhtNode:
 
                             # Check seq freshness
                             existing = self.storage.get(target_hex)
-                            if existing is None or seq_val >= existing.seq:
+                            # Byzantine Tombstone Suppression / Sequence Rollback: ignore seq + 1 tombstone updates
+                            if self.byzantine_behavior == "suppress_tombstone" and existing is not None and seq_val > existing.seq:
+                                pass # preserve stale record
+                            elif existing is None or seq_val >= existing.seq:
                                 self.storage[target_hex] = MutableRecord(
                                     v=v,
                                     seq=seq_val,
@@ -273,6 +307,10 @@ class DhtNode:
                     data_source="SIMULATED" if ed25519.is_fast_mode() else "MEASURED"
                 )
                 self.logger.log(entry)
+
+            if self.byzantine_behavior == "corrupt_bencode":
+                # Return corrupted/truncated bencode dictionary
+                return b"d1:t2:aa1:y1:r1:rd2:id20:MALFORMED_BENCODE_BROKEN"
 
             resp_packet = {
                 "t": tx_id if tx_id is not None else b"aa",
