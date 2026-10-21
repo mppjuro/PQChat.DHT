@@ -74,6 +74,8 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
    * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
    * `0x05` – Segment transferu blokowego (Chunk)
    * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+   * `0x07` – Reakcja na wiadomość (`TYPE_REACTION`: emoji powiązane z `(targetSeqEpoch, targetSeqNum)`)
+   * `0x08` – Pinezka lokalizacji / Status bezpieczeństwa offline (`TYPE_LOCATION_PIN`: współrzędne i notatka statusowa)
 2. `SeqNum` (2 bajty, UInt16 Big-Endian): Licznik $`Counter_{out}`$ nadawcy.
 3. `AckNum` (2 bajty, UInt16 Big-Endian): Ostatnio odebrany numer sekwencyjny partnera.
 4. `TimestampUTC` (8 bajtów, Int64 Big-Endian): Czas uniksowy nadania w milisekundach.
@@ -116,6 +118,21 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `MemberCount` ($`M`$): 2 bajty (UInt16, liczba uczestników, wartość $`\le 64`$)
   * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
   * `CSPRNG Padding`: wypełnienie do 859 bajtów.
+* **Typ 0x07 (Reakcja – Reaction):**
+  * `TargetSeqEpoch`: 4 bajty (UInt32 Big-Endian)
+  * `TargetSeqNum`: 2 bajty (UInt16 Big-Endian)
+  * `EmojiLength` ($`E`$): 1 bajt (UInt8, wartość $`\le 64`$)
+  * `Emoji`: $`E`$ bajtów UTF-8 (maksymalnie 64 bajty)
+  * `CSPRNG Padding`: $`852 - E`$ bajtów (wypełnienie do 859 B)
+* **Typ 0x08 (Pinezka Lokalizacji / Status Bezpieczeństwa Offline – Location Pin):**
+  * `Latitude`: 8 bajtów (Double IEEE 754 Big-Endian)
+  * `Longitude`: 8 bajtów (Double IEEE 754 Big-Endian)
+  * `Altitude`: 8 bajtów (Double IEEE 754 Big-Endian)
+  * `Accuracy`: 4 bajty (Float IEEE 754 Big-Endian)
+  * `EphemeralTtlSeconds`: 4 bajty (UInt32 Big-Endian)
+  * `NoteLength` ($`P`$): 2 bajty (UInt16 Big-Endian, wartość $`\le 829`$)
+  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów)
+  * `CSPRNG Padding`: $`829 - P`$ bajtów (wypełnienie do 859 B)
 
 ### Czaty Grupowe i Tabele Bazy Danych (`groups` i `group_members`):
 * **Model Dystrybucji i Adresowania:** Każdy uczestnik posiada własny łańcuch nadawczy ($`myChainKeyOut`$). Wiadomości grupowe nadawane są na indywidualne sloty odbiorców:

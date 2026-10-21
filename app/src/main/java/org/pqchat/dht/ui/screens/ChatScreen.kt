@@ -1,6 +1,8 @@
 package org.pqchat.dht.ui.screens
 
+import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,6 +53,7 @@ import java.util.*
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
 import org.pqchat.dht.data.repository.ChatRepository
+import org.pqchat.dht.protocol.LocationPinData
 import org.pqchat.dht.ui.util.SecureScreenEffect
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -87,6 +90,7 @@ fun ChatScreen(
     var fullscreenImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     val ephemeralTtlSeconds by viewModel.ephemeralTtlSeconds.collectAsState()
     var showEphemeralMenu by remember { mutableStateOf(false) }
+    var showLocationPinDialog by remember { mutableStateOf(false) }
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
@@ -491,6 +495,20 @@ fun ChatScreen(
                             }
                         }
 
+                        // Location pin / offline safety status button (single-frame 900B BEP 44 micro-payload)
+                        IconButton(
+                            onClick = { showLocationPinDialog = true },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("chat_location_pin_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Place,
+                                contentDescription = "Pinezka lokalizacji",
+                                tint = ElectricGreen
+                            )
+                        }
+
                         OutlinedTextField(
                             value = textInput,
                             onValueChange = { textInput = it },
@@ -625,7 +643,8 @@ fun ChatScreen(
                     MessageBubble(
                         message = msg,
                         onImageClick = { bytes -> fullscreenImageBytes = bytes },
-                        onResend = { viewModel.resendMessage(msg.id) }
+                        onResend = { viewModel.resendMessage(msg.id) },
+                        onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji) }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -929,6 +948,16 @@ fun ChatScreen(
                 }
             )
         }
+
+        if (showLocationPinDialog) {
+            LocationPinDialog(
+                onDismiss = { showLocationPinDialog = false },
+                onSend = { lat, lon, alt, acc, note ->
+                    viewModel.sendLocationPin(lat, lon, alt, acc, note)
+                    showLocationPinDialog = false
+                }
+            )
+        }
     }
 }
 
@@ -936,8 +965,10 @@ fun ChatScreen(
 fun MessageBubble(
     message: MessageEntity,
     onImageClick: ((ByteArray) -> Unit)? = null,
-    onResend: (() -> Unit)? = null
+    onResend: (() -> Unit)? = null,
+    onReactionClick: ((String) -> Unit)? = null
 ) {
+    val context = LocalContext.current
     val appColors = LocalAppColors.current
 
     val isOut = message.isOutgoing
@@ -948,6 +979,11 @@ fun MessageBubble(
     val timeStr = remember(message.timestamp) {
         val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         sdf.format(Date(message.timestamp))
+    }
+
+    var showReactionPicker by remember { mutableStateOf(false) }
+    val locationPin: LocationPinData? = remember(message.rawTextContent) {
+        LocationPinData.parse(message.rawTextContent)
     }
 
     Column(
@@ -1026,13 +1062,145 @@ fun MessageBubble(
                     }
                 }
 
-                // Text Content
-                message.rawTextContent?.let { text ->
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = appColors.textPrimary
-                    )
+                // Location Pin Micro-Payload or Standard Text Content
+                if (locationPin != null) {
+                    Surface(
+                        color = appColors.surfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, ElectricGreen.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Place,
+                                    contentDescription = null,
+                                    tint = ElectricGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Pinezka lokalizacji / Status",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ElectricGreen
+                                )
+                            }
+
+                            if (locationPin.note.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = locationPin.note,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = appColors.textPrimary
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val latFormatted = String.format(Locale.US, "%.5f°", locationPin.latitude)
+                            val lonFormatted = String.format(Locale.US, "%.5f°", locationPin.longitude)
+                            Text(
+                                text = "Współrzędne: $latFormatted, $lonFormatted",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = appColors.textSecondary
+                            )
+
+                            if (locationPin.altitude != 0.0 || locationPin.accuracy > 0f) {
+                                val altStr = if (locationPin.altitude != 0.0) "${locationPin.altitude.toInt()} m" else "-"
+                                val accStr = if (locationPin.accuracy > 0f) "±${locationPin.accuracy.toInt()} m" else "-"
+                                Text(
+                                    text = "Wysokość: $altStr • Dokładność: $accStr",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.textSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(locationPin.geoUri)).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    try {
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Brak aplikacji mapy (np. OsmAnd, Organic Maps)", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("open_map_button_${message.id}"),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricGreen),
+                                border = BorderStroke(1.dp, ElectricGreen.copy(alpha = 0.6f)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Otwórz w mapie offline", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                } else {
+                    message.rawTextContent?.let { text ->
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = appColors.textPrimary
+                        )
+                    }
+                }
+
+                // Display Reaction if present
+                if (!message.reaction.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = appColors.surface.copy(alpha = 0.9f),
+                        border = BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f)),
+                        modifier = Modifier.testTag("reaction_badge_${message.id}")
+                    ) {
+                        Text(
+                            text = message.reaction ?: "",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            fontSize = 15.sp
+                        )
+                    }
+                }
+
+                if (showReactionPicker) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = appColors.surface,
+                        border = BorderStroke(1.dp, appColors.primary.copy(alpha = 0.6f)),
+                        shadowElevation = 4.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val emojis = listOf("❤️", "👍", "🔥", "😂", "😮", "📍")
+                            for (emoji in emojis) {
+                                Text(
+                                    text = emoji,
+                                    fontSize = 18.sp,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            onReactionClick?.invoke(emoji)
+                                            showReactionPicker = false
+                                        }
+                                        .padding(4.dp)
+                                        .testTag("reaction_emoji_${message.id}_$emoji")
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1096,6 +1264,20 @@ fun MessageBubble(
                             color = statusColor,
                             fontSize = 10.sp
                         )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = { showReactionPicker = !showReactionPicker },
+                            modifier = Modifier
+                                .size(20.dp)
+                                .testTag("react_button_${message.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddReaction,
+                                contentDescription = "Dodaj reakcję",
+                                tint = appColors.textSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                         if (isExpired && message.isOutgoing) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
@@ -1252,3 +1434,173 @@ fun FullscreenImageViewer(
         }
     }
 }
+
+@Composable
+fun LocationPinDialog(
+    onDismiss: () -> Unit,
+    onSend: (latitude: Double, longitude: Double, altitude: Double, accuracy: Float, note: String) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    var latText by remember { mutableStateOf("52.2297") }
+    var lonText by remember { mutableStateOf("21.0122") }
+    var altText by remember { mutableStateOf("110.0") }
+    var accText by remember { mutableStateOf("5.0") }
+    var noteText by remember { mutableStateOf("Status: Bezpieczny (Offline)") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Place,
+                    contentDescription = null,
+                    tint = ElectricGreen
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Pinezka lokalizacji (900 B BEP 44)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = appColors.textPrimary
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Przesyła współrzędne geograficzne i status bezpieczeństwa w pojedynczym jednoramkowym rekordzie 900 B bez podziału na segmenty (bez chunkingu).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = appColors.textSecondary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Szybkie statusy:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = appColors.textSecondary,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    SuggestionChip(
+                        onClick = { noteText = "Status: Bezpieczny (Offline)" },
+                        label = { Text("🟢 Bezpieczny", fontSize = 11.sp) }
+                    )
+                    SuggestionChip(
+                        onClick = { noteText = "Punkt zborny Alpha" },
+                        label = { Text("🚩 Zbiórka", fontSize = 11.sp) }
+                    )
+                    SuggestionChip(
+                        onClick = { noteText = "Status: W drodze do celu" },
+                        label = { Text("🚶 W drodze", fontSize = 11.sp) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Notatka / Status") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = appColors.primary,
+                        unfocusedBorderColor = appColors.border,
+                        focusedTextColor = appColors.textPrimary,
+                        unfocusedTextColor = appColors.textPrimary
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = latText,
+                        onValueChange = { latText = it },
+                        label = { Text("Szerokość (Lat)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = appColors.primary,
+                            unfocusedBorderColor = appColors.border,
+                            focusedTextColor = appColors.textPrimary,
+                            unfocusedTextColor = appColors.textPrimary
+                        )
+                    )
+                    OutlinedTextField(
+                        value = lonText,
+                        onValueChange = { lonText = it },
+                        label = { Text("Długość (Lon)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = appColors.primary,
+                            unfocusedBorderColor = appColors.border,
+                            focusedTextColor = appColors.textPrimary,
+                            unfocusedTextColor = appColors.textPrimary
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = altText,
+                        onValueChange = { altText = it },
+                        label = { Text("Wysokość (m)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = appColors.primary,
+                            unfocusedBorderColor = appColors.border,
+                            focusedTextColor = appColors.textPrimary,
+                            unfocusedTextColor = appColors.textPrimary
+                        )
+                    )
+                    OutlinedTextField(
+                        value = accText,
+                        onValueChange = { accText = it },
+                        label = { Text("Dokładność (m)") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = appColors.primary,
+                            unfocusedBorderColor = appColors.border,
+                            focusedTextColor = appColors.textPrimary,
+                            unfocusedTextColor = appColors.textPrimary
+                        )
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val lat = latText.toDoubleOrNull() ?: 0.0
+                    val lon = lonText.toDoubleOrNull() ?: 0.0
+                    val alt = altText.toDoubleOrNull() ?: 0.0
+                    val acc = accText.toFloatOrNull() ?: 0.0f
+                    onSend(lat, lon, alt, acc, noteText.trim())
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = appColors.primary,
+                    contentColor = Color.Black
+                ),
+                modifier = Modifier.testTag("send_location_pin_confirm_button")
+            ) {
+                Text("Wyślij pinezkę", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Anuluj", color = appColors.textSecondary)
+            }
+        },
+        containerColor = appColors.surface
+    )
+}
+

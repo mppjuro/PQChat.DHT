@@ -179,7 +179,8 @@ data class MessageEntity(
     val senderMemberId: EncryptedText? = null,
     val senderName: EncryptedText? = null,
     val ephemeralTtlSeconds: Long = 0L,
-    val expiresAtTimestamp: Long? = null
+    val expiresAtTimestamp: Long? = null,
+    val reaction: String? = null
 ) {
     companion object {
         fun computeMessageRowId(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): String =
@@ -210,7 +211,8 @@ data class MessageEntity(
         senderMemberId: String? = null,
         senderName: String? = null,
         ephemeralTtlSeconds: Long = 0L,
-        expiresAtTimestamp: Long? = null
+        expiresAtTimestamp: Long? = null,
+        reaction: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -243,7 +245,8 @@ data class MessageEntity(
             EncryptedText(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "senderName")
         },
         ephemeralTtlSeconds = ephemeralTtlSeconds,
-        expiresAtTimestamp = expiresAtTimestamp
+        expiresAtTimestamp = expiresAtTimestamp,
+        reaction = reaction
     )
 
     @Ignore
@@ -266,7 +269,8 @@ data class MessageEntity(
         senderMemberId: String? = null,
         senderName: String? = null,
         ephemeralTtlSeconds: Long = 0L,
-        expiresAtTimestamp: Long? = null
+        expiresAtTimestamp: Long? = null,
+        reaction: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -287,7 +291,8 @@ data class MessageEntity(
         senderMemberId = senderMemberId,
         senderName = senderName,
         ephemeralTtlSeconds = ephemeralTtlSeconds,
-        expiresAtTimestamp = expiresAtTimestamp
+        expiresAtTimestamp = expiresAtTimestamp,
+        reaction = reaction
     )
 
     init {
@@ -879,8 +884,17 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE contactId = :contactId AND ephemeralTtlSeconds > 0 AND expiresAtTimestamp IS NULL")
     suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity>
 
-    @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage WHERE id = :id")
+    @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage, reaction = NULL WHERE id = :id")
     suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?)
+
+    @Query("UPDATE messages SET reaction = :reaction WHERE id = :id")
+    suspend fun updateMessageReactionById(id: Long, reaction: String?)
+
+    @Query("UPDATE messages SET reaction = :reaction WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum AND isOutgoing = :isOutgoing")
+    suspend fun updateMessageReaction(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean, reaction: String?)
+
+    @Query("UPDATE messages SET reaction = :reaction WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum")
+    suspend fun updateMessageReactionAnyDirection(contactId: String, seqEpoch: Int, seqNum: Int, reaction: String?)
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteMessageById(id: Long)

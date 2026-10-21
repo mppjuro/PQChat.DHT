@@ -273,6 +273,8 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
    * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
    * `0x05` – Segment transferu blokowego (Chunk)
    * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+   * `0x07` – Reakcja na wiadomość (`TYPE_REACTION`: emoji powiązane z `(targetSeqEpoch, targetSeqNum)`)
+   * `0x08` – Pinezka lokalizacji / Status bezpieczeństwa offline (`TYPE_LOCATION_PIN`: współrzędne i notatka)
 2. `SeqNum` (2 B, UInt16 BE): numer sekwencyjny nadawcy $`Counter_{out}`$.
 3. `AckNum` (2 B, UInt16 BE): ostatnio odebrany numer sekwencyjny rozmówcy.
 4. `TimestampUTC` (8 B, Int64 BE): uniksowy znacznik czasu w milisekundach.
@@ -314,6 +316,21 @@ Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'
   * `MemberCount` ($`M`$): 2 B (UInt16, liczba uczestników, wartość $`\le 64`$)
   * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
   * `CSPRNG Padding`: $`859 - \text{długość}`$ bajtów
+* **Typ 0x07 (Reakcja Emoji — TYPE_REACTION):**
+  * `TargetSeqEpoch`: 4 B (UInt32 BE)
+  * `TargetSeqNum`: 2 B (UInt16 BE)
+  * `EmojiLength` ($`E`$): 1 B (UInt8, wartość $`\le 64`$)
+  * `Emoji`: $`E`$ bajtów UTF-8 (maksymalnie 64 bajty)
+  * `CSPRNG Padding`: $`852 - E`$ bajtów (wypełnienie do 859 B)
+* **Typ 0x08 (Pinezka Lokalizacji / Status Bezpieczeństwa Offline — TYPE_LOCATION_PIN):**
+  * `Latitude`: 8 B (Double IEEE 754 BE)
+  * `Longitude`: 8 B (Double IEEE 754 BE)
+  * `Altitude`: 8 B (Double IEEE 754 BE)
+  * `Accuracy`: 4 B (Float IEEE 754 BE)
+  * `EphemeralTtlSeconds`: 4 B (UInt32 BE)
+  * `NoteLength` ($`P`$): 2 B (UInt16 BE, wartość $`\le 829`$)
+  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów)
+  * `CSPRNG Padding`: $`829 - P`$ bajtów (wypełnienie do 859 B)
 
 ### 7.5. Dodatkowe Typy Rekordów o Stałym Rozmiarze 900 B
 * **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).

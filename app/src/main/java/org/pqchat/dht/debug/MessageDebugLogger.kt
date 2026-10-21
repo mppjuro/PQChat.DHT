@@ -386,6 +386,22 @@ object MessageDebugLogger {
                 "memberCount" to p.members.size,
                 "description" to "Zdecentralizowana kontrola grupy PQ Sender Keys over BEP 44"
             )
+            is BinaryFrameCodec.DecodedPayload.Reaction -> linkedMapOf<String, Any?>(
+                "type" to "Reaction (0x07)",
+                "targetSeqEpoch" to p.targetSeqEpoch,
+                "targetSeqNum" to p.targetSeqNum,
+                "emoji" to p.emoji,
+                "description" to "Jednoramkowy mikro-payload: Reakcja emoji powiązana z wiadomością"
+            )
+            is BinaryFrameCodec.DecodedPayload.LocationPin -> linkedMapOf<String, Any?>(
+                "type" to "LocationPin (0x08)",
+                "latitude" to p.latitude,
+                "longitude" to p.longitude,
+                "altitude" to p.altitude,
+                "accuracy" to p.accuracy,
+                "note" to p.note,
+                "description" to "Jednoramkowy mikro-payload: Pinezka współrzędnych geograficznych / Status bezpieczeństwa"
+            )
         }
 
         val pqcAnalysis = when (frameMsg.msgType) {
@@ -419,6 +435,8 @@ object MessageDebugLogger {
             BinaryFrameCodec.TYPE_REKEY_RESPONSE -> "REKEY RESPONSE"
             BinaryFrameCodec.TYPE_CHUNK_DATA -> "CHUNK"
             BinaryFrameCodec.TYPE_GROUP_CONTROL -> "GROUP CONTROL"
+            BinaryFrameCodec.TYPE_REACTION -> "REAKCJA EMOJI"
+            BinaryFrameCodec.TYPE_LOCATION_PIN -> "PINEZKA LOKALIZACJI"
             else -> "TYP 0x%02X".format(frameMsg.msgType)
         }
 

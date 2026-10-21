@@ -712,6 +712,194 @@ class ChatRepository(
         }
     }
 
+    suspend fun sendReaction(
+        contactId: String,
+        targetMessage: MessageEntity,
+        emoji: String
+    ): Boolean = sendReaction(contactId, targetMessage.seqEpoch, targetMessage.seqNum, emoji)
+
+    suspend fun sendReaction(
+        contactId: String,
+        targetSeqEpoch: Int,
+        targetSeqNum: Int,
+        emoji: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        getContactMutex(contactId).withLock {
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+
+            val plaintext = BinaryFrameCodec.encodeReaction(
+                seqNum = contact.counterOut and 0xFFFF,
+                ackNum = contact.counterIn and 0xFFFF,
+                timestampUTC = System.currentTimeMillis(),
+                targetSeqEpoch = targetSeqEpoch,
+                targetSeqNum = targetSeqNum,
+                emoji = emoji
+            )
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                direction = contact.outboundDirection
+            )
+
+            messageDao.updateMessageReactionAnyDirection(contactId, targetSeqEpoch, targetSeqNum, emoji)
+
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+
+            val isSelf = (contactId == SELF_CONTACT_ID)
+            if (isStrictPoissonShaping() && !isSelf) {
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        messageId = -1L,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                        }
+                    )
+                )
+                true
+            } else {
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                }
+                success
+            }
+        }
+    }
+
+    suspend fun sendLocationPin(
+        contactId: String,
+        latitude: Double,
+        longitude: Double,
+        altitude: Double = 0.0,
+        accuracy: Float = 0.0f,
+        note: String = "",
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean = withContext(Dispatchers.IO) {
+        val locText = org.pqchat.dht.protocol.LocationPinData(
+            latitude = latitude,
+            longitude = longitude,
+            altitude = altitude,
+            accuracy = accuracy,
+            note = note
+        ).toPayloadText()
+
+        getContactMutex(contactId).withLock {
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+
+            val plaintext = BinaryFrameCodec.encodeLocationPin(
+                seqNum = contact.counterOut and 0xFFFF,
+                ackNum = contact.counterIn and 0xFFFF,
+                timestampUTC = System.currentTimeMillis(),
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                accuracy = accuracy,
+                note = note,
+                ephemeralTtlSeconds = ephemeralTtlSeconds
+            )
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                direction = contact.outboundDirection
+            )
+
+            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+            val isSelf = contactId == SELF_CONTACT_ID
+
+            val msgId = messageDao.insertMessage(
+                MessageEntity(
+                    contactId = contactId,
+                    isOutgoing = true,
+                    seqEpoch = contact.counterOut / 65536,
+                    seqNum = contact.counterOut,
+                    ackNum = contact.counterIn,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = locText,
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENDING",
+                    ackTarget = targetAck,
+                    ackRatchetKey = slot.msgKey,
+                    slotTarget = slot.target,
+                    slotEdSeed = slot.edPrivateKeySeed,
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
+                )
+            )
+
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+
+            if (isStrictPoissonShaping() && !isSelf) {
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf,
+                        seqNum = contact.counterOut,
+                        messageId = msgId,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                                val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                messageDao.updateStatus(msgId, newStatus)
+                            } else {
+                                messageDao.updateStatus(msgId, "EXPIRED_DHT")
+                            }
+                        }
+                    )
+                )
+                true
+            } else {
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+                if (success) {
+                    messageDao.updateStatus(msgId, if (isSelf) "SENT_DHT" else "PENDING_DELIVERY")
+                } else {
+                    messageDao.updateStatus(msgId, "EXPIRED_DHT")
+                }
+                success
+            }
+        }
+    }
+
     /**
      * Sends an image payload over DHT with chunking.
      * Protected by per-contact Mutex and Room outbox queue.
@@ -1407,6 +1595,66 @@ class ChatRepository(
                         skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
                         anyProcessed = true
                     }
+                    BinaryFrameCodec.TYPE_REACTION -> {
+                        val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                        messageDao.updateMessageReaction(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, true, reactionPayload.emoji)
+                        messageDao.updateMessageReactionAnyDirection(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                        bitmap.markReceived(sk.slotIndex)
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = contact.counterIn,
+                            chainKeyIn = contact.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        sk.destroy()
+                        skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        anyProcessed = true
+                    }
+                    BinaryFrameCodec.TYPE_LOCATION_PIN -> {
+                        val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                        val seqEpoch = sk.slotIndex / 65536
+                        if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, sk.slotIndex, false)) {
+                            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(sk.rawMsgKey, "${sk.slotIndex}")
+                            val locText = org.pqchat.dht.protocol.LocationPinData(
+                                locPayload.latitude,
+                                locPayload.longitude,
+                                locPayload.altitude,
+                                locPayload.accuracy,
+                                locPayload.note
+                            ).toPayloadText()
+                            messageDao.insertMessage(
+                                MessageEntity(
+                                    contactId = contactId,
+                                    isOutgoing = false,
+                                    seqEpoch = seqEpoch,
+                                    seqNum = sk.slotIndex,
+                                    ackNum = frameMsg.ackNum,
+                                    timestamp = frameMsg.timestampUTC,
+                                    textContent = locText,
+                                    status = "DELIVERED",
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = sk.rawMsgKey,
+                                    slotTarget = sk.target,
+                                    slotEdSeed = sk.rawEdPrivateKeySeed,
+                                    ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
+                                    expiresAtTimestamp = null
+                                )
+                            )
+                            onIncomingMessageDelivered?.invoke(contactId, locText, false)
+                        }
+                        bitmap.markReceived(sk.slotIndex)
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = contact.counterIn,
+                            chainKeyIn = contact.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        sk.destroy()
+                        skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        anyProcessed = true
+                    }
                     BinaryFrameCodec.TYPE_GROUP_CONTROL -> {
                         val controlPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.GroupControl
                         processIncomingGroupControl(contactId, controlPayload)
@@ -1899,6 +2147,86 @@ class ChatRepository(
                                 seqNum = slot.counter
                             )
                         )
+                    }
+                    true
+                }
+                BinaryFrameCodec.TYPE_REACTION -> {
+                    val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                    bitmap.markReceived(slot.counter)
+                    messageDao.updateMessageReaction(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, true, reactionPayload.emoji)
+                    messageDao.updateMessageReactionAnyDirection(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                    contactDao.updateIncomingStateWithBitmap(
+                        id = contactId,
+                        counterIn = slot.counter + 1,
+                        chainKeyIn = slot.nextChainKey,
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+                    preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                    if (!isSelf) {
+                        pendingAckQueue.enqueue(
+                            org.pqchat.dht.traffic.PendingAck(
+                                contactId = contactId,
+                                messageId = "${slot.counter}",
+                                ratchetKey = slot.msgKey,
+                                seqNum = slot.counter
+                            )
+                        )
+                    }
+                    true
+                }
+                BinaryFrameCodec.TYPE_LOCATION_PIN -> {
+                    val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                    bitmap.markReceived(slot.counter)
+                    val seqEpoch = slot.counter / 65536
+                    val alreadyExists = messageDao.existsMessageWithEpoch(contactId, seqEpoch, slot.counter, false)
+                    if (!alreadyExists) {
+                        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${slot.counter}")
+                        val locText = org.pqchat.dht.protocol.LocationPinData(
+                            locPayload.latitude,
+                            locPayload.longitude,
+                            locPayload.altitude,
+                            locPayload.accuracy,
+                            locPayload.note
+                        ).toPayloadText()
+                        messageDao.insertMessage(
+                            MessageEntity(
+                                contactId = contactId,
+                                isOutgoing = false,
+                                seqEpoch = seqEpoch,
+                                seqNum = slot.counter,
+                                ackNum = frameMsg.ackNum,
+                                timestamp = frameMsg.timestampUTC,
+                                textContent = locText,
+                                status = "DELIVERED",
+                                ackTarget = targetAck,
+                                ackRatchetKey = slot.msgKey,
+                                slotTarget = slot.target,
+                                slotEdSeed = slot.edPrivateKeySeed,
+                                ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
+                                expiresAtTimestamp = null
+                            )
+                        )
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = slot.nextChainKey,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                        onIncomingMessageDelivered?.invoke(contactId, locText, false)
+
+                        if (!isSelf) {
+                            pendingAckQueue.enqueue(
+                                org.pqchat.dht.traffic.PendingAck(
+                                    contactId = contactId,
+                                    messageId = "${slot.counter}",
+                                    ratchetKey = slot.msgKey,
+                                    seqNum = slot.counter
+                                )
+                            )
+                        }
                     }
                     true
                 }
@@ -2581,6 +2909,59 @@ class ChatRepository(
                             skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
                             true
                         }
+                        BinaryFrameCodec.TYPE_REACTION -> {
+                            val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                            messageDao.updateMessageReaction(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, true, reactionPayload.emoji)
+                            messageDao.updateMessageReactionAnyDirection(contactId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            true
+                        }
+                        BinaryFrameCodec.TYPE_LOCATION_PIN -> {
+                            val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                            val seqEpoch = skippedKey.slotIndex / 65536
+                            if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, skippedKey.slotIndex, false)) {
+                                val locText = org.pqchat.dht.protocol.LocationPinData(
+                                    locPayload.latitude,
+                                    locPayload.longitude,
+                                    locPayload.altitude,
+                                    locPayload.accuracy,
+                                    locPayload.note
+                               ).toPayloadText()
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = contactId,
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = skippedKey.slotIndex,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = locText,
+                                        status = "DELIVERED"
+                                    )
+                                )
+                                onIncomingMessageDelivered?.invoke(contactId, locText, false)
+                            }
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            true
+                        }
                         else -> {
                             harvestUndecryptableItem(skippedKey.target, item)
                             false
@@ -2649,6 +3030,40 @@ class ChatRepository(
                                     )
                                 )
                                 onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                            }
+                        } else if (frameMsg.msgType == BinaryFrameCodec.TYPE_REACTION) {
+                            val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                            messageDao.updateMessageReactionAnyDirection(groupId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                        } else if (frameMsg.msgType == BinaryFrameCodec.TYPE_LOCATION_PIN) {
+                            val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                            val seqEpoch = slot.counter / 65536
+                            if (!messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)) {
+                                val locText = org.pqchat.dht.protocol.LocationPinData(
+                                    locPayload.latitude,
+                                    locPayload.longitude,
+                                    locPayload.altitude,
+                                    locPayload.accuracy,
+                                    locPayload.note
+                                ).toPayloadText()
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = groupId,
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = slot.counter,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = locText,
+                                        status = "DELIVERED",
+                                        slotTarget = slot.target,
+                                        slotEdSeed = slot.edPrivateKeySeed,
+                                        senderMemberId = member.memberId,
+                                        senderName = member.rawMemberName,
+                                        ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
+                                        expiresAtTimestamp = null
+                                    )
+                                )
+                                onIncomingMessageDelivered?.invoke(groupId, locText, false)
                             }
                         }
                     }
@@ -4180,6 +4595,283 @@ class ChatRepository(
         }
     }
 
+    suspend fun sendGroupReaction(
+        groupId: String,
+        targetMessage: MessageEntity,
+        emoji: String
+    ): Boolean = sendGroupReaction(groupId, targetMessage.seqEpoch, targetMessage.seqNum, emoji)
+
+    suspend fun sendGroupReaction(
+        groupId: String,
+        targetSeqEpoch: Int,
+        targetSeqNum: Int,
+        emoji: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+
+            val plaintext = BinaryFrameCodec.encodeReaction(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                targetSeqEpoch = targetSeqEpoch,
+                targetSeqNum = targetSeqNum,
+                emoji = emoji
+            )
+
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            val targetSlots = if (activeMembers.isNotEmpty()) {
+                activeMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
+
+            messageDao.updateMessageReactionAnyDirection(groupId, targetSeqEpoch, targetSeqNum, emoji)
+
+            groupDao.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
+                lastActive = System.currentTimeMillis()
+            )
+
+            val framesRemaining = java.util.concurrent.atomic.AtomicInteger(targetSlots.size)
+            val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+
+            if (isStrictPoissonShaping()) {
+                val outboundFrames = targetSlots.map { slot ->
+                    val frame = BinaryFrameCodec.packGroupAeadFrame(
+                        key = slot.msgKey,
+                        plaintext = plaintext,
+                        target = slot.target,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes
+                    )
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = false,
+                        seqNum = currentGroup.myCounterOut,
+                        messageId = -1L,
+                        contactId = groupId,
+                        onSent = { success ->
+                            if (success) {
+                                anySuccess.set(true)
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                        }
+                    )
+                }
+                outboundPoissonQueue.enqueueInterleaved(outboundFrames)
+                return@withLock true
+            }
+
+            var overallSuccess = false
+            for ((idx, slot) in targetSlots.withIndex()) {
+                if (idx > 0) {
+                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    kotlinx.coroutines.delay(jitterMs)
+                }
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    overallSuccess = true
+                }
+            }
+            overallSuccess
+        }
+    }
+
+    suspend fun sendGroupLocationPin(
+        groupId: String,
+        latitude: Double,
+        longitude: Double,
+        altitude: Double = 0.0,
+        accuracy: Float = 0.0f,
+        note: String = "",
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean = withContext(Dispatchers.IO) {
+        val locText = org.pqchat.dht.protocol.LocationPinData(
+            latitude = latitude,
+            longitude = longitude,
+            altitude = altitude,
+            accuracy = accuracy,
+            note = note
+        ).toPayloadText()
+
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+
+            val plaintext = BinaryFrameCodec.encodeLocationPin(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                accuracy = accuracy,
+                note = note,
+                ephemeralTtlSeconds = ephemeralTtlSeconds
+            )
+
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            val targetSlots = if (activeMembers.isNotEmpty()) {
+                activeMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
+
+            val msgId = messageDao.insertMessage(
+                MessageEntity(
+                    contactId = groupId,
+                    isOutgoing = true,
+                    seqEpoch = currentGroup.myCounterOut / 65536,
+                    seqNum = currentGroup.myCounterOut,
+                    ackNum = 0,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = locText,
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
+                    senderMemberId = currentGroup.myMemberId,
+                    senderName = "Ja",
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
+                )
+            )
+
+            groupDao.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
+                lastActive = System.currentTimeMillis()
+            )
+
+            val framesRemaining = java.util.concurrent.atomic.AtomicInteger(targetSlots.size)
+            val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+
+            if (isStrictPoissonShaping()) {
+                val outboundFrames = targetSlots.map { slot ->
+                    val frame = BinaryFrameCodec.packGroupAeadFrame(
+                        key = slot.msgKey,
+                        plaintext = plaintext,
+                        target = slot.target,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes
+                    )
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = false,
+                        seqNum = currentGroup.myCounterOut,
+                        messageId = msgId,
+                        contactId = groupId,
+                        onSent = { success ->
+                            if (success) {
+                                anySuccess.set(true)
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                            if (framesRemaining.decrementAndGet() == 0) {
+                                if (anySuccess.get()) {
+                                    messageDao.updateStatus(msgId, "SENT_DHT")
+                                }
+                            }
+                        }
+                    )
+                }
+                outboundPoissonQueue.enqueueInterleaved(outboundFrames)
+                return@withLock true
+            }
+
+            var overallSuccess = false
+            for ((idx, slot) in targetSlots.withIndex()) {
+                if (idx > 0) {
+                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    kotlinx.coroutines.delay(jitterMs)
+                }
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    overallSuccess = true
+                }
+            }
+
+            if (overallSuccess) {
+                messageDao.updateStatus(msgId, "SENT_DHT")
+            }
+            overallSuccess
+        }
+    }
+
     suspend fun rotateGroupSenderKey(groupId: String): Boolean = withContext(Dispatchers.IO) {
         getGroupMutex(groupId).withLock {
             val group = groupDao?.getGroupById(groupId) ?: return@withLock false
@@ -4342,6 +5034,43 @@ class ChatRepository(
                                             )
                                         )
                                         onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                                    }
+                                }
+                                BinaryFrameCodec.TYPE_REACTION -> {
+                                    val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                                    messageDao.updateMessageReactionAnyDirection(groupId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                                }
+                                BinaryFrameCodec.TYPE_LOCATION_PIN -> {
+                                    val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                                    val seqEpoch = activeSlot.counter / 65536
+                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                    if (!alreadyExists) {
+                                        val locText = org.pqchat.dht.protocol.LocationPinData(
+                                            locPayload.latitude,
+                                            locPayload.longitude,
+                                            locPayload.altitude,
+                                            locPayload.accuracy,
+                                            locPayload.note
+                                        ).toPayloadText()
+                                        messageDao.insertMessage(
+                                            MessageEntity(
+                                                contactId = groupId,
+                                                isOutgoing = false,
+                                                seqEpoch = seqEpoch,
+                                                seqNum = activeSlot.counter,
+                                                ackNum = frameMsg.ackNum,
+                                                timestamp = frameMsg.timestampUTC,
+                                                textContent = locText,
+                                                status = "DELIVERED",
+                                                slotTarget = activeSlot.target,
+                                                slotEdSeed = activeSlot.edPrivateKeySeed,
+                                                senderMemberId = curMember.memberId,
+                                                senderName = curMember.rawMemberName,
+                                                ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
+                                                expiresAtTimestamp = null
+                                            )
+                                        )
+                                        onIncomingMessageDelivered?.invoke(groupId, locText, false)
                                     }
                                 }
                                 else -> {}

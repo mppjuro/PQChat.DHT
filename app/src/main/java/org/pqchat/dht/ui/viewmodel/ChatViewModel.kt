@@ -370,6 +370,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun sendReaction(targetMessage: MessageEntity, emoji: String) {
+        val contactId = _selectedContactId.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val group = repository.getGroup(contactId)
+            val success = if (group != null) {
+                repository.sendGroupReaction(contactId, targetMessage, emoji)
+            } else {
+                repository.sendReaction(contactId, targetMessage, emoji)
+            }
+            if (!success) {
+                _statusNotification.value = "Nie udało się wysłać reakcji do DHT"
+            }
+        }
+    }
+
+    fun sendLocationPin(
+        latitude: Double,
+        longitude: Double,
+        altitude: Double = 0.0,
+        accuracy: Float = 0.0f,
+        note: String = ""
+    ) {
+        val contactId = _selectedContactId.value ?: return
+        val ttl = _ephemeralTtlSeconds.value
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Wysyłanie pinezki lokalizacji przez DHT..."
+            val group = repository.getGroup(contactId)
+            val success = if (group != null) {
+                repository.sendGroupLocationPin(contactId, latitude, longitude, altitude, accuracy, note, ttl)
+            } else {
+                repository.sendLocationPin(contactId, latitude, longitude, altitude, accuracy, note, ttl)
+            }
+            if (success) {
+                _statusNotification.value = "Wysłano pinezkę lokalizacji"
+            } else {
+                _statusNotification.value = "Błąd wysyłania pinezki lokalizacji"
+            }
+        }
+    }
+
     fun resendMessage(messageId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Ponowne wysyłanie wiadomości..."

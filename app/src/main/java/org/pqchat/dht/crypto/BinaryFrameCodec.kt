@@ -28,11 +28,16 @@ object BinaryFrameCodec {
     const val TYPE_REKEY_RESPONSE: Byte = 0x04
     const val TYPE_CHUNK_DATA: Byte = 0x05
     const val TYPE_GROUP_CONTROL: Byte = 0x06
+    const val TYPE_REACTION: Byte = 0x07
+    const val TYPE_LOCATION_PIN: Byte = 0x08
 
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
     const val GROUP_SUBTYPE_LEAVE: Byte = 0x03
     const val GROUP_REKEY_MESSAGE_INTERVAL = 50
+
+    const val T7_MAX_EMOJI_SIZE = 64
+    const val T8_MAX_NOTE_SIZE = 829 // 859 - 30 (lat:8, lon:8, alt:8, acc:4, len:2)
 
     // Type 0x01 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + Salt (24 B) + Tag (32 B) = 856 <= 859
     const val T1_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
@@ -191,6 +196,21 @@ object BinaryFrameCodec {
                 return result
             }
         }
+
+        data class Reaction(
+            val targetSeqEpoch: Int,
+            val targetSeqNum: Int,
+            val emoji: String
+        ) : DecodedPayload()
+
+        data class LocationPin(
+            val latitude: Double,
+            val longitude: Double,
+            val altitude: Double,
+            val accuracy: Float,
+            val note: String,
+            val ephemeralTtlSeconds: Long = 0L
+        ) : DecodedPayload()
     }
 
     data class FrameMessage(
@@ -476,6 +496,75 @@ object BinaryFrameCodec {
         members = emptyList()
     )
 
+    fun encodeReaction(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        targetSeqEpoch: Int,
+        targetSeqNum: Int,
+        emoji: String
+    ): ByteArray {
+        val emojiBytes = emoji.toByteArray(Charsets.UTF_8)
+        require(emojiBytes.size <= T7_MAX_EMOJI_SIZE) {
+            "Emoji length ${emojiBytes.size} exceeds maximum $T7_MAX_EMOJI_SIZE bytes"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.putInt(targetSeqEpoch)
+        buffer.putShort((targetSeqNum and 0xFFFF).toShort())
+        buffer.putShort(emojiBytes.size.toShort())
+        buffer.put(emojiBytes)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_REACTION, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
+    fun encodeLocationPin(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        latitude: Double,
+        longitude: Double,
+        altitude: Double,
+        accuracy: Float,
+        note: String,
+        ephemeralTtlSeconds: Long = 0L
+    ): ByteArray {
+        val noteBytes = note.toByteArray(Charsets.UTF_8)
+        val maxNote = if (ephemeralTtlSeconds > 0) {
+            T8_MAX_NOTE_SIZE - EPHEMERAL_HEADER_SIZE
+        } else {
+            T8_MAX_NOTE_SIZE
+        }
+        require(noteBytes.size <= maxNote) {
+            "Note length ${noteBytes.size} exceeds maximum $maxNote bytes"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.putDouble(latitude)
+        buffer.putDouble(longitude)
+        buffer.putDouble(altitude)
+        buffer.putFloat(accuracy)
+        buffer.putShort(noteBytes.size.toShort())
+        buffer.put(noteBytes)
+
+        if (ephemeralTtlSeconds > 0) {
+            buffer.putLong(MAGIC_EPHEMERAL)
+            buffer.putInt(ephemeralTtlSeconds.toInt())
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_LOCATION_PIN, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
     private fun packPlaintext(
         msgType: Byte,
         seqNum: Int,
@@ -662,6 +751,40 @@ object BinaryFrameCodec {
                         groupName = gName,
                         members = memberList
                     )
+                }
+                TYPE_REACTION -> {
+                    val targetEpoch = buffer.int
+                    val targetSeq = buffer.short.toInt() and 0xFFFF
+                    val emojiLen = buffer.short.toInt() and 0xFFFF
+                    require(emojiLen in 0..T7_MAX_EMOJI_SIZE && emojiLen <= buffer.remaining()) {
+                        "Invalid emoji length: $emojiLen"
+                    }
+                    val emojiBytes = ByteArray(emojiLen)
+                    buffer.get(emojiBytes)
+                    DecodedPayload.Reaction(targetEpoch, targetSeq, String(emojiBytes, Charsets.UTF_8))
+                }
+                TYPE_LOCATION_PIN -> {
+                    val lat = buffer.double
+                    val lon = buffer.double
+                    val alt = buffer.double
+                    val acc = buffer.float
+                    val noteLen = buffer.short.toInt() and 0xFFFF
+                    require(noteLen in 0..T8_MAX_NOTE_SIZE && noteLen <= buffer.remaining()) {
+                        "Invalid note length: $noteLen"
+                    }
+                    val noteBytes = ByteArray(noteLen)
+                    buffer.get(noteBytes)
+                    var ttl = 0L
+                    if (buffer.remaining() >= EPHEMERAL_HEADER_SIZE) {
+                        val mark = buffer.position()
+                        val magic = buffer.long
+                        if (magic == MAGIC_EPHEMERAL) {
+                            ttl = buffer.int.toLong() and 0xFFFFFFFFL
+                        } else {
+                            buffer.position(mark)
+                        }
+                    }
+                    DecodedPayload.LocationPin(lat, lon, alt, acc, String(noteBytes, Charsets.UTF_8), ttl)
                 }
                 else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
             }

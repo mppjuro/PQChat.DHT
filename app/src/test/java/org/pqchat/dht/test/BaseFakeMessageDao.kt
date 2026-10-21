@@ -164,4 +164,41 @@ open class BaseFakeMessageDao : MessageDao {
     override suspend fun deleteMessageById(id: Long) {
         messages.removeIf { it.id == id }
     }
+
+    override suspend fun updateMessageReactionById(id: Long, reaction: String?) {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            messages[idx] = messages[idx].copy(reaction = reaction)
+        }
+    }
+
+    override suspend fun updateMessageReaction(
+        contactId: String,
+        seqEpoch: Int,
+        seqNum: Int,
+        isOutgoing: Boolean,
+        reaction: String?
+    ) {
+        val idx = messages.indexOfFirst {
+            it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing
+        }
+        if (idx >= 0) {
+            messages[idx] = messages[idx].copy(reaction = reaction)
+        }
+    }
+
+    override suspend fun updateMessageReactionAnyDirection(
+        contactId: String,
+        seqEpoch: Int,
+        seqNum: Int,
+        reaction: String?
+    ) {
+        val idx = messages.indexOfFirst {
+            it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum
+        }
+        if (idx >= 0) {
+            messages[idx] = messages[idx].copy(reaction = reaction)
+        }
+    }
 }
+
