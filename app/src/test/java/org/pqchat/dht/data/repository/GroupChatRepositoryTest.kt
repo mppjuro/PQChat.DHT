@@ -1539,4 +1539,309 @@ class GroupChatRepositoryTest {
         assertEquals(1, charlieMessageDao.messages.size)
         assertEquals("Welcome back online Charlie! Epoch 2 message.", charlieMessageDao.messages[0].rawTextContent)
     }
+
+    @Test
+    fun testGroupControl_InviteRetransmissionToOfflineMember() = runBlocking {
+        val dhtNode = FakeDht()
+
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceAckQueue = PendingAckQueue()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = aliceAckQueue,
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobAckQueue = PendingAckQueue()
+
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = bobAckQueue,
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        val aliceToBobKey = CryptoUtils.secureRandomBytes(64)
+        val bobToAliceKey = CryptoUtils.secureRandomBytes(64)
+
+        aliceContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "bob-contact-id",
+                name = "Bob 🛡️",
+                chainKeyOut = aliceToBobKey,
+                counterOut = 0,
+                chainKeyIn = bobToAliceKey,
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+        bobContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "alice-contact-id",
+                name = "Alice 🚀",
+                chainKeyOut = bobToAliceKey,
+                counterOut = 0,
+                chainKeyIn = aliceToBobKey,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+
+        // 1. Alice creates a group with Unicode/Emoji name
+        val groupName = "🇵🇱 Quantum Safe Taskforce 🛡️"
+        val group = aliceRepo.createGroup(groupName, listOf("bob-contact-id"))
+
+        // Simulate Bob being offline: invite packet in DHT is lost / dropped
+        val bobSlot0 = RatchetChain.deriveSlot(aliceToBobKey, 0)
+        dhtNode.storage.remove(CryptoUtils.toHex(bobSlot0.target))
+
+        // Bob polls while offline: nothing found
+        val receivedBefore = bobRepo.pollContactIncoming("alice-contact-id")
+        assertFalse("Bob receives nothing because invite packet was lost", receivedBefore)
+
+        // 2. Alice uses retransmitGroupInviteToOfflineMember
+        val unconfirmedInvites = aliceRepo.getPendingGroupControls().filter {
+            it.groupId == group.groupId && it.contactId == "bob-contact-id" && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_INVITE
+        }
+        assertEquals(1, unconfirmedInvites.size)
+
+        val retransmitOk = aliceRepo.retransmitGroupInviteToOfflineMember(group.groupId, "bob-contact-id")
+        assertTrue("Invite retransmission must succeed", retransmitOk)
+
+        // 3. Bob comes back online and polls incoming channel
+        val receivedAfter = bobRepo.pollContactIncoming("alice-contact-id")
+        assertTrue("Bob receives retransmitted invite frame", receivedAfter)
+
+        // Verify Bob has joined the group with matching Unicode group name
+        val bobGroup = bobGroupDao.getGroupById(group.groupId)
+        assertNotNull(bobGroup)
+        assertEquals(groupName, bobGroup!!.groupName)
+
+        // 4. Bob emits Cover-ACK for the retransmitted invite
+        assertEquals(1, bobAckQueue.size)
+        val bobAck = bobAckQueue.poll()!!
+        val ackFrame = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(bobAck.ratchetKey, bobAck.messageId, bobAck.seqNum)
+        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(bobAck.ratchetKey, bobAck.messageId)
+        val ackEdSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(bobAck.ratchetKey, bobAck.messageId)
+        dhtNode.putMutable(targetAck, ackFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, ackEdSeed)
+
+        // 5. Alice confirms ACK
+        aliceRepo.checkPendingAcks("bob-contact-id")
+        val remainingPending = aliceRepo.getPendingGroupControls().filter { it.contactId == "bob-contact-id" }
+        assertTrue("Pending invite must be confirmed and removed", remainingPending.isEmpty())
+    }
+
+    @Test
+    fun testGroupEpochCatchup_AutomaticRetransmissionViaRepublishPolicy() = runBlocking {
+        val dhtNode = FakeDht()
+
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceAckQueue = PendingAckQueue()
+
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = aliceAckQueue,
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobAckQueue = PendingAckQueue()
+
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = bobAckQueue,
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        val groupId = UUID.randomUUID().toString()
+        val aliceMemberId = UUID.randomUUID().toString()
+        val bobMemberId = UUID.randomUUID().toString()
+
+        val aliceToBobKey = CryptoUtils.secureRandomBytes(64)
+        val bobToAliceKey = CryptoUtils.secureRandomBytes(64)
+        val initialAliceKey = CryptoUtils.secureRandomBytes(64)
+
+        aliceContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "bob-contact-id",
+                name = "Bob",
+                chainKeyOut = aliceToBobKey,
+                counterOut = 0,
+                chainKeyIn = bobToAliceKey,
+                counterIn = 0,
+                isVerified = true
+            )
+        )
+        bobContactDao.insertOrUpdate(
+            ContactEntity(
+                id = "alice-contact-id",
+                name = "Alice",
+                chainKeyOut = bobToAliceKey,
+                counterOut = 0,
+                chainKeyIn = aliceToBobKey,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+
+        aliceGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "Catchup Group",
+                myMemberId = aliceMemberId,
+                myChainKeyOut = initialAliceKey,
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        aliceGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = bobMemberId,
+                contactId = "bob-contact-id",
+                memberName = "Bob",
+                chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                counterIn = 0,
+                isActive = true
+            )
+        )
+
+        bobGroupDao.insertOrUpdate(
+            GroupEntity(
+                groupId = groupId,
+                groupName = "Catchup Group",
+                myMemberId = bobMemberId,
+                myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                myCounterOut = 0,
+                groupEpoch = 1L
+            )
+        )
+        bobGroupMemberDao.insertOrUpdate(
+            GroupMemberEntity(
+                groupId = groupId,
+                memberId = aliceMemberId,
+                contactId = "alice-contact-id",
+                memberName = "Alice",
+                chainKeyIn = initialAliceKey,
+                counterIn = 0,
+                isActive = true
+            )
+        )
+
+        // 1. Alice rotates sender key to Epoch 2
+        aliceRepo.rotateGroupSenderKey(groupId)
+        val aliceGroupEpoch2 = aliceGroupDao.getGroupById(groupId)!!
+        assertEquals(2L, aliceGroupEpoch2.groupEpoch)
+
+        // Drop the rekey packet from DHT to simulate Bob being offline / network drop
+        val slot0 = RatchetChain.deriveSlot(aliceToBobKey, 0)
+        dhtNode.storage.remove(CryptoUtils.toHex(slot0.target))
+
+        // 2. Automated retransmission via retransmitUnconfirmedGroupControls using RepublishPolicy
+        val policy = org.pqchat.dht.traffic.RepublishPolicy(tier1IntervalMs = 1000L)
+        // Advance time to satisfy retry interval
+        val futureTime = System.currentTimeMillis() + 5000L
+        val retransmittedCount = aliceRepo.retransmitUnconfirmedGroupControls(policy, futureTime)
+        assertEquals("Exactly 1 unconfirmed rekey control frame must be retransmitted", 1, retransmittedCount)
+
+        // 3. Bob comes online, polls 1-on-1, receives the retransmitted REKEY frame!
+        val bobReceived = bobRepo.pollContactIncoming("alice-contact-id")
+        assertTrue("Bob must receive retransmitted REKEY frame", bobReceived)
+
+        // Verify Bob's incoming chain for Alice is synchronized to Epoch 2
+        val bobAliceMember = bobGroupMemberDao.getMember(groupId, aliceMemberId)!!
+        assertArrayEquals(aliceGroupEpoch2.rawMyChainKeyOut, bobAliceMember.rawChainKeyIn)
+
+        // 4. Bob ACKs the rekey
+        assertEquals(1, bobAckQueue.size)
+        val bobAck = bobAckQueue.poll()!!
+        val ackFrame = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(bobAck.ratchetKey, bobAck.messageId, bobAck.seqNum)
+        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(bobAck.ratchetKey, bobAck.messageId)
+        val ackEdSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(bobAck.ratchetKey, bobAck.messageId)
+        dhtNode.putMutable(targetAck, ackFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, ackEdSeed)
+
+        aliceRepo.checkPendingAcks("bob-contact-id")
+        assertTrue("Alice must have 0 pending controls after ACK", aliceRepo.getPendingGroupControls().isEmpty())
+
+        // 5. Alice sends an Epoch 2 group message with Polish/Unicode text
+        val messageText = "Zażółć gęślą jaźń w epoce 2! 🛡️"
+        aliceRepo.sendGroupMessage(groupId, messageText)
+
+        val bobGotMsg = bobRepo.pollGroupIncoming(groupId)
+        assertTrue("Bob must receive and decrypt the Epoch 2 group message", bobGotMsg)
+        assertEquals(1, bobMessageDao.messages.size)
+        assertEquals(messageText, bobMessageDao.messages[0].rawTextContent)
+    }
+
+    @Test
+    fun testGroupFanOutBurst_InterleavingWithDummyFramesWhenQueueEmpty() {
+        val queue = OutboundPoissonQueue()
+
+        // 3 group frames to enqueue
+        val groupFrames = (1..3).map { i ->
+            OutboundPoissonFrame(
+                target = CryptoUtils.secureRandomBytes(20),
+                payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES),
+                sk = CryptoUtils.secureRandomBytes(32),
+                seqNum = 100 + i
+            )
+        }
+
+        // Enqueue with dummyFactory on empty queue
+        queue.enqueueInterleaved(groupFrames) { OutboundPoissonQueue.createDummyFrame() }
+
+        // Expected: 3 group frames spaced by 2 dummy frames = 5 frames total
+        assertEquals(5, queue.size)
+        val items = queue.getAll()
+
+        // Verify pattern: [Group, Dummy, Group, Dummy, Group]
+        assertFalse("Item 0 must be group frame", items[0].isDummyCover)
+        assertTrue("Item 1 must be dummy frame", items[1].isDummyCover)
+        assertFalse("Item 2 must be group frame", items[2].isDummyCover)
+        assertTrue("Item 3 must be dummy frame", items[3].isDummyCover)
+        assertFalse("Item 4 must be group frame", items[4].isDummyCover)
+    }
 }

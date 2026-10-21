@@ -2172,7 +2172,9 @@ class ChatRepository(
         val slotTarget: ByteArray,
         val slotEdSeed: ByteArray,
         val payload: ByteArray,
-        val timestamp: Long = System.currentTimeMillis()
+        val timestamp: Long = System.currentTimeMillis(),
+        var lastRepublishedTimestamp: Long = 0L,
+        var currentAttempts: Int = 0
     )
 
     private val pendingGroupControls = ConcurrentHashMap<Long, PendingGroupControlRecord>()
@@ -3379,6 +3381,39 @@ class ChatRepository(
             return success
     }
 
+    suspend fun retransmitGroupInviteToOfflineMember(groupId: String, memberContactId: String): Boolean {
+        val group = groupDao?.getGroupById(groupId) ?: return false
+        val groupIdBytes = uuidStringToBytes(groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+        val allMembers = groupMemberDao?.getMembersForGroup(groupId) ?: emptyList()
+        val membersSummary = allMembers.map { m ->
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(
+                uuidStringToBytes(m.memberId),
+                m.memberName
+            )
+        }
+
+        // Cancel previous unconfirmed invite tasks for this member in this group
+        val previousTasks = pendingGroupControls.values.filter {
+            it.groupId == groupId && it.contactId == memberContactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_INVITE
+        }
+        for (task in previousTasks) {
+            org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(task.taskId)
+            pendingGroupControls.remove(task.taskId)
+        }
+
+        return sendGroupControlInvite(
+            contactId = memberContactId,
+            groupIdBytes = groupIdBytes,
+            groupEpoch = group.groupEpoch,
+            myMemberIdBytes = myMemberIdBytes,
+            myChainKeyOut = group.rawMyChainKeyOut,
+            currentCounter = group.myCounterOut.toLong(),
+            groupName = group.groupName,
+            membersSummary = membersSummary
+        )
+    }
+
     suspend fun retransmitGroupRekeyToOfflineMember(groupId: String, memberContactId: String): Boolean {
         val group = groupDao?.getGroupById(groupId) ?: return false
         val groupIdBytes = uuidStringToBytes(groupId)
@@ -3403,6 +3438,62 @@ class ChatRepository(
             currentCounter = group.myCounterOut.toLong(),
             groupName = group.groupName
         )
+    }
+
+    suspend fun retransmitGroupControlToOfflineMember(groupId: String, memberContactId: String): Boolean {
+        val record = pendingGroupControls.values.firstOrNull {
+            it.groupId == groupId && it.contactId == memberContactId
+        } ?: return false
+        return when (record.controlSubType) {
+            BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> retransmitGroupInviteToOfflineMember(groupId, memberContactId)
+            BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> retransmitGroupRekeyToOfflineMember(groupId, memberContactId)
+            else -> false
+        }
+    }
+
+    suspend fun retransmitUnconfirmedGroupControls(
+        policy: org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(),
+        currentTimeMs: Long = System.currentTimeMillis()
+    ): Int = withContext(Dispatchers.IO) {
+        val unconfirmed = pendingGroupControls.values.toList()
+        if (unconfirmed.isEmpty()) return@withContext 0
+
+        var retransmittedCount = 0
+        for (record in unconfirmed) {
+            val age = (currentTimeMs - record.timestamp).coerceAtLeast(0L)
+            if (policy.isExpired(age)) {
+                org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(record.taskId)
+                pendingGroupControls.remove(record.taskId)
+                continue
+            }
+
+            if (record.currentAttempts >= 40) {
+                org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(record.taskId)
+                pendingGroupControls.remove(record.taskId)
+                continue
+            }
+
+            val interval = policy.getIntervalForAge(age)
+            val timeSinceLast = if (record.lastRepublishedTimestamp == 0L) {
+                Long.MAX_VALUE
+            } else {
+                (currentTimeMs - record.lastRepublishedTimestamp).coerceAtLeast(0L)
+            }
+
+            if (timeSinceLast >= interval) {
+                val success = when (record.controlSubType) {
+                    BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> retransmitGroupInviteToOfflineMember(record.groupId, record.contactId)
+                    BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> retransmitGroupRekeyToOfflineMember(record.groupId, record.contactId)
+                    else -> false
+                }
+                if (success) {
+                    record.lastRepublishedTimestamp = currentTimeMs
+                    record.currentAttempts++
+                    retransmittedCount++
+                }
+            }
+        }
+        retransmittedCount
     }
 
     suspend fun processIncomingGroupControl(

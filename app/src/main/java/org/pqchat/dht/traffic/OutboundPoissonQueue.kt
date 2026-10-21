@@ -112,10 +112,10 @@ class OutboundPoissonQueue {
             if (existing.isEmpty()) {
                 // If queue is empty, space out group frames with dummy cover frames
                 for (i in frames.indices) {
-                    interleaved.add(frames[i])
-                    if (i < frames.size - 1 && dummyFactory != null) {
+                    if (i > 0 && dummyFactory != null) {
                         interleaved.add(dummyFactory.invoke())
                     }
+                    interleaved.add(frames[i])
                 }
             } else {
                 // Interleave frames across existing queue items with deterministic stride
@@ -123,23 +123,34 @@ class OutboundPoissonQueue {
                 var frameIdx = 0
                 var existingIdx = 0
                 val stride = totalSlots.toDouble() / frames.size
+                var lastWasGroupFrame = false
 
                 for (pos in 0 until totalSlots) {
                     val shouldPlaceGroupFrame = frameIdx < frames.size &&
                             (pos >= (frameIdx * stride).toInt() || existingIdx >= existing.size)
 
                     if (shouldPlaceGroupFrame) {
+                        if (dummyFactory != null && lastWasGroupFrame) {
+                            interleaved.add(dummyFactory.invoke())
+                        }
                         interleaved.add(frames[frameIdx++])
+                        lastWasGroupFrame = true
                     } else if (existingIdx < existing.size) {
                         interleaved.add(existing[existingIdx++])
+                        lastWasGroupFrame = false
                     }
                 }
 
                 while (frameIdx < frames.size) {
+                    if (dummyFactory != null && lastWasGroupFrame) {
+                        interleaved.add(dummyFactory.invoke())
+                    }
                     interleaved.add(frames[frameIdx++])
+                    lastWasGroupFrame = true
                 }
                 while (existingIdx < existing.size) {
                     interleaved.add(existing[existingIdx++])
+                    lastWasGroupFrame = false
                 }
             }
 

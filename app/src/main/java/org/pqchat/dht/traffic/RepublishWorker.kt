@@ -41,6 +41,9 @@ class RepublishWorker(
             // 2. Check pending ACKs before republishing (in case an ACK arrived)
             repository.checkPendingAcks()
 
+            // 2b. Retransmit unconfirmed group control frames (Invites & Rekeys) for offline members
+            repository.retransmitUnconfirmedGroupControls(policy)
+
             // 3. Execute periodic republish pass with Exponential Backoff (60-90m tiers)
             executeRepublishPass(
                 dhtClient = repository.dhtLeafNode,

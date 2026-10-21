@@ -37,6 +37,9 @@ class PollingWorker(
             // 2. Check pending ACKs
             repository.checkPendingAcks()
 
+            // 2b. Retransmit unconfirmed group control frames (Invites & Rekeys) for offline members
+            repository.retransmitUnconfirmedGroupControls(policy)
+
             // 3. Mark any messages that expired offline in Room DB
             repository.expireOutdatedPendingMessages(policy.maxTtlMs)
 

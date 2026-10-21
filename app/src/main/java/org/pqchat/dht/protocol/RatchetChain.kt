@@ -375,4 +375,36 @@ object RatchetChain {
 
         return slots
     }
+
+    fun computeGroupLookaheadSlots(
+        startChainKey: ByteArray,
+        startCounter: Int,
+        groupId: ByteArray,
+        senderMemberId: ByteArray,
+        recipientMemberId: ByteArray,
+        windowSize: Int = 4
+    ): List<SlotParameters> = computeGroupLookaheadSlots(
+        startChainKey = startChainKey,
+        startCounter = startCounter,
+        groupId = groupId,
+        recipientMemberId = recipientMemberId,
+        windowSize = windowSize
+    )
+
+    fun computeGroupLookaheadSlots(
+        startChainKey: org.pqchat.dht.data.db.EncryptedBlob,
+        startCounter: Int,
+        groupId: ByteArray,
+        recipientMemberId: ByteArray,
+        windowSize: Int = 4
+    ): List<SlotParameters> = computeGroupLookaheadSlots(startChainKey.raw, startCounter, groupId, recipientMemberId, windowSize)
+
+    fun computeGroupLookaheadSlots(
+        startChainKey: org.pqchat.dht.data.db.EncryptedBlob,
+        startCounter: Int,
+        groupId: ByteArray,
+        senderMemberId: ByteArray,
+        recipientMemberId: ByteArray,
+        windowSize: Int = 4
+    ): List<SlotParameters> = computeGroupLookaheadSlots(startChainKey.raw, startCounter, groupId, recipientMemberId, windowSize)
 }
