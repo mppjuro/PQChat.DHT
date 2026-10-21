@@ -62,6 +62,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🐛 Poprawki Błędów (Bug Fixes)
 
+- [`ef55043`](https://github.com/mppjuro/PQChat.DHT/commit/ef550431f9d4fe42d400fa18365c39ba03aabeba) (2026-10-21) — **group**: eliminate fan-out burst, add group epoch catch-up retransmission, and expand edge-case tests
 - [`528d195`](https://github.com/mppjuro/PQChat.DHT/commit/528d195433a566b8a23f318a6a1823ad8f2c6186) (2026-10-21) — **test**: resolve instrumented UI test failures, dialog window bounds, and message row-binding validation
 - [`bc34ed6`](https://github.com/mppjuro/PQChat.DHT/commit/bc34ed67ecd2aedf311a70ec8ee8dc68bf8aec23) (2026-10-21) — **group**: fix group control serialization, eliminate burst fan-out, add rekey catch-up and optimize test runtime
 - [`71cdcf9`](https://github.com/mppjuro/PQChat.DHT/commit/71cdcf99da56473851c0cb04f8699efa1e694fdb) (2026-10-20) — **service**: implement Android 14/15 targetSdk 35 FGS onTimeout, clean docs and remove duplicates
@@ -151,6 +152,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`37ffd6f`](https://github.com/mppjuro/PQChat.DHT/commit/37ffd6f9481b20fced7000017c1f00ad82bc0ad8) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9759c56`](https://github.com/mppjuro/PQChat.DHT/commit/9759c56571ae43208571f86759f2186afc6d884b) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`9cf03df`](https://github.com/mppjuro/PQChat.DHT/commit/9cf03dfea4979c8d71e91729e4f30fe91ca1518f) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`e6bf068`](https://github.com/mppjuro/PQChat.DHT/commit/e6bf06893e7bb91d9271e3fd8793ee3a60180bb8) (2026-10-20) — **changelog**: auto-update CHANGELOG.md [skip ci]
