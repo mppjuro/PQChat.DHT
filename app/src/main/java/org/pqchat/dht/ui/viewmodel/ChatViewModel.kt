@@ -157,6 +157,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isCrowdsourcedRepublishEnabled: StateFlow<Boolean> = settingsManager.isCrowdsourcedRepublishEnabled
     val isTorEnabled: StateFlow<Boolean> = settingsManager.isTorEnabled
     val isBiometricLockEnabled: StateFlow<Boolean> = settingsManager.isBiometricLockEnabled
+    val isAppLockPinSet: StateFlow<Boolean> = settingsManager.isAppLockPinSet
+    val isDuressPinSet: StateFlow<Boolean> = settingsManager.isDuressPinSet
+    val isDuressActive: StateFlow<Boolean> = settingsManager.isDuressActive
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = settingsManager.isStrictPoissonShapingEnabled
     val torState: StateFlow<org.pqchat.dht.network.tor.TorState> =
         app?.embeddedTorManager?.state ?: MutableStateFlow(org.pqchat.dht.network.tor.TorState.Disconnected)
@@ -167,6 +170,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBiometricLockEnabled(enabled: Boolean) {
         settingsManager.setBiometricLockEnabled(enabled)
+    }
+
+    fun setAppLockPin(pin: String?) {
+        settingsManager.setAppLockPin(pin)
+    }
+
+    fun setDuressPin(pin: String?) {
+        settingsManager.setDuressPin(pin)
+    }
+
+    fun verifyPin(pin: String): org.pqchat.dht.data.settings.PinAuthResult {
+        return settingsManager.verifyPin(pin)
+    }
+
+    fun triggerDuressMode() {
+        org.pqchat.dht.crypto.KeystoreCrypto.deleteMasterKey()
+        settingsManager.setDuressActive(true)
+    }
+
+    fun clearDuressActive() {
+        settingsManager.clearDuressActive()
     }
 
     fun setStrictPoissonShapingEnabled(enabled: Boolean) {

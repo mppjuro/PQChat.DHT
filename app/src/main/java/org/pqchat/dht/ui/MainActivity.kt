@@ -34,17 +34,35 @@ class MainActivity : FragmentActivity() {
         setContent {
             val themeMode by viewModel.themeMode.collectAsState()
             val isBiometricEnabled by viewModel.isBiometricLockEnabled.collectAsState()
-            var isUnlocked by remember(isBiometricEnabled) { mutableStateOf(!isBiometricEnabled) }
+            val isPinConfigured by viewModel.isAppLockPinSet.collectAsState()
+            val isDuressConfigured by viewModel.isDuressPinSet.collectAsState()
+            val isDuressActive by viewModel.isDuressActive.collectAsState()
+
+            val requiresLock = (isBiometricEnabled || isPinConfigured || isDuressConfigured) && !isDuressActive
+            var isUnlocked by remember(requiresLock) { mutableStateOf(!requiresLock) }
 
             PQChatTheme(themeMode = themeMode) {
-                if (isBiometricEnabled && !isUnlocked) {
+                if (isDuressActive) {
+                    DecoyNotesScreen()
+                } else if (!isUnlocked && requiresLock) {
                     BiometricLockScreen(
                         onUnlockRequested = {
                             BiometricAuthHelper.authenticate(
                                 activity = this@MainActivity,
                                 onSuccess = { isUnlocked = true }
                             )
-                        }
+                        },
+                        onPinSubmitted = { pin ->
+                            viewModel.verifyPin(pin)
+                        },
+                        onUnlockSuccess = {
+                            isUnlocked = true
+                        },
+                        onDuressTriggered = {
+                            viewModel.triggerDuressMode()
+                        },
+                        isPinConfigured = isPinConfigured || isDuressConfigured,
+                        isBiometricAvailable = isBiometricEnabled
                     )
                 } else {
                     MainAppNavigation(viewModel)

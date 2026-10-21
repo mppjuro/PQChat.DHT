@@ -12,6 +12,13 @@ enum class ThemeMode {
     LIGHT
 }
 
+enum class PinAuthResult {
+    NORMAL_UNLOCK,
+    DURESS_TRIGGERED,
+    INVALID,
+    NO_PIN_SET
+}
+
 data class SyncIntervalOption(
     val label: String,
     val millis: Long
@@ -187,6 +194,21 @@ class AppSettingsManager(
     )
     val isBiometricLockEnabled: StateFlow<Boolean> = _isBiometricLockEnabled.asStateFlow()
 
+    private val _isAppLockPinSet = MutableStateFlow(
+        prefs?.getString(KEY_APP_LOCK_PIN_HASH, null) != null
+    )
+    val isAppLockPinSet: StateFlow<Boolean> = _isAppLockPinSet.asStateFlow()
+
+    private val _isDuressPinSet = MutableStateFlow(
+        prefs?.getString(KEY_DURESS_PIN_HASH, null) != null
+    )
+    val isDuressPinSet: StateFlow<Boolean> = _isDuressPinSet.asStateFlow()
+
+    private val _isDuressActive = MutableStateFlow(
+        prefs?.getBoolean(KEY_IS_DURESS_ACTIVE, false) ?: false
+    )
+    val isDuressActive: StateFlow<Boolean> = _isDuressActive.asStateFlow()
+
     // Master's thesis anonymous research telemetry (default FALSE, explicitly opt-in)
     private val _isAnonymousStatsEnabled = MutableStateFlow(
         prefs?.getBoolean(KEY_ANONYMOUS_STATS, false) ?: false
@@ -281,6 +303,111 @@ class AppSettingsManager(
         _isBiometricLockEnabled.value = enabled
     }
 
+    /**
+     * Hashes a PIN with a salt using SHA-256.
+     */
+    fun hashPin(pin: String, salt: ByteArray): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update(salt)
+        return digest.digest(pin.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val hexChars = "0123456789abcdef"
+        val result = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val i = b.toInt() and 0xFF
+            result.append(hexChars[i ushr 4])
+            result.append(hexChars[i and 0x0F])
+        }
+        return result.toString()
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length
+        val data = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            i += 2
+        }
+        return data
+    }
+
+    fun setAppLockPin(pin: String?) {
+        val editor = prefs?.edit()
+        if (pin.isNullOrBlank()) {
+            editor?.remove(KEY_APP_LOCK_PIN_HASH)
+            editor?.remove(KEY_APP_LOCK_PIN_SALT)
+            editor?.apply()
+            _isAppLockPinSet.value = false
+        } else {
+            val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+            val hash = hashPin(pin.trim(), salt)
+            editor?.putString(KEY_APP_LOCK_PIN_SALT, bytesToHex(salt))
+            editor?.putString(KEY_APP_LOCK_PIN_HASH, bytesToHex(hash))
+            editor?.apply()
+            _isAppLockPinSet.value = true
+        }
+    }
+
+    fun setDuressPin(pin: String?) {
+        val editor = prefs?.edit()
+        if (pin.isNullOrBlank()) {
+            editor?.remove(KEY_DURESS_PIN_HASH)
+            editor?.remove(KEY_DURESS_PIN_SALT)
+            editor?.apply()
+            _isDuressPinSet.value = false
+        } else {
+            val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+            val hash = hashPin(pin.trim(), salt)
+            editor?.putString(KEY_DURESS_PIN_SALT, bytesToHex(salt))
+            editor?.putString(KEY_DURESS_PIN_HASH, bytesToHex(hash))
+            editor?.apply()
+            _isDuressPinSet.value = true
+        }
+    }
+
+    fun setDuressActive(active: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_IS_DURESS_ACTIVE, active)?.apply()
+        _isDuressActive.value = active
+    }
+
+    fun clearDuressActive() {
+        setDuressActive(false)
+    }
+
+    fun verifyPin(inputPin: String): PinAuthResult {
+        val cleanPin = inputPin.trim()
+        if (cleanPin.isEmpty()) return PinAuthResult.INVALID
+
+        val duressHashHex = prefs?.getString(KEY_DURESS_PIN_HASH, null)
+        val duressSaltHex = prefs?.getString(KEY_DURESS_PIN_SALT, null)
+        if (duressHashHex != null && duressSaltHex != null) {
+            val salt = hexToBytes(duressSaltHex)
+            val computedHash = bytesToHex(hashPin(cleanPin, salt))
+            if (computedHash.equals(duressHashHex, ignoreCase = true)) {
+                return PinAuthResult.DURESS_TRIGGERED
+            }
+        }
+
+        val appLockHashHex = prefs?.getString(KEY_APP_LOCK_PIN_HASH, null)
+        val appLockSaltHex = prefs?.getString(KEY_APP_LOCK_PIN_SALT, null)
+        if (appLockHashHex != null && appLockSaltHex != null) {
+            val salt = hexToBytes(appLockSaltHex)
+            val computedHash = bytesToHex(hashPin(cleanPin, salt))
+            if (computedHash.equals(appLockHashHex, ignoreCase = true)) {
+                return PinAuthResult.NORMAL_UNLOCK
+            }
+        }
+
+        if (duressHashHex == null && appLockHashHex == null) {
+            return PinAuthResult.NO_PIN_SET
+        }
+
+        return PinAuthResult.INVALID
+    }
+
     fun setAnonymousStatsEnabled(enabled: Boolean) {
         prefs?.edit()?.putBoolean(KEY_ANONYMOUS_STATS, enabled)?.apply()
         _isAnonymousStatsEnabled.value = enabled
@@ -321,6 +448,11 @@ class AppSettingsManager(
         private const val KEY_CROWDSOURCED_REPUBLISH = "crowdsourced_republish_enabled"
         private const val KEY_TOR_ENABLED = "tor_enabled"
         private const val KEY_BIOMETRIC_LOCK = "biometric_lock_enabled"
+        private const val KEY_APP_LOCK_PIN_HASH = "app_lock_pin_hash"
+        private const val KEY_APP_LOCK_PIN_SALT = "app_lock_pin_salt"
+        private const val KEY_DURESS_PIN_HASH = "duress_pin_hash"
+        private const val KEY_DURESS_PIN_SALT = "duress_pin_salt"
+        private const val KEY_IS_DURESS_ACTIVE = "is_duress_active"
         private const val KEY_ANONYMOUS_STATS = "anonymous_stats_enabled"
         private const val KEY_STATS_PROBE_INTERVAL = "stats_probe_interval"
         private const val KEY_STRICT_POISSON_SHAPING = "strict_poisson_shaping_enabled"

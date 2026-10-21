@@ -1,22 +1,127 @@
 package org.pqchat.dht.ui.util
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.util.Base64
+import androidx.core.content.FileProvider
 import com.google.zxing.*
 import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import java.io.File
 import java.util.EnumMap
 
 object QrCodeUtil {
 
     val MULTIPART_MAGIC = byteArrayOf('P'.code.toByte(), 'Q'.code.toByte(), 'Q'.code.toByte(), 'R'.code.toByte())
     const val MULTIPART_MAGIC_STR = "PQQR"
+
+    const val STEG_HANDSHAKE_PAYLOAD_SIZE = 864 // pk_A (832B) + Seed_init (32B) per AGENTS.md §5.A
+
+    /**
+     * Generates a harmless, aesthetically pleasing carrier bitmap (smooth gradient / abstract pattern)
+     * of dimensions [width] x [height] for steganographic handshake exchange.
+     */
+    fun generateHarmlessCarrierPixels(width: Int = 400, height: Int = 400): IntArray {
+        val pixels = IntArray(width * height)
+        for (y in 0 until height) {
+            val ny = y.toFloat() / height
+            for (x in 0 until width) {
+                val nx = x.toFloat() / width
+                val r = ((Math.sin(nx * Math.PI) * 180 + 40)).toInt().coerceIn(0, 255)
+                val g = ((Math.cos(ny * Math.PI) * 120 + 100)).toInt().coerceIn(0, 255)
+                val b = ((Math.sin((nx + ny) * Math.PI) * 150 + 80)).toInt().coerceIn(0, 255)
+                pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        return pixels
+    }
+
+    /**
+     * Generates a harmless carrier Android Bitmap for preview or export.
+     */
+    fun generateHarmlessCarrierBitmap(width: Int = 400, height: Int = 400): Bitmap {
+        val pixels = generateHarmlessCarrierPixels(width, height)
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * Embeds an 864-byte handshake invitation into a newly generated harmless PNG image.
+     */
+    fun generateHarmlessStegoPng(handshakeBytes: ByteArray, width: Int = 400, height: Int = 400): ByteArray {
+        val pixels = generateHarmlessCarrierPixels(width, height)
+        return org.pqchat.dht.media.Png8Compressor.encodePng8(
+            width = width,
+            height = height,
+            argbPixels = pixels,
+            maxColors = 128,
+            stegoPayload = handshakeBytes
+        )
+    }
+
+    /**
+     * Embeds an 864-byte handshake invitation into a provided carrier Bitmap, returning PNG8 bytes.
+     */
+    fun embedHandshakeInCarrierBitmap(carrierBitmap: Bitmap, handshakeBytes: ByteArray): ByteArray {
+        return org.pqchat.dht.media.Png8Compressor.compressBitmapToPng8(
+            bitmap = carrierBitmap,
+            maxEdge = 1000,
+            maxColors = 128,
+            stegoPayload = handshakeBytes
+        )
+    }
+
+    /**
+     * Extracts an 864-byte handshake invitation from raw image file bytes (PNG8 scanline steganography)
+     * or decoded ARGB bitmap pixels (Blue channel LSB fallback).
+     */
+    fun extractHandshakeStego(rawBytes: ByteArray): ByteArray? {
+        // 1. Try pure PNG8 scanline extraction
+        val fromPng = org.pqchat.dht.media.Png8Compressor.extractStegoFromPng8(rawBytes)
+        if (fromPng != null && fromPng.size == STEG_HANDSHAKE_PAYLOAD_SIZE) {
+            return fromPng
+        }
+
+        // 2. Try ARGB bitmap extraction if it is a decoded image
+        return try {
+            val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+            if (bitmap != null) {
+                val w = bitmap.width
+                val h = bitmap.height
+                val p = IntArray(w * h)
+                bitmap.getPixels(p, 0, w, 0, 0, w, h)
+                val fromArgb = org.pqchat.dht.media.Png8Compressor.extractFromArgbPixels(w, h, p)
+                if (fromArgb != null && fromArgb.size == STEG_HANDSHAKE_PAYLOAD_SIZE) {
+                    fromArgb
+                } else null
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Creates an Intent to share the steganographic PNG image via external apps / messengers / email.
+     */
+    fun createShareStegoImageIntent(context: Context, pngBytes: ByteArray): Intent {
+        val cacheFile = File(context.cacheDir, "pqchat_handshake_${System.currentTimeMillis()}.png")
+        cacheFile.writeBytes(pngBytes)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            cacheFile
+        )
+        return Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
 
     fun base64Encode(data: ByteArray): String {
         return try {
@@ -536,21 +641,43 @@ object QrCodeUtil {
             }
         }
 
-        android.util.Log.w("QrCodeUtil", "All QR decode strategies failed for bitmap ${width}x${height}")
+        // Strategy E: Check for steganographic handshake in pixel buffer
+        try {
+            val stego = org.pqchat.dht.media.Png8Compressor.extractFromArgbPixels(width, height, intArray)
+            if (stego != null && stego.size == STEG_HANDSHAKE_PAYLOAD_SIZE) {
+                android.util.Log.d("QrCodeUtil", "Steganographic handshake recovered from bitmap pixels!")
+                return base64Encode(stego)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("QrCodeUtil", "Pixel stego decode check failed: ${e.message}")
+        }
+
+        android.util.Log.w("QrCodeUtil", "All QR and steganography decode strategies failed for bitmap ${width}x${height}")
         return null
     }
 
     /**
-     * Loads a Bitmap from a content Uri and extracts the QR code payload text.
+     * Loads a Bitmap from a content Uri and extracts either a steganographic handshake invitation
+     * or a standard visual QR code payload text.
      */
     fun decodeQrFromUri(context: Context, uri: Uri): String? {
         return try {
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val rawBytes = inputStream.readBytes()
+            inputStream.close()
+
+            // 1. First check for steganographic handshake in raw PNG or image file bytes
+            val stego = extractHandshakeStego(rawBytes)
+            if (stego != null && stego.size == STEG_HANDSHAKE_PAYLOAD_SIZE) {
+                android.util.Log.d("QrCodeUtil", "Steganographic handshake detected in URI file (${stego.size} bytes)!")
+                return base64Encode(stego)
+            }
+
+            // 2. Fallback to decoding Bitmap and running QR code detection
             val options = BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val decodedBitmap = BitmapFactory.decodeStream(inputStream, null, options)
-            inputStream.close()
+            val decodedBitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, options)
             if (decodedBitmap != null) {
                 val nonHardwareBitmap = if (decodedBitmap.config == Bitmap.Config.HARDWARE) {
                     decodedBitmap.copy(Bitmap.Config.ARGB_8888, false) ?: decodedBitmap

@@ -56,6 +56,14 @@ fun SettingsScreen(
     val isCrowdsourcedRepublishEnabled by viewModel.isCrowdsourcedRepublishEnabled.collectAsState()
     val isTorEnabled by viewModel.isTorEnabled.collectAsState()
     val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsState()
+    val isAppLockPinSet by viewModel.isAppLockPinSet.collectAsState()
+    val isDuressPinSet by viewModel.isDuressPinSet.collectAsState()
+
+    var showPinDialog by remember { mutableStateOf(false) }
+    var showDuressPinDialog by remember { mutableStateOf(false) }
+    var pinDialogInput by remember { mutableStateOf("") }
+    var duressPinDialogInput by remember { mutableStateOf("") }
+
     val isStrictPoissonShapingEnabled by viewModel.isStrictPoissonShapingEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
 
@@ -746,6 +754,128 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
+                    // Kod PIN aplikacji
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Kod PIN aplikacji",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isAppLockPinSet) "Ustawiony (wymagany przy odblokowaniu)" else "Nieustawiony (dostęp bezpośredni lub biometria)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isAppLockPinSet) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (isAppLockPinSet) {
+                                OutlinedButton(
+                                    onClick = { viewModel.setAppLockPin(null) },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Usuń", fontSize = 12.sp)
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    pinDialogInput = ""
+                                    showPinDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    if (isAppLockPinSet) "Zmień" else "Ustaw",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Kod przymusu (Duress PIN)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Kod przymusu (Duress PIN)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = appColors.textPrimary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "🛡️ Panic Wipe",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFE53935),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = "Wpisanie tego kodu na ekranie blokady natychmiast kasuje klucz bazy danych w AndroidKeyStore i otwiera niewinny widok pustych notatek własnych (Decoy).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                            if (isDuressPinSet) {
+                                Text(
+                                    text = "Skonfigurowany i aktywny ✓",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = appColors.primary,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (isDuressPinSet) {
+                                OutlinedButton(
+                                    onClick = { viewModel.setDuressPin(null) },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Usuń", fontSize = 12.sp)
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    duressPinDialogInput = ""
+                                    showDuressPinDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    if (isDuressPinSet) "Zmień" else "Ustaw",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
                     // Przełącznik: Ścisłe kształtowanie ruchu Poissona (Strict Poisson Traffic Shaping)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1103,6 +1233,93 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showPinDialog) {
+        AlertDialog(
+            onDismissRequest = { showPinDialog = false },
+            title = { Text("Ustaw kod PIN aplikacji") },
+            text = {
+                Column {
+                    Text(
+                        "Wprowadź kod PIN (4-16 cyfr), który będzie wymagany do odblokowania aplikacji.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = pinDialogInput,
+                        onValueChange = { pinDialogInput = it },
+                        label = { Text("Nowy kod PIN") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = pinDialogInput.trim()
+                        if (trimmed.length >= 4) {
+                            viewModel.setAppLockPin(trimmed)
+                            showPinDialog = false
+                        }
+                    }
+                ) {
+                    Text("Zapisz")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPinDialog = false }) {
+                    Text("Anuluj")
+                }
+            }
+        )
+    }
+
+    if (showDuressPinDialog) {
+        AlertDialog(
+            onDismissRequest = { showDuressPinDialog = false },
+            title = { Text("Ustaw kod przymusu (Duress PIN)") },
+            text = {
+                Column {
+                    Text(
+                        "⚠️ UWAGA: Wpisanie tego kodu na ekranie blokady bezpowrotnie wyczyści klucz szyfrujący w bezpiecznym module sprzętowym (AndroidKeyStore) i przekieruje do pustego ekranu notatek (Decoy).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE53935)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = duressPinDialogInput,
+                        onValueChange = { duressPinDialogInput = it },
+                        label = { Text("Kod przymusu (różny od normalnego PIN)") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = duressPinDialogInput.trim()
+                        if (trimmed.length >= 4) {
+                            viewModel.setDuressPin(trimmed)
+                            showDuressPinDialog = false
+                        }
+                    }
+                ) {
+                    Text("Zapisz kod przymusu")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDuressPinDialog = false }) {
+                    Text("Anuluj")
+                }
+            }
+        )
     }
 }
 
@@ -1481,3 +1698,4 @@ fun TorStatusCard(
         }
     }
 }
+

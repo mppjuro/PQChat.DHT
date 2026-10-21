@@ -34,6 +34,9 @@ object KeystoreCrypto {
     @Volatile
     private var testKeyProvider: (() -> SecretKey)? = null
 
+    @Volatile
+    private var isKeyWiped: Boolean = false
+
     /**
      * Injects a SecretKey provider for JVM unit tests where AndroidKeyStore is unavailable.
      * In production, this must remain null to guarantee fail-closed security.
@@ -54,9 +57,59 @@ object KeystoreCrypto {
      */
     fun resetForTesting() {
         testKeyProvider = null
+        isKeyWiped = false
+    }
+
+    /**
+     * Checks if the master key has been permanently wiped via Duress PIN.
+     */
+    fun isMasterKeyWiped(): Boolean = isKeyWiped
+
+    /**
+     * Checks if the master key currently exists in AndroidKeyStore (or test provider).
+     */
+    fun hasMasterKey(): Boolean {
+        if (isKeyWiped) return false
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+            keyStore.load(null)
+            keyStore.containsAlias(KEY_ALIAS)
+        } catch (_: Throwable) {
+            testKeyProvider != null
+        }
+    }
+
+    /**
+     * Permanently deletes the AES-256 master key from hardware AndroidKeyStore (Duress wipe).
+     * Once destroyed, all past encrypted data in the Room database is irreversibly unrecoverable.
+     * Subsequent encryption/decryption calls will immediately fail closed.
+     */
+    fun deleteMasterKey(): Boolean {
+        isKeyWiped = true
+        var deleted = false
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
+            keyStore.load(null)
+            if (keyStore.containsAlias(KEY_ALIAS)) {
+                keyStore.deleteEntry(KEY_ALIAS)
+                deleted = true
+            }
+        } catch (_: Throwable) {
+            // AndroidKeyStore unavailable
+        }
+        if (testKeyProvider != null) {
+            testKeyProvider = null
+            deleted = true
+        }
+        return deleted
     }
 
     private fun getOrCreateSecretKey(): SecretKey {
+        if (isKeyWiped) {
+            throw IllegalStateException(
+                "AndroidKeyStore master key was permanently destroyed by Duress wipe. Fail-closed."
+            )
+        }
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
             keyStore.load(null)

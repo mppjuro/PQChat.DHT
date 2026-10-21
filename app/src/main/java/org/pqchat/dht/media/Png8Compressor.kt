@@ -7,12 +7,14 @@ import java.io.DataOutputStream
 import java.util.PriorityQueue
 import java.util.zip.CRC32
 import java.util.zip.Deflater
+import java.util.zip.Inflater
 
 /**
  * High-performance PNG8 (Indexed 8-bit color) encoder and compressor for DHT block transfers.
  *
  * Implements Median-Cut color quantization, perceptual RGB distance matching,
- * fast 15-bit color lookup caching, scanline generation, and RFC 1950 zlib Deflate.
+ * fast 15-bit color lookup caching, scanline generation, RFC 1950 zlib Deflate,
+ * and post-quantization LSB steganography for metadata-free handshake exchange.
  */
 object Png8Compressor {
 
@@ -21,11 +23,77 @@ object Png8Compressor {
         0x0D.toByte(), 0x0A.toByte(), 0x1A.toByte(), 0x0A.toByte()
     )
 
+    val STEG_MAGIC = byteArrayOf(0x50.toByte(), 0x51.toByte(), 0x53.toByte(), 0x54.toByte()) // "PQST"
+    const val STEG_HEADER_OVERHEAD = 10 // 4B magic ("PQST") + 2B length UInt16 + 4B CRC32
+
     private val CHUNK_IHDR = "IHDR".toByteArray(Charsets.US_ASCII)
     private val CHUNK_PLTE = "PLTE".toByteArray(Charsets.US_ASCII)
     private val CHUNK_TRNS = "tRNS".toByteArray(Charsets.US_ASCII)
     private val CHUNK_IDAT = "IDAT".toByteArray(Charsets.US_ASCII)
     private val CHUNK_IEND = "IEND".toByteArray(Charsets.US_ASCII)
+
+    /**
+     * Packs an arbitrary binary payload into a self-authenticating steganographic envelope:
+     * [0..3]: Magic "PQST" (4 bytes)
+     * [4..5]: Payload length (2 bytes UInt16 Big-Endian)
+     * [6..5+len]: Payload (len bytes)
+     * [6+len..9+len]: CRC32 checksum over (Magic + Length + Payload) (4 bytes Big-Endian)
+     */
+    fun packStegoEnvelope(payload: ByteArray): ByteArray {
+        require(payload.isNotEmpty()) { "Steganography payload cannot be empty" }
+        require(payload.size <= 65535) { "Steganography payload exceeds maximum UInt16 size (65535 bytes)" }
+
+        val len = payload.size
+        val out = ByteArray(STEG_HEADER_OVERHEAD + len)
+        out[0] = STEG_MAGIC[0]
+        out[1] = STEG_MAGIC[1]
+        out[2] = STEG_MAGIC[2]
+        out[3] = STEG_MAGIC[3]
+        out[4] = ((len ushr 8) and 0xFF).toByte()
+        out[5] = (len and 0xFF).toByte()
+        System.arraycopy(payload, 0, out, 6, len)
+
+        val crc = CRC32()
+        crc.update(out, 0, 6 + len)
+        val crcVal = crc.value.toInt()
+        out[6 + len] = ((crcVal ushr 24) and 0xFF).toByte()
+        out[7 + len] = ((crcVal ushr 16) and 0xFF).toByte()
+        out[8 + len] = ((crcVal ushr 8) and 0xFF).toByte()
+        out[9 + len] = (crcVal and 0xFF).toByte()
+        return out
+    }
+
+    /**
+     * Unpacks and verifies a steganographic envelope. Returns the payload or null if invalid/corrupt.
+     */
+    fun unpackStegoEnvelope(envelope: ByteArray): ByteArray? {
+        if (envelope.size < STEG_HEADER_OVERHEAD) return null
+        if (envelope[0] != STEG_MAGIC[0] ||
+            envelope[1] != STEG_MAGIC[1] ||
+            envelope[2] != STEG_MAGIC[2] ||
+            envelope[3] != STEG_MAGIC[3]
+        ) {
+            return null
+        }
+        val len = ((envelope[4].toInt() and 0xFF) shl 8) or (envelope[5].toInt() and 0xFF)
+        if (len < 0 || envelope.size < STEG_HEADER_OVERHEAD + len) return null
+
+        val expectedCrc = (
+            ((envelope[6 + len].toInt() and 0xFF) shl 24) or
+            ((envelope[7 + len].toInt() and 0xFF) shl 16) or
+            ((envelope[8 + len].toInt() and 0xFF) shl 8) or
+            (envelope[9 + len].toInt() and 0xFF)
+        )
+
+        val crc = CRC32()
+        crc.update(envelope, 0, 6 + len)
+        val actualCrc = crc.value.toInt()
+        if (actualCrc != expectedCrc) return null
+
+        val payload = ByteArray(len)
+        System.arraycopy(envelope, 6, payload, 0, len)
+        return payload
+    }
 
     /**
      * Color bin for histogram gathering before median cut.
@@ -86,11 +154,20 @@ object Png8Compressor {
         width: Int,
         height: Int,
         argbPixels: IntArray,
-        maxColors: Int = 128
+        maxColors: Int = 128,
+        stegoPayload: ByteArray? = null
     ): ByteArray {
         require(width > 0 && height > 0) { "Width and height must be positive" }
         require(argbPixels.size >= width * height) { "Pixel array size does not match width * height" }
         val targetColors = maxColors.coerceIn(2, 256)
+
+        val stegoEnvelope = stegoPayload?.let { packStegoEnvelope(it) }
+        val totalStegoBits = stegoEnvelope?.let { it.size * 8 } ?: 0
+        if (totalStegoBits > 0) {
+            require(width * height >= totalStegoBits) {
+                "Carrier image has insufficient capacity (${width * height} pixels), but steganography requires at least $totalStegoBits pixels"
+            }
+        }
 
         // 1. Separate transparent pixels and build color histogram
         var hasTransparency = false
@@ -194,9 +271,25 @@ object Png8Compressor {
             }
         }
 
+        val startIndexForOpaque = if (hasTransparency) 1 else 0
+
+        // If steganography is active, ensure we have both even and odd indices for opaque colors
+        if (stegoEnvelope != null) {
+            val hasEvenOpaque = (startIndexForOpaque until paletteList.size).any { (it and 1) == 0 }
+            val hasOddOpaque = (startIndexForOpaque until paletteList.size).any { (it and 1) == 1 }
+            if (!hasEvenOpaque || !hasOddOpaque) {
+                val refColor = if (paletteList.isNotEmpty()) paletteList.last() else intArrayOf(0, 0, 0)
+                val perturbed = intArrayOf(
+                    refColor[0],
+                    refColor[1],
+                    (refColor[2] xor 1).coerceIn(0, 255)
+                )
+                paletteList.add(perturbed)
+            }
+        }
+
         // Final palette array (K <= 256 entries)
         val palette = paletteList.toTypedArray()
-        val startIndexForOpaque = if (hasTransparency) 1 else 0
 
         // 2. Fast 15-bit color lookup cache
         val colorCache = IntArray(32768) { -1 }
@@ -204,6 +297,7 @@ object Png8Compressor {
         // 3. Map pixels to palette indices & build uncompressed scanlines
         // Each scanline: [FilterByte = 0, idx0, idx1, ..., idx_{width-1}]
         val scanlines = ByteArray(height * (width + 1))
+        var stegoBitIndex = 0
 
         for (y in 0 until height) {
             val rowOffset = y * (width + 1)
@@ -221,28 +315,61 @@ object Png8Compressor {
                 val g = (p ushr 8) and 0xFF
                 val b = p and 0xFF
 
-                val key = ((r shr 3) shl 10) or ((g shr 3) shl 5) or (b shr 3)
-                var idx = colorCache[key]
-                if (idx == -1) {
+                val targetParity: Int? = if (stegoEnvelope != null && stegoBitIndex < totalStegoBits) {
+                    val byteIdx = stegoBitIndex / 8
+                    val bitInByte = 7 - (stegoBitIndex % 8)
+                    val bit = (stegoEnvelope[byteIdx].toInt() ushr bitInByte) and 1
+                    stegoBitIndex++
+                    bit
+                } else {
+                    null
+                }
+
+                val idx: Int = if (targetParity != null) {
+                    // Steganographic LSB modulation: select closest color with matching parity
                     var bestDist = Long.MAX_VALUE
-                    var bestIdx = startIndexForOpaque
+                    var bestIdx = -1
                     for (pi in startIndexForOpaque until palette.size) {
-                        val pr = palette[pi][0]
-                        val pg = palette[pi][1]
-                        val pb = palette[pi][2]
-                        val dr = r - pr
-                        val dg = g - pg
-                        val db = b - pb
-                        // Weighted Euclidean perceptual distance
-                        val dist = 2L * dr * dr + 4L * dg * dg + 3L * db * db
-                        if (dist < bestDist) {
-                            bestDist = dist
-                            bestIdx = pi
-                            if (dist == 0L) break
+                        if ((pi and 1) == targetParity) {
+                            val pr = palette[pi][0]
+                            val pg = palette[pi][1]
+                            val pb = palette[pi][2]
+                            val dr = r - pr
+                            val dg = g - pg
+                            val db = b - pb
+                            val dist = 2L * dr * dr + 4L * dg * dg + 3L * db * db
+                            if (dist < bestDist) {
+                                bestDist = dist
+                                bestIdx = pi
+                                if (dist == 0L) break
+                            }
                         }
                     }
-                    idx = bestIdx
-                    colorCache[key] = idx
+                    if (bestIdx != -1) bestIdx else (startIndexForOpaque or targetParity).coerceIn(startIndexForOpaque, palette.size - 1)
+                } else {
+                    val key = ((r shr 3) shl 10) or ((g shr 3) shl 5) or (b shr 3)
+                    var cachedIdx = colorCache[key]
+                    if (cachedIdx == -1) {
+                        var bestDist = Long.MAX_VALUE
+                        var bestIdx = startIndexForOpaque
+                        for (pi in startIndexForOpaque until palette.size) {
+                            val pr = palette[pi][0]
+                            val pg = palette[pi][1]
+                            val pb = palette[pi][2]
+                            val dr = r - pr
+                            val dg = g - pg
+                            val db = b - pb
+                            val dist = 2L * dr * dr + 4L * dg * dg + 3L * db * db
+                            if (dist < bestDist) {
+                                bestDist = dist
+                                bestIdx = pi
+                                if (dist == 0L) break
+                            }
+                        }
+                        cachedIdx = bestIdx
+                        colorCache[key] = cachedIdx
+                    }
+                    cachedIdx
                 }
 
                 scanlines[rowOffset + 1 + x] = idx.toByte()
@@ -311,6 +438,212 @@ object Png8Compressor {
         return pngOut.toByteArray()
     }
 
+    /**
+     * Extracts and authenticates an embedded steganographic payload from raw PNG8 file bytes.
+     * Pure Kotlin logic with zero Android dependencies.
+     *
+     * @param pngBytes Raw PNG file bytes
+     * @return Decoded payload ByteArray or null if no valid steganographic carrier is found
+     */
+    fun extractStegoFromPng8(pngBytes: ByteArray): ByteArray? {
+        if (pngBytes.size < 8) return null
+        for (i in 0 until 8) {
+            if (pngBytes[i] != PNG_MAGIC[i]) return null
+        }
+
+        var offset = 8
+        var width = 0
+        var height = 0
+        val idatBaos = ByteArrayOutputStream()
+
+        while (offset + 8 <= pngBytes.size) {
+            val chunkLen = (
+                ((pngBytes[offset].toInt() and 0xFF) shl 24) or
+                ((pngBytes[offset + 1].toInt() and 0xFF) shl 16) or
+                ((pngBytes[offset + 2].toInt() and 0xFF) shl 8) or
+                (pngBytes[offset + 3].toInt() and 0xFF)
+            )
+            if (chunkLen < 0 || offset + 8 + chunkLen + 4 > pngBytes.size) break
+            val typeStr = String(pngBytes, offset + 4, 4, Charsets.US_ASCII)
+            val dataOffset = offset + 8
+
+            when (typeStr) {
+                "IHDR" -> {
+                    if (chunkLen >= 8) {
+                        width = (
+                            ((pngBytes[dataOffset].toInt() and 0xFF) shl 24) or
+                            ((pngBytes[dataOffset + 1].toInt() and 0xFF) shl 16) or
+                            ((pngBytes[dataOffset + 2].toInt() and 0xFF) shl 8) or
+                            (pngBytes[dataOffset + 3].toInt() and 0xFF)
+                        )
+                        height = (
+                            ((pngBytes[dataOffset + 4].toInt() and 0xFF) shl 24) or
+                            ((pngBytes[dataOffset + 5].toInt() and 0xFF) shl 16) or
+                            ((pngBytes[dataOffset + 6].toInt() and 0xFF) shl 8) or
+                            (pngBytes[dataOffset + 7].toInt() and 0xFF)
+                        )
+                    }
+                }
+                "IDAT" -> {
+                    idatBaos.write(pngBytes, dataOffset, chunkLen)
+                }
+                "IEND" -> {
+                    break
+                }
+            }
+            offset += 8 + chunkLen + 4 // chunk header (8) + data + crc (4)
+        }
+
+        if (width <= 0 || height <= 0 || idatBaos.size() == 0) return null
+
+        val idatBytes = idatBaos.toByteArray()
+        val inflater = Inflater()
+        inflater.setInput(idatBytes)
+        val scanlinesBaos = ByteArrayOutputStream(height * (width + 1))
+        val buffer = ByteArray(16384)
+        try {
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buffer)
+                if (count == 0 && inflater.needsInput()) break
+                scanlinesBaos.write(buffer, 0, count)
+            }
+        } catch (_: Exception) {
+            return null
+        } finally {
+            inflater.end()
+        }
+
+        val scanlines = scanlinesBaos.toByteArray()
+        val expectedScanlinesLen = height * (width + 1)
+        if (scanlines.size < expectedScanlinesLen) return null
+
+        val totalPixels = width * height
+        if (totalPixels < STEG_HEADER_OVERHEAD * 8) return null
+
+        // Extract bits row by row, skipping filter bytes at start of each line
+        val bits = ArrayList<Int>(minOf(totalPixels, 65536 * 8))
+        for (y in 0 until height) {
+            val rowOffset = y * (width + 1)
+            for (x in 0 until width) {
+                val idxByte = scanlines[rowOffset + 1 + x].toInt() and 0xFF
+                bits.add(idxByte and 1)
+            }
+        }
+
+        // Fast reject check: first 4 bytes (32 bits) must match STEG_MAGIC
+        if (bits.size < 32) return null
+        val magic = ByteArray(4)
+        for (b in 0 until 4) {
+            var byteVal = 0
+            for (k in 0 until 8) {
+                byteVal = (byteVal shl 1) or bits[b * 8 + k]
+            }
+            magic[b] = byteVal.toByte()
+        }
+        if (magic[0] != STEG_MAGIC[0] ||
+            magic[1] != STEG_MAGIC[1] ||
+            magic[2] != STEG_MAGIC[2] ||
+            magic[3] != STEG_MAGIC[3]
+        ) {
+            return null
+        }
+
+        // Read payload length (bytes 4..5)
+        if (bits.size < 48) return null
+        var lenVal = 0
+        for (k in 0 until 16) {
+            lenVal = (lenVal shl 1) or bits[32 + k]
+        }
+        if (lenVal <= 0 || lenVal > 65535) return null
+
+        val totalBytes = STEG_HEADER_OVERHEAD + lenVal
+        if (bits.size < totalBytes * 8) return null
+
+        val envelope = ByteArray(totalBytes)
+        envelope[0] = magic[0]
+        envelope[1] = magic[1]
+        envelope[2] = magic[2]
+        envelope[3] = magic[3]
+        envelope[4] = ((lenVal ushr 8) and 0xFF).toByte()
+        envelope[5] = (lenVal and 0xFF).toByte()
+
+        for (b in 6 until totalBytes) {
+            var byteVal = 0
+            for (k in 0 until 8) {
+                byteVal = (byteVal shl 1) or bits[b * 8 + k]
+            }
+            envelope[b] = byteVal.toByte()
+        }
+
+        return unpackStegoEnvelope(envelope)
+    }
+
+    /**
+     * Embeds arbitrary payload into the LSB of the Blue channel of an ARGB pixel buffer.
+     */
+    fun embedInArgbPixels(width: Int, height: Int, argbPixels: IntArray, payload: ByteArray): IntArray {
+        val envelope = packStegoEnvelope(payload)
+        val totalBits = envelope.size * 8
+        require(width * height >= totalBits) {
+            "Pixel array capacity (${width * height}) is smaller than required bits ($totalBits)"
+        }
+
+        val result = argbPixels.copyOf()
+        for (i in 0 until totalBits) {
+            val byteIdx = i / 8
+            val bitInByte = 7 - (i % 8)
+            val bit = (envelope[byteIdx].toInt() ushr bitInByte) and 1
+            val orig = result[i]
+            result[i] = (orig and 0xFFFFFFFE.toInt()) or bit
+        }
+        return result
+    }
+
+    /**
+     * Extracts and authenticates an embedded payload from the LSB of the Blue channel of ARGB pixels.
+     */
+    fun extractFromArgbPixels(width: Int, height: Int, argbPixels: IntArray): ByteArray? {
+        val totalPixels = minOf(width * height, argbPixels.size)
+        if (totalPixels < STEG_HEADER_OVERHEAD * 8) return null
+
+        // Read first 6 bytes (48 bits) to inspect magic & length
+        val headerBytes = ByteArray(6)
+        for (b in 0 until 6) {
+            var byteVal = 0
+            for (k in 0 until 8) {
+                val bit = argbPixels[b * 8 + k] and 1
+                byteVal = (byteVal shl 1) or bit
+            }
+            headerBytes[b] = byteVal.toByte()
+        }
+
+        if (headerBytes[0] != STEG_MAGIC[0] ||
+            headerBytes[1] != STEG_MAGIC[1] ||
+            headerBytes[2] != STEG_MAGIC[2] ||
+            headerBytes[3] != STEG_MAGIC[3]
+        ) {
+            return null
+        }
+
+        val len = ((headerBytes[4].toInt() and 0xFF) shl 8) or (headerBytes[5].toInt() and 0xFF)
+        if (len <= 0 || len > 65535) return null
+        val totalBytes = STEG_HEADER_OVERHEAD + len
+        if (totalPixels < totalBytes * 8) return null
+
+        val envelope = ByteArray(totalBytes)
+        System.arraycopy(headerBytes, 0, envelope, 0, 6)
+        for (b in 6 until totalBytes) {
+            var byteVal = 0
+            for (k in 0 until 8) {
+                val bit = argbPixels[b * 8 + k] and 1
+                byteVal = (byteVal shl 1) or bit
+            }
+            envelope[b] = byteVal.toByte()
+        }
+
+        return unpackStegoEnvelope(envelope)
+    }
+
     private fun writeChunk(dos: DataOutputStream, type: ByteArray, data: ByteArray) {
         dos.writeInt(data.size)
         dos.write(type)
@@ -324,12 +657,13 @@ object Png8Compressor {
 
     /**
      * Resizes the Bitmap so that its longest edge does not exceed [maxEdge],
-     * quantizes colors to [maxColors], and encodes to PNG8 format.
+     * quantizes colors to [maxColors], and encodes to PNG8 format with optional steganographic payload.
      */
     fun compressBitmapToPng8(
         bitmap: Bitmap,
         maxEdge: Int = 1000,
-        maxColors: Int = 128
+        maxColors: Int = 128,
+        stegoPayload: ByteArray? = null
     ): ByteArray {
         val origW = bitmap.width
         val origH = bitmap.height
@@ -349,7 +683,7 @@ object Png8Compressor {
         val pixels = IntArray(w * h)
         scaled.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        return encodePng8(w, h, pixels, maxColors)
+        return encodePng8(w, h, pixels, maxColors, stegoPayload)
     }
 
     /**
@@ -372,5 +706,19 @@ object Png8Compressor {
         } catch (_: Exception) {
             rawBytes
         }
+    }
+
+    /**
+     * Embeds [stegoPayload] inside [rawImageBytes] by decoding into a Bitmap and encoding to PNG8.
+     */
+    fun embedStegoInPng(
+        rawImageBytes: ByteArray,
+        stegoPayload: ByteArray,
+        maxEdge: Int = 1000,
+        maxColors: Int = 128
+    ): ByteArray {
+        val bitmap = BitmapFactory.decodeByteArray(rawImageBytes, 0, rawImageBytes.size)
+            ?: throw IllegalArgumentException("Could not decode carrier image bytes")
+        return compressBitmapToPng8(bitmap, maxEdge, maxColors, stegoPayload)
     }
 }

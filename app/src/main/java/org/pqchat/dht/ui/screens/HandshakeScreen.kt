@@ -1,6 +1,7 @@
 package org.pqchat.dht.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -104,7 +105,7 @@ fun HandshakeScreen(
                 qrBase64Input = decoded
                 galleryScanError = null
             } else {
-                galleryScanError = "No valid QR code found in selected image."
+                galleryScanError = "Nie znaleziono kodu QR ani ukrytej steganografii w wybranym obrazie."
             }
         }
     }
@@ -375,7 +376,27 @@ fun HandshakeScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        // Steganographic Image Share Option
+                        OutlinedButton(
+                            onClick = {
+                                val stegoBytes = QrCodeUtil.generateHarmlessStegoPng(state.qrBytes)
+                                val shareIntent = QrCodeUtil.createShareStegoImageIntent(context, stegoBytes)
+                                context.startActivity(Intent.createChooser(shareIntent, "Udostępnij zdjęcie steganograficzne"))
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
+                            border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.7f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .testTag("handshake_share_stego_button")
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp), tint = NeonCyan)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Ukryj w zdjęciu (Steganografia PNG)", fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         // Controls to reset or regenerate QR code
                         Row(
@@ -509,7 +530,7 @@ fun HandshakeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Scan QR from Image / Gallery",
+                            text = "Skanuj QR lub zdjęcie steganograficzne z galerii",
                             fontWeight = FontWeight.SemiBold,
                             color = NeonCyan
                         )
