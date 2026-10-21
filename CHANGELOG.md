@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`0412c7b`](https://github.com/mppjuro/PQChat.DHT/commit/0412c7b1af243c84da9b300f0bb018af3a84d68a) (2026-10-21) — add single-frame cryptographic micro-payloads for message reactions and location pins
 - [`ebcc8d7`](https://github.com/mppjuro/PQChat.DHT/commit/ebcc8d70619f02d048bb6db0c3b0eaabc1a2b62a) (2026-10-21) — **ephemeral**: implement disappearing messages with safe 900-byte DHT tombstones and SQLite wiping
 - [`80e45e7`](https://github.com/mppjuro/PQChat.DHT/commit/80e45e7f1dba7784160d844f070b6ba772e00dcb) (2026-10-20) — **group**: implement unique BEP 44 recipient targets to prevent group follower correlation
 - [`3ddca3e`](https://github.com/mppjuro/PQChat.DHT/commit/3ddca3ebc058cb5b3fdf288a7222db34fa529e2a) (2026-10-20) — **group-crypto**: add group protocol formal verification (ProVerif) and auto-rekey on member leave
