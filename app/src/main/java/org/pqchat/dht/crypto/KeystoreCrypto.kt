@@ -340,7 +340,8 @@ object KeystoreCrypto {
         }
 
         if (encrypted[0] == MAGIC_ROW_BOUND_V2 && encrypted.size >= 1 + 1 + 2 + 1 + GCM_IV_LENGTH_BYTES + 16) {
-            var offset = 1
+            try {
+                var offset = 1
             val tableLen = encrypted[offset++].toInt() and 0xFF
             if (offset + tableLen > encrypted.size) {
                 throw IllegalArgumentException("Malformed row-bound v2 header: table length exceeds payload")
@@ -387,7 +388,13 @@ object KeystoreCrypto {
             val cipherOffset = offset + GCM_IV_LENGTH_BYTES
             val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
             return DecryptedRow(plain, table, id, column)
-        } else if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
+        } catch (e: Exception) {
+            val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
+            if (fallback != null) return fallback
+            throw e
+        }
+    } else if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
+        try {
             var offset = 1
             val tableLen = encrypted[offset++].toInt() and 0xFF
             if (offset + tableLen > encrypted.size) {
@@ -425,21 +432,46 @@ object KeystoreCrypto {
             val cipherOffset = offset + GCM_IV_LENGTH_BYTES
             val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
             return DecryptedRow(plain, table, id, null)
-        } else {
-            if (expectedTable != null || expectedId != null || expectedColumn != null) {
-                throw AEADBadTagException("Ciphertext lacks required row-bound AAD header for table=$expectedTable, id=$expectedId, column=$expectedColumn")
-            }
-            if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
-                throw IllegalArgumentException("Ciphertext too short (${encrypted.size} bytes) for IV and GCM tag")
-            }
-            val secretKey = getOrCreateSecretKey()
-            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-            val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
-            return DecryptedRow(plain, null, null, null)
+        } catch (e: Exception) {
+            val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
+            if (fallback != null) return fallback
+            throw e
         }
+    } else {
+        if (expectedTable != null || expectedId != null || expectedColumn != null) {
+            throw AEADBadTagException("Ciphertext lacks required row-bound AAD header for table=$expectedTable, id=$expectedId, column=$expectedColumn")
+        }
+        if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
+            throw IllegalArgumentException("Ciphertext too short (${encrypted.size} bytes) for IV and GCM tag")
+        }
+        val secretKey = getOrCreateSecretKey()
+        val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+        val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+        val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
+        return DecryptedRow(plain, null, null, null)
     }
+}
+
+private fun tryDecryptRaw(
+    encrypted: ByteArray,
+    expectedTable: String?,
+    expectedId: String?,
+    expectedColumn: String?
+): DecryptedRow? {
+    if (expectedTable != null || expectedId != null || expectedColumn != null) return null
+    if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) return null
+    return try {
+        val secretKey = getOrCreateSecretKey()
+        val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+        val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+        val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
+        DecryptedRow(plain, null, null, null)
+    } catch (_: Throwable) {
+        null
+    }
+}
 
     /**
      * Decrypts row-bound ciphertext and validates expected table, row ID, and column.

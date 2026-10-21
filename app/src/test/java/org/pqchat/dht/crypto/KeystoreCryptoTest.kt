@@ -68,6 +68,37 @@ class KeystoreCryptoTest {
     }
 
     @Test
+    fun testRawCiphertextWithIvCollidingWithRowBoundMagicDecodesCorrectly() {
+        val originalText = "Collision test with magic IV byte 🔒"
+        val plainBytes = originalText.toByteArray(Charsets.UTF_8)
+
+        for (magic in listOf(KeystoreCrypto.MAGIC_ROW_BOUND, KeystoreCrypto.MAGIC_ROW_BOUND_V2)) {
+            // Craft a raw ciphertext where IV[0] == magic byte
+            val customIv = CryptoUtils.secureRandomBytes(KeystoreCrypto.GCM_IV_LENGTH_BYTES)
+            customIv[0] = magic
+
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = javax.crypto.spec.GCMParameterSpec(128, customIv)
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, testMasterKey, spec)
+            val cipherTextWithTag = cipher.doFinal(plainBytes)
+
+            val rawCiphertext = ByteArray(customIv.size + cipherTextWithTag.size)
+            System.arraycopy(customIv, 0, rawCiphertext, 0, customIv.size)
+            System.arraycopy(cipherTextWithTag, 0, rawCiphertext, customIv.size, cipherTextWithTag.size)
+
+            assertEquals(magic, rawCiphertext[0])
+
+            // KeystoreCrypto.decrypt must not throw IllegalArgumentException and must return original bytes
+            val decryptedBytes = KeystoreCrypto.decrypt(rawCiphertext)
+            assertNotNull(decryptedBytes)
+            assertArrayEquals(plainBytes, decryptedBytes)
+
+            val decryptedString = KeystoreCrypto.decryptString(CryptoUtils.toHex(rawCiphertext))
+            assertEquals(originalText, decryptedString)
+        }
+    }
+
+    @Test
     fun testRowBoundEncryptionAndDecryption() {
         val secretData = "SuperSecretContactKey".toByteArray(Charsets.UTF_8)
         val table = "contacts"
