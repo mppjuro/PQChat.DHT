@@ -56,7 +56,7 @@ fun HandshakeScreen(
     SecureScreenEffect()
 
     val context = LocalContext.current
-    var selectedTab by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) 1 else 0) }
+    var selectedTab by remember(initialTabIsBob) { mutableIntStateOf(if (initialTabIsBob) 1 else 0) }
     var contactName by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) "Alice" else "Bob") }
     var qrBase64Input by remember { mutableStateOf("") }
     var isManualInputExpanded by remember { mutableStateOf(false) }
@@ -112,7 +112,7 @@ fun HandshakeScreen(
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isAnimatedQr by remember { mutableStateOf(false) }
     var animatedFrames by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
-    var currentFrameIndex by remember { mutableStateOf(0) }
+    var currentFrameIndex by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(aliceInitState) {
         val state = aliceInitState

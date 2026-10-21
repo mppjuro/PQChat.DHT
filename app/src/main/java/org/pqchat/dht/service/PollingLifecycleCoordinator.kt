@@ -90,7 +90,12 @@ class PollingLifecycleCoordinator(
             }
         )
         try {
-            context.registerReceiver(screenStateReceiver, ScreenStateReceiver.createIntentFilter())
+            androidx.core.content.ContextCompat.registerReceiver(
+                context,
+                screenStateReceiver,
+                ScreenStateReceiver.createIntentFilter(),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register ScreenStateReceiver", e)
         }

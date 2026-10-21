@@ -1,3 +1,9 @@
 #!/bin/sh
-# Auto-update CHANGELOG.md after each commit
+# Auto-update CHANGELOG.md after each commit (skipping automated and [skip ci] commits)
+LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
+if echo "$LAST_COMMIT_MSG" | grep -qiE "auto-update CHANGELOG\.md|\[skip ci\]"; then
+    echo "Skipping changelog generation for automated/skip-ci commit."
+    exit 0
+fi
+
 python scripts/generate_changelog.py

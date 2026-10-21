@@ -49,3 +49,4 @@ docs/formal/bin/
 # Firebase service credentials (NEVER commit)
 app/google-services.json
 **/google-services.json
+.antigravity/

@@ -48,10 +48,17 @@ def get_git_commits():
             })
     return commits
 
-def categorize_commit(subject):
-    # Check if merge commit of a dependabot PR
+def is_ignored_commit(subject):
+    sub_lower = subject.lower()
+    if "auto-update changelog.md" in sub_lower or "[skip ci]" in sub_lower:
+        return True
     if subject.startswith("Merge pull request") or subject.startswith("Merge remote-tracking branch"):
-        return None  # Skip merge commits in changelog
+        return True
+    return False
+
+def categorize_commit(subject):
+    if is_ignored_commit(subject):
+        return None
 
     for pattern, title, key in CATEGORY_MAPPING:
         if re.search(pattern, subject, re.IGNORECASE):

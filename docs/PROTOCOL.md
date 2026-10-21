@@ -419,6 +419,18 @@ Z uwagi na asynchroniczny charakter sieci UDP i DHT, pakiety mogą docierać z o
 
 Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/` (24 lematy w 7 modelach):
 
+| Własność Bezpieczeństwa | Plik Modelu | Weryfikowane Gwarancje Kryptograficzne | Wynik ProVerif |
+| :--- | :--- | :--- | :--- |
+| **Zunifikowany Protokół** | `pqchat_protocol.pv` | MasterKey, tory $`A \to B`$ i $`B \to A`$, ładunki AAD, transkrypt SAS i odporność na replay | `RESULT: True` (8/8) |
+| **Poufność i Potwierdzenie** | `pqchat_secrecy.pv` | Poufność ładunków i injektywne uwierzytelnienie w hybrydowym KEM (ML-KEM-512 + X25519) | `RESULT: True` (5/5) |
+| **Poufność Przeszła (FS)** | `pqchat_forward_secrecy.pv` | Ochrona dawnych wiadomości przy kompromitacji stanu łańcucha w pamięci RAM | `RESULT: True` (2/2) |
+| **Samoleczenie (PCS)** | `pqchat_post_compromise.pv` | Przywrócenie poufności po wycieku kluczy dzięki rotacji asymetrycznej KEM | `RESULT: True` (2/2) |
+| **Ochrona przed Replay** | `pqchat_replay.pv` | Injektywność akceptacji pakietów i unieważnianie slotów tombstone'ami | `RESULT: True` (2/2) |
+| **Anonimowość i Tombstone'y** | `pqchat_unlinkability.pv` | Równoważność obserwacyjna adresów docelowych i nierozróżnialność 900-bajtowych tombstone'ów | `RESULT: True` (1/1) |
+| **Protokół Grupowy i PCS/FS** | `pqchat_group_protocol.pv` | Dystrybucja kluczy nadawcy, wiązanie AAD i grupowe PCS/FS po odejściu członka | `RESULT: True` (4/4) |
+
+### Szczegółowy opis dowiedzionych własności:
+
 1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $`MasterKey`$, stanów łańcucha $`ChainKey_{A \to B}, ChainKey_{B \to A}`$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
 2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt, obronę dualną **Hybrid KEM (ML-KEM-512 + X25519)** oraz zobowiązanie SAS ($`Commitment`$).
 3. **Forward Secrecy (Poufność Przeszła):** Dowiedziono (`pqchat_forward_secrecy.pv`), że wyciek stanu łańcucha $`ChainKey_1`$ nie pozwala na odszyfrowanie wcześniejszych wiadomości ($`msg_0`$).

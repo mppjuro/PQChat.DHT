@@ -125,6 +125,15 @@ flowchart TB
 * **Low-Bandwidth Media Compression**: In-flight 8-bit PNG palette quantizer (`Png8Compressor.kt`) and chunked frame stream delivery (`ChunkingEngine.kt`) designed to fit small payload constraints.
 * **Out-of-Band Pairing**: Mutual contact pairing via animated QR codes (`CameraQrScanner.kt`, `QrCodeUtil.kt`).
 
+### 5. Decentralized Post-Quantum Group Messaging (Sender Keys over BEP 44)
+
+* **Metadata-Free Group Addressing (`deriveGroupRecipientSlot`)**: Eliminates Group Follower Correlation in DHT lookups. For each broadcast, sender derives distinct pseudorandom destination addresses for each recipient:
+  $`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, RecipientMemberID)`$
+  No two members ever poll the same DHT slot, completely preventing observers from correlating group members or estimating group size.
+* **Outbound Sender Chains**: Each member maintains an independent 64-byte sender chain key ($`myChainKeyOut`$) distributed via Type `0x06` (`TYPE_GROUP_CONTROL`) frames over authenticated 1-on-1 channels protected by hybrid ML-KEM-512 + X25519.
+* **Cryptographic Context Binding (AAD)**: Payloads are encrypted with AES-256-GCM bound to $`\text{AAD} = \text{Target} \parallel GroupID \parallel SenderMemberID`$, preventing cross-group replay or sender impersonation.
+* **Group Forward Secrecy & Post-Compromise Security (PCS)**: Automatic epoch rotation every 50 messages, and mandatory instant rotation upon member departure (`GROUP_SUBTYPE_LEAVE`), distributing new keys to active members only and guaranteeing Post-Leave Secrecy.
+
 ---
 
 ## 🔒 Protocol Flow
@@ -158,7 +167,7 @@ Detailed message layouts, frame headers, and serialization rules are specified i
 
 The core cryptographic protocol is formally verified using **[ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/)** symbolic protocol analyzer. All verification scripts and proof models are unified in the [`docs/formal/`](docs/formal/) directory.
 
-The formal suite encompasses dual-defense **Hybrid KEM (ML-KEM-512 + X25519)**, **Anti-Grinding SAS**, **Dual Unidirectional Chains**, and **900-byte CSPRNG safe tombstones**:
+The formal suite encompasses dual-defense **Hybrid KEM (ML-KEM-512 + X25519)**, **Anti-Grinding SAS**, **Dual Unidirectional Chains**, **900-byte CSPRNG safe tombstones**, and **Decentralized Post-Quantum Group Messaging** (24 lemmas verified across 7 models):
 
 | Property | Model File | Verified Security Guarantee | Status |
 | --- | --- | --- | --- |
@@ -168,6 +177,7 @@ The formal suite encompasses dual-defense **Hybrid KEM (ML-KEM-512 + X25519)**, 
 | **Post-Compromise (PCS)** | `pqchat_post_compromise.pv` | Session recovery & self-healing after breach via Hybrid KEM rekey | `RESULT: True` (2/2) |
 | **Replay Protection** | `pqchat_replay.pv` | Injective packet correspondences & safe tombstone slot invalidation | `RESULT: True` (2/2) |
 | **Unlinkability & Tombstones** | `pqchat_unlinkability.pv` | Target unlinkability (diff-equivalence) & 900B tombstone indistinguishability | `RESULT: True` (1/1) |
+| **Group Protocol & PCS/FS** | `pqchat_group_protocol.pv` | Group sender keys distribution, AAD binding, and group PCS/FS on member leave | `RESULT: True` (4/4) |
 
 To reproduce the formal verification suite locally:
 

@@ -43,11 +43,27 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+    }
+
+    lint {
+        abortOnError = true
+        warningsAsErrors = true
+        checkDependencies = false
+        disable += setOf(
+            "GradleDependency",
+            "AndroidGradlePluginVersion",
+            "MonochromeLauncherIcon",
+            "UnusedResources",
+            "UseKtx",
+            "ObsoleteSdkInt",
+            "OldTargetApi"
+        )
     }
 
     compileOptions {
