@@ -156,6 +156,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🧪 Testy (Tests)
 
+- [`af04901`](https://github.com/mppjuro/PQChat.DHT/commit/af049014b59f2a1d18c0cc4f3f8ebbb5dcb8334f) (2026-10-22) — **e2e**: expand physical pixel UI Automator tests and full GitHub Workflows automation
 - [`4d1d93a`](https://github.com/mppjuro/PQChat.DHT/commit/4d1d93a2b2be5ea9add09e715cf30f55b8111a01) (2026-10-20) — **e2e**: implement multi-emulator orchestration and instrumented physical UI tests
 - [`04b6293`](https://github.com/mppjuro/PQChat.DHT/commit/04b62930a9f063e82c1f20cf14098190f9c8415c) (2026-10-08) — fix recovery round budget and initiator roles in testRandomizedLossAndReorderingProperty
 
