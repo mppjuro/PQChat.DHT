@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`7f0e982`](https://github.com/mppjuro/PQChat.DHT/commit/7f0e9828295d7d31e8e966122612580cb904010a) (2026-10-22) — **security**: implement Byzantine and adversarial DHT attack simulation framework with /24 subnet bucketing and highest-seq rollback defenses
 - [`a51879d`](https://github.com/mppjuro/PQChat.DHT/commit/a51879d9bf1ab1d4304490bab97f49795dca77c3) (2026-10-22) — **research**: expand empirical telemetry module, consent dialog, and thesis analyzer
 - [`16100a3`](https://github.com/mppjuro/PQChat.DHT/commit/16100a3383e22ed678aaf6056d4b9fc3693f8cba) (2026-10-21) — add PNG8 handshake steganography and Duress PIN Keystore wipe with decoy view
 - [`0412c7b`](https://github.com/mppjuro/PQChat.DHT/commit/0412c7b1af243c84da9b300f0bb018af3a84d68a) (2026-10-21) — add single-frame cryptographic micro-payloads for message reactions and location pins
