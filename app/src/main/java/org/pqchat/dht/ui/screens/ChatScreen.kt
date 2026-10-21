@@ -144,7 +144,7 @@ fun ChatScreen(
                     Column {
                         if (group != null) {
                             Text(
-                                text = group.groupName,
+                                text = group.rawGroupName,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = appColors.textPrimary,
                                 maxLines = 1,
@@ -170,13 +170,13 @@ fun ChatScreen(
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable(enabled = contact != null) {
                                         if (contact != null) {
-                                            editedContactName = contact.name
+                                            editedContactName = contact.rawName
                                             showEditContactNameDialog = true
                                         }
                                     }
                             ) {
                                 Text(
-                                    text = contact?.name ?: "Chat",
+                                    text = contact?.rawName ?: "Chat",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = appColors.textPrimary,
                                     maxLines = 1,
@@ -660,7 +660,7 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = group.groupName,
+                            text = group.rawGroupName,
                             style = MaterialTheme.typography.titleMedium,
                             color = appColors.textPrimary
                         )
@@ -718,7 +718,7 @@ fun ChatScreen(
                                         ) {
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = member.memberName,
+                                                    text = member.rawMemberName,
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = appColors.textPrimary,
                                                     fontWeight = FontWeight.SemiBold
@@ -835,9 +835,9 @@ fun MessageBubble(
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Sender name for group messages
-                if (!isOut && !message.senderName.isNullOrBlank()) {
+                if (!isOut && !message.rawSenderName.isNullOrBlank()) {
                     Text(
-                        text = message.senderName,
+                        text = message.rawSenderName ?: "",
                         style = MaterialTheme.typography.labelSmall,
                         color = CryptoPurple,
                         fontWeight = FontWeight.Bold

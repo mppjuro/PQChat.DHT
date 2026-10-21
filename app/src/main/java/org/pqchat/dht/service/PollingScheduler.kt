@@ -254,7 +254,7 @@ class PollingScheduler(
         if (!isUserInThisChat) {
             schedulerScope.launch {
                 val contact = repository.getContact(contactId)
-                val contactName = contact?.name ?: "PQChat"
+                val contactName = contact?.rawName ?: "PQChat"
                 val messagePreview = if (isImage) "📷 Otrzymano zaszyfrowany plik obrazu" else textContent
                 if (notificationNotifier != null) {
                     notificationNotifier?.invoke(contactId, contactName, messagePreview)

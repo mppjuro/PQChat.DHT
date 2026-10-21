@@ -27,7 +27,8 @@ object KeystoreCrypto {
     private const val GCM_TAG_LENGTH_BITS = 128
     const val GCM_IV_LENGTH_BYTES = 12
 
-    const val MAGIC_ROW_BOUND: Byte = 0x51 // ASCII 'Q'
+    const val MAGIC_ROW_BOUND: Byte = 0x51 // ASCII 'Q' - v1 (table+id)
+    const val MAGIC_ROW_BOUND_V2: Byte = 0x52 // ASCII 'R' - v2 (table+id+column)
 
     // Injected key provider used strictly in JVM unit test environments
     @Volatile
@@ -158,29 +159,39 @@ object KeystoreCrypto {
     }
 
     /**
-     * Computes the Additional Authenticated Data (AAD) for row-level binding: table + "+" + id.
+     * Computes the Additional Authenticated Data (AAD) for row-level and column-level binding:
+     * table + "+" + id + "+" + column (if column is present), or table + "+" + id.
      */
-    fun buildRowAad(table: String, id: String): ByteArray {
-        return "$table+$id".toByteArray(Charsets.UTF_8)
+    fun buildRowAad(table: String, id: String, column: String? = null): ByteArray {
+        return if (column != null && column.isNotEmpty()) {
+            "$table+$id+$column".toByteArray(Charsets.UTF_8)
+        } else {
+            "$table+$id".toByteArray(Charsets.UTF_8)
+        }
     }
 
     data class DecryptedRow(
         val plaintext: ByteArray?,
         val table: String?,
-        val id: String?
+        val id: String?,
+        val column: String? = null
     )
 
     /**
-     * Encrypts plaintext bytes with row-bound AAD:
-     * Header format: [MAGIC 1B] + [tableLen 1B] + [table] + [idLen 2B] + [id] + [IV 12B] + [Ciphertext + Tag 16B].
-     * AAD = table + id.
+     * Encrypts plaintext bytes with row-bound (and optionally column-bound) AAD:
+     * If column is provided, uses v2 header:
+     * [MAGIC_ROW_BOUND_V2 1B (0x52)] + [tableLen 1B] + [table] + [idLen 2B] + [id] + [colLen 1B] + [column] + [IV 12B] + [Ciphertext + Tag 16B].
+     * AAD = table + "+" + id + "+" + column.
+     * Otherwise uses legacy v1 header:
+     * [MAGIC_ROW_BOUND 1B (0x51)] + [tableLen 1B] + [table] + [idLen 2B] + [id] + [IV 12B] + [Ciphertext + Tag 16B].
+     * AAD = table + "+" + id.
      */
-    fun encrypt(plaintext: ByteArray?, table: String, id: String): ByteArray? {
+    fun encrypt(plaintext: ByteArray?, table: String, id: String, column: String? = null): ByteArray? {
         if (plaintext == null) return null
         val secretKey = getOrCreateSecretKey()
         val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-        val aad = buildRowAad(table, id)
+        val aad = buildRowAad(table, id, column)
         cipher.updateAAD(aad)
         val ciphertext = cipher.doFinal(plaintext)
         val iv = cipher.iv
@@ -190,33 +201,59 @@ object KeystoreCrypto {
         require(tableBytes.size <= 255) { "Table name too long (${tableBytes.size} bytes > 255)" }
         require(idBytes.size <= 65535) { "Row ID too long (${idBytes.size} bytes > 65535)" }
 
-        val totalSize = 1 + 1 + tableBytes.size + 2 + idBytes.size + iv.size + ciphertext.size
-        val out = ByteArray(totalSize)
-        var idx = 0
-        out[idx++] = MAGIC_ROW_BOUND
-        out[idx++] = tableBytes.size.toByte()
-        System.arraycopy(tableBytes, 0, out, idx, tableBytes.size)
-        idx += tableBytes.size
-        out[idx++] = ((idBytes.size ushr 8) and 0xFF).toByte()
-        out[idx++] = (idBytes.size and 0xFF).toByte()
-        System.arraycopy(idBytes, 0, out, idx, idBytes.size)
-        idx += idBytes.size
-        System.arraycopy(iv, 0, out, idx, iv.size)
-        idx += iv.size
-        System.arraycopy(ciphertext, 0, out, idx, ciphertext.size)
-        return out
+        if (column != null && column.isNotEmpty()) {
+            val colBytes = column.toByteArray(Charsets.UTF_8)
+            require(colBytes.size <= 255) { "Column name too long (${colBytes.size} bytes > 255)" }
+            val totalSize = 1 + 1 + tableBytes.size + 2 + idBytes.size + 1 + colBytes.size + iv.size + ciphertext.size
+            val out = ByteArray(totalSize)
+            var idx = 0
+            out[idx++] = MAGIC_ROW_BOUND_V2
+            out[idx++] = tableBytes.size.toByte()
+            System.arraycopy(tableBytes, 0, out, idx, tableBytes.size)
+            idx += tableBytes.size
+            out[idx++] = ((idBytes.size ushr 8) and 0xFF).toByte()
+            out[idx++] = (idBytes.size and 0xFF).toByte()
+            System.arraycopy(idBytes, 0, out, idx, idBytes.size)
+            idx += idBytes.size
+            out[idx++] = colBytes.size.toByte()
+            System.arraycopy(colBytes, 0, out, idx, colBytes.size)
+            idx += colBytes.size
+            System.arraycopy(iv, 0, out, idx, iv.size)
+            idx += iv.size
+            System.arraycopy(ciphertext, 0, out, idx, ciphertext.size)
+            return out
+        } else {
+            val totalSize = 1 + 1 + tableBytes.size + 2 + idBytes.size + iv.size + ciphertext.size
+            val out = ByteArray(totalSize)
+            var idx = 0
+            out[idx++] = MAGIC_ROW_BOUND
+            out[idx++] = tableBytes.size.toByte()
+            System.arraycopy(tableBytes, 0, out, idx, tableBytes.size)
+            idx += tableBytes.size
+            out[idx++] = ((idBytes.size ushr 8) and 0xFF).toByte()
+            out[idx++] = (idBytes.size and 0xFF).toByte()
+            System.arraycopy(idBytes, 0, out, idx, idBytes.size)
+            idx += idBytes.size
+            System.arraycopy(iv, 0, out, idx, iv.size)
+            idx += iv.size
+            System.arraycopy(ciphertext, 0, out, idx, ciphertext.size)
+            return out
+        }
     }
 
     /**
      * Encrypts plaintext bytes with optional AAD.
-     * If aad contains "table+id", row-bound format is used. Otherwise standard [IV 12B] + [Ciphertext + Tag 16B] is produced.
+     * If aad contains "table+id+column" or "table+id", row/column-bound format is used.
+     * Otherwise standard [IV 12B] + [Ciphertext + Tag 16B] is produced.
      */
     fun encrypt(plaintext: ByteArray?, aad: ByteArray? = null): ByteArray? {
         if (plaintext == null) return null
         if (aad != null && aad.isNotEmpty()) {
             val aadStr = String(aad, Charsets.UTF_8)
-            val parts = aadStr.split('+', limit = 2)
-            if (parts.size == 2) {
+            val parts = aadStr.split('+', limit = 3)
+            if (parts.size == 3) {
+                return encrypt(plaintext, parts[0], parts[1], parts[2])
+            } else if (parts.size == 2) {
                 return encrypt(plaintext, parts[0], parts[1])
             }
         }
@@ -235,20 +272,69 @@ object KeystoreCrypto {
     }
 
     /**
-     * Decrypts ciphertext and extracts row metadata (table, id) from header if present.
+     * Decrypts ciphertext and extracts row and column metadata (table, id, column) from header if present.
      * Enforces fail-closed behavior: never returns raw input on authentication failure.
      */
     fun decryptWithRowMetadata(
         encrypted: ByteArray?,
         expectedTable: String? = null,
-        expectedId: String? = null
+        expectedId: String? = null,
+        expectedColumn: String? = null
     ): DecryptedRow {
-        if (encrypted == null) return DecryptedRow(null, null, null)
+        if (encrypted == null) return DecryptedRow(null, null, null, null)
         if (encrypted.isEmpty()) {
             throw IllegalArgumentException("Ciphertext is empty")
         }
 
-        if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
+        if (encrypted[0] == MAGIC_ROW_BOUND_V2 && encrypted.size >= 1 + 1 + 2 + 1 + GCM_IV_LENGTH_BYTES + 16) {
+            var offset = 1
+            val tableLen = encrypted[offset++].toInt() and 0xFF
+            if (offset + tableLen > encrypted.size) {
+                throw IllegalArgumentException("Malformed row-bound v2 header: table length exceeds payload")
+            }
+            val table = String(encrypted, offset, tableLen, Charsets.UTF_8)
+            offset += tableLen
+
+            if (offset + 2 > encrypted.size) {
+                throw IllegalArgumentException("Malformed row-bound v2 header: id length truncated")
+            }
+            val idLen = ((encrypted[offset++].toInt() and 0xFF) shl 8) or (encrypted[offset++].toInt() and 0xFF)
+            if (offset + idLen > encrypted.size) {
+                throw IllegalArgumentException("Malformed row-bound v2 header: id exceeds payload")
+            }
+            val id = String(encrypted, offset, idLen, Charsets.UTF_8)
+            offset += idLen
+
+            if (offset + 1 > encrypted.size) {
+                throw IllegalArgumentException("Malformed row-bound v2 header: column length truncated")
+            }
+            val colLen = encrypted[offset++].toInt() and 0xFF
+            if (offset + colLen + GCM_IV_LENGTH_BYTES + 16 > encrypted.size) {
+                throw IllegalArgumentException("Malformed row-bound v2 header: ciphertext payload truncated")
+            }
+            val column = String(encrypted, offset, colLen, Charsets.UTF_8)
+            offset += colLen
+
+            if (expectedTable != null && table != expectedTable) {
+                throw AEADBadTagException("Table mismatch: expected $expectedTable but found $table")
+            }
+            if (expectedId != null && id != expectedId) {
+                throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
+            }
+            if (expectedColumn != null && column != expectedColumn) {
+                throw AEADBadTagException("Column mismatch: expected $expectedColumn but found $column")
+            }
+
+            val aad = buildRowAad(table, id, column)
+            val secretKey = getOrCreateSecretKey()
+            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+            val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, offset, GCM_IV_LENGTH_BYTES)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+            cipher.updateAAD(aad)
+            val cipherOffset = offset + GCM_IV_LENGTH_BYTES
+            val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
+            return DecryptedRow(plain, table, id, column)
+        } else if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
             var offset = 1
             val tableLen = encrypted[offset++].toInt() and 0xFF
             if (offset + tableLen > encrypted.size) {
@@ -273,6 +359,9 @@ object KeystoreCrypto {
             if (expectedId != null && id != expectedId) {
                 throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
             }
+            if (expectedColumn != null) {
+                throw AEADBadTagException("Column mismatch: expected $expectedColumn but ciphertext is legacy v1 without column binding")
+            }
 
             val aad = buildRowAad(table, id)
             val secretKey = getOrCreateSecretKey()
@@ -282,10 +371,10 @@ object KeystoreCrypto {
             cipher.updateAAD(aad)
             val cipherOffset = offset + GCM_IV_LENGTH_BYTES
             val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
-            return DecryptedRow(plain, table, id)
+            return DecryptedRow(plain, table, id, null)
         } else {
-            if (expectedTable != null || expectedId != null) {
-                throw AEADBadTagException("Ciphertext lacks required row-bound AAD header for table=$expectedTable, id=$expectedId")
+            if (expectedTable != null || expectedId != null || expectedColumn != null) {
+                throw AEADBadTagException("Ciphertext lacks required row-bound AAD header for table=$expectedTable, id=$expectedId, column=$expectedColumn")
             }
             if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
                 throw IllegalArgumentException("Ciphertext too short (${encrypted.size} bytes) for IV and GCM tag")
@@ -295,16 +384,16 @@ object KeystoreCrypto {
             val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
             val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
-            return DecryptedRow(plain, null, null)
+            return DecryptedRow(plain, null, null, null)
         }
     }
 
     /**
-     * Decrypts row-bound ciphertext and validates expected table and row ID.
+     * Decrypts row-bound ciphertext and validates expected table, row ID, and column.
      */
-    fun decrypt(encrypted: ByteArray?, table: String, id: String): ByteArray? {
+    fun decrypt(encrypted: ByteArray?, table: String, id: String, column: String? = null): ByteArray? {
         if (encrypted == null) return null
-        return decryptWithRowMetadata(encrypted, expectedTable = table, expectedId = id).plaintext
+        return decryptWithRowMetadata(encrypted, expectedTable = table, expectedId = id, expectedColumn = column).plaintext
     }
 
     /**
@@ -314,8 +403,10 @@ object KeystoreCrypto {
         if (encrypted == null) return null
         if (aad != null && aad.isNotEmpty()) {
             val aadStr = String(aad, Charsets.UTF_8)
-            val parts = aadStr.split('+', limit = 2)
-            if (parts.size == 2) {
+            val parts = aadStr.split('+', limit = 3)
+            if (parts.size == 3) {
+                return decrypt(encrypted, parts[0], parts[1], parts[2])
+            } else if (parts.size == 2) {
                 return decrypt(encrypted, parts[0], parts[1])
             }
             if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
@@ -332,21 +423,21 @@ object KeystoreCrypto {
     }
 
     /**
-     * Encrypts a UTF-8 String with row-bound AAD.
+     * Encrypts a UTF-8 String with row-bound (and optionally column-bound) AAD.
      */
-    fun encryptString(plaintext: String?, table: String, id: String): String? {
+    fun encryptString(plaintext: String?, table: String, id: String, column: String? = null): String? {
         if (plaintext == null) return null
-        val enc = encrypt(plaintext.toByteArray(Charsets.UTF_8), table, id) ?: return null
+        val enc = encrypt(plaintext.toByteArray(Charsets.UTF_8), table, id, column) ?: return null
         return CryptoUtils.toHex(enc)
     }
 
     /**
-     * Decrypts a hex-encoded row-bound string.
+     * Decrypts a hex-encoded row-bound (and optionally column-bound) string.
      */
-    fun decryptString(ciphertextHex: String?, table: String, id: String): String? {
+    fun decryptString(ciphertextHex: String?, table: String, id: String, column: String? = null): String? {
         if (ciphertextHex == null) return null
         val bytes = CryptoUtils.fromHex(ciphertextHex)
-        val dec = decrypt(bytes, table, id) ?: return null
+        val dec = decrypt(bytes, table, id, column) ?: return null
         return String(dec, Charsets.UTF_8)
     }
 

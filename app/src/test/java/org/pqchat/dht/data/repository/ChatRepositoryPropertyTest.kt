@@ -98,7 +98,7 @@ class ChatRepositoryPropertyTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateContactName(id: String, name: String) {
+        override suspend fun updateContactName(id: String, name: EncryptedText) {
             contacts.computeIfPresent(id) { _, c ->
                 c.copy(name = name)
             }

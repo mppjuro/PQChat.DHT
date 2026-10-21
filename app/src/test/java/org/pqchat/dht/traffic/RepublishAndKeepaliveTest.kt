@@ -68,7 +68,7 @@ class RepublishAndKeepaliveTest {
         override suspend fun updateVerifiedStatus(id: String, isVerified: Boolean) {
             contacts[id]?.let { contacts[id] = it.copy(isVerified = isVerified) }
         }
-        override suspend fun updateContactName(id: String, name: String) {
+        override suspend fun updateContactName(id: String, name: EncryptedText) {
             contacts[id]?.let { contacts[id] = it.copy(name = name) }
         }
         override suspend fun deleteContact(id: String) { contacts.remove(id) }

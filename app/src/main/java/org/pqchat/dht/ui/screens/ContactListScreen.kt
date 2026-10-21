@@ -371,7 +371,7 @@ fun ContactListScreen(
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = selfContact?.name ?: "🔒 Moje Notatki (Test DHT)",
+                                    text = selfContact?.rawName ?: "🔒 Moje Notatki (Test DHT)",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = appColors.textPrimary,
                                     fontWeight = FontWeight.Bold
@@ -571,7 +571,7 @@ fun ContactItem(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = contact.name,
+                        text = contact.rawName,
                         style = MaterialTheme.typography.titleMedium,
                         color = appColors.textPrimary
                     )
@@ -677,7 +677,7 @@ fun GroupItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = group.groupName,
+                    text = group.rawGroupName,
                     style = MaterialTheme.typography.titleMedium,
                     color = appColors.textPrimary,
                     fontWeight = FontWeight.Bold
@@ -815,7 +815,7 @@ fun CreateGroupDialog(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = contact.name,
+                                        text = contact.rawName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = appColors.textPrimary
                                     )

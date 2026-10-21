@@ -334,4 +334,155 @@ class KeystoreCryptoTest {
             exTableSwapContact.message!!.contains("table='groups', id='group_ops_202'")
         )
     }
+
+    @Test
+    fun testV2FormatHeaderAndColumnBoundEncryptionRoundTrip() {
+        val secretBytes = "MyColumnBoundSecretChainKey".toByteArray(Charsets.UTF_8)
+        val table = "contacts"
+        val id = "peer_99"
+        val column = "chainKeyOut"
+
+        val cipherBytes = KeystoreCrypto.encrypt(secretBytes, table, id, column)
+        assertNotNull(cipherBytes)
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, cipherBytes!![0])
+
+        // Verify correct decryption with matching column
+        val decrypted = KeystoreCrypto.decrypt(cipherBytes, table, id, column)
+        assertNotNull(decrypted)
+        assertArrayEquals(secretBytes, decrypted)
+
+        // Attempt decryption with wrong column name -> must fail
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decrypt(cipherBytes, table, id, "chainKeyIn")
+        }
+    }
+
+    @Test
+    fun testColumnSwapOnContactEntityThrowsAEADBadTagException() {
+        val converters = KeystoreConverters()
+
+        val contact = ContactEntity(
+            id = "alice_uuid",
+            name = "Alice In Wonderland",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            chainKeyIn = CryptoUtils.secureRandomBytes(64),
+            counterOut = 10,
+            counterIn = 5,
+            sas = "9876",
+            fingerprint = "SHA256:ALICE_FINGERPRINT_HEX"
+        )
+
+        // Verify social metadata is encrypted as EncryptedText with V2 column binding
+        val nameHex = converters.toDatabaseText(contact.name)
+        assertNotNull(nameHex)
+        val nameBytes = CryptoUtils.fromHex(nameHex!!)
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, nameBytes[0])
+        assertEquals("name", contact.name.boundColumn)
+        assertEquals("Alice In Wonderland", contact.rawName)
+
+        val sasHex = converters.toDatabaseText(contact.sas)
+        assertNotNull(sasHex)
+        val sasBytes = CryptoUtils.fromHex(sasHex!!)
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, sasBytes[0])
+        assertEquals("sas", contact.sas.boundColumn)
+        assertEquals("9876", contact.rawSas)
+
+        val fpHex = converters.toDatabaseText(contact.fingerprint)
+        assertNotNull(fpHex)
+        val fpBytes = CryptoUtils.fromHex(fpHex!!)
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, fpBytes[0])
+        assertEquals("fingerprint", contact.fingerprint.boundColumn)
+        assertEquals("SHA256:ALICE_FINGERPRINT_HEX", contact.rawFingerprint)
+
+        // 1. Column Swap Attack: swap chainKeyIn into chainKeyOut
+        val exColSwap = assertThrows(AEADBadTagException::class.java) {
+            contact.copy(chainKeyOut = contact.chainKeyIn)
+        }
+        assertTrue(
+            "Exception must mention column mismatch",
+            exColSwap.message!!.contains("binding mismatch") &&
+            exColSwap.message!!.contains("column='chainKeyOut'") &&
+            exColSwap.message!!.contains("column='chainKeyIn'")
+        )
+
+        // 2. Direct cryptographic decryption under swapped column fails AES-256-GCM AEAD
+        val chainKeyOutDbBlob = converters.toDatabaseBlob(contact.chainKeyOut)!!
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decrypt(chainKeyOutDbBlob, "contacts", "alice_uuid", "chainKeyIn")
+        }
+
+        // 3. Metadata Column Swap Attack: swap sas into name
+        val exNameSasSwap = assertThrows(AEADBadTagException::class.java) {
+            contact.copy(name = contact.sas)
+        }
+        assertTrue(
+            "Exception must mention column mismatch for name vs sas",
+            exNameSasSwap.message!!.contains("binding mismatch") &&
+            exNameSasSwap.message!!.contains("column='name'") &&
+            exNameSasSwap.message!!.contains("column='sas'")
+        )
+    }
+
+    @Test
+    fun testMessageEntityIntraRowAndInterMessageSwapThrowsAEADBadTagException() {
+        val converters = KeystoreConverters()
+
+        val msg1 = org.pqchat.dht.data.db.MessageEntity(
+            contactId = "contact_bob",
+            isOutgoing = false,
+            seqEpoch = 0,
+            seqNum = 1,
+            textContent = "Message #1 content",
+            senderMemberId = "member_1_uuid",
+            senderName = "Bob The Builder"
+        )
+
+        val msg2 = org.pqchat.dht.data.db.MessageEntity(
+            contactId = "contact_bob",
+            isOutgoing = false,
+            seqEpoch = 0,
+            seqNum = 2,
+            textContent = "Message #2 content",
+            senderMemberId = "member_1_uuid",
+            senderName = "Bob The Builder"
+        )
+
+        // Verify messageRowId calculation
+        assertEquals("contact_bob_0_1_false", msg1.messageRowId)
+        assertEquals("contact_bob_0_2_false", msg2.messageRowId)
+        assertEquals("textContent", msg1.textContent!!.boundColumn)
+        assertEquals("senderName", msg1.senderName!!.boundColumn)
+
+        // 1. Intra-Row Swap Attack: swap senderName into textContent
+        val exIntraRow = assertThrows(AEADBadTagException::class.java) {
+            msg1.copy(textContent = msg1.senderName)
+        }
+        assertTrue(
+            "Intra-row swap must fail column validation",
+            exIntraRow.message!!.contains("binding mismatch") &&
+            exIntraRow.message!!.contains("column='textContent'") &&
+            exIntraRow.message!!.contains("column='senderName'")
+        )
+
+        // 2. Inter-Message Swap Attack: swap textContent of msg1 into msg2 of same contact
+        val exInterMessage = assertThrows(AEADBadTagException::class.java) {
+            msg2.copy(textContent = msg1.textContent)
+        }
+        assertTrue(
+            "Inter-message swap must fail rowId validation",
+            exInterMessage.message!!.contains("binding mismatch") &&
+            exInterMessage.message!!.contains("expected table='messages', id='contact_bob_0_2_false'") &&
+            exInterMessage.message!!.contains("id='contact_bob_0_1_false'")
+        )
+
+        // 3. Direct cryptographic AEAD verification fails on swapped message rowId or column
+        val msg1TextHex = converters.toDatabaseText(msg1.textContent)!!
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decryptString(msg1TextHex, "messages", "contact_bob_0_2_false", "textContent")
+        }
+        assertThrows(GeneralSecurityException::class.java) {
+            KeystoreCrypto.decryptString(msg1TextHex, "messages", "contact_bob_0_1_false", "senderName")
+        }
+    }
 }
+

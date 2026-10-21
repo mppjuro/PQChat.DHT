@@ -3,6 +3,7 @@ package org.pqchat.dht.test
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.pqchat.dht.data.db.EncryptedBlob
+import org.pqchat.dht.data.db.EncryptedText
 import org.pqchat.dht.data.db.MessageDao
 import org.pqchat.dht.data.db.MessageEntity
 import java.util.concurrent.CopyOnWriteArrayList
@@ -96,20 +97,46 @@ open class BaseFakeMessageDao : MessageDao {
         slotEdSeed: EncryptedBlob?,
         ackTarget: ByteArray?,
         ackRatchetKey: EncryptedBlob?,
-        retryCount: Int
+        retryCount: Int,
+        textContent: EncryptedText?,
+        imageBytes: EncryptedBlob?
     ) {
         val idx = messages.indexOfFirst { it.id == id }
         if (idx >= 0) {
-            messages[idx] = messages[idx].copy(
+            val old = messages[idx]
+            val newRowId = MessageEntity.computeMessageRowId(old.contactId, old.seqEpoch, seqNum, old.isOutgoing)
+            val updatedText = textContent ?: old.textContent?.raw?.let {
+                EncryptedText(it, "messages", newRowId, "textContent")
+            }
+            val updatedImage = imageBytes ?: old.imageBytes?.raw?.let {
+                EncryptedBlob(it, "messages", newRowId, "imageBytes")
+            }
+            val updatedEdSeed = slotEdSeed ?: old.slotEdSeed?.raw?.let {
+                EncryptedBlob(it, "messages", newRowId, "slotEdSeed")
+            }
+            val updatedAckKey = ackRatchetKey ?: old.ackRatchetKey?.raw?.let {
+                EncryptedBlob(it, "messages", newRowId, "ackRatchetKey")
+            }
+            val updatedSenderMemberId = old.senderMemberId?.raw?.let {
+                EncryptedText(it, "messages", newRowId, "senderMemberId")
+            }
+            val updatedSenderName = old.senderName?.raw?.let {
+                EncryptedText(it, "messages", newRowId, "senderName")
+            }
+            messages[idx] = old.copy(
                 status = status,
                 seqNum = seqNum,
                 ackNum = ackNum,
                 timestamp = timestamp,
                 slotTarget = slotTarget,
-                slotEdSeed = slotEdSeed,
+                slotEdSeed = updatedEdSeed,
                 ackTarget = ackTarget,
-                ackRatchetKey = ackRatchetKey,
-                retryCount = retryCount
+                ackRatchetKey = updatedAckKey,
+                retryCount = retryCount,
+                textContent = updatedText,
+                imageBytes = updatedImage,
+                senderMemberId = updatedSenderMemberId,
+                senderName = updatedSenderName
             )
         }
     }

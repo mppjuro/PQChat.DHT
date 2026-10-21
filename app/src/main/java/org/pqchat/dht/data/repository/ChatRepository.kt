@@ -2552,7 +2552,7 @@ class ChatRepository(
                                         textContent = textPayload.text,
                                         status = "DELIVERED",
                                         senderMemberId = member.memberId,
-                                        senderName = member.memberName
+                                        senderName = member.rawMemberName
                                     )
                                 )
                                 onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
@@ -2564,7 +2564,7 @@ class ChatRepository(
                         groupId = groupId,
                         memberId = member.memberId,
                         counterIn = slot.counter + 1,
-                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${member.memberId}"),
+                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${member.memberId}", "chainKeyIn"),
                         bitmapBase = bitmap.windowBase,
                         bitmap = bitmap.toByteArray()
                     )
@@ -2915,6 +2915,7 @@ class ChatRepository(
                             if (success) {
                                 decoyTargetPool.registerPopulatedTarget(slot.target)
                                 val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                                val newRowId = org.pqchat.dht.data.db.MessageEntity.computeMessageRowId(msg.contactId, msg.seqEpoch, contact.counterOut, msg.isOutgoing)
                                 messageDao.updateMessageForResend(
                                     id = msg.id,
                                     status = newStatus,
@@ -2922,10 +2923,22 @@ class ChatRepository(
                                     ackNum = contact.counterIn,
                                     timestamp = System.currentTimeMillis(),
                                     slotTarget = slot.target,
-                                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", msg.contactId),
+                                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(
+                                        slot.edPrivateKeySeed,
+                                        "messages",
+                                        newRowId,
+                                        "slotEdSeed"
+                                    ),
                                     ackTarget = targetAck,
-                                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", msg.contactId),
-                                    retryCount = msg.retryCount + 1
+                                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(
+                                        slot.msgKey,
+                                        "messages",
+                                        newRowId,
+                                        "ackRatchetKey"
+                                    ),
+                                    retryCount = msg.retryCount + 1,
+                                    textContent = text?.let { org.pqchat.dht.data.db.EncryptedText(it, "messages", newRowId, "textContent") },
+                                    imageBytes = image?.let { org.pqchat.dht.data.db.EncryptedBlob(it, "messages", newRowId, "imageBytes") }
                                 )
                                 if (!isSelf) {
                                     PollingWorker.registerRepublishTask(
@@ -2968,6 +2981,7 @@ class ChatRepository(
             if (success) {
                 decoyTargetPool.registerPopulatedTarget(slot.target)
                 val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                val newRowId = org.pqchat.dht.data.db.MessageEntity.computeMessageRowId(msg.contactId, msg.seqEpoch, contact.counterOut, msg.isOutgoing)
                 messageDao.updateMessageForResend(
                     id = msg.id,
                     status = newStatus,
@@ -2975,10 +2989,22 @@ class ChatRepository(
                     ackNum = contact.counterIn,
                     timestamp = System.currentTimeMillis(),
                     slotTarget = slot.target,
-                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(slot.edPrivateKeySeed, "messages", msg.contactId),
+                    slotEdSeed = org.pqchat.dht.data.db.EncryptedBlob(
+                        slot.edPrivateKeySeed,
+                        "messages",
+                        newRowId,
+                        "slotEdSeed"
+                    ),
                     ackTarget = targetAck,
-                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(slot.msgKey, "messages", msg.contactId),
-                    retryCount = msg.retryCount + 1
+                    ackRatchetKey = org.pqchat.dht.data.db.EncryptedBlob(
+                        slot.msgKey,
+                        "messages",
+                        newRowId,
+                        "ackRatchetKey"
+                    ),
+                    retryCount = msg.retryCount + 1,
+                    textContent = text?.let { org.pqchat.dht.data.db.EncryptedText(it, "messages", newRowId, "textContent") },
+                    imageBytes = image?.let { org.pqchat.dht.data.db.EncryptedBlob(it, "messages", newRowId, "imageBytes") }
                 )
 
                 if (!isSelf) {
@@ -3055,7 +3081,7 @@ class ChatRepository(
             val contact = contactDao.getContactById(contactId) ?: continue
             val memberId = UUID.randomUUID().toString()
             val memberIdBytes = uuidStringToBytes(memberId)
-            val memberName = contact.name
+            val memberName = contact.rawName
             membersSummary.add(BinaryFrameCodec.DecodedPayload.GroupMemberSummary(memberIdBytes, memberName))
             memberEntities.add(
                 GroupMemberEntity(
@@ -3389,7 +3415,7 @@ class ChatRepository(
         val membersSummary = allMembers.map { m ->
             BinaryFrameCodec.DecodedPayload.GroupMemberSummary(
                 uuidStringToBytes(m.memberId),
-                m.memberName
+                m.rawMemberName
             )
         }
 
@@ -3409,7 +3435,7 @@ class ChatRepository(
             myMemberIdBytes = myMemberIdBytes,
             myChainKeyOut = group.rawMyChainKeyOut,
             currentCounter = group.myCounterOut.toLong(),
-            groupName = group.groupName,
+            groupName = group.rawGroupName,
             membersSummary = membersSummary
         )
     }
@@ -3436,7 +3462,7 @@ class ChatRepository(
             myMemberIdBytes = myMemberIdBytes,
             myChainKeyOut = group.rawMyChainKeyOut,
             currentCounter = group.myCounterOut.toLong(),
-            groupName = group.groupName
+            groupName = group.rawGroupName
         )
     }
 
@@ -3503,7 +3529,7 @@ class ChatRepository(
         val groupId = bytesToUuidString(control.groupId)
         val senderMemberId = bytesToUuidString(control.senderMemberId)
         val senderContact = contactDao.getContactById(contactId)
-        val senderName = senderContact?.name ?: "Uczestnik"
+        val senderName = senderContact?.rawName ?: "Uczestnik"
 
         when (control.controlSubType) {
             BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> {
@@ -3605,7 +3631,7 @@ class ChatRepository(
                 if (existingMember != null) {
                     val updated = existingMember.copy(
                         contactId = contactId,
-                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}"),
+                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}", "chainKeyIn"),
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
                     )
@@ -3614,7 +3640,7 @@ class ChatRepository(
                     groupMemberDao?.deleteMember(groupId, placeholderMember.memberId)
                     val updated = placeholderMember.copy(
                         memberId = senderMemberId,
-                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}"),
+                        chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}", "chainKeyIn"),
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
                     )
@@ -3718,7 +3744,7 @@ class ChatRepository(
             groupDao.updateOutgoingState(
                 groupId = groupId,
                 counterOut = currentGroup.myCounterOut + 1,
-                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId),
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
                 lastActive = System.currentTimeMillis()
             )
 
@@ -3812,7 +3838,7 @@ class ChatRepository(
             groupId = group.groupId,
             epoch = newEpoch,
             counterOut = newCounterOut,
-            chainKeyOut = EncryptedBlob(newChainKeyOut, "groups", group.groupId),
+            chainKeyOut = EncryptedBlob(newChainKeyOut, "groups", group.groupId, "myChainKeyOut"),
             lastActive = System.currentTimeMillis()
         )
 
@@ -3838,7 +3864,7 @@ class ChatRepository(
                     myMemberIdBytes = myMemberIdBytes,
                     myChainKeyOut = newChainKeyOut,
                     currentCounter = 0L,
-                    groupName = group.groupName,
+                    groupName = group.rawGroupName,
                     outboundCollector = if (isStrictPoissonShaping()) rekeyFrames else null
                 )
             } catch (_: Exception) {}
@@ -3875,7 +3901,7 @@ class ChatRepository(
                         myMemberIdBytes = myMemberIdBytes,
                         myChainKeyOut = group.rawMyChainKeyOut,
                         currentCounter = group.myCounterOut.toLong(),
-                        groupName = group.groupName,
+                        groupName = group.rawGroupName,
                         outboundCollector = if (isStrictPoissonShaping()) leaveFrames else null
                     )
                 } catch (_: Exception) {}
@@ -3949,7 +3975,7 @@ class ChatRepository(
                                                 textContent = textPayload.text,
                                                 status = "DELIVERED",
                                                 senderMemberId = curMember.memberId,
-                                                senderName = curMember.memberName
+                                                senderName = curMember.rawMemberName
                                             )
                                         )
                                         onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
@@ -3964,14 +3990,14 @@ class ChatRepository(
                             groupId = groupId,
                             memberId = curMember.memberId,
                             counterIn = activeSlot.counter + 1,
-                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}", "chainKeyIn"),
                             bitmapBase = bitmap.windowBase,
                             bitmap = bitmap.toByteArray()
                         )
 
                         curMember = curMember.copy(
                             counterIn = activeSlot.counter + 1,
-                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}"),
+                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${curMember.memberId}", "chainKeyIn"),
                             receivedBitmapBase = bitmap.windowBase,
                             receivedBitmap = bitmap.toByteArray()
                         )

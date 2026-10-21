@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GroupEntity::class,
         GroupMemberEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -223,6 +223,247 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 1. Re-encrypt contacts:
+                // - chainKeyOut and chainKeyIn from v1 (table+id) to v2 (table+id+column)
+                // - encrypt plain metadata fields: name, sas, fingerprint
+                val cursorContacts = db.query("SELECT id, name, chainKeyOut, chainKeyIn, sas, fingerprint FROM contacts")
+                while (cursorContacts.moveToNext()) {
+                    val id = cursorContacts.getString(0)
+                    val rawName = cursorContacts.getString(1) ?: ""
+                    val oldChainKeyOut = cursorContacts.getBlob(2)
+                    val oldChainKeyIn = cursorContacts.getBlob(3)
+                    val rawSas = cursorContacts.getString(4) ?: ""
+                    val rawFingerprint = cursorContacts.getString(5) ?: ""
+
+                    val plainChainKeyOut = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldChainKeyOut, "contacts", id) ?: oldChainKeyOut
+                    } catch (_: Throwable) { oldChainKeyOut }
+                    val plainChainKeyIn = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldChainKeyIn, "contacts", id) ?: oldChainKeyIn
+                    } catch (_: Throwable) { oldChainKeyIn }
+
+                    val newChainKeyOut = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainChainKeyOut, "contacts", id, "chainKeyOut")
+                    val newChainKeyIn = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainChainKeyIn, "contacts", id, "chainKeyIn")
+
+                    val encName = org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawName, "contacts", id, "name")
+                    val encSas = org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawSas, "contacts", id, "sas")
+                    val encFingerprint = org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawFingerprint, "contacts", id, "fingerprint")
+
+                    db.execSQL(
+                        "UPDATE contacts SET name = ?, chainKeyOut = ?, chainKeyIn = ?, sas = ?, fingerprint = ? WHERE id = ?",
+                        arrayOf(encName, newChainKeyOut, newChainKeyIn, encSas, encFingerprint, id)
+                    )
+                }
+                cursorContacts.close()
+
+                // 2. Re-encrypt groups:
+                // - groupName (plain text -> v2 EncryptedText)
+                // - myChainKeyOut -> v2 ("groups", groupId, "myChainKeyOut")
+                val cursorGroups = db.query("SELECT groupId, groupName, myChainKeyOut FROM groups")
+                while (cursorGroups.moveToNext()) {
+                    val groupId = cursorGroups.getString(0)
+                    val rawGroupName = cursorGroups.getString(1) ?: ""
+                    val oldKeyOut = cursorGroups.getBlob(2)
+
+                    val plainKeyOut = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldKeyOut, "groups", groupId) ?: oldKeyOut
+                    } catch (_: Throwable) { oldKeyOut }
+
+                    val newKeyOut = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainKeyOut, "groups", groupId, "myChainKeyOut")
+                    val encGroupName = org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawGroupName, "groups", groupId, "groupName")
+
+                    db.execSQL(
+                        "UPDATE groups SET groupName = ?, myChainKeyOut = ? WHERE groupId = ?",
+                        arrayOf(encGroupName, newKeyOut, groupId)
+                    )
+                }
+                cursorGroups.close()
+
+                // 3. Re-encrypt group_members:
+                // - memberName (plain text -> v2 EncryptedText)
+                // - chainKeyIn -> v2 ("group_members", "${groupId}_${memberId}", "chainKeyIn")
+                val cursorMembers = db.query("SELECT groupId, memberId, memberName, chainKeyIn FROM group_members")
+                while (cursorMembers.moveToNext()) {
+                    val groupId = cursorMembers.getString(0)
+                    val memberId = cursorMembers.getString(1)
+                    val rawMemberName = cursorMembers.getString(2) ?: ""
+                    val oldKeyIn = cursorMembers.getBlob(3)
+                    val rowId = "${groupId}_${memberId}"
+
+                    val plainKeyIn = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldKeyIn, "group_members", rowId) ?: oldKeyIn
+                    } catch (_: Throwable) { oldKeyIn }
+
+                    val newKeyIn = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainKeyIn, "group_members", rowId, "chainKeyIn")
+                    val encMemberName = org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawMemberName, "group_members", rowId, "memberName")
+
+                    db.execSQL(
+                        "UPDATE group_members SET memberName = ?, chainKeyIn = ? WHERE groupId = ? AND memberId = ?",
+                        arrayOf(encMemberName, newKeyIn, groupId, memberId)
+                    )
+                }
+                cursorMembers.close()
+
+                // 4. Re-encrypt messages:
+                // - bind textContent, imageBytes, ackRatchetKey, slotEdSeed, senderMemberId, senderName
+                //   to rowId: "${contactId}_${seqEpoch}_${seqNum}_${isOutgoing}" and column name
+                val cursorMessages = db.query("SELECT id, contactId, isOutgoing, seqEpoch, seqNum, textContent, imageBytes, ackRatchetKey, slotEdSeed, senderMemberId, senderName FROM messages")
+                while (cursorMessages.moveToNext()) {
+                    val id = cursorMessages.getLong(0)
+                    val contactId = cursorMessages.getString(1)
+                    val isOutgoing = cursorMessages.getInt(2) != 0
+                    val seqEpoch = cursorMessages.getInt(3)
+                    val seqNum = cursorMessages.getInt(4)
+                    val oldTextContent = cursorMessages.getString(5)
+                    val oldImageBytes = cursorMessages.getBlob(6)
+                    val oldAckRatchetKey = cursorMessages.getBlob(7)
+                    val oldSlotEdSeed = cursorMessages.getBlob(8)
+                    val rawSenderMemberId = cursorMessages.getString(9)
+                    val rawSenderName = cursorMessages.getString(10)
+
+                    val newRowId = MessageEntity.computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing)
+
+                    val newTextContentHex = if (oldTextContent != null) {
+                        val plainText = try {
+                            org.pqchat.dht.crypto.KeystoreCrypto.decryptString(oldTextContent) ?: oldTextContent
+                        } catch (_: Throwable) { oldTextContent }
+                        org.pqchat.dht.crypto.KeystoreCrypto.encryptString(plainText, "messages", newRowId, "textContent")
+                    } else null
+
+                    val newImageBytes = if (oldImageBytes != null) {
+                        val plainImg = try {
+                            org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldImageBytes) ?: oldImageBytes
+                        } catch (_: Throwable) { oldImageBytes }
+                        org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainImg, "messages", newRowId, "imageBytes")
+                    } else null
+
+                    val newAckRatchetKey = if (oldAckRatchetKey != null) {
+                        val plainAck = try {
+                            org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldAckRatchetKey) ?: oldAckRatchetKey
+                        } catch (_: Throwable) { oldAckRatchetKey }
+                        org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainAck, "messages", newRowId, "ackRatchetKey")
+                    } else null
+
+                    val newSlotEdSeed = if (oldSlotEdSeed != null) {
+                        val plainSlot = try {
+                            org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldSlotEdSeed) ?: oldSlotEdSeed
+                        } catch (_: Throwable) { oldSlotEdSeed }
+                        org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainSlot, "messages", newRowId, "slotEdSeed")
+                    } else null
+
+                    val encSenderMemberId = if (rawSenderMemberId != null) {
+                        org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawSenderMemberId, "messages", newRowId, "senderMemberId")
+                    } else null
+
+                    val encSenderName = if (rawSenderName != null) {
+                        org.pqchat.dht.crypto.KeystoreCrypto.encryptString(rawSenderName, "messages", newRowId, "senderName")
+                    } else null
+
+                    db.execSQL(
+                        "UPDATE messages SET textContent = ?, imageBytes = ?, ackRatchetKey = ?, slotEdSeed = ?, senderMemberId = ?, senderName = ? WHERE id = ?",
+                        arrayOf(newTextContentHex, newImageBytes, newAckRatchetKey, newSlotEdSeed, encSenderMemberId, encSenderName, id)
+                    )
+                }
+                cursorMessages.close()
+
+                // 5. Re-encrypt skipped_keys:
+                // msgKey and edPrivateKeySeed with column binding
+                val cursorSkipped = db.query("SELECT contactId, slotIndex, msgKey, edPrivateKeySeed FROM skipped_keys")
+                while (cursorSkipped.moveToNext()) {
+                    val contactId = cursorSkipped.getString(0)
+                    val slotIndex = cursorSkipped.getInt(1)
+                    val oldMsgKey = cursorSkipped.getBlob(2)
+                    val oldEdSeed = cursorSkipped.getBlob(3)
+                    val rowId = "${contactId}_${slotIndex}"
+
+                    val plainMsgKey = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldMsgKey, "skipped_keys", rowId) ?: oldMsgKey
+                    } catch (_: Throwable) { oldMsgKey }
+                    val plainEdSeed = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldEdSeed, "skipped_keys", rowId) ?: oldEdSeed
+                    } catch (_: Throwable) { oldEdSeed }
+
+                    val newMsgKey = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainMsgKey, "skipped_keys", rowId, "msgKey")
+                    val newEdSeed = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainEdSeed, "skipped_keys", rowId, "edPrivateKeySeed")
+
+                    db.execSQL(
+                        "UPDATE skipped_keys SET msgKey = ?, edPrivateKeySeed = ? WHERE contactId = ? AND slotIndex = ?",
+                        arrayOf(newMsgKey, newEdSeed, contactId, slotIndex)
+                    )
+                }
+                cursorSkipped.close()
+
+                // 6. Re-encrypt pending_rekey_offers:
+                // skNew with column binding "skNew"
+                val cursorOffers = db.query("SELECT contactId, skNew FROM pending_rekey_offers")
+                while (cursorOffers.moveToNext()) {
+                    val contactId = cursorOffers.getString(0)
+                    val oldSkNew = cursorOffers.getBlob(1)
+
+                    val plainSkNew = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldSkNew, "pending_rekey_offers", contactId) ?: oldSkNew
+                    } catch (_: Throwable) { oldSkNew }
+
+                    val newSkNew = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainSkNew, "pending_rekey_offers", contactId, "skNew")
+
+                    db.execSQL(
+                        "UPDATE pending_rekey_offers SET skNew = ? WHERE contactId = ?",
+                        arrayOf(newSkNew, contactId)
+                    )
+                }
+                cursorOffers.close()
+
+                // 7. Re-encrypt chunks:
+                // data with column binding "data"
+                val cursorChunks = db.query("SELECT transferId, chunkIndex, data FROM chunks")
+                while (cursorChunks.moveToNext()) {
+                    val transferId = cursorChunks.getString(0)
+                    val chunkIndex = cursorChunks.getInt(1)
+                    val oldData = cursorChunks.getBlob(2)
+                    val rowId = "${transferId}_${chunkIndex}"
+
+                    val plainData = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldData, "chunks", rowId) ?: oldData
+                    } catch (_: Throwable) { oldData }
+
+                    val newData = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainData, "chunks", rowId, "data")
+
+                    db.execSQL(
+                        "UPDATE chunks SET data = ? WHERE transferId = ? AND chunkIndex = ?",
+                        arrayOf(newData, transferId, chunkIndex)
+                    )
+                }
+                cursorChunks.close()
+
+                // 8. Re-encrypt pending_chunk_transfers:
+                // baseEdSeed and baseMsgKey with column names
+                val cursorPendingTransfers = db.query("SELECT transferId, baseEdSeed, baseMsgKey FROM pending_chunk_transfers")
+                while (cursorPendingTransfers.moveToNext()) {
+                    val transferId = cursorPendingTransfers.getString(0)
+                    val oldEdSeed = cursorPendingTransfers.getBlob(1)
+                    val oldMsgKey = cursorPendingTransfers.getBlob(2)
+
+                    val plainEdSeed = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldEdSeed, "pending_chunk_transfers", "${transferId}_seed") ?: oldEdSeed
+                    } catch (_: Throwable) { oldEdSeed }
+                    val plainMsgKey = try {
+                        org.pqchat.dht.crypto.KeystoreCrypto.decrypt(oldMsgKey, "pending_chunk_transfers", "${transferId}_key") ?: oldMsgKey
+                    } catch (_: Throwable) { oldMsgKey }
+
+                    val newEdSeed = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainEdSeed, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed")
+                    val newMsgKey = org.pqchat.dht.crypto.KeystoreCrypto.encrypt(plainMsgKey, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey")
+
+                    db.execSQL(
+                        "UPDATE pending_chunk_transfers SET baseEdSeed = ?, baseMsgKey = ? WHERE transferId = ?",
+                        arrayOf(newEdSeed, newMsgKey, transferId)
+                    )
+                }
+                cursorPendingTransfers.close()
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -230,7 +471,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                 INSTANCE = instance

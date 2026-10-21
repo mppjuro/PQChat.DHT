@@ -12,20 +12,26 @@ import org.pqchat.dht.crypto.KeystoreCrypto
 data class EncryptedBlob(
     val raw: ByteArray,
     val boundTable: String? = null,
-    val boundId: String? = null
+    val boundId: String? = null,
+    val boundColumn: String? = null
 ) {
     val size: Int get() = raw.size
     fun copyOf(): ByteArray = raw.copyOf()
 
     /**
-     * Validates that this ciphertext was bound to the expected table and row ID.
-     * Throws [AEADBadTagException] if a row-swap or column-swap attack occurred.
+     * Validates that this ciphertext was bound to the expected table, row ID, and column.
+     * Throws [AEADBadTagException] if a row-swap, table-swap, or column-swap attack occurred.
      */
-    fun validateRowBinding(expectedTable: String, expectedId: String, fieldName: String = "field") {
-        if (boundTable != expectedTable || boundId != expectedId) {
+    fun validateRowBinding(
+        expectedTable: String,
+        expectedId: String,
+        expectedColumn: String? = null,
+        fieldName: String = "field"
+    ) {
+        if (boundTable != expectedTable || boundId != expectedId || (expectedColumn != null && boundColumn != expectedColumn)) {
             throw AEADBadTagException(
-                "Row binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', " +
-                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}'"
+                "Row/column binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', column='$expectedColumn', " +
+                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}', column='${boundColumn ?: "<unbound>"}'"
             )
         }
     }
@@ -42,27 +48,42 @@ data class EncryptedBlob(
 
 /**
  * Encrypted string wrapper for Room database storage.
- * Automatically encrypted with Android Keystore AES-256-GCM and bound to table+id when persisted.
+ * Automatically encrypted with Android Keystore AES-256-GCM and bound to table+id+column when persisted.
  */
 data class EncryptedText(
     val raw: String,
     val boundTable: String? = null,
-    val boundId: String? = null
+    val boundId: String? = null,
+    val boundColumn: String? = null
 ) : CharSequence by raw {
     override fun toString(): String = raw
 
     /**
-     * Validates that this ciphertext was bound to the expected table and row ID.
-     * Throws [AEADBadTagException] if a row-swap or column-swap attack occurred.
+     * Validates that this ciphertext was bound to the expected table, row ID, and column.
+     * Throws [AEADBadTagException] if a row-swap, table-swap, or column-swap attack occurred.
      */
-    fun validateRowBinding(expectedTable: String, expectedId: String, fieldName: String = "field") {
-        if (boundTable != expectedTable || boundId != expectedId) {
+    fun validateRowBinding(
+        expectedTable: String,
+        expectedId: String,
+        expectedColumn: String? = null,
+        fieldName: String = "field"
+    ) {
+        if (boundTable != expectedTable || boundId != expectedId || (expectedColumn != null && boundColumn != expectedColumn)) {
             throw AEADBadTagException(
-                "Row binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', " +
-                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}'"
+                "Row/column binding mismatch on $fieldName: expected table='$expectedTable', id='$expectedId', column='$expectedColumn', " +
+                "but got table='${boundTable ?: "<unbound>"}', id='${boundId ?: "<unbound>"}', column='${boundColumn ?: "<unbound>"}'"
             )
         }
     }
+
+    fun take(n: Int): String = raw.take(n)
+    fun uppercase(): String = raw.uppercase()
+    fun lowercase(): String = raw.lowercase()
+    fun ifEmpty(defaultValue: () -> String): String = raw.ifEmpty(defaultValue)
+    fun isBlank(): Boolean = raw.isBlank()
+    fun isNotBlank(): Boolean = raw.isNotBlank()
+    fun isEmpty(): Boolean = raw.isEmpty()
+    fun isNotEmpty(): Boolean = raw.isNotEmpty()
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -76,7 +97,7 @@ data class EncryptedText(
 
 /**
  * Room TypeConverters providing transparent Android Keystore encryption
- * with row-bound AAD for sensitive fields per AGENTS.md §2.
+ * with row-bound and column-bound AAD for sensitive fields per AGENTS.md §2.
  */
 class KeystoreConverters {
 
@@ -84,7 +105,7 @@ class KeystoreConverters {
     fun toDatabaseBlob(encrypted: EncryptedBlob?): ByteArray? {
         if (encrypted == null) return null
         return if (encrypted.boundTable != null && encrypted.boundId != null) {
-            KeystoreCrypto.encrypt(encrypted.raw, encrypted.boundTable, encrypted.boundId)
+            KeystoreCrypto.encrypt(encrypted.raw, encrypted.boundTable, encrypted.boundId, encrypted.boundColumn)
         } else {
             KeystoreCrypto.encrypt(encrypted.raw)
         }
@@ -94,14 +115,14 @@ class KeystoreConverters {
     fun fromDatabaseBlob(blob: ByteArray?): EncryptedBlob? {
         if (blob == null) return null
         val result = KeystoreCrypto.decryptWithRowMetadata(blob)
-        return result.plaintext?.let { EncryptedBlob(it, result.table, result.id) }
+        return result.plaintext?.let { EncryptedBlob(it, result.table, result.id, result.column) }
     }
 
     @TypeConverter
     fun toDatabaseText(encrypted: EncryptedText?): String? {
         if (encrypted == null) return null
         val bytes = if (encrypted.boundTable != null && encrypted.boundId != null) {
-            KeystoreCrypto.encrypt(encrypted.raw.toByteArray(Charsets.UTF_8), encrypted.boundTable, encrypted.boundId)
+            KeystoreCrypto.encrypt(encrypted.raw.toByteArray(Charsets.UTF_8), encrypted.boundTable, encrypted.boundId, encrypted.boundColumn)
         } else {
             KeystoreCrypto.encrypt(encrypted.raw.toByteArray(Charsets.UTF_8))
         } ?: return null
@@ -113,6 +134,6 @@ class KeystoreConverters {
         if (textHex == null) return null
         val bytes = CryptoUtils.fromHex(textHex)
         val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
-        return result.plaintext?.let { EncryptedText(String(it, Charsets.UTF_8), result.table, result.id) }
+        return result.plaintext?.let { EncryptedText(String(it, Charsets.UTF_8), result.table, result.id, result.column) }
     }
 }

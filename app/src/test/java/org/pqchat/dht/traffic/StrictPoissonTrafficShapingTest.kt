@@ -699,7 +699,7 @@ class StrictPoissonTrafficShapingTest {
             flow.value = contacts.values.toList()
         }
 
-        override suspend fun updateContactName(id: String, name: String) {
+        override suspend fun updateContactName(id: String, name: EncryptedText) {
             val c = contacts[id] ?: return
             contacts[id] = c.copy(name = name)
             flow.value = contacts.values.toList()
