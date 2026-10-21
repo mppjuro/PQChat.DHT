@@ -442,7 +442,8 @@ fun ChatScreen(
                                         if (ephemeralTtlSeconds == 0L) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.testTag("chat_ephemeral_ttl_item_0")
                                 )
                                 DropdownMenuItem(
                                     text = { Text("1 minuta") },
@@ -454,7 +455,8 @@ fun ChatScreen(
                                         if (ephemeralTtlSeconds == 60L) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.testTag("chat_ephemeral_ttl_item_60")
                                 )
                                 DropdownMenuItem(
                                     text = { Text("15 minut") },
@@ -466,7 +468,8 @@ fun ChatScreen(
                                         if (ephemeralTtlSeconds == 900L) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.testTag("chat_ephemeral_ttl_item_900")
                                 )
                                 DropdownMenuItem(
                                     text = { Text("1 godzina") },
@@ -478,7 +481,8 @@ fun ChatScreen(
                                         if (ephemeralTtlSeconds == 3600L) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.testTag("chat_ephemeral_ttl_item_3600")
                                 )
                                 DropdownMenuItem(
                                     text = { Text("24 godziny") },
@@ -490,7 +494,8 @@ fun ChatScreen(
                                         if (ephemeralTtlSeconds == 86400L) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = ElectricGreen)
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.testTag("chat_ephemeral_ttl_item_86400")
                                 )
                             }
                         }
@@ -1001,6 +1006,9 @@ fun MessageBubble(
             modifier = Modifier
                 .widthIn(max = 320.dp)
                 .border(1.dp, borderColor, RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(16.dp))
+                .clickable { showReactionPicker = !showReactionPicker }
+                .testTag("message_bubble_${message.id}")
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Sender name for group messages
@@ -1506,7 +1514,9 @@ fun LocationPinDialog(
                     onValueChange = { noteText = it },
                     label = { Text("Notatka / Status") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("location_pin_note_input"),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = appColors.primary,
                         unfocusedBorderColor = appColors.border,

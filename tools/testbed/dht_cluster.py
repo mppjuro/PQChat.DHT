@@ -5,13 +5,19 @@ adversary/Sybil node fraction with malicious observer logging.
 """
 
 import os
+import sys
 import random
 import socket
 import asyncio
 from typing import List, Dict, Optional, Tuple
 
-from .dht_node import DhtNode, TelemetryLogger, QueryLogEntry
-from . import ed25519
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from tools.testbed.dht_node import DhtNode, TelemetryLogger, QueryLogEntry
+    from tools.testbed import ed25519
+else:
+    from .dht_node import DhtNode, TelemetryLogger, QueryLogEntry
+    from . import ed25519
 
 
 class DhtCluster:
@@ -151,3 +157,34 @@ class UdpClusterServerProtocol(asyncio.DatagramProtocol):
         )
         if resp_bytes and self.transport:
             self.transport.sendto(resp_bytes, addr)
+
+
+async def run_cluster_server(host: str = "0.0.0.0", base_port: int = 30000, num_nodes: int = 50):
+    cluster = DhtCluster(num_nodes=num_nodes, base_port=base_port, host=host)
+    loop = asyncio.get_running_loop()
+    transports = []
+    print(f"[DHT Cluster] Starting UDP cluster with {num_nodes} nodes on {host}:{base_port}..{base_port+num_nodes-1}", flush=True)
+    for node in cluster.nodes:
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda p=node.port: UdpClusterServerProtocol(cluster, p),
+            local_addr=(host, node.port)
+        )
+        transports.append(transport)
+    print(f"[DHT Cluster] Primary bootstrap node: {host}:{base_port}. Cluster fully operational.", flush=True)
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        for t in transports:
+            t.close()
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="BEP 5 / BEP 44 Local DHT Cluster Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Binding host")
+    parser.add_argument("--base-port", type=int, default=30000, help="Base UDP port")
+    parser.add_argument("--nodes", type=int, default=50, help="Number of virtual DHT nodes")
+    args = parser.parse_args()
+    asyncio.run(run_cluster_server(args.host, args.base_port, args.nodes))
+

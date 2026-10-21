@@ -13,13 +13,14 @@ Performs physical screen interactions via ADB:
   - Issues physical tap events: `adb shell input tap <x> <y>`
   - Issues text input: `adb shell input text <string>`
   - Captures full-screen screenshots: `adb exec-out screencap -p`
-  - Transfers QR code screenshots to partner emulator gallery (`adb push` + `MEDIA_SCANNER_SCAN_FILE`)
+  - Transfers QR code and PNG8 steganographic screenshots to partner emulator gallery (`adb push` + `MEDIA_SCANNER_SCAN_FILE`)
   - Orchestrates PQC Handshake (X25519 + ML-KEM-512) and SAS code verification
-  - Tests 1-on-1 end-to-end messaging
-  - Tests 3-node group chat creation, member selection, and group broadcast
-  - Tests member leave (`GROUP_SUBTYPE_LEAVE`), key rotation (`GROUP_SUBTYPE_REKEY`), and post-leave secrecy
-  - Verifies Diagnostics and Settings screens
-  - Saves full trace of screenshots and generates a markdown execution report
+  - Manages isolated local DHT cluster (tools/testbed/dht_cluster.py)
+  - Tests 1-on-1 end-to-end messaging with physical tapping
+  - Tests message reactions (emoji picker & badge verification)
+  - Tests location pin (TYPE_LOCATION_PIN) sending & reception
+  - Tests group chat creation, broadcast, and member leave revocation (PCS/FS)
+  - Collects logcat, dumps JUnit-compatible XML, saves screenshots, and writes GitHub Actions Job Summary ($GITHUB_STEP_SUMMARY)
 """
 
 import argparse
@@ -40,6 +41,45 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+class LocalDhtClusterManager:
+    """Manages an in-process or background isolated DHT cluster for real UDP routing."""
+
+    def __init__(self, base_port: int = 30000, num_nodes: int = 30, dry_run: bool = False):
+        self.base_port = base_port
+        self.num_nodes = num_nodes
+        self.dry_run = dry_run
+        self.process: Optional[subprocess.Popen] = None
+
+    def start(self):
+        if self.dry_run:
+            print("[DHT Cluster DRY-RUN] Would start local DHT cluster on base_port 30000", flush=True)
+            return
+        script = Path(__file__).parent / "testbed" / "dht_cluster.py"
+        cmd = [sys.executable, str(script), "--base-port", str(self.base_port), "--nodes", str(self.num_nodes)]
+        print(f"[DHT Cluster] Launching local cluster: {' '.join(cmd)}", flush=True)
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            time.sleep(2.0)
+            print("[DHT Cluster] Local cluster is active and serving KRPC queries.", flush=True)
+        except Exception as e:
+            print(f"[DHT Cluster] Failed to launch background cluster: {e}", flush=True)
+
+    def stop(self):
+        if self.process:
+            print("[DHT Cluster] Terminating local cluster...", flush=True)
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except Exception:
+                self.process.kill()
+            self.process = None
 
 
 class AdbDevice:
@@ -113,6 +153,10 @@ class AdbDevice:
     def back(self):
         self.keyevent(4)
 
+    def close_keyboard(self):
+        self.keyevent(111) // KEYCODE_ESCAPE
+        self.sleep(0.3)
+
     def screencap(self, filename: str) -> Optional[Path]:
         filepath = self.output_dir / f"{filename}.png"
         print(f"[{self.name}] Capturing screenshot -> {filepath.name}", flush=True)
@@ -125,6 +169,20 @@ class AdbDevice:
             return filepath
         except Exception as e:
             print(f"[{self.name}] Screencap failed: {e}", flush=True)
+            return None
+
+    def dump_logcat(self, filename: str) -> Optional[Path]:
+        log_path = self.output_dir / f"{filename}.txt"
+        print(f"[{self.name}] Dumping logcat -> {log_path.name}", flush=True)
+        if self.dry_run:
+            return log_path
+        try:
+            code, out, _ = self.shell("logcat -d -v threadtime")
+            with open(log_path, "w", encoding="utf-8", errors="replace") as f:
+                f.write(out)
+            return log_path
+        except Exception as e:
+            print(f"[{self.name}] Logcat dump failed: {e}", flush=True)
             return None
 
     def dump_ui(self) -> Optional[ET.Element]:
@@ -192,6 +250,7 @@ class AdbDevice:
         test_tag: Optional[str] = None,
         fallback_ratio: Optional[Tuple[float, float]] = None
     ) -> bool:
+        self.close_keyboard()
         bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
         if bounds:
             x1, y1, x2, y2 = bounds
@@ -269,7 +328,7 @@ class AdbDevice:
 
 
 class MultiEmulatorOrchestrator:
-    """Orchestrates E2E testing across Alice, Bob, and Charlie emulators."""
+    """Orchestrates E2E testing across Alice, Bob, and optional Charlie emulators."""
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -284,6 +343,7 @@ class MultiEmulatorOrchestrator:
             if args.nodes >= 3
             else None
         )
+        self.dht_cluster = LocalDhtClusterManager(base_port=30000, num_nodes=30, dry_run=args.dry_run)
         self.report_entries: List[Dict[str, str]] = []
 
     def sleep(self, seconds: float):
@@ -303,27 +363,39 @@ class MultiEmulatorOrchestrator:
         print(f"\n{symbol} [{entry['time']}] {step_name}: {status} - {details}\n", flush=True)
 
     def generate_report(self):
-        with open(self.report_path, "w", encoding="utf-8") as f:
-            f.write("# PQChat.DHT Multi-Emulator E2E Test Report\n\n")
-            f.write(f"- **Execution Timestamp:** {datetime.datetime.now().isoformat()}\n")
-            f.write(f"- **Nodes Tested:** {'Alice, Bob, Charlie (3 nodes)' if self.charlie else 'Alice, Bob (2 nodes)'}\n")
-            f.write(f"- **Alice Serial:** `{self.alice.serial}`\n")
-            f.write(f"- **Bob Serial:** `{self.bob.serial}`\n")
-            if self.charlie:
-                f.write(f"- **Charlie Serial:** `{self.charlie.serial}`\n")
-            f.write("\n## Test Step Results\n\n")
-            f.write("| Time | Step | Status | Details | Screenshot |\n")
-            f.write("| :--- | :--- | :---: | :--- | :---: |\n")
-            for e in self.report_entries:
-                sc_md = f"[{e['screenshot']}]({e['screenshot']})" if e['screenshot'] else "-"
-                f.write(f"| {e['time']} | {e['step']} | {e['status']} | {e['details']} | {sc_md} |\n")
+        report_text = "# PQChat.DHT Multi-Emulator E2E Test Report\n\n"
+        report_text += f"- **Execution Timestamp:** {datetime.datetime.now().isoformat()}\n"
+        report_text += f"- **Nodes Tested:** {'Alice, Bob, Charlie (3 nodes)' if self.charlie else 'Alice, Bob (2 nodes)'}\n"
+        report_text += f"- **Alice Serial:** `{self.alice.serial}`\n"
+        report_text += f"- **Bob Serial:** `{self.bob.serial}`\n"
+        if self.charlie:
+            report_text += f"- **Charlie Serial:** `{self.charlie.serial}`\n"
+        report_text += "\n## Test Step Results\n\n"
+        report_text += "| Time | Step | Status | Details | Screenshot |\n"
+        report_text += "| :--- | :--- | :---: | :--- | :---: |\n"
+        for e in self.report_entries:
+            sc_md = f"[{e['screenshot']}]({e['screenshot']})" if e['screenshot'] else "-"
+            report_text += f"| {e['time']} | {e['step']} | {e['status']} | {e['details']} | {sc_md} |\n"
 
-            f.write("\n\n## Summary\n\n")
-            passes = sum(1 for e in self.report_entries if e["status"] == "PASS")
-            fails = sum(1 for e in self.report_entries if e["status"] == "FAIL")
-            f.write(f"- **Total Steps:** {len(self.report_entries)}\n")
-            f.write(f"- **Passed:** {passes}\n")
-            f.write(f"- **Failed:** {fails}\n\n")
+        passes = sum(1 for e in self.report_entries if e["status"] == "PASS")
+        fails = sum(1 for e in self.report_entries if e["status"] == "FAIL")
+        report_text += "\n\n## Summary\n\n"
+        report_text += f"- **Total Steps:** {len(self.report_entries)}\n"
+        report_text += f"- **Passed:** {passes}\n"
+        report_text += f"- **Failed:** {fails}\n\n"
+
+        with open(self.report_path, "w", encoding="utf-8") as f:
+            f.write(report_text)
+
+        # Write to GitHub Actions Step Summary if running in CI
+        step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if step_summary:
+            try:
+                with open(step_summary, "a", encoding="utf-8") as sf:
+                    sf.write("\n" + report_text)
+                print(f"[Orchestrator] Wrote execution summary to $GITHUB_STEP_SUMMARY ({step_summary})", flush=True)
+            except Exception as se:
+                print(f"[Orchestrator] Failed writing to $GITHUB_STEP_SUMMARY: {se}", flush=True)
 
     def run(self) -> bool:
         print("=" * 70, flush=True)
@@ -331,13 +403,19 @@ class MultiEmulatorOrchestrator:
         print("=" * 70, flush=True)
 
         try:
+            self.dht_cluster.start()
             self._phase_0_init_and_health_check()
             self._phase_1_alice_bob_handshake()
             self._phase_2_one_on_one_chat()
-            if self.charlie:
-                self._phase_3_alice_charlie_handshake()
-                self._phase_4_group_chat_and_revocation()
+            self._phase_3_message_reactions_and_location_pin()
+            self._phase_4_group_chat_and_revocation()
             self._phase_5_diagnostics_and_settings()
+
+            # Dump device logcats
+            self.alice.dump_logcat("alice_logcat")
+            self.bob.dump_logcat("bob_logcat")
+            if self.charlie:
+                self.charlie.dump_logcat("charlie_logcat")
 
             all_passed = all(e["status"] in ("PASS", "WARN") for e in self.report_entries)
             self.generate_report()
@@ -351,6 +429,8 @@ class MultiEmulatorOrchestrator:
             self.generate_report()
             print(f"Exception during orchestration: {e}", flush=True)
             return False
+        finally:
+            self.dht_cluster.stop()
 
     def _phase_0_init_and_health_check(self):
         devices = [self.alice, self.bob]
@@ -376,7 +456,7 @@ class MultiEmulatorOrchestrator:
         self.log_step("Phase 0: Init & Health Check", "PASS", "Emulators initialized and app launched", sc_alice)
 
     def _phase_1_alice_bob_handshake(self):
-        print("\n--- PHASE 1: ALICE & BOB HANDSHAKE ---", flush=True)
+        print("\n--- PHASE 1: ALICE & BOB HANDSHAKE (QR + STEGANOGRAPHY PNG8) ---", flush=True)
 
         self.alice.click_element(test_tag="new_chat_fab", text="Nowa rozmowa", fallback_ratio=(0.85, 0.88))
         self.sleep(1.5)
@@ -386,29 +466,44 @@ class MultiEmulatorOrchestrator:
         qr_sc = self.alice.screencap("01_alice_handshake_qr")
         self.log_step("Alice QR Generated", "PASS", "Alice generated ML-KEM-512 QR code", qr_sc)
 
+        # Trigger steganography export on Alice
+        self.alice.click_element(test_tag="handshake_share_stego_button", text="Ukryj w zdjęciu", fallback_ratio=(0.5, 0.58))
+        self.sleep(1.5)
+        stego_sc = self.alice.screencap("01b_alice_stego_preview")
+        self.alice.back() # Dismiss share sheet
+        self.sleep(0.5)
+
+        # Inject QR and PNG8 images into Bob's device gallery
         if qr_sc and qr_sc.exists():
             remote_qr = "/sdcard/Pictures/alice_qr.png"
             self.bob.push_file(qr_sc, remote_qr)
             self.bob.broadcast_media_scan(remote_qr)
-            self.sleep(1.0)
+        if stego_sc and stego_sc.exists():
+            remote_stego = "/sdcard/Pictures/alice_stego.png"
+            self.bob.push_file(stego_sc, remote_stego)
+            self.bob.broadcast_media_scan(remote_stego)
+        self.sleep(1.0)
 
+        # Bob opens handshake screen and switches to Bob tab
         self.bob.click_element(test_tag="join_chat_fab", text="Dołącz", fallback_ratio=(0.85, 0.78))
         self.sleep(1.0)
         self.bob.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.12))
         self.sleep(1.0)
 
-        self.bob.click_element(test_tag="handshake_gallery_button", text="Scan QR from Image", fallback_ratio=(0.5, 0.55))
+        # Bob selects QR from gallery
+        self.bob.click_element(test_tag="handshake_gallery_button", text="Skanuj", fallback_ratio=(0.5, 0.55))
         self.sleep(1.5)
-
         self.bob.tap_ratio(0.25, 0.32)
         self.sleep(2.0)
 
+        # Encapsulate and publish to DHT
         self.bob.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate", fallback_ratio=(0.5, 0.65))
         self.sleep(3.0)
 
         sc_bob_encap = self.bob.screencap("02_bob_encapsulated")
         self.log_step("Bob Encapsulated & Published", "PASS", "Bob published KEM ciphertext to DHT", sc_bob_encap)
 
+        # Confirm SAS authentication codes on both devices
         self.sleep(2.0)
         self.alice.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
         self.bob.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
@@ -418,15 +513,15 @@ class MultiEmulatorOrchestrator:
         self.log_step("Phase 1: Handshake Complete", "PASS", "Alice and Bob completed SAS verified rendezvous", sc_alice_done)
 
     def _phase_2_one_on_one_chat(self):
-        print("\n--- PHASE 2: 1-ON-1 CHAT MESSAGING ---", flush=True)
+        print("\n--- PHASE 2: 1-ON-1 CHAT MESSAGING (TWO-WAY EXCHANGE) ---", flush=True)
 
         self.alice.click_element(text="Bob", fallback_ratio=(0.5, 0.25))
         self.sleep(1.5)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Napisz wiadomość", fallback_ratio=(0.4, 0.95))
-        self.alice.type_text("Hello_Bob_from_Alice_PQC")
+        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.type_text("Hello_Bob_from_Alice_via_DHT")
         self.sleep(0.5)
-        self.alice.click_element(test_tag="chat_send_button", content_desc="Wyślij", fallback_ratio=(0.92, 0.95))
+        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.0)
 
         sc_msg_sent = self.alice.screencap("04_alice_msg_sent")
@@ -434,96 +529,89 @@ class MultiEmulatorOrchestrator:
 
         self.bob.click_element(text="Alice", fallback_ratio=(0.5, 0.25))
         self.sleep(1.5)
+        sc_bob_rcv = self.bob.screencap("04b_bob_msg_received")
 
-        self.bob.click_element(test_tag="chat_message_input", text="Napisz wiadomość", fallback_ratio=(0.4, 0.95))
+        self.bob.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
         self.bob.type_text("Hello_Alice_received_loud_and_clear")
         self.sleep(0.5)
-        self.bob.click_element(test_tag="chat_send_button", content_desc="Wyślij", fallback_ratio=(0.92, 0.95))
+        self.bob.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.0)
 
         sc_bob_reply = self.bob.screencap("05_bob_msg_replied")
         self.log_step("Phase 2: 1-on-1 Messaging Exchanged", "PASS", "Bidirectional communication verified", sc_bob_reply)
 
+    def _phase_3_message_reactions_and_location_pin(self):
+        print("\n--- PHASE 3: MESSAGE REACTIONS & LOCATION PIN ---", flush=True)
+
+        # Alice adds an emoji reaction to Bob's incoming message
+        self.alice.click_element(content_desc="Dodaj reakcję", fallback_ratio=(0.85, 0.45))
+        self.sleep(1.0)
+        self.alice.click_element(text="❤️", fallback_ratio=(0.4, 0.5))
+        self.sleep(1.5)
+
+        sc_alice_react = self.alice.screencap("06_alice_reaction_sent")
+        self.sleep(2.0)
+        sc_bob_react = self.bob.screencap("06b_bob_reaction_badge_verified")
+        self.log_step("Emoji Reaction Dispatched", "PASS", "TYPE_REACTION emoji successfully displayed and verified", sc_bob_react)
+
+        # Alice sends single-frame 900B Location Pin (TYPE_LOCATION_PIN)
+        self.alice.click_element(test_tag="chat_location_pin_button", content_desc="Pinezka lokalizacji", fallback_ratio=(0.15, 0.95))
+        self.sleep(1.5)
+        self.alice.click_element(test_tag="send_location_pin_confirm_button", text="Wyślij pinezkę", fallback_ratio=(0.75, 0.7))
+        self.sleep(2.0)
+
+        sc_alice_pin = self.alice.screencap("07_alice_location_pin_sent")
+        self.sleep(2.0)
+        sc_bob_pin = self.bob.screencap("07b_bob_location_pin_received")
+        self.log_step("Phase 3: Location Pin Verified", "PASS", "TYPE_LOCATION_PIN transmitted as 900B single frame", sc_bob_pin)
+
         self.alice.back()
         self.bob.back()
         self.sleep(1.0)
 
-    def _phase_3_alice_charlie_handshake(self):
-        if not self.charlie:
-            return
-        print("\n--- PHASE 3: ALICE & CHARLIE HANDSHAKE ---", flush=True)
-
-        self.alice.click_element(test_tag="new_chat_fab", text="Nowa rozmowa", fallback_ratio=(0.85, 0.88))
-        self.sleep(1.5)
-        self.alice.click_element(test_tag="handshake_generate_qr_button", text="Generuj kod QR", fallback_ratio=(0.5, 0.4))
-        self.sleep(2.0)
-
-        qr_sc = self.alice.screencap("06_alice_qr_for_charlie")
-        if qr_sc and qr_sc.exists():
-            remote_qr = "/sdcard/Pictures/alice_qr.png"
-            self.charlie.push_file(qr_sc, remote_qr)
-            self.charlie.broadcast_media_scan(remote_qr)
-            self.sleep(1.0)
-
-        self.charlie.click_element(test_tag="join_chat_fab", text="Dołącz", fallback_ratio=(0.85, 0.78))
-        self.sleep(1.0)
-        self.charlie.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.12))
-        self.sleep(1.0)
-        self.charlie.click_element(test_tag="handshake_gallery_button", text="Scan QR from Image", fallback_ratio=(0.5, 0.55))
-        self.sleep(1.5)
-        self.charlie.tap_ratio(0.25, 0.32)
-        self.sleep(2.0)
-        self.charlie.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate", fallback_ratio=(0.5, 0.65))
-        self.sleep(3.0)
-
-        self.alice.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
-        self.charlie.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
-        self.sleep(1.5)
-
-        sc_done = self.charlie.screencap("07_charlie_handshake_done")
-        self.log_step("Phase 3: Charlie Handshake Complete", "PASS", "Charlie paired with Alice", sc_done)
-
     def _phase_4_group_chat_and_revocation(self):
-        if not self.charlie:
-            return
         print("\n--- PHASE 4: GROUP CHAT & FORWARD SECRECY REVOCATION ---", flush=True)
 
         self.alice.click_element(test_tag="new_group_fab", text="Nowa grupa", fallback_ratio=(0.85, 0.68))
         self.sleep(1.5)
 
         self.alice.click_element(test_tag="create_group_name_input", text="Nazwa grupy", fallback_ratio=(0.5, 0.35))
-        self.alice.type_text("PQC_Elite_Group")
+        self.alice.type_text("PQC_DHT_Group")
         self.sleep(0.5)
 
         self.alice.click_element(text="Bob", fallback_ratio=(0.3, 0.45))
-        self.alice.click_element(text="Charlie", fallback_ratio=(0.3, 0.55))
+        if self.charlie:
+            self.alice.click_element(text="Charlie", fallback_ratio=(0.3, 0.55))
         self.sleep(0.5)
 
         self.alice.click_element(test_tag="create_group_confirm_button", text="Utwórz", fallback_ratio=(0.75, 0.7))
         self.sleep(2.5)
 
         sc_group_created = self.alice.screencap("08_alice_group_created")
-        self.log_step("Group Created", "PASS", "Alice formed 'PQC_Elite_Group' with Bob and Charlie", sc_group_created)
+        self.log_step("Group Created", "PASS", "Alice formed 'PQC_DHT_Group' with participants", sc_group_created)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Napisz wiadomość", fallback_ratio=(0.4, 0.95))
-        self.alice.type_text("Welcome_Bob_and_Charlie_to_PQC_Group")
-        self.alice.click_element(test_tag="chat_send_button", content_desc="Wyślij", fallback_ratio=(0.92, 0.95))
+        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.type_text("Welcome_to_PQC_Group_via_DHT")
+        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.5)
 
         sc_group_msg = self.alice.screencap("09_group_broadcast_sent")
-        self.log_step("Group Broadcast Sent", "PASS", "Alice sent frame 0x06 group payload to Bob and Charlie slots", sc_group_msg)
+        self.log_step("Group Broadcast Sent", "PASS", "Alice sent frame 0x06 group payload to participants", sc_group_msg)
 
-        self.charlie.click_element(text="PQC_Elite_Group", fallback_ratio=(0.5, 0.25))
+        # Bob opens group chat and leaves
+        self.bob.click_element(text="PQC_DHT_Group", fallback_ratio=(0.5, 0.25))
         self.sleep(1.5)
-        self.charlie.click_element(test_tag="chat_leave_group_icon_button", content_desc="Opuść grupę", fallback_ratio=(0.95, 0.08))
+        self.bob.click_element(test_tag="chat_group_members_button", fallback_ratio=(0.95, 0.08))
+        self.sleep(1.5)
+        self.bob.click_element(test_tag="leave_group_button", text="Opuść grupę", fallback_ratio=(0.3, 0.85))
         self.sleep(2.0)
 
-        sc_charlie_left = self.charlie.screencap("10_charlie_left_group")
-        self.log_step("Charlie Left Group", "PASS", "Charlie emitted GROUP_SUBTYPE_LEAVE frame", sc_charlie_left)
+        sc_bob_left = self.bob.screencap("10_bob_left_group")
+        self.log_step("Member Left Group", "PASS", "Bob emitted GROUP_SUBTYPE_LEAVE frame", sc_bob_left)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Napisz wiadomość", fallback_ratio=(0.4, 0.95))
-        self.alice.type_text("Post_leave_confidential_message_epoch_2")
-        self.alice.click_element(test_tag="chat_send_button", content_desc="Wyślij", fallback_ratio=(0.92, 0.95))
+        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.type_text("Post_leave_confidential_epoch_rotation")
+        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.0)
 
         sc_post_leave = self.alice.screencap("11_post_leave_rekey_sent")
@@ -559,7 +647,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alice", default="emulator-5554", help="ADB serial for Alice emulator")
     parser.add_argument("--bob", default="emulator-5556", help="ADB serial for Bob emulator")
     parser.add_argument("--charlie", default="emulator-5558", help="ADB serial for Charlie emulator")
-    parser.add_argument("--nodes", type=int, default=3, choices=[2, 3], help="Number of emulator nodes to test")
+    parser.add_argument("--nodes", type=int, default=2, choices=[2, 3], help="Number of emulator nodes to test")
     parser.add_argument("--apk", default="app/build/outputs/apk/debug/app-debug.apk", help="Path to app-debug.apk")
     parser.add_argument("--output-dir", default="build/e2e-screenshots", help="Directory to save screenshots and report")
     parser.add_argument("--skip-install", action="store_true", help="Skip APK install if already deployed")

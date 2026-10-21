@@ -790,7 +790,8 @@ fun SettingsScreen(
                                     showPinDialog = true
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("settings_pin_setup_button")
                             ) {
                                 Text(
                                     if (isAppLockPinSet) "Zmień" else "Ustaw",
@@ -860,7 +861,8 @@ fun SettingsScreen(
                                     showDuressPinDialog = true
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("settings_duress_pin_setup_button")
                             ) {
                                 Text(
                                     if (isDuressPinSet) "Zmień" else "Ustaw",
@@ -1059,7 +1061,8 @@ fun SettingsScreen(
                                 } else {
                                     viewModel.setAnonymousStatsEnabled(false)
                                 }
-                            }
+                            },
+                            modifier = Modifier.testTag("settings_research_telemetry_switch")
                         )
                     }
 
@@ -1260,7 +1263,8 @@ fun SettingsScreen(
                         singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
-                        )
+                        ),
+                        modifier = Modifier.testTag("pin_dialog_input")
                     )
                 }
             },
@@ -1272,13 +1276,17 @@ fun SettingsScreen(
                             viewModel.setAppLockPin(trimmed)
                             showPinDialog = false
                         }
-                    }
+                    },
+                    modifier = Modifier.testTag("pin_dialog_confirm_button")
                 ) {
                     Text("Zapisz")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showPinDialog = false }) {
+                TextButton(
+                    onClick = { showPinDialog = false },
+                    modifier = Modifier.testTag("pin_dialog_dismiss_button")
+                ) {
                     Text("Anuluj")
                 }
             }
@@ -1304,7 +1312,8 @@ fun SettingsScreen(
                         singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
-                        )
+                        ),
+                        modifier = Modifier.testTag("duress_pin_dialog_input")
                     )
                 }
             },
@@ -1316,13 +1325,17 @@ fun SettingsScreen(
                             viewModel.setDuressPin(trimmed)
                             showDuressPinDialog = false
                         }
-                    }
+                    },
+                    modifier = Modifier.testTag("duress_pin_dialog_confirm_button")
                 ) {
                     Text("Zapisz kod przymusu")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDuressPinDialog = false }) {
+                TextButton(
+                    onClick = { showDuressPinDialog = false },
+                    modifier = Modifier.testTag("duress_pin_dialog_dismiss_button")
+                ) {
                     Text("Anuluj")
                 }
             }
@@ -1394,7 +1407,8 @@ fun SettingsScreen(
                         viewModel.setAnonymousStatsEnabled(true)
                         showResearchConsentDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = appColors.primary)
+                    colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
+                    modifier = Modifier.testTag("research_consent_confirm_button")
                 ) {
                     Text("Wyrażam zgodę i włączam", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
@@ -1403,7 +1417,8 @@ fun SettingsScreen(
                 TextButton(
                     onClick = {
                         showResearchConsentDialog = false
-                    }
+                    },
+                    modifier = Modifier.testTag("research_consent_dismiss_button")
                 ) {
                     Text("Anuluj", color = appColors.textSecondary)
                 }

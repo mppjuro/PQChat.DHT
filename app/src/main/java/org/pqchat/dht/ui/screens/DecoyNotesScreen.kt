@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -152,7 +153,8 @@ fun DecoyNotesScreen(
                         text = "Brak zapisanych notatek",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = appColors.textPrimary
+                        color = appColors.textPrimary,
+                        modifier = Modifier.testTag("decoy_notes_empty_text")
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(

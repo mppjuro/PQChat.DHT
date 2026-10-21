@@ -22,6 +22,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pqchat.dht.data.settings.PinAuthResult
@@ -146,7 +149,9 @@ fun BiometricLockScreen(
                 },
                 isError = errorMessage != null,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("pin_input_field")
             )
 
             if (errorMessage != null) {
@@ -162,6 +167,79 @@ fun BiometricLockScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Bank-grade on-screen numeric keypad
+            val keypadRows = listOf(
+                listOf("1", "2", "3"),
+                listOf("4", "5", "6"),
+                listOf("7", "8", "9"),
+                listOf("C", "0", "⌫")
+            )
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (row in keypadRows) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for (key in row) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = appColors.surfaceVariant.copy(alpha = 0.7f),
+                                border = BorderStroke(1.dp, appColors.border),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        when (key) {
+                                            "C" -> {
+                                                pinInput = ""
+                                                errorMessage = null
+                                            }
+                                            "⌫" -> {
+                                                if (pinInput.isNotEmpty()) {
+                                                    pinInput = pinInput.dropLast(1)
+                                                    errorMessage = null
+                                                }
+                                            }
+                                            else -> {
+                                                if (pinInput.length < 16) {
+                                                    pinInput += key
+                                                    errorMessage = null
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .testTag(
+                                        when (key) {
+                                            "C" -> "pin_key_clear"
+                                            "⌫" -> "pin_key_backspace"
+                                            else -> "pin_key_$key"
+                                        }
+                                    )
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Text(
+                                        text = key,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (key in listOf("C", "⌫")) appColors.primary else appColors.textPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Submit PIN Button
             Button(
                 onClick = { submitPin() },
@@ -170,6 +248,7 @@ fun BiometricLockScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
+                    .testTag("pin_unlock_button")
             ) {
                 Text(
                     text = "Odblokuj kodem PIN",

@@ -22,7 +22,7 @@ import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
 class MainActivity : FragmentActivity() {
 
-    private val viewModel: ChatViewModel by viewModels()
+    val viewModel: ChatViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
