@@ -127,6 +127,12 @@ class ChatRepository(
     @Volatile
     var pollBatchSize: Int = N_POLL_TARGETS
 
+    /**
+     * Lookahead window size for pre-polling out-of-order slots in constant polling batches.
+     */
+    @Volatile
+    var pollLookaheadWindowSize: Int = 2
+
     @Volatile
     var intraBatchJitterMinMs: Long = 20L
 
@@ -2409,6 +2415,9 @@ class ChatRepository(
         val target: ByteArray
         val isSelf: Boolean
         val seqNum: Long
+        val entityId: String
+        val isFocused: Boolean
+        val priorityWeight: Double
         suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean
     }
 
@@ -2417,6 +2426,9 @@ class ChatRepository(
     ) : PollTask {
         override val isSelf: Boolean = true
         override val seqNum: Long = 0L
+        override val entityId: String = "decoy"
+        override val isFocused: Boolean = false
+        override val priorityWeight: Double = 1.0
         override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
             if (item != null) {
                 harvestUndecryptableItem(target, item)
@@ -2430,11 +2442,47 @@ class ChatRepository(
         val contactId: String,
         val slot: RatchetChain.SlotParameters,
         override val isSelf: Boolean,
-        override val seqNum: Long
+        override val seqNum: Long,
+        override val isFocused: Boolean = false,
+        val lookaheadDistance: Int = 0
     ) : PollTask {
+        override val entityId: String get() = contactId
+        override val priorityWeight: Double
+            get() = if (lookaheadDistance == 0) 10.0 else 10.0 / (1.0 + lookaheadDistance)
+
         override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
             if (item == null) return false
             return getContactMutex(contactId).withLock {
+                val contact = contactDao.getContactById(contactId) ?: return@withLock false
+                if (slot.counter > contact.counterIn) {
+                    val intermediateSlots = RatchetChain.computeLookaheadSlots(
+                        startChainKey = contact.chainKeyIn,
+                        startCounter = contact.counterIn,
+                        windowSize = slot.counter - contact.counterIn
+                    )
+                    for (interSlot in intermediateSlots) {
+                        if (interSlot.counter < slot.counter) {
+                            val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
+                            if (!bitmap.isReceived(interSlot.counter)) {
+                                if (skippedKeyDao != null) {
+                                    val count = skippedKeyDao.countSkippedKeys(contactId)
+                                    if (count >= MAX_SKIPPED_KEYS_PER_CONTACT) {
+                                        skippedKeyDao.deleteOldestSkippedKeys(contactId, count - MAX_SKIPPED_KEYS_PER_CONTACT + 1)
+                                    }
+                                    skippedKeyDao.insertOrUpdate(
+                                        SkippedKeyEntity(
+                                            contactId = contactId,
+                                            slotIndex = interSlot.counter,
+                                            msgKey = interSlot.msgKey,
+                                            target = interSlot.target,
+                                            edPrivateKeySeed = interSlot.edPrivateKeySeed
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 val processed = processIncomingItem(contactId, slot, item, isSelf)
                 if (!processed) {
                     harvestUndecryptableItem(slot.target, item)
@@ -2453,8 +2501,12 @@ class ChatRepository(
         val contactId: String,
         val skippedKey: SkippedKeyEntity,
         override val isSelf: Boolean,
-        override val seqNum: Long
+        override val seqNum: Long,
+        override val isFocused: Boolean = false
     ) : PollTask {
+        override val entityId: String get() = contactId
+        override val priorityWeight: Double = 12.0
+
         override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
             if (item == null) return false
             return getContactMutex(contactId).withLock {
@@ -2520,9 +2572,15 @@ class ChatRepository(
         val isIndividualSlot: Boolean,
         val groupIdBytes: ByteArray,
         val memberIdBytes: ByteArray,
-        override val seqNum: Long
+        override val seqNum: Long,
+        override val isFocused: Boolean = false,
+        val lookaheadDistance: Int = 0
     ) : PollTask {
         override val isSelf: Boolean = false
+        override val entityId: String get() = groupId
+        override val priorityWeight: Double
+            get() = if (lookaheadDistance == 0) 10.0 else 10.0 / (1.0 + lookaheadDistance)
+
         override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
             if (item == null) return false
             return getGroupMutex(groupId).withLock {
@@ -2560,14 +2618,25 @@ class ChatRepository(
                         }
                     }
 
-                    groupMemberDao?.updateMemberIncomingStateWithBitmap(
-                        groupId = groupId,
-                        memberId = member.memberId,
-                        counterIn = slot.counter + 1,
-                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${member.memberId}", "chainKeyIn"),
-                        bitmapBase = bitmap.windowBase,
-                        bitmap = bitmap.toByteArray()
-                    )
+                    if (slot.counter == member.counterIn) {
+                        groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                            groupId = groupId,
+                            memberId = member.memberId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${member.memberId}", "chainKeyIn"),
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                    } else {
+                        groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                            groupId = groupId,
+                            memberId = member.memberId,
+                            counterIn = member.counterIn,
+                            chainKeyIn = member.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                    }
 
                     if (isIndividualSlot) {
                         try {
@@ -2590,10 +2659,209 @@ class ChatRepository(
         }
     }
 
+    private inner class PendingAckPollTask(
+        override val target: ByteArray,
+        val messageId: Long,
+        val contactId: String,
+        val ratchetKey: ByteArray,
+        val seqNumInt: Int,
+        val slotTarget: ByteArray?,
+        val slotEdSeed: ByteArray?,
+        override val isSelf: Boolean,
+        override val isFocused: Boolean = false
+    ) : PollTask {
+        override val entityId: String get() = contactId
+        override val seqNum: Long = seqNumInt.toLong()
+        override val priorityWeight: Double = 8.0
+
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item == null) return false
+            val isValid = org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(
+                ratchetKey = ratchetKey,
+                frame = item.v,
+                expectedMessageId = "$seqNumInt",
+                expectedSeqNum = seqNumInt
+            )
+            if (isValid) {
+                messageDao.updateStatus(messageId, "DELIVERED")
+                PollingWorker.unregisterRepublishTask(messageId)
+                onRepublishTaskUpdated?.invoke()
+                if (slotTarget != null) {
+                    researchTelemetry?.recordDeliveryAck(slotTarget)
+                    if (slotEdSeed != null) {
+                        try {
+                            dhtLeafNode.putMutable(
+                                target = slotTarget,
+                                v = BinaryFrameCodec.createTombstonePayload(),
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
+                                salt = null,
+                                sk = slotEdSeed,
+                                skipLocalStore = isSelf
+                            )
+                        } catch (_: Exception) {}
+                    }
+                }
+                return true
+            }
+            return false
+        }
+    }
+
+    private inner class PendingGroupControlAckPollTask(
+        override val target: ByteArray,
+        val record: PendingGroupControlRecord,
+        override val isFocused: Boolean = false
+    ) : PollTask {
+        override val entityId: String get() = record.contactId
+        override val isSelf: Boolean = record.contactId == SELF_CONTACT_ID
+        override val seqNum: Long = record.seqNum.toLong()
+        override val priorityWeight: Double = 8.0
+
+        override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
+            if (item == null) return false
+            val isValid = org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(
+                ratchetKey = record.ackRatchetKey,
+                frame = item.v,
+                expectedMessageId = "${record.seqNum}",
+                expectedSeqNum = record.seqNum
+            )
+            if (isValid) {
+                PollingWorker.unregisterRepublishTask(record.taskId)
+                pendingGroupControls.remove(record.taskId)
+                onRepublishTaskUpdated?.invoke()
+                researchTelemetry?.recordDeliveryAck(record.slotTarget)
+                try {
+                    dhtLeafNode.putMutable(
+                        target = record.slotTarget,
+                        v = BinaryFrameCodec.createTombstonePayload(),
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
+                        salt = null,
+                        sk = record.slotEdSeed,
+                        skipLocalStore = isSelf
+                    )
+                } catch (_: Exception) {}
+                return true
+            }
+            return false
+        }
+    }
+
+    /**
+     * Weighted Fair Stratified Sampling without replacement:
+     * - Partitions candidate active listening slots into focus stratum (if focusContactId != null)
+     *   and background stratum (other contacts/groups).
+     * - Damps entity dominance with sub-linear fairness factor: weight / sqrt(entityCount), ensuring
+     *   large 50-person groups do not starve 1-on-1 contacts.
+     * - Samples slots without replacement using Efraimidis-Spirakis exponential key sampling.
+     */
+    private fun sampleWeightedFairStratified(
+        candidateTasks: List<PollTask>,
+        batchSize: Int,
+        focusContactId: String?
+    ): List<PollTask> {
+        if (candidateTasks.isEmpty() || batchSize <= 0) return emptyList()
+
+        // 1. Deduplicate by target byte equality (keep highest priorityWeight)
+        val uniqueByTarget = LinkedHashMap<String, PollTask>()
+        for (task in candidateTasks) {
+            val hex = CryptoUtils.toHex(task.target)
+            val existing = uniqueByTarget[hex]
+            if (existing == null || task.priorityWeight > existing.priorityWeight) {
+                uniqueByTarget[hex] = task
+            }
+        }
+        val candidates = uniqueByTarget.values.toList()
+
+        if (candidates.size <= batchSize) {
+            return candidates
+        }
+
+        // Weighted sampling without replacement using Efraimidis-Spirakis algorithm
+        // with sublinear entity fairness damping: w_eff = priorityWeight / sqrt(entityCandidateCount)
+        fun sampleWithoutReplacement(pool: List<PollTask>, k: Int): List<PollTask> {
+            if (pool.size <= k) return pool
+            if (k <= 0) return emptyList()
+
+            val entityCounts = pool.groupingBy { it.entityId }.eachCount()
+            val scored = pool.map { task ->
+                val entityCount = entityCounts[task.entityId] ?: 1
+                val fairnessDamping = Math.sqrt(entityCount.toDouble()).coerceAtLeast(1.0)
+                val effectiveWeight = (task.priorityWeight / fairnessDamping).coerceAtLeast(1e-4)
+
+                val u = CryptoUtils.secureRandom.nextDouble().coerceIn(1e-12, 1.0 - 1e-12)
+                val key = Math.pow(u, 1.0 / effectiveWeight)
+                Pair(task, key)
+            }
+
+            return scored.sortedByDescending { it.second }.take(k).map { it.first }
+        }
+
+        if (focusContactId != null) {
+            val focusedPool = candidates.filter { it.isFocused }
+            val backgroundPool = candidates.filter { !it.isFocused }
+
+            if (focusedPool.isNotEmpty() && backgroundPool.isNotEmpty()) {
+                val bgQuotaDesired = minOf(backgroundPool.size, maxOf(1, batchSize / 4))
+                val focusQuota = minOf(focusedPool.size, batchSize - bgQuotaDesired)
+                val bgQuota = batchSize - focusQuota
+
+                // In focused pool, guarantee current in-sequence slot (k=0) if it exists
+                val focusedCurrent = focusedPool.filter {
+                    (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is SkippedKeyPollTask)
+                }
+                val result = mutableListOf<PollTask>()
+                if (focusedCurrent.isNotEmpty() && focusQuota > 0) {
+                    val guaranteed = focusedCurrent.take(focusQuota)
+                    result.addAll(guaranteed)
+                    val remainingFocusPool = focusedPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
+                    val remainingFocusQuota = focusQuota - guaranteed.size
+                    if (remainingFocusQuota > 0 && remainingFocusPool.isNotEmpty()) {
+                        result.addAll(sampleWithoutReplacement(remainingFocusPool, remainingFocusQuota))
+                    }
+                } else {
+                    result.addAll(sampleWithoutReplacement(focusedPool, focusQuota))
+                }
+
+                result.addAll(sampleWithoutReplacement(backgroundPool, bgQuota))
+                return result.take(batchSize)
+            } else if (focusedPool.isNotEmpty()) {
+                val focusedCurrent = focusedPool.filter {
+                    (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is SkippedKeyPollTask)
+                }
+                val result = mutableListOf<PollTask>()
+                if (focusedCurrent.isNotEmpty()) {
+                    val guaranteed = focusedCurrent.take(batchSize)
+                    result.addAll(guaranteed)
+                    val remaining = focusedPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
+                    val remainingQuota = batchSize - guaranteed.size
+                    if (remainingQuota > 0 && remaining.isNotEmpty()) {
+                        result.addAll(sampleWithoutReplacement(remaining, remainingQuota))
+                    }
+                    return result.take(batchSize)
+                } else {
+                    return sampleWithoutReplacement(focusedPool, batchSize)
+                }
+            } else {
+                return sampleWithoutReplacement(backgroundPool, batchSize)
+            }
+        } else {
+            // General poll (APP_ACTIVE_OTHER, BACKGROUND_IDLE, DOZE_SLEEP):
+            // Sample fairly across all candidate slots
+            return sampleWithoutReplacement(candidates, batchSize)
+        }
+    }
+
     /**
      * Executes a Constant-Size Decoy-Padded Poll Batch:
-     * - Generates a constant budget of [batchSize] (default N_POLL_TARGETS = 8) getMutable queries.
-     * - Disguises focused contact/group queries within real/expiring decoy targets from [DecoyTargetPool].
+     * - Generates a constant budget of [batchSize] (default N_POLL_TARGETS = 8) getMutable queries
+     *   across all states (FOREGROUND_CHAT, APP_ACTIVE_OTHER, BACKGROUND_IDLE, DOZE_SLEEP).
+     * - Gathers active listening slots across 1-on-1 contacts, active group members, lookahead windows,
+     *   and pending ACKs.
+     * - When active slots exceed [batchSize], applies Weighted Fair Stratified Sampling without replacement.
+     * - Disguises focused contact/group queries within real/expiring decoy targets from [DecoyTargetPool]
+     *   when active slots are fewer than [batchSize].
      * - Shuffles all targets in random permutation using CSPRNG.
      * - Applies intra-batch jitter between queries to prevent network observer timing/frequency correlation.
      */
@@ -2603,130 +2871,178 @@ class ChatRepository(
         intraBatchJitterMinMs: Long = this.intraBatchJitterMinMs,
         intraBatchJitterMaxMs: Long = this.intraBatchJitterMaxMs
     ): Boolean = withContext(Dispatchers.IO) {
-        // 1. Process any pending ACKs for focused contact (or globally)
-        checkPendingAcks(focusContactId)
-
-        // 2. Assemble candidate real tasks
+        // 1. Assemble candidate real active listening slots
         val tasks = mutableListOf<PollTask>()
 
-        if (focusContactId != null) {
-            val group = groupDao?.getGroupById(focusContactId)
-            if (group != null) {
-                val members = groupMemberDao?.getMembersForGroup(focusContactId) ?: emptyList()
-                val groupIdBytes = uuidStringToBytes(focusContactId)
-                val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
-                for (member in members) {
-                    if (member.memberId == group.myMemberId) continue
-                    if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
-                    val memberIdBytes = uuidStringToBytes(member.memberId)
-                    val baseSlot = RatchetChain.deriveSlot(member.rawChainKeyIn, member.counterIn)
-                    val individualSlot = RatchetChain.deriveGroupRecipientSlot(
-                        chainKey = member.rawChainKeyIn,
-                        counter = member.counterIn,
-                        groupId = groupIdBytes,
-                        senderMemberId = memberIdBytes,
-                        recipientMemberId = myMemberIdBytes
-                    )
-                    tasks.add(
-                        GroupMemberSlotPollTask(
-                            target = individualSlot.target,
-                            groupId = focusContactId,
-                            member = member,
-                            slot = individualSlot,
-                            baseSlot = baseSlot,
-                            isIndividualSlot = true,
-                            groupIdBytes = groupIdBytes,
-                            memberIdBytes = memberIdBytes,
-                            seqNum = member.counterIn.toLong()
-                        )
-                    )
-                }
-            } else {
-                val contact = contactDao.getContactById(focusContactId)
-                if (contact != null) {
-                    val isSelf = contact.id == SELF_CONTACT_ID
-                    val skipped = skippedKeyDao?.getSkippedKeysForContact(contact.id) ?: emptyList()
-                    for (sk in skipped) {
-                        tasks.add(
-                            SkippedKeyPollTask(
-                                target = sk.target,
-                                contactId = contact.id,
-                                skippedKey = sk,
-                                isSelf = isSelf,
-                                seqNum = sk.slotIndex.toLong()
-                            )
-                        )
-                    }
-                    val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
-                    tasks.add(
-                        ContactSlotPollTask(
-                            target = currentSlot.target,
-                            contactId = contact.id,
-                            slot = currentSlot,
-                            isSelf = isSelf,
-                            seqNum = contact.counterIn.toLong()
-                        )
-                    )
-                }
-            }
-        } else {
-            // General poll: gather all active contacts and group members
-            val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
-            for (contact in contacts) {
-                val isSelf = contact.id == SELF_CONTACT_ID
-                val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+        // 1a. Gather 1-on-1 contact listening slots (current slot, lookahead window, skipped keys)
+        val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        for (contact in contacts) {
+            val isSelf = contact.id == SELF_CONTACT_ID
+            val isFocusedContact = (contact.id == focusContactId)
+
+            val skipped = skippedKeyDao?.getSkippedKeysForContact(contact.id) ?: emptyList()
+            for (sk in skipped) {
                 tasks.add(
-                    ContactSlotPollTask(
-                        target = currentSlot.target,
+                    SkippedKeyPollTask(
+                        target = sk.target,
                         contactId = contact.id,
-                        slot = currentSlot,
+                        skippedKey = sk,
                         isSelf = isSelf,
-                        seqNum = contact.counterIn.toLong()
+                        seqNum = sk.slotIndex.toLong(),
+                        isFocused = isFocusedContact
                     )
                 )
             }
-            val groups = groupDao?.getAllActiveGroups() ?: emptyList()
-            for (group in groups) {
-                val members = groupMemberDao?.getMembersForGroup(group.groupId) ?: emptyList()
-                val groupIdBytes = uuidStringToBytes(group.groupId)
-                val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
-                for (member in members) {
-                    if (member.memberId == group.myMemberId) continue
-                    if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
-                    val memberIdBytes = uuidStringToBytes(member.memberId)
-                    val baseSlot = RatchetChain.deriveSlot(member.rawChainKeyIn, member.counterIn)
-                    val individualSlot = RatchetChain.deriveGroupRecipientSlot(
-                        chainKey = member.rawChainKeyIn,
-                        counter = member.counterIn,
-                        groupId = groupIdBytes,
-                        senderMemberId = memberIdBytes,
-                        recipientMemberId = myMemberIdBytes
-                    )
+
+            val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+            tasks.add(
+                ContactSlotPollTask(
+                    target = currentSlot.target,
+                    contactId = contact.id,
+                    slot = currentSlot,
+                    isSelf = isSelf,
+                    seqNum = contact.counterIn.toLong(),
+                    isFocused = isFocusedContact,
+                    lookaheadDistance = 0
+                )
+            )
+
+            if (pollLookaheadWindowSize > 0) {
+                val laSlots = RatchetChain.computeLookaheadSlots(
+                    startChainKey = contact.chainKeyIn,
+                    startCounter = contact.counterIn,
+                    windowSize = pollLookaheadWindowSize
+                )
+                for (k in 1 until laSlots.size) {
+                    val laSlot = laSlots[k]
                     tasks.add(
-                        GroupMemberSlotPollTask(
-                            target = individualSlot.target,
-                            groupId = group.groupId,
-                            member = member,
-                            slot = individualSlot,
-                            baseSlot = baseSlot,
-                            isIndividualSlot = true,
-                            groupIdBytes = groupIdBytes,
-                            memberIdBytes = memberIdBytes,
-                            seqNum = member.counterIn.toLong()
+                        ContactSlotPollTask(
+                            target = laSlot.target,
+                            contactId = contact.id,
+                            slot = laSlot,
+                            isSelf = isSelf,
+                            seqNum = laSlot.counter.toLong(),
+                            isFocused = isFocusedContact,
+                            lookaheadDistance = k
                         )
                     )
                 }
             }
         }
 
-        // 3. Constant budget adjustment: take at most batchSize, pad with DecoyTargetPool if fewer
-        val finalTasks = if (tasks.size > batchSize) {
-            tasks.take(batchSize).toMutableList()
-        } else {
-            tasks.toMutableList()
+        // 1b. Gather group member active listening slots (current slot, lookahead window)
+        val groups = groupDao?.getAllActiveGroups() ?: emptyList()
+        for (group in groups) {
+            val isFocusedGroup = (group.groupId == focusContactId)
+            val members = groupMemberDao?.getMembersForGroup(group.groupId) ?: emptyList()
+            val groupIdBytes = uuidStringToBytes(group.groupId)
+            val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+
+            for (member in members) {
+                if (member.memberId == group.myMemberId) continue
+                if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
+
+                val memberIdBytes = uuidStringToBytes(member.memberId)
+                val baseSlot = RatchetChain.deriveSlot(member.rawChainKeyIn, member.counterIn)
+                val individualSlot = RatchetChain.deriveGroupRecipientSlot(
+                    chainKey = member.rawChainKeyIn,
+                    counter = member.counterIn,
+                    groupId = groupIdBytes,
+                    senderMemberId = memberIdBytes,
+                    recipientMemberId = myMemberIdBytes
+                )
+
+                tasks.add(
+                    GroupMemberSlotPollTask(
+                        target = individualSlot.target,
+                        groupId = group.groupId,
+                        member = member,
+                        slot = individualSlot,
+                        baseSlot = baseSlot,
+                        isIndividualSlot = true,
+                        groupIdBytes = groupIdBytes,
+                        memberIdBytes = memberIdBytes,
+                        seqNum = member.counterIn.toLong(),
+                        isFocused = isFocusedGroup,
+                        lookaheadDistance = 0
+                    )
+                )
+
+                if (pollLookaheadWindowSize > 0) {
+                    val groupLaSlots = RatchetChain.computeGroupLookaheadSlots(
+                        startChainKey = member.rawChainKeyIn,
+                        startCounter = member.counterIn,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes,
+                        recipientMemberId = myMemberIdBytes,
+                        windowSize = pollLookaheadWindowSize
+                    )
+                    for (k in 1 until groupLaSlots.size) {
+                        val laSlot = groupLaSlots[k]
+                        tasks.add(
+                            GroupMemberSlotPollTask(
+                                target = laSlot.target,
+                                groupId = group.groupId,
+                                member = member,
+                                slot = laSlot,
+                                baseSlot = laSlot,
+                                isIndividualSlot = true,
+                                groupIdBytes = groupIdBytes,
+                                memberIdBytes = memberIdBytes,
+                                seqNum = laSlot.counter.toLong(),
+                                isFocused = isFocusedGroup,
+                                lookaheadDistance = k
+                            )
+                        )
+                    }
+                }
+            }
         }
 
-        val countNeeded = batchSize - finalTasks.size
+        // 1c. Gather pending ACK slots (1-on-1 delivery ACKs and group control ACKs)
+        val pendingMsgs = if (focusContactId != null) {
+            messageDao.getPendingDeliveryMessagesForContact(focusContactId)
+        } else {
+            messageDao.getAllPendingDeliveryMessages()
+        }
+        for (msg in pendingMsgs) {
+            val targetAck = msg.ackTarget ?: continue
+            val ratchetKey = msg.ackRatchetKey?.raw ?: continue
+            tasks.add(
+                PendingAckPollTask(
+                    target = targetAck,
+                    messageId = msg.id,
+                    contactId = msg.contactId,
+                    ratchetKey = ratchetKey,
+                    seqNumInt = msg.seqNum,
+                    slotTarget = msg.slotTarget,
+                    slotEdSeed = msg.slotEdSeed?.raw,
+                    isSelf = msg.contactId == SELF_CONTACT_ID,
+                    isFocused = msg.contactId == focusContactId
+                )
+            )
+        }
+
+        val controlRecords = if (focusContactId != null) {
+            pendingGroupControls.values.filter { it.contactId == focusContactId }
+        } else {
+            pendingGroupControls.values.toList()
+        }
+        for (rec in controlRecords) {
+            tasks.add(
+                PendingGroupControlAckPollTask(
+                    target = rec.targetAck,
+                    record = rec,
+                    isFocused = rec.contactId == focusContactId
+                )
+            )
+        }
+
+        // 2. Apply Weighted Fair Stratified Sampling without replacement
+        val sampledTasks = sampleWeightedFairStratified(tasks, batchSize, focusContactId).toMutableList()
+
+        // 3. Constant budget adjustment: pad with DecoyTargetPool queries if fewer than batchSize
+        val countNeeded = batchSize - sampledTasks.size
         if (countNeeded > 0) {
             val decoyTargets = decoyTargetPool.getDecoyTargets(countNeeded) {
                 runBlocking { collectExpiringAndPastTargets(focusContactId) }
@@ -2737,17 +3053,17 @@ class ChatRepository(
             }
 
             for (target in decoyTargets.take(countNeeded)) {
-                finalTasks.add(DecoyPollTask(target))
+                sampledTasks.add(DecoyPollTask(target))
             }
         }
 
         // 4. Random permutation: Fisher-Yates shuffle with CSPRNG
-        val shuffledTasks = finalTasks.shuffled(CryptoUtils.secureRandom)
+        val finalTasks = sampledTasks.take(batchSize).shuffled(CryptoUtils.secureRandom)
 
         // 5. Execute batch sequentially with intra-batch jitter
         var anyReceived = false
-        for (i in shuffledTasks.indices) {
-            val task = shuffledTasks[i]
+        for (i in finalTasks.indices) {
+            val task = finalTasks[i]
             try {
                 val tStart = System.currentTimeMillis()
                 val item = dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf)
@@ -2771,7 +3087,7 @@ class ChatRepository(
             } catch (_: Exception) {}
 
             // Apply intra-batch jitter between queries
-            if (i < shuffledTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
+            if (i < finalTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
                 val span = (intraBatchJitterMaxMs - intraBatchJitterMinMs).coerceAtLeast(1L)
                 val jitter = intraBatchJitterMinMs + (CryptoUtils.secureRandom.nextDouble() * span).toLong()
                 if (jitter > 0L) {

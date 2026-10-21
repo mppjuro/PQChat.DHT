@@ -750,6 +750,321 @@ class TrafficThreatModelStatisticalTest {
         assertTrue("Elapsed time ($elapsed ms) must exhibit intra-batch jitter (>= 100 ms)", elapsed >= 100L)
     }
 
+    @Test
+    fun testGroupChatAndDirectChatPolling_StatisticallyIndistinguishableInCountAndTiming() = runBlocking {
+        class TimingTrackingFakeDht(val delegate: FakeDht = FakeDht()) : DhtClient by delegate {
+            val queriedTargetsInOrder = mutableListOf<ByteArray>()
+            val cycleCounts = mutableListOf<Int>()
+            val cycleTimestamps = mutableListOf<MutableList<Long>>()
+            private var currentCount = 0
+            private var currentTimestamps = mutableListOf<Long>()
+
+            fun startCycle() {
+                currentCount = 0
+                currentTimestamps = mutableListOf()
+            }
+
+            fun endCycle() {
+                cycleCounts.add(currentCount)
+                cycleTimestamps.add(currentTimestamps)
+            }
+
+            override suspend fun getMutable(
+                target: ByteArray,
+                salt: ByteArray?,
+                skipLocalStore: Boolean,
+                timeoutMs: Long,
+                probeAllReplicas: Boolean
+            ): DhtLeafNode.MutableItem? {
+                currentTimestamps.add(System.nanoTime())
+                queriedTargetsInOrder.add(target.copyOf())
+                currentCount++
+                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas)
+            }
+        }
+
+        val expectedBatchSize = ChatRepository.N_POLL_TARGETS
+        assertEquals(8, expectedBatchSize)
+
+        // -----------------------------------------------------------------------------------------
+        // CLIENT A: Pure 1-on-1 Direct Chat User
+        // - 1 single contact (Alice), 0 groups
+        // - Lookahead window = 2 (slots: k=0, k=1, k=2 -> 3 real candidate listening slots)
+        // - Budget B = 8 -> candidate slots (3) < B, so 5 slots must be padded with DecoyTargetPool
+        // -----------------------------------------------------------------------------------------
+        val contactDaoA = FakeContactDao()
+        val fakeDhtA = TimingTrackingFakeDht()
+        val decoyPoolA = DecoyTargetPool()
+        val populatedDecoysA = (1..50).map { CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)) }
+        decoyPoolA.registerPopulatedTargets(populatedDecoysA)
+
+        val aliceChainKeyIn = CryptoUtils.secureRandomBytes(64)
+        val alice = ContactEntity(
+            id = "alice",
+            name = "Alice",
+            chainKeyOut = CryptoUtils.secureRandomBytes(64),
+            counterOut = 0,
+            chainKeyIn = aliceChainKeyIn,
+            counterIn = 0
+        )
+        contactDaoA.insertOrUpdate(alice)
+
+        val repoA = ChatRepository(
+            contactDao = contactDaoA,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDhtA,
+            pendingAckQueue = PendingAckQueue(),
+            decoyTargetPool = decoyPoolA,
+            groupDao = null,
+            groupMemberDao = null
+        ).apply {
+            pollLookaheadWindowSize = 2
+        }
+
+        // -----------------------------------------------------------------------------------------
+        // CLIENT B: Heavy Group Chat Participant
+        // - Participates in 5 distinct groups
+        // - Each group has 10 members (1 self + 9 other active members -> 45 total peers)
+        // - Lookahead window = 2 (each member has slots k=0, 1, 2 -> 45 * 3 = 135 real candidate slots)
+        // - Candidate slots (135) >> B (8) -> Weighted Fair Stratified Sampling downsamples to 8
+        // -----------------------------------------------------------------------------------------
+        val contactDaoB = FakeContactDao()
+        val groupDaoB = FakeGroupDao()
+        val groupMemberDaoB = FakeGroupMemberDao()
+        val fakeDhtB = TimingTrackingFakeDht()
+        val decoyPoolB = DecoyTargetPool()
+        val populatedDecoysB = (1..50).map { CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)) }
+        decoyPoolB.registerPopulatedTargets(populatedDecoysB)
+
+        val myMemberIdB = java.util.UUID.randomUUID().toString()
+        val groupIds = (1..5).map { java.util.UUID.randomUUID().toString() }
+        val allGroupMemberTargets = mutableMapOf<String, MutableSet<String>>()
+
+        fun uuidTo16Bytes(uuidStr: String): ByteArray {
+            val u = java.util.UUID.fromString(uuidStr)
+            val bb = java.nio.ByteBuffer.allocate(16)
+            bb.putLong(u.mostSignificantBits)
+            bb.putLong(u.leastSignificantBits)
+            return bb.array()
+        }
+
+        val myMemberIdBytesB = uuidTo16Bytes(myMemberIdB)
+
+        for (gId in groupIds) {
+            allGroupMemberTargets[gId] = mutableSetOf()
+            val gBytes = uuidTo16Bytes(gId)
+            groupDaoB.insertOrUpdate(
+                GroupEntity(
+                    groupId = gId,
+                    groupName = "Group-$gId",
+                    myMemberId = myMemberIdB,
+                    myChainKeyOut = CryptoUtils.secureRandomBytes(64),
+                    myCounterOut = 0
+                )
+            )
+
+            for (m in 1..9) {
+                val memberId = java.util.UUID.randomUUID().toString()
+                val mBytes = uuidTo16Bytes(memberId)
+                val memberChainKeyIn = CryptoUtils.secureRandomBytes(64)
+                groupMemberDaoB.insertOrUpdate(
+                    GroupMemberEntity(
+                        groupId = gId,
+                        memberId = memberId,
+                        contactId = null,
+                        memberName = "Member $m in $gId",
+                        chainKeyIn = memberChainKeyIn,
+                        counterIn = 0
+                    )
+                )
+
+                // Track expected targets for lookahead k=0, 1, 2
+                val memberSlots = RatchetChain.computeGroupLookaheadSlots(
+                    startChainKey = memberChainKeyIn,
+                    startCounter = 0,
+                    groupId = gBytes,
+                    senderMemberId = mBytes,
+                    recipientMemberId = myMemberIdBytesB,
+                    windowSize = 2
+                )
+                for (slot in memberSlots) {
+                    allGroupMemberTargets[gId]!!.add(CryptoUtils.toHex(slot.target))
+                }
+            }
+        }
+
+        val repoB = ChatRepository(
+            contactDao = contactDaoB,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDhtB,
+            pendingAckQueue = PendingAckQueue(),
+            decoyTargetPool = decoyPoolB,
+            groupDao = groupDaoB,
+            groupMemberDao = groupMemberDaoB
+        ).apply {
+            pollLookaheadWindowSize = 2
+        }
+
+        // -----------------------------------------------------------------------------------------
+        // RUN POLLING CYCLES (30 cycles for each client)
+        // Using intra-batch jitter between 5ms and 15ms.
+        // -----------------------------------------------------------------------------------------
+        val nCycles = 30
+        val jitterMinMs = 5L
+        val jitterMaxMs = 15L
+
+        for (cycle in 0 until nCycles) {
+            // First 15 cycles: focused on Alice / Group 1
+            // Last 15 cycles: background / idle (focusContactId = null)
+            val focusA = if (cycle < 15) "alice" else null
+            val focusB = if (cycle < 15) groupIds[0] else null
+
+            fakeDhtA.startCycle()
+            repoA.pollConstantBatch(
+                focusContactId = focusA,
+                batchSize = expectedBatchSize,
+                intraBatchJitterMinMs = jitterMinMs,
+                intraBatchJitterMaxMs = jitterMaxMs
+            )
+            fakeDhtA.endCycle()
+
+            fakeDhtB.startCycle()
+            repoB.pollConstantBatch(
+                focusContactId = focusB,
+                batchSize = expectedBatchSize,
+                intraBatchJitterMinMs = jitterMinMs,
+                intraBatchJitterMaxMs = jitterMaxMs
+            )
+            fakeDhtB.endCycle()
+        }
+
+        // -----------------------------------------------------------------------------------------
+        // 1. STATISTICAL PROPERTY 1: Strict Invariance of Query Count & Chi-Square Goodness-of-Fit
+        // -----------------------------------------------------------------------------------------
+        val countsA = fakeDhtA.cycleCounts
+        val countsB = fakeDhtB.cycleCounts
+
+        assertEquals(nCycles, countsA.size)
+        assertEquals(nCycles, countsB.size)
+
+        // Strict batch size equality: B = const across all cycles
+        assertTrue("Client A (1-on-1) must have exactly $expectedBatchSize queries in every cycle", countsA.all { it == expectedBatchSize })
+        assertTrue("Client B (5 groups of 10) must have exactly $expectedBatchSize queries in every cycle", countsB.all { it == expectedBatchSize })
+
+        val varA = countsA.map { (it - expectedBatchSize.toDouble()) * (it - expectedBatchSize.toDouble()) }.average()
+        val varB = countsB.map { (it - expectedBatchSize.toDouble()) * (it - expectedBatchSize.toDouble()) }.average()
+        assertEquals("Client A query count variance must be strictly 0.0", 0.0, varA, 1e-9)
+        assertEquals("Client B query count variance must be strictly 0.0", 0.0, varB, 1e-9)
+
+        // Chi-Square Test of homogeneity on count distributions between Client A and Client B
+        // With bins [k < B, k == B, k > B]: both distributions have 100% of samples in [k == B].
+        val kBins = 3
+        val observedA = IntArray(kBins)
+        val observedB = IntArray(kBins)
+        for (c in countsA) {
+            val bin = when {
+                c < expectedBatchSize -> 0
+                c == expectedBatchSize -> 1
+                else -> 2
+            }
+            observedA[bin]++
+        }
+        for (c in countsB) {
+            val bin = when {
+                c < expectedBatchSize -> 0
+                c == expectedBatchSize -> 1
+                else -> 2
+            }
+            observedB[bin]++
+        }
+
+        var chiSquareCount = 0.0
+        for (b in 0 until kBins) {
+            val expectedTotal = (observedA[b] + observedB[b]).toDouble()
+            if (expectedTotal > 0.0) {
+                val expectedClient = expectedTotal / 2.0
+                val diffA = observedA[b] - expectedClient
+                val diffB = observedB[b] - expectedClient
+                chiSquareCount += (diffA * diffA) / expectedClient + (diffB * diffB) / expectedClient
+            }
+        }
+        // Critical value for Chi-Square test (alpha=0.01) is 6.63 (1 df)
+        assertTrue(
+            "Chi-Square test statistic ($chiSquareCount) must prove count distributions are identical (critical = 6.63)",
+            chiSquareCount < 6.63
+        )
+
+        // -----------------------------------------------------------------------------------------
+        // 2. STATISTICAL PROPERTY 2: Two-Sample Kolmogorov-Smirnov Test on Inter-Query Arrival Timings
+        // -----------------------------------------------------------------------------------------
+        // An adversary observing the inter-query timing intervals must not distinguish whether the
+        // client is chatting 1-on-1 or in large group chats.
+        val delaysA = mutableListOf<Double>()
+        for (timestamps in fakeDhtA.cycleTimestamps) {
+            for (i in 0 until timestamps.size - 1) {
+                // convert nanoseconds to fractional milliseconds
+                delaysA.add((timestamps[i + 1] - timestamps[i]) / 1_000_000.0)
+            }
+        }
+
+        val delaysB = mutableListOf<Double>()
+        for (timestamps in fakeDhtB.cycleTimestamps) {
+            for (i in 0 until timestamps.size - 1) {
+                delaysB.add((timestamps[i + 1] - timestamps[i]) / 1_000_000.0)
+            }
+        }
+
+        val expectedDelaysCount = nCycles * (expectedBatchSize - 1) // 30 * 7 = 210 delays
+        assertEquals(expectedDelaysCount, delaysA.size)
+        assertEquals(expectedDelaysCount, delaysB.size)
+
+        val ksStat = computeTwoSampleKsStatistic(delaysA.toDoubleArray(), delaysB.toDoubleArray())
+        val n1 = delaysA.size.toDouble()
+        val n2 = delaysB.size.toDouble()
+        // Two-sample KS critical value at alpha = 0.05 is 1.36 * sqrt((n1 + n2) / (n1 * n2))
+        // For n1=210, n2=210: 1.36 * sqrt(420 / 44100) ~ 0.1327
+        val ksCritical = 1.36 * sqrt((n1 + n2) / (n1 * n2))
+
+        assertTrue(
+            "Two-sample KS statistic ($ksStat) must be < critical ($ksCritical at alpha=0.05), " +
+            "proving inter-query timing distributions between 1-on-1 and Group Chat clients are statistically indistinguishable",
+            ksStat < ksCritical
+        )
+
+        // -----------------------------------------------------------------------------------------
+        // 3. STATISTICAL PROPERTY 3: Anti-Starvation & Fairness of Weighted Fair Stratified Sampling
+        // -----------------------------------------------------------------------------------------
+        // For Client B: across the 30 cycles, tasks representing all 5 groups must be sampled.
+        val queriedHexesB = fakeDhtB.queriedTargetsInOrder.map { CryptoUtils.toHex(it) }.toSet()
+        for (gId in groupIds) {
+            val groupTargets = allGroupMemberTargets[gId]!!
+            val hitsForGroup = groupTargets.count { it in queriedHexesB }
+            assertTrue(
+                "Group $gId must not be starved (must have at least one slot sampled across 30 cycles), got $hitsForGroup hits",
+                hitsForGroup > 0
+            )
+        }
+
+        // For Client A: 1 contact with 3 slots (current + 2 lookahead) -> exactly 5 decoy queries per batch
+        val aliceSlots = RatchetChain.computeLookaheadSlots(aliceChainKeyIn, 0, 2)
+        val aliceKnownSlots = aliceSlots.map { CryptoUtils.toHex(it.target) }.toSet()
+
+        val queriedHexesA = fakeDhtA.queriedTargetsInOrder.map { CryptoUtils.toHex(it) }
+        val decoyHitsA = queriedHexesA.count { it !in aliceKnownSlots }
+        // Across 30 cycles, with exactly 5 decoys per cycle: total decoys = 30 * 5 = 150
+        assertEquals(
+            "Client A must pad exactly (batchSize - 3) = 5 decoys per cycle, yielding 150 decoy queries across 30 cycles",
+            nCycles * (expectedBatchSize - 3),
+            decoyHitsA
+        )
+    }
+
     private fun computeTwoSampleKsStatistic(sample1: DoubleArray, sample2: DoubleArray): Double {
         val n1 = sample1.size
         val n2 = sample2.size

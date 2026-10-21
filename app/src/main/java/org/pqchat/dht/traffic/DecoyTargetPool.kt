@@ -66,6 +66,10 @@ class DecoyTargetPool(
             targets.addAll(fallbackCandidates.take(count - targets.size))
         }
 
+        while (targets.size < count) {
+            targets.add(CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)))
+        }
+
         return targets
     }
 
