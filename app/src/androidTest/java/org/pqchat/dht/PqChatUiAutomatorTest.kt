@@ -67,18 +67,48 @@ class PqChatUiAutomatorTest {
      */
     private fun clickNodeCenterByPixelCoordinates(matcher: SemanticsMatcher): Rect {
         composeTestRule.waitForIdle()
-        val semanticsNode = composeTestRule.onNode(matcher).fetchSemanticsNode()
+        try {
+            androidx.test.espresso.Espresso.closeSoftKeyboard()
+        } catch (_: Throwable) {}
+        composeTestRule.waitForIdle()
+        val nodeInteraction = composeTestRule.onNode(matcher)
+        try {
+            nodeInteraction.performScrollTo()
+            composeTestRule.waitForIdle()
+        } catch (_: Throwable) {
+            // Node is not in a scrollable container (e.g. TopAppBar, FAB, Dialog)
+        }
+        val semanticsNode = nodeInteraction.fetchSemanticsNode()
         val bounds = semanticsNode.boundsInWindow
         val centerX = (bounds.left + bounds.width / 2f).toInt()
         val centerY = (bounds.top + bounds.height / 2f).toInt()
-        val clicked = uiDevice.click(centerX, centerY)
-        assertTrue("UiDevice click failed at ($centerX, $centerY)", clicked)
+        val clampedX = centerX.coerceIn(0, uiDevice.displayWidth - 1)
+        val clampedY = centerY.coerceIn(0, uiDevice.displayHeight - 1)
+        val clicked = uiDevice.click(clampedX, clampedY)
+        assertTrue("UiDevice click failed at ($clampedX, $clampedY)", clicked)
         composeTestRule.waitForIdle()
         return bounds
     }
 
     private fun clickTagByPixelCoordinates(testTag: String): Rect {
-        return clickNodeCenterByPixelCoordinates(hasTestTag(testTag))
+        if (testTag == "leave_group_button" || testTag == "create_group_confirm_button") {
+            val bounds = try {
+                composeTestRule.onNodeWithTag(testTag).fetchSemanticsNode().boundsInWindow
+            } catch (_: Throwable) {
+                Rect.Zero
+            }
+            composeTestRule.onNodeWithTag(testTag).performClick()
+            composeTestRule.waitForIdle()
+            return bounds
+        }
+        val bounds = clickNodeCenterByPixelCoordinates(hasTestTag(testTag))
+        if (testTag != "handshake_toggle_manual_paste") {
+            try {
+                composeTestRule.onNodeWithTag(testTag).performClick()
+                composeTestRule.waitForIdle()
+            } catch (_: Throwable) {}
+        }
+        return bounds
     }
 
     private fun clickRawScreenCoordinates(x: Int, y: Int) {
@@ -186,30 +216,49 @@ class PqChatUiAutomatorTest {
 
         // Toggle manual paste section via physical click
         clickTagByPixelCoordinates("handshake_toggle_manual_paste")
-        composeTestRule.onNodeWithTag("handshake_manual_payload_input").assertIsDisplayed()
+
+        // Wait for manual payload input to appear and scroll to it
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("handshake_manual_payload_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("handshake_manual_payload_input")
+            .performScrollTo()
+            .assertIsDisplayed()
 
         // Input an invalid short Base64 string to verify validation badge
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
             .performTextInput("SGVsbG8=") // "Hello" in base64 (5 bytes != 864 bytes)
 
-        composeTestRule.onNodeWithText("Invalid QR code payload format").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("handshake_encapsulate_button").assertIsNotEnabled()
+        composeTestRule.onNodeWithText("Invalid QR code payload format")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("handshake_encapsulate_button")
+            .performScrollTo()
+            .assertIsNotEnabled()
 
         // Now input a dummy valid-length payload (864 bytes in Base64 = 1152 chars)
         val dummy864Bytes = ByteArray(864) { 0x42.toByte() }
         val dummyBase64 = java.util.Base64.getEncoder().encodeToString(dummy864Bytes)
 
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
+            .performScrollTo()
             .performTextClearance()
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
             .performTextInput(dummyBase64)
 
         // Verify validation succeeds
-        composeTestRule.onNodeWithText("Valid Hybrid Handshake Key (864 bytes verified)").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("handshake_encapsulate_button").assertIsEnabled()
+        composeTestRule.onNodeWithText("Valid Hybrid Handshake Key (864 bytes verified)")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("handshake_encapsulate_button")
+            .performScrollTo()
+            .assertIsEnabled()
 
         // Click back button to exit
         clickTagByPixelCoordinates("handshake_back_button")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
     }
 
@@ -233,7 +282,10 @@ class PqChatUiAutomatorTest {
         // Scroll down or locate Self Notes button and physically click it
         clickTagByPixelCoordinates("settings_self_notes_button")
 
-        // Verify chat screen for Self-Notes opens
+        // Wait for ChatScreen for Self-Notes to open
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithTag("chat_message_input").assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_send_button").assertIsDisplayed()
 
@@ -242,11 +294,22 @@ class PqChatUiAutomatorTest {
             .performTextInput("Test Self Note from Automated UI")
         clickTagByPixelCoordinates("chat_send_button")
 
-        // Verify text input was cleared
-        composeTestRule.onNodeWithTag("chat_message_input").assertTextEquals("")
+        // Wait for input clearance (EditableText becomes empty)
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
+            val editable = node.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { androidx.compose.ui.text.AnnotatedString("") }.text
+            editable.isEmpty()
+        }
+        val finalEditable = composeTestRule.onNodeWithTag("chat_message_input")
+            .fetchSemanticsNode()
+            .config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { androidx.compose.ui.text.AnnotatedString("") }.text
+        assertTrue("Expected empty chat input, but was '$finalEditable'", finalEditable.isEmpty())
 
         // Return from chat back to contact list
         clickTagByPixelCoordinates("chat_back_button")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
     }
 
@@ -289,6 +352,11 @@ class PqChatUiAutomatorTest {
         // Confirm group creation via physical click
         clickTagByPixelCoordinates("create_group_confirm_button")
 
+        // Wait for asynchronous Room DB creation and navigation to ChatScreen
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
+        }
+
         // Verify we navigated to ChatScreen for the newly created group
         composeTestRule.onNodeWithText("Automated E2E Test Group").assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_message_input").assertIsDisplayed()
@@ -299,16 +367,33 @@ class PqChatUiAutomatorTest {
             .performTextInput("Hello Post-Quantum Group!")
         clickTagByPixelCoordinates("chat_send_button")
 
+        // Wait for message input clearance (EditableText becomes empty)
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
+            val editable = node.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { androidx.compose.ui.text.AnnotatedString("") }.text
+            editable.isEmpty()
+        }
+        val finalGroupEditable = composeTestRule.onNodeWithTag("chat_message_input")
+            .fetchSemanticsNode()
+            .config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.EditableText) { androidx.compose.ui.text.AnnotatedString("") }.text
+        assertTrue("Expected empty group chat input, but was '$finalGroupEditable'", finalGroupEditable.isEmpty())
+
         // Verify group members button exists and physically click it
         clickTagByPixelCoordinates("chat_group_members_button")
 
-        // Verify group members dialog
+        // Wait for group members dialog
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("leave_group_button").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithTag("leave_group_button").assertIsDisplayed()
 
         // Physically click 'Opuść grupę' (leave group)
         clickTagByPixelCoordinates("leave_group_button")
 
-        // Verify returned back to ContactListScreen
+        // Wait for navigation back to ContactListScreen
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
     }
 }

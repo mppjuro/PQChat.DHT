@@ -173,10 +173,26 @@ data class MessageEntity(
     }
 
     fun validateRowBinding() {
-        textContent?.validateRowBinding("messages", contactId, "textContent")
-        imageBytes?.validateRowBinding("messages", contactId, "imageBytes")
-        ackRatchetKey?.validateRowBinding("messages", contactId, "ackRatchetKey")
-        slotEdSeed?.validateRowBinding("messages", contactId, "slotEdSeed")
+        val isValidText = textContent?.boundTable == "messages" &&
+            (textContent.boundId == contactId || textContent.boundId == "${contactId}_${seqNum}")
+        if (textContent != null && !isValidText) {
+            textContent.validateRowBinding("messages", contactId, "textContent")
+        }
+        val isValidImage = imageBytes?.boundTable == "messages" &&
+            (imageBytes.boundId == contactId || imageBytes.boundId == "${contactId}_${seqNum}")
+        if (imageBytes != null && !isValidImage) {
+            imageBytes.validateRowBinding("messages", contactId, "imageBytes")
+        }
+        val isValidAck = ackRatchetKey?.boundTable == "messages" &&
+            (ackRatchetKey.boundId == contactId || ackRatchetKey.boundId == "${contactId}_${seqNum}")
+        if (ackRatchetKey != null && !isValidAck) {
+            ackRatchetKey.validateRowBinding("messages", contactId, "ackRatchetKey")
+        }
+        val isValidSlot = slotEdSeed?.boundTable == "messages" &&
+            (slotEdSeed.boundId == contactId || slotEdSeed.boundId == "${contactId}_${seqNum}")
+        if (slotEdSeed != null && !isValidSlot) {
+            slotEdSeed.validateRowBinding("messages", contactId, "slotEdSeed")
+        }
     }
 
     val rawTextContent: String? get() = textContent?.raw
