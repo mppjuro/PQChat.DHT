@@ -7,6 +7,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 🚀 Nowe Funkcjonalności (Features)
 
+- [`ebcc8d7`](https://github.com/mppjuro/PQChat.DHT/commit/ebcc8d70619f02d048bb6db0c3b0eaabc1a2b62a) (2026-10-21) — **ephemeral**: implement disappearing messages with safe 900-byte DHT tombstones and SQLite wiping
 - [`80e45e7`](https://github.com/mppjuro/PQChat.DHT/commit/80e45e7f1dba7784160d844f070b6ba772e00dcb) (2026-10-20) — **group**: implement unique BEP 44 recipient targets to prevent group follower correlation
 - [`3ddca3e`](https://github.com/mppjuro/PQChat.DHT/commit/3ddca3ebc058cb5b3fdf288a7222db34fa529e2a) (2026-10-20) — **group-crypto**: add group protocol formal verification (ProVerif) and auto-rekey on member leave
 - [`0e57077`](https://github.com/mppjuro/PQChat.DHT/commit/0e57077cd6a8e015716c85cbb9c27673125f703f) (2026-10-20) — **traffic**: Constant-Size Decoy-Padded Poll Batch eliminating chat screen correlation and traffic pairing
@@ -154,6 +155,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 
 ## 📚 Dokumentacja (Documentation)
 
+- [`d1e387d`](https://github.com/mppjuro/PQChat.DHT/commit/d1e387d2e63dace995ce6c32460d1128785cfd07) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`8325cb7`](https://github.com/mppjuro/PQChat.DHT/commit/8325cb73bb98b203267fabf39d111eceb383aa0c) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`303c48b`](https://github.com/mppjuro/PQChat.DHT/commit/303c48b554cc13d704cb1fde7d68aecea1b1bd7e) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
 - [`37ffd6f`](https://github.com/mppjuro/PQChat.DHT/commit/37ffd6f9481b20fced7000017c1f00ad82bc0ad8) (2026-10-21) — **changelog**: auto-update CHANGELOG.md [skip ci]
