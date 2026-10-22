@@ -845,6 +845,12 @@ class ChatRepository(
         emoji: String
     ): Boolean = withContext(Dispatchers.IO) {
         getContactMutex(contactId).withLock {
+            val isSelf = (contactId == SELF_CONTACT_ID)
+            messageDao.updateMessageReactionAnyDirection(contactId, targetSeqEpoch, targetSeqNum, emoji)
+            if (isSelf) {
+                return@withLock true
+            }
+
             val contact = contactDao.getContactById(contactId) ?: return@withLock false
             val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
@@ -863,16 +869,13 @@ class ChatRepository(
                 direction = contact.outboundDirection
             )
 
-            messageDao.updateMessageReactionAnyDirection(contactId, targetSeqEpoch, targetSeqNum, emoji)
-
             contactDao.updateOutgoingState(
                 id = contactId,
                 counterOut = contact.counterOut + 1,
                 chainKeyOut = slot.nextChainKey
             )
 
-            val isSelf = (contactId == SELF_CONTACT_ID)
-            if (isStrictPoissonShaping() && !isSelf) {
+            if (isStrictPoissonShaping()) {
                 outboundPoissonQueue.enqueue(
                     org.pqchat.dht.traffic.OutboundPoissonFrame(
                         target = slot.target,
@@ -880,7 +883,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
+                        skipLocalStore = false,
                         seqNum = contact.counterOut,
                         messageId = -1L,
                         contactId = contactId,
@@ -899,7 +902,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
+                    skipLocalStore = false
                 )
                 if (success) {
                     decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -927,8 +930,42 @@ class ChatRepository(
         ).toPayloadText()
 
         getContactMutex(contactId).withLock {
-            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val isSelf = contactId == SELF_CONTACT_ID
             val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+
+            if (isSelf) {
+                val currentContact = contactDao.getContactById(contactId)
+                val seqNum = currentContact?.counterOut ?: 0
+                val seqEpoch = seqNum / 65536
+                messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = true,
+                        seqEpoch = seqEpoch,
+                        seqNum = seqNum,
+                        ackNum = 0,
+                        timestamp = System.currentTimeMillis(),
+                        textContent = locText,
+                        status = "SENT_DHT",
+                        ackTarget = null,
+                        ackRatchetKey = null,
+                        slotTarget = null,
+                        slotEdSeed = null,
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
+                    )
+                )
+                if (currentContact != null) {
+                    contactDao.updateOutgoingState(
+                        id = contactId,
+                        counterOut = seqNum + 1,
+                        chainKeyOut = currentContact.chainKeyOut
+                    )
+                }
+                return@withLock true
+            }
+
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
             val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
             val plaintext = BinaryFrameCodec.encodeLocationPin(
@@ -950,7 +987,6 @@ class ChatRepository(
             )
 
             val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
-            val isSelf = contactId == SELF_CONTACT_ID
 
             val msgId = messageDao.insertMessage(
                 MessageEntity(

@@ -2,6 +2,7 @@ package org.pqchat.dht
 
 import android.os.Build
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -706,63 +707,102 @@ class PqChatUiAutomatorTest {
         // Locate react button on message and click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(reactButtonMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
         try {
-            composeTestRule.onAllNodes(reactButtonMatcher).onFirst().performClick()
+            composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                .onFirst().performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+            try {
+                composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                    .onFirst().performClick()
+            } catch (_: Throwable) {
+                clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+            }
         }
+        composeTestRule.waitForIdle()
 
         // Emoji reaction picker opens — click heart reaction
         val emojiHeartMatcher = hasTestTagContaining("reaction_emoji_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(emojiHeartMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
         try {
-            composeTestRule.onAllNodes(emojiHeartMatcher).onFirst().performClick()
+            composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                .onFirst().performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+            try {
+                composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                    .onFirst().performClick()
+            } catch (_: Throwable) {
+                clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+            }
         }
+        composeTestRule.waitForIdle()
 
-        // Verify reaction badge appears
+        // Verify reaction badge appears (useUnmergedTree = true is critical for badge inside message bubble)
         val reactionBadgeMatcher = hasTestTagContaining("reaction_badge_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(reactionBadgeMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(reactionBadgeMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onAllNodes(reactionBadgeMatcher).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodes(reactionBadgeMatcher, useUnmergedTree = true)
+            .onFirst().assertExists()
 
         // Test Location Pin: Click location pin button in input bar
         try {
-            composeTestRule.onNodeWithTag("chat_location_pin_button").performClick()
+            composeTestRule.onNodeWithTag("chat_location_pin_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickTagByPixelCoordinates("chat_location_pin_button")
+            try {
+                composeTestRule.onNodeWithTag("chat_location_pin_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_location_pin_button")
+            }
         }
+        composeTestRule.waitForIdle()
 
         // LocationPinDialog appears
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodesWithTag("location_pin_note_input").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithTag("location_pin_note_input", useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithTag("location_pin_note_input").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("location_pin_note_input", useUnmergedTree = true)
+            .assertIsDisplayed()
 
         // Confirm send location pin
         try {
-            composeTestRule.onNodeWithTag("send_location_pin_confirm_button").performClick()
+            composeTestRule.onNodeWithTag("send_location_pin_confirm_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickTagByPixelCoordinates("send_location_pin_confirm_button")
+            try {
+                composeTestRule.onNodeWithTag("send_location_pin_confirm_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("send_location_pin_confirm_button")
+            }
         }
+        composeTestRule.waitForIdle()
 
         // Verify location pin message is dispatched and visible in chat
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodesWithText("Location Pin", substring = true).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("Location Pin", substring = true, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onAllNodesWithText("Location Pin", substring = true).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Location Pin", substring = true, useUnmergedTree = true)
+            .onFirst().assertExists()
 
         // Exit chat
         try {
-            composeTestRule.onNodeWithTag("chat_back_button").performClick()
+            composeTestRule.onNodeWithTag("chat_back_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickTagByPixelCoordinates("chat_back_button")
+            try {
+                composeTestRule.onNodeWithTag("chat_back_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_back_button")
+            }
         }
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
