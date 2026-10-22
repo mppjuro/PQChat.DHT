@@ -37,6 +37,11 @@ object KeystoreCrypto {
     @Volatile
     private var isKeyWiped: Boolean = false
 
+    val INSTRUMENTED_TEST_MASTER_KEY: SecretKey = javax.crypto.spec.SecretKeySpec(
+        ByteArray(32) { (it * 31 + 17).toByte() },
+        "AES"
+    )
+
     /**
      * Injects a SecretKey provider for JVM unit tests where AndroidKeyStore is unavailable.
      * In production, this must remain null to guarantee fail-closed security.

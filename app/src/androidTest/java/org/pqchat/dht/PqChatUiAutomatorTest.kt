@@ -46,10 +46,7 @@ import org.pqchat.dht.ui.util.SecureScreenConfig
 class PqChatUiAutomatorTest {
 
     companion object {
-        private val TEST_MASTER_KEY: SecretKey = SecretKeySpec(
-            ByteArray(32) { (it * 31 + 17).toByte() },
-            "AES"
-        )
+        val TEST_MASTER_KEY: SecretKey get() = org.pqchat.dht.crypto.KeystoreCrypto.INSTRUMENTED_TEST_MASTER_KEY
     }
 
     @get:Rule(order = 0)
@@ -748,12 +745,18 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithTag("handshake_share_stego_button").fetchSemanticsNodes().isNotEmpty()
         }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_share_stego_button").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_share_stego_button").assertIsDisplayed()
 
         // Switch to Bob tab and verify gallery / stego scan button
         clickTagByPixelCoordinates("handshake_bob_tab")
         composeTestRule.waitUntil(timeoutMillis = 5_000) {
             composeTestRule.onAllNodesWithTag("handshake_gallery_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_gallery_button").performScrollTo()
         }
         composeTestRule.onNodeWithTag("handshake_gallery_button").assertIsDisplayed()
 

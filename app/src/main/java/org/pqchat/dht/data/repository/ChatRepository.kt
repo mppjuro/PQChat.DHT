@@ -515,10 +515,16 @@ class ChatRepository(
     }
 
     suspend fun ensureSelfNotesContactExists() = withContext(Dispatchers.IO) {
-        val existing = contactDao.getContactById(SELF_CONTACT_ID)
+        val existing = try {
+            contactDao.getContactById(SELF_CONTACT_ID)
+        } catch (_: Throwable) {
+            null
+        }
         if (existing == null || existing.chainKeyOut.size != 64 || (existing.counterIn == 0 && existing.counterOut > 0)) {
             val symmetricSeed = CryptoUtils.secureRandomBytes(64)
-            messageDao.deleteMessagesForContact(SELF_CONTACT_ID)
+            try {
+                messageDao.deleteMessagesForContact(SELF_CONTACT_ID)
+            } catch (_: Throwable) {}
             contactDao.insertOrUpdate(
                 ContactEntity(
                     id = SELF_CONTACT_ID,
