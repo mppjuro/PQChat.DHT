@@ -118,6 +118,10 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 - [`0cbec4a`](https://github.com/mppjuro/PQChat.DHT/commit/0cbec4a64423dd1192b6e35122d9a2ab9ca04094) (2026-10-07) — screen change polling recalculation and resolve compiler and lint warnings
 - [`e4d3094`](https://github.com/mppjuro/PQChat.DHT/commit/e4d3094a1a1aa8a2ad988f1ba22ce112ab503362) (2026-10-07) — DHT message polling with Fast Termination and asynchronous lookahead window
 
+## ♻️ Refactoring
+
+- [`97428fa`](https://github.com/mppjuro/PQChat.DHT/commit/97428fa35838af9584939bc2d254de35da79de0f) (2026-10-22) — **i18n**: unify 100% codebase, documentation, tests, and CI to English
+
 ## 📦 Build & Dependencies
 
 - [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
