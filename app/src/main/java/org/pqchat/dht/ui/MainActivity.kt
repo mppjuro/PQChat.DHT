@@ -23,6 +23,11 @@ import org.pqchat.dht.ui.viewmodel.ChatViewModel
 class MainActivity : FragmentActivity() {
 
     val viewModel: ChatViewModel by viewModels()
+    private var lockAppCallback: (() -> Unit)? = null
+
+    fun lockApp() {
+        lockAppCallback?.invoke()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +44,19 @@ class MainActivity : FragmentActivity() {
             val isDuressActive by viewModel.isDuressActive.collectAsState()
 
             val requiresLock = (isBiometricEnabled || isPinConfigured || isDuressConfigured) && !isDuressActive
-            var isUnlocked by remember(requiresLock) { mutableStateOf(!requiresLock) }
+            var isUnlocked by remember { mutableStateOf(!requiresLock) }
+
+            LaunchedEffect(requiresLock) {
+                if (!requiresLock) {
+                    isUnlocked = true
+                }
+            }
+
+            lockAppCallback = {
+                if (requiresLock) {
+                    isUnlocked = false
+                }
+            }
 
             PQChatTheme(themeMode = themeMode) {
                 if (isDuressActive) {
@@ -65,7 +82,11 @@ class MainActivity : FragmentActivity() {
                         isBiometricAvailable = isBiometricEnabled
                     )
                 } else {
-                    MainAppNavigation(viewModel)
+                    MainAppNavigation(
+                        viewModel = viewModel,
+                        requiresLock = requiresLock,
+                        onLockRequested = { isUnlocked = false }
+                    )
                 }
             }
         }
@@ -73,7 +94,11 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-fun MainAppNavigation(viewModel: ChatViewModel) {
+fun MainAppNavigation(
+    viewModel: ChatViewModel,
+    requiresLock: Boolean = false,
+    onLockRequested: () -> Unit = {}
+) {
     val context = LocalContext.current
     var currentScreen by remember { mutableStateOf<Screen>(Screen.ContactList) }
 
@@ -137,7 +162,12 @@ fun MainAppNavigation(viewModel: ChatViewModel) {
         is Screen.Settings -> {
             SettingsScreen(
                 viewModel = viewModel,
-                onBack = { currentScreen = Screen.ContactList },
+                onBack = {
+                    if (requiresLock) {
+                        onLockRequested()
+                    }
+                    currentScreen = Screen.ContactList
+                },
                 onOpenSelfNotes = {
                     viewModel.openSelfNotes()
                     currentScreen = Screen.Chat(ChatRepository.SELF_CONTACT_ID)

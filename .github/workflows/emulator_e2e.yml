@@ -91,7 +91,12 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
           script: |
-            ./gradlew connectedDebugAndroidTest
+            ./gradlew connectedDebugAndroidTest --continue --stacktrace || {
+              echo "❌ CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
+              find app/build/reports/androidTests/connected -type f \( -name "*.html" -o -name "*.xml" \) || true
+              find app/build/outputs/androidTest-results -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
+              exit 1
+            }
 
       - name: Run Multi-Emulator E2E Orchestrator
         run: |
