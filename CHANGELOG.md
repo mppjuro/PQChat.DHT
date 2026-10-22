@@ -71,6 +71,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`97888a4`](https://github.com/mppjuro/PQChat.DHT/commit/97888a44ecbbc8de36842e6b7feacdd9af64552f) (2026-10-22) — **test**: repair nightly CI test suites for repository, statistical threat models, and adversarial simulation
 - [`beb57a0`](https://github.com/mppjuro/PQChat.DHT/commit/beb57a0da9f7b085daaac3ee4f6daaa05b26b6a6) (2026-10-22) — **test**: PqChatUiAutomatorTest clicked "sent" immediately after pasting text, corrected race condition
 - [`bfb5e5e`](https://github.com/mppjuro/PQChat.DHT/commit/bfb5e5e60fc677db1f7b7199d7dff9bfc92e2edc) (2026-10-22) — **test**: optimize self notes text dispatch and unmerged semantics in UI automator test
 - [`c701628`](https://github.com/mppjuro/PQChat.DHT/commit/c701628e866953474adf284220429b49bff4fd28) (2026-10-22) — **test**: use unmerged tree for reaction badge and optimize self-notes reactions and location pin
