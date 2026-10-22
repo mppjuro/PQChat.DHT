@@ -2,7 +2,7 @@ name: Android CI (Fast Tests)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "fix/**", "test/**" ]
   pull_request:
     branches: [ "main" ]
 

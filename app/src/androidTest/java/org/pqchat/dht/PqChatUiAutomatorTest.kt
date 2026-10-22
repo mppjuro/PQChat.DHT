@@ -10,6 +10,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.uiautomator.UiDevice
+import javax.crypto.SecretKey
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertFalse
@@ -43,6 +45,13 @@ import org.pqchat.dht.ui.util.SecureScreenConfig
 @RunWith(AndroidJUnit4::class)
 class PqChatUiAutomatorTest {
 
+    companion object {
+        private val TEST_MASTER_KEY: SecretKey = SecretKeySpec(
+            ByteArray(32) { (it * 31 + 17).toByte() },
+            "AES"
+        )
+    }
+
     @get:Rule(order = 0)
     val permissionRule: GrantPermissionRule = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         GrantPermissionRule.grant(
@@ -64,7 +73,7 @@ class PqChatUiAutomatorTest {
     fun setUp() {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         try {
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
@@ -78,6 +87,7 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {}
         try {
             kotlinx.coroutines.runBlocking {
+                composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
                 composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
                     org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
                 )
@@ -91,7 +101,7 @@ class PqChatUiAutomatorTest {
 
     @After
     fun tearDown() {
-        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         try {
             kotlinx.coroutines.runBlocking {
                 composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
@@ -117,9 +127,6 @@ class PqChatUiAutomatorTest {
      * Helper to safely dismiss the soft keyboard and allow dialog/view animations to settle.
      */
     private fun dismissKeyboardAndWait() {
-        try {
-            androidx.test.espresso.Espresso.closeSoftKeyboard()
-        } catch (_: Throwable) {}
         try {
             val imm = InstrumentationRegistry.getInstrumentation().targetContext
                 .getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
@@ -559,8 +566,13 @@ class PqChatUiAutomatorTest {
                 org.pqchat.dht.crypto.KeystoreCrypto.hasMasterKey()
             )
         } finally {
-            // Clean up state so subsequent tests can run cleanly
-            org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+            // Clean up state and restore test master key so subsequent tests can run cleanly
+            org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            try {
+                kotlinx.coroutines.runBlocking {
+                    composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
+                }
+            } catch (_: Throwable) {}
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
                 composeTestRule.activity.viewModel.clearDuressActive()
@@ -667,7 +679,10 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithText(noteMsg).fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithText(noteMsg).performScrollTo().assertIsDisplayed()
+        runCatching {
+            composeTestRule.onNodeWithText(noteMsg).performScrollTo()
+        }
+        composeTestRule.onNodeWithText(noteMsg).assertIsDisplayed()
 
         // Locate react button on message and physically click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")

@@ -42,6 +42,7 @@ object KeystoreCrypto {
      * In production, this must remain null to guarantee fail-closed security.
      */
     fun setTestKeyProvider(provider: (() -> SecretKey)?) {
+        isKeyWiped = false
         testKeyProvider = provider
     }
 
@@ -49,6 +50,7 @@ object KeystoreCrypto {
      * Injects a static SecretKey for JVM unit tests.
      */
     fun setTestSecretKey(key: SecretKey?) {
+        isKeyWiped = false
         testKeyProvider = if (key != null) { { key } } else null
     }
 
@@ -70,12 +72,13 @@ object KeystoreCrypto {
      */
     fun hasMasterKey(): Boolean {
         if (isKeyWiped) return false
+        if (testKeyProvider != null) return true
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
             keyStore.load(null)
             keyStore.containsAlias(KEY_ALIAS)
         } catch (_: Throwable) {
-            testKeyProvider != null
+            false
         }
     }
 
@@ -109,6 +112,10 @@ object KeystoreCrypto {
             throw IllegalStateException(
                 "AndroidKeyStore master key was permanently destroyed by Duress wipe. Fail-closed."
             )
+        }
+        val providerKey = testKeyProvider?.invoke()
+        if (providerKey != null) {
+            return providerKey
         }
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
