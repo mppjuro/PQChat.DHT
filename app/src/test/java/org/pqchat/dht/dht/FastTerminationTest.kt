@@ -126,4 +126,60 @@ class FastTerminationTest {
             nodeB3.stop()
         }
     }
+
+    @Test
+    fun testTargetRouteCacheEvictedOnFailedGetMutableAndNotPoisoned() = runBlocking {
+        val nodeA = DhtLeafNode()
+        val nodeB1 = DhtLeafNode()
+        val nodeB2 = DhtLeafNode()
+        val nodeB3 = DhtLeafNode()
+
+        try {
+            nodeA.initSocket()
+            val socketB1 = nodeB1.initSocket()
+            val socketB2 = nodeB2.initSocket()
+            val socketB3 = nodeB3.initSocket()
+
+            nodeA.start()
+            nodeB1.start()
+            nodeB2.start()
+            nodeB3.start()
+
+            val target1 = CryptoUtils.secureRandomBytes(20)
+            val peerB1 = DhtLeafNode.DhtPeer(nodeB1.myNodeId, InetSocketAddress("127.0.0.1", socketB1.localPort))
+            val peerB2 = DhtLeafNode.DhtPeer(nodeB2.myNodeId, InetSocketAddress("127.0.0.1", socketB2.localPort))
+            val peerB3 = DhtLeafNode.DhtPeer(nodeB3.myNodeId, InetSocketAddress("127.0.0.1", socketB3.localPort))
+
+            // 1. Pre-warmed cache with non-existent item must be evicted on failure
+            nodeA.targetRouteCache.put(target1, listOf(peerB1, peerB2, peerB3))
+            assertTrue("Target1 should be prewarmed in route cache", nodeA.targetRouteCache.containsKey(target1))
+
+            val res1 = nodeA.getMutable(target1, timeoutMs = 1500L)
+            assertNull("Expected null for non-existent item", res1)
+            assertFalse(
+                "TargetRouteCache must evict pre-warmed entries on failed getMutable",
+                nodeA.targetRouteCache.containsKey(target1)
+            )
+
+            // 2. Uncached target must NOT be stored with shallow nodes when getMutable fails
+            val target2 = CryptoUtils.secureRandomBytes(20)
+            nodeA.addPeer(nodeB1.myNodeId, InetSocketAddress("127.0.0.1", socketB1.localPort))
+            nodeA.addPeer(nodeB2.myNodeId, InetSocketAddress("127.0.0.1", socketB2.localPort))
+            nodeA.addPeer(nodeB3.myNodeId, InetSocketAddress("127.0.0.1", socketB3.localPort))
+
+            assertFalse(nodeA.targetRouteCache.containsKey(target2))
+            val res2 = nodeA.getMutable(target2, timeoutMs = 1500L)
+            assertNull("Expected null for non-existent item", res2)
+            assertFalse(
+                "TargetRouteCache must not be poisoned with shallow nodes on failed getMutable",
+                nodeA.targetRouteCache.containsKey(target2)
+            )
+        } finally {
+            nodeA.stop()
+            nodeB1.stop()
+            nodeB2.stop()
+            nodeB3.stop()
+        }
+    }
 }
+

@@ -1098,159 +1098,188 @@ class DhtLeafNode(
             }
 
         val allCandidates = (storedPeers + remoteCandidates).distinctBy { it.address }
-        val nodesToQuery = if (allCandidates.isNotEmpty()) {
-            diversifyCandidatesBySubnet(allCandidates, count = 20, maxPerSubnet = 2)
-        } else if (localPeers.isNotEmpty()) {
-            localPeers.take(20)
-        } else if (autoBootstrap) {
-            resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
-        } else {
-            emptyList()
+        val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
+        allCandidates.forEach { candidatePool[it.address] = it }
+        if (candidatePool.isEmpty()) {
+            if (localPeers.isNotEmpty()) {
+                localPeers.forEach { candidatePool[it.address] = it }
+            } else if (autoBootstrap) {
+                resolveBootstrapNodes().forEach {
+                    candidatePool[it] = DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+                }
+            }
         }
 
-        if (nodesToQuery.isEmpty() || torTransportMode == TorTransportMode.BLOCKED_ERROR) {
+        if (candidatePool.isEmpty() || torTransportMode == TorTransportMode.BLOCKED_ERROR) {
             _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
             return@withContext null
         }
 
-        // Top 3 remote nodes with smallest XOR distance to target
-        val localAddresses = localPeers.map { it.address }.toSet()
-        val topClosest = nodesToQuery.filter { it.address !in localAddresses }.sortedWith { a, b ->
-            val distA = xorDistance(a.nodeId, target)
-            val distB = xorDistance(b.nodeId, target)
-            compareBytes(distA, distB)
-        }.take(3)
+        val isLiveNetwork = candidatePool.values.any { !isLoopbackOrLocal(it.address) }
+        val minHops = if (isLiveNetwork) 4 else 1
+        val maxHops = if (isLiveNetwork) 5 else 2
 
-        val topClosestAddresses = topClosest.map { it.address }.toSet()
-        val closestKnownDistance = if (topClosest.isNotEmpty()) {
-            xorDistance(topClosest[0].nodeId, target)
-        } else null
-
+        val queriedAddresses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
+        val emptyResponses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
         val foundItem = java.util.concurrent.atomic.AtomicReference<MutableItem?>(null)
-        val emptyClosestResponses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
-        val closerNodeIndicated = java.util.concurrent.atomic.AtomicBoolean(false)
         val verifiedResponses = java.util.concurrent.atomic.AtomicInteger(0)
         val totalResponses = java.util.concurrent.atomic.AtomicInteger(0)
         val verifiedSubnets = ConcurrentHashMap.newKeySet<String>()
+        var hopsExecuted = 0
 
-        coroutineScope {
-            var queryJobs: List<Job> = emptyList()
-            queryJobs = nodesToQuery.map { peer ->
-                launch {
-                    try {
-                        val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                        val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
-                        totalResponses.incrementAndGet()
+        for (hop in 1..maxHops) {
+            val unqueried = candidatePool.values
+                .filter { it.address !in queriedAddresses && !isBootstrapRouter(it.address) }
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
 
-                        val verified = parseAndVerifyGetResult(resp, salt, peer.address)
-                        if (verified != null) {
-                            verifiedResponses.incrementAndGet()
-                            verifiedSubnets.add(getSubnet24Prefix(peer.address))
+            if (unqueried.isEmpty()) break
 
-                            // Always track and prefer the record with the HIGHEST verified seq
-                            while (true) {
-                                val current = foundItem.get()
-                                if (current == null || verified.seq > current.seq) {
-                                    if (foundItem.compareAndSet(current, verified)) {
+            val batchCount = if (hop == 1) 20 else 8
+            val currentHopNodes = if (isLiveNetwork) {
+                diversifyCandidatesBySubnet(unqueried, count = batchCount, maxPerSubnet = 2)
+            } else {
+                unqueried.take(batchCount)
+            }
+
+            if (currentHopNodes.isEmpty()) break
+
+            currentHopNodes.forEach { queriedAddresses.add(it.address) }
+            hopsExecuted = hop
+
+            coroutineScope {
+                var queryJobs: List<Job> = emptyList()
+                queryJobs = currentHopNodes.map { peer ->
+                    launch {
+                        try {
+                            val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                            val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
+                            totalResponses.incrementAndGet()
+
+                            val respId = resp.responseData["id"] as? ByteArray
+                            if (respId != null && respId.size == 20 && !isBootstrapRouter(peer.address)) {
+                                candidatePool[peer.address] = DhtPeer(respId, peer.address)
+                                addPeer(respId, peer.address)
+                            }
+
+                            val verified = parseAndVerifyGetResult(resp, salt, peer.address)
+                            if (verified != null) {
+                                verifiedResponses.incrementAndGet()
+                                verifiedSubnets.add(getSubnet24Prefix(peer.address))
+
+                                while (true) {
+                                    val current = foundItem.get()
+                                    if (current == null || verified.seq > current.seq) {
+                                        if (foundItem.compareAndSet(current, verified)) {
+                                            break
+                                        }
+                                    } else {
                                         break
                                     }
-                                } else {
-                                    break
                                 }
-                            }
 
-                            if (!probeAllReplicas) {
-                                val currBest = foundItem.get()
-                                val currSeq = currBest?.seq ?: 0L
-                                val minQuorum = minOf(3, nodesToQuery.size)
-                                val canTerminate = (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, nodesToQuery.size)) ||
-                                        (verifiedResponses.get() >= minQuorum && verifiedSubnets.size >= minOf(2, minQuorum)) ||
-                                        (verifiedResponses.get() >= minOf(5, nodesToQuery.size))
-                                if (canTerminate) {
-                                    queryJobs.forEach { job ->
-                                        if (job != coroutineContext.job) job.cancel()
-                                    }
-                                    return@launch
-                                }
-                            }
-                        }
-
-                        // Response received without valid 'v'
-                        if (!probeAllReplicas && topClosestAddresses.contains(peer.address)) {
-                            val nodesBytes = resp.responseData["nodes"] as? ByteArray
-                            var hasCloser = false
-                            if (nodesBytes != null) {
-                                val discovered = parseCompactNodesList(nodesBytes)
-                                if (closestKnownDistance != null && discovered.any { node ->
-                                        compareBytes(xorDistance(node.nodeId, target), closestKnownDistance) < 0
-                                    }) {
-                                    hasCloser = true
-                                    closerNodeIndicated.set(true)
-                                }
-                            }
-
-                            if (!hasCloser) {
-                                emptyClosestResponses.add(peer.address)
-                                val requiredCount = minOf(3, topClosest.size)
-                                val storedAddrs = storedPeers.map { it.address }.toSet()
-                                val storedPending = storedAddrs.any { it !in emptyClosestResponses }
-                                if (emptyClosestResponses.size >= requiredCount && !closerNodeIndicated.get() && !storedPending) {
-                                    // Aggressive Fast Termination:
-                                    // First 3 nodes with smallest XOR distance returned no 'v' and no closer nodes,
-                                    // and all known stored peers have been checked.
-                                    println("[PQChat] Fast Termination: $requiredCount closest nodes returned no 'v' and no closer nodes for target=$targetHex")
-                                    queryJobs.forEach { job ->
-                                        if (job != coroutineContext.job) job.cancel()
+                                if (!probeAllReplicas) {
+                                    val currBest = foundItem.get()
+                                    val currSeq = currBest?.seq ?: 0L
+                                    val minQuorum = minOf(3, currentHopNodes.size)
+                                    val canTerminate = (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, currentHopNodes.size)) ||
+                                            (verifiedResponses.get() >= minQuorum && verifiedSubnets.size >= minOf(2, minQuorum)) ||
+                                            (verifiedResponses.get() >= minOf(5, currentHopNodes.size))
+                                    if (canTerminate) {
+                                        queryJobs.forEach { job ->
+                                            if (job != coroutineContext.job) job.cancel()
+                                        }
+                                        return@launch
                                     }
                                 }
-                            }
-                        }
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-            queryJobs.joinAll()
-        }
-
-        var secondWaveCount = 0
-        if (foundItem.get() == null && closerNodeIndicated.get() && !probeAllReplicas) {
-            val secondWave = findClosestNodes(target, count = 16)
-                .filter { it.address !in nodesToQuery.map { n -> n.address } }
-                .take(8)
-            secondWaveCount = secondWave.size
-            if (secondWave.isNotEmpty()) {
-                coroutineScope {
-                    var secondJobs: List<Job> = emptyList()
-                    secondJobs = secondWave.map { peer ->
-                        launch {
-                            try {
-                                val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                                val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
-                                totalResponses.incrementAndGet()
-                                val verified = parseAndVerifyGetResult(resp, salt, peer.address)
-                                if (verified != null) {
-                                    verifiedResponses.incrementAndGet()
-                                    while (true) {
-                                        val current = foundItem.get()
-                                        if (current == null || verified.seq > current.seq) {
-                                            if (foundItem.compareAndSet(current, verified)) {
-                                                break
-                                            }
-                                        } else {
-                                            break
+                            } else {
+                                emptyResponses.add(peer.address)
+                                val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                                if (nodesBytes != null) {
+                                    val discovered = parseCompactNodesList(nodesBytes)
+                                    discovered.forEach { node ->
+                                        if (!isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
+                                            candidatePool.putIfAbsent(node.address, node)
                                         }
                                     }
                                 }
-                            } catch (_: Exception) {
+
+                                // In-batch Fast Termination check only if we've reached minHops
+                                if (!probeAllReplicas && hop >= minHops) {
+                                    val eligible = candidatePool.values.filter { !isBootstrapRouter(it.address) }
+                                    val top3 = eligible.sortedWith { a, b ->
+                                        val distA = xorDistance(a.nodeId, target)
+                                        val distB = xorDistance(b.nodeId, target)
+                                        compareBytes(distA, distB)
+                                    }.take(3)
+                                    val required = minOf(3, eligible.size)
+                                    if (top3.size >= required && top3.take(required).all { it.address in emptyResponses }) {
+                                        val storedAddrs = storedPeers.map { it.address }.toSet()
+                                        if (storedAddrs.all { it in emptyResponses }) {
+                                            queryJobs.forEach { job ->
+                                                if (job != coroutineContext.job) job.cancel()
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        } catch (_: Exception) {
                         }
                     }
-                    secondJobs.joinAll()
+                }
+                queryJobs.joinAll()
+            }
+
+            // If we found a verified item and probeAllReplicas is false, finish search immediately
+            if (foundItem.get() != null && !probeAllReplicas) {
+                break
+            }
+
+            // Fast-Termination evaluation
+            if (!probeAllReplicas && foundItem.get() == null) {
+                val eligiblePeers = candidatePool.values.filter { !isBootstrapRouter(it.address) }
+                val top3Overall = eligiblePeers.sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }.take(3)
+
+                val top3Count = minOf(3, eligiblePeers.size)
+                val allTop3Empty = top3Overall.size >= top3Count && top3Overall.take(top3Count).all { it.address in emptyResponses }
+
+                val storedAddrs = storedPeers.map { it.address }.toSet()
+                val storedPending = storedAddrs.any { it !in emptyResponses }
+
+                val unqueriedPeers = candidatePool.values.filter { it.address !in queriedAddresses && !isBootstrapRouter(it.address) }
+
+                // Find minimum XOR distance among all nodes queried so far
+                var minQueriedDist: ByteArray? = null
+                for (addr in queriedAddresses) {
+                    val p = candidatePool[addr] ?: continue
+                    if (p.nodeId.all { it == 0.toByte() }) continue
+                    val d = xorDistance(p.nodeId, target)
+                    if (minQueriedDist == null || compareBytes(d, minQueriedDist) < 0) {
+                        minQueriedDist = d
+                    }
+                }
+
+                val hasCloserUnqueried = minQueriedDist != null && unqueriedPeers.any {
+                    it.nodeId.any { b -> b != 0.toByte() } && compareBytes(xorDistance(it.nodeId, target), minQueriedDist) < 0
+                }
+
+                val canFastTerminate = (hop >= minHops || !hasCloserUnqueried || unqueriedPeers.isEmpty())
+
+                if (canFastTerminate && allTop3Empty && !storedPending) {
+                    println("[PQChat] Fast Termination: $top3Count closest nodes from pool returned no 'v', no closer candidates in queue (hop=$hop, minHops=$minHops) for target=$targetHex")
+                    break
                 }
             }
         }
 
-        val totalQueried = nodesToQuery.size + secondWaveCount
+        val totalQueried = queriedAddresses.size
         val totalResponded = if (probeAllReplicas) {
             verifiedResponses.get()
         } else if (foundItem.get() != null) {
@@ -1258,7 +1287,7 @@ class DhtLeafNode(
         } else {
             totalResponses.get()
         }
-        val hops = (if (wasPrewarmed) 1 else 2) + (if (secondWaveCount > 0) 1 else 0)
+        val hops = maxOf(1, hopsExecuted)
 
         val metrics = DhtOpMetrics(
             nodesQueried = totalQueried,
@@ -1283,8 +1312,8 @@ class DhtLeafNode(
                 val existing = targetRouteCache[target] ?: emptyList()
                 targetRouteCache.put(target, (listOf(respPeer) + existing).distinctBy { it.address }.take(8))
             }
-        } else if (targetRouteCache[target].isNullOrEmpty() && topClosest.isNotEmpty()) {
-            targetRouteCache.put(target, topClosest)
+        } else {
+            targetRouteCache.remove(target)
         }
 
         println("[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=$totalQueried, responded=$totalResponded, hops=$hops, found=${finalBestItem != null}")
