@@ -71,6 +71,14 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`beb57a0`](https://github.com/mppjuro/PQChat.DHT/commit/beb57a0da9f7b085daaac3ee4f6daaa05b26b6a6) (2026-10-22) — **test**: PqChatUiAutomatorTest clicked "sent" immediately after pasting text, corrected race condition
+- [`bfb5e5e`](https://github.com/mppjuro/PQChat.DHT/commit/bfb5e5e60fc677db1f7b7199d7dff9bfc92e2edc) (2026-10-22) — **test**: optimize self notes text dispatch and unmerged semantics in UI automator test
+- [`c701628`](https://github.com/mppjuro/PQChat.DHT/commit/c701628e866953474adf284220429b49bff4fd28) (2026-10-22) — **test**: use unmerged tree for reaction badge and optimize self-notes reactions and location pin
+- [`ef52f11`](https://github.com/mppjuro/PQChat.DHT/commit/ef52f11a636201b98604ed4afff567f62d5c5765) (2026-10-22) — **test**: protect Room flows from duress wipe and harden reaction test interactions
+- [`fc8a834`](https://github.com/mppjuro/PQChat.DHT/commit/fc8a834182000ea5447c0ee6a0b48c8be081cb98) (2026-10-22) — **test**: guard camera hardware allocation and publish test results to step summary
+- [`59017b5`](https://github.com/mppjuro/PQChat.DHT/commit/59017b59f4b31d25ec5118975c51a4c415094b50) (2026-10-22) — **ci**: restore valid yaml syntax for emulator script command
+- [`a7b8592`](https://github.com/mppjuro/PQChat.DHT/commit/a7b85928d29f562cd2693d152795ffcddd2f0853) (2026-10-22) — **test**: coordinate instrumented master key, add fail-safe scroll and inline failure reporting
+- [`17e5f07`](https://github.com/mppjuro/PQChat.DHT/commit/17e5f0728d2a9be661a32ff14a5189d8b0dbcec5) (2026-10-22) — **test**: resolve androidTest duress isolation, scroll fragility, and gradle deprecation warning
 - [`29a59a9`](https://github.com/mppjuro/PQChat.DHT/commit/29a59a950225423672ec498e70b310b380a32d59) (2026-10-22) — **test**: resolve CameraX 0-camera crash, chat_send_button assertion order, and self-notes race condition
 - [`b0664db`](https://github.com/mppjuro/PQChat.DHT/commit/b0664db34b9ccd08784aeaa6e891bdd52638fb30) (2026-10-22) — **test**: harden physical click execution across dialog windows and add info logging to CI
 - [`264f5d7`](https://github.com/mppjuro/PQChat.DHT/commit/264f5d707df382c6b5c89f77574c6909c22b90d1) (2026-10-22) — **test**: resolve connectedDebugAndroidTest failure and lock lifecycle race condition
