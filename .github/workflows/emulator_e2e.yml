@@ -90,7 +90,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace || (echo "❌ CONNECTED TESTS FAILED! DUMPING TEST FAILURE REPORTS DIRECTLY:" && find app/build/outputs/androidTest-results app/build/reports/androidTests -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; && exit 1)
+          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace
 
       - name: Dump Test Failure Reports
         if: failure()
