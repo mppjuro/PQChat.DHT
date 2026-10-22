@@ -126,6 +126,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`bf032a6`](https://github.com/mppjuro/PQChat.DHT/commit/bf032a6212c2f2799e3f7319414fc4cee8b1ac2b) (2026-10-22) — **emulator**: add -no-metrics and swiftshader options, harden ui test lifecycle
 - [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
 - [`c575e47`](https://github.com/mppjuro/PQChat.DHT/commit/c575e4723b97834be5ef464b36ee6c67f9fcd7aa) (2026-10-19) — **deps**: bump com.google.firebase:firebase-bom from 33.9.0 to 35.0.2
 - [`abb1c4d`](https://github.com/mppjuro/PQChat.DHT/commit/abb1c4dc9d3caff04c48ff5057153f2a614e7123) (2026-10-19) — **deps**: bump actions/checkout from 4 to 7
