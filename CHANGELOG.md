@@ -71,6 +71,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`b0664db`](https://github.com/mppjuro/PQChat.DHT/commit/b0664db34b9ccd08784aeaa6e891bdd52638fb30) (2026-10-22) — **test**: harden physical click execution across dialog windows and add info logging to CI
 - [`264f5d7`](https://github.com/mppjuro/PQChat.DHT/commit/264f5d707df382c6b5c89f77574c6909c22b90d1) (2026-10-22) — **test**: resolve connectedDebugAndroidTest failure and lock lifecycle race condition
 - [`55a7687`](https://github.com/mppjuro/PQChat.DHT/commit/55a7687087f7b487e5ab453b0c11c78774f687b4) (2026-10-22) — **crypto,db,traffic**: standardize frame codecs, enforce V2 row binding and implement WFQ traffic shaping
 - [`726f50d`](https://github.com/mppjuro/PQChat.DHT/commit/726f50d3271294d60c3cac2512a0f5f5c93a1911) (2026-10-21) — **crypto**: handle IV collision with row-bound magic bytes during Keystore raw decryption
