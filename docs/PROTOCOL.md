@@ -10,20 +10,20 @@ This document provides the complete technical specification of the **PQChat.DHT*
 1. **Serverless & Zero Metadata:** Complete absence of centralized servers, push notification brokers (FCM/APNs), and static user identifiers or accounts.
 2. **Client-Only Leaf Node Mode:** Mobile devices never route third-party KRPC packets and never buffer data for other nodes in RAM. They function exclusively as initiators of UDP `put` / `get` queries (BEP 44).
 3. **Ephemeral DHT Buffer (Store-and-Forward):** Messages are stored as mutable BEP 44 records with a retention lifespan of 24–72 hours.
-4. **Post-Quantum Cryptography (PQC):** Protection against *Harvest Now, Decrypt Later* attacks using the NIST-standardized **ML-KEM-512** algorithm (FIPS 203 / Kyber-512).
-5. **Anti-Traffic Analysis:** Emission of Poisson-distributed dummy noise packets to eliminate temporal correlation between user activity and UDP frame transmissions.
+4. **Post-Quantum Cryptography (PQC):** Protection against *Harvest Now, Decrypt Later* attacks using the NIST-standardized **ML-KEM-512** algorithm (FIPS 203 / Kyber-512) paired with classical **X25519 ECDH** (RFC 7748) in a dual-defense hybrid model.
+5. **Anti-Traffic Analysis:** Constant-Budget Stratified Polling and Poisson-distributed cover traffic with Weighted Fair Queueing (WFQ) to eliminate temporal and statistical correlation.
 
 ### 1.2. Cryptographic Assumptions & Security Model (Security Assumptions)
 
 > [!IMPORTANT]
 > **Assumption 1: Public Seed in QR Code ($Seed_{init}$ is Public)**
-> The QR code presented during out-of-band pairing (Handshake) contains:
+> The QR code or steganographic PNG8 image presented during out-of-band pairing (Handshake) contains:
 > $$QR = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B}) \quad (\text{total } 864\text{ bytes})$$
 > The protocol **does not assume confidentiality** of the QR code against physical observers (e.g., shoulder surfing or surveillance cameras).
 > * $Seed_{init}$ is used exclusively for one-time deterministic derivation of the DHT rendezvous point:
 >   $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
 >   as well as for transcript binding and collision avoidance.
-> * Even if an adversary learns $pk_A$ and $Seed_{init}$, **they cannot decrypt messages or determine the shared secret**, because secrecy relies strictly on the hardness of ML-KEM-512 (Module Learning With Errors — M-LWE) and X25519 ECDH (DLP).
+> * Even if an adversary learns $pk_A$ and $Seed_{init}$, **they cannot decrypt messages or determine the shared secret**, because secrecy relies strictly on the hardness of ML-KEM-512 (Module Learning With Errors — M-LWE) and X25519 ECDH (Discrete Logarithm Problem).
 > * Man-in-the-Middle attacks (tampering with DHT responses) are prevented by the **Key Confirmation Tag** and **Short Authentication String (SAS)**.
 
 > [!WARNING]
@@ -37,17 +37,17 @@ This document provides the complete technical specification of the **PQChat.DHT*
 
 ## 2. Rendezvous Phase and Handshake
 
-The pairing workflow consists of 3 steps: QR generation by Alice, processing and publishing by Bob, and retrieval and verification by Alice.
+The pairing workflow consists of 3 steps: QR/steganographic image generation by Alice, processing and publishing by Bob, and retrieval and verification by Alice.
 
 ```
        Alice                                                  Bob
-  (Displays QR)                                          (Scans QR)
+  (Displays QR/PNG8)                                     (Scans QR/PNG8)
          |                                                    |
   1. Generates (pk_A, sk_A)                                   |
      Seed_init <- CSPRNG(32)                                  |
      Target_0 = SHA-1(...)                                    |
-     Presents QR: pk_A || Seed_init                           |
-         | ---------------- Scan QR (OOB) ------------------> |
+     Presents QR / PNG8: pk_A || Seed_init                    |
+         | ---------------- Scan QR / PNG8 (OOB) ------------>|
          |                                                    |
          |                                            2. Encapsulate(pk_A) -> (SS_init, ct_B)
          |                                               Generates salt (24 B)
@@ -72,17 +72,18 @@ The pairing workflow consists of 3 steps: QR generation by Alice, processing and
      [SUCCESS -> zero sk_A, derive chains, SAS = computeSas(MasterKey, Commitment)]
 ```
 
-### 2.1. Step 1 (Alice): Initialization and QR Presentation
+### 2.1. Step 1 (Alice): Initialization and QR / Steganography Presentation
 1. Keypair Generation: $(pk_A, sk_A) \leftarrow \text{Hybrid-KEM.KeyGen}()$ (832 B public key: 800 B ML-KEM-512 + 32 B X25519).
 2. Random Seed Generation: $Seed_{init} \leftarrow \text{CSPRNG}(32\text{ bytes})$.
 3. Rendezvous Address Derivation ($Target_0$):
    $$HMAC_0 = \text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"})$$
    $$Target_0 = \text{SHA-1}(HMAC_0)$$
-4. QR Payload Presentation (strict 864 bytes size):
-   $$QR_{payload} = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B})$$
+4. Payload Presentation (strict 864 bytes size):
+   $$Payload_{raw} = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B})$$
+   Presented either as a dense QR code or embedded into an innocent-looking 256-color PNG8 image via median-cut color quantization steganography.
 
 ### 2.2. Step 2 (Bob): Scanning, Encapsulation, and BEP 44 Publication
-1. QR Unpacking: extract $pk_A$ and $Seed_{init}$.
+1. Unpacking: Extract $pk_A$ and $Seed_{init}$ from QR code or PNG8 stego image.
 2. Hybrid Secret Encapsulation:
    $$(SS_{init}, ct_B) \leftarrow \text{Hybrid-KEM.Encapsulate}(pk_A)$$
    where $SS_{init} \in \{0,1\}^{256}$, $ct_B \in \{0,1\}^{6400}$ ($800\text{ bytes}$: 768 B ML-KEM + 32 B X25519 eph pk).
@@ -139,7 +140,7 @@ $$\text{Entropy}_{SAS} = \text{HKDF-Expand}(MasterKey, \text{"PQChat\_SAS\_v2\_A
 The entropy bits are divided into two 4-digit groups modulo 10000:
 $$Part_1 = (\text{Uint32BE}(\text{Entropy}_{SAS}[0..3]) \ \& \ \text{0x7FFFFFFF}) \pmod{10000}$$
 $$Part_2 = (\text{Uint32BE}(\text{Entropy}_{SAS}[4..7]) \ \& \ \text{0x7FFFFFFF}) \pmod{10000}$$
-$$SAS = \text{format}(\text{"\%04d-\%04d"}, Part_1, Part_2)$$
+$$SAS = \text{format}(\text{"%04d-%04d"}, Part_1, Part_2)$$
 * **Search Space:** $10^8$ (100 million combinations, ~26.6 bits of entropy).
 * **Commitment Property:** Any tampering with $pk_A$, $ct_B$, $Seed_{init}$, or $salt$ alters both $MasterKey$ and $Commitment$, producing a completely divergent SAS code.
 * **UI Verification:** Users view the SAS code in `HandshakeScreen` and `ChatScreen` and can mark the contact as `isVerified = true` with a single tap.
@@ -188,7 +189,7 @@ To guarantee **Post-Compromise Security (PCS)** (self-healing after potential RA
 ```
        Sender (Counter_out == 50k)                        Receiver
             |                                                 |
-  1. Generates fresh ML-KEM-512 pair                          |
+  1. Generates fresh Hybrid KEM pair                          |
      (pk_new, sk_new)                                         |
      Stores PendingOffer(epoch+1, sk_new)                     |
      Sends Type 0x03 packet (Rekey Offer: pk_new)             |
@@ -227,15 +228,6 @@ When $Counter_{out} > 0$ and $Counter_{out} \equiv 0 \pmod{50}$:
   $$ChainKey_{out} \leftarrow \text{HKDF-Extract}(ChainKey_{out}, SS_{rekey})$$
 * Destroys $sk_{new}$ (zeroing ML-KEM and X25519 private key memory) and deletes the entity from the database.
 
-### 6.4. Unique BEP 44 Target Addresses per Recipient in Group Chats
-In group chats, instead of using a single shared target address $Target = \text{RatchetChain.deriveSlot}(myChainKeyOut, counterOut)$ for all group members, the sender derives a unique target address for each member:
-$$\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)$$
-and then generates dedicated slot parameters (`msgKey`, `edPrivateKeySeed`, `target`) via `RatchetChain.deriveGroupRecipientSlot`.
-
-The sender executes distinct `putMutable` operations under each unique target address ($N$ targets for $N$ members). In `pollGroupIncoming`, each member polls **only their unique target, never a shared one**.
-
-**Security Rationale:** A same-target design for all members allows a DHT observer to correlate $N$ recipients through concurrent `GET` queries on the same slot, breaking group destination secrecy (Group Follower Correlation). Distributing slots across $N$ independent pseudorandom addresses guarantees that observers cannot correlate recipients or discover their co-membership in the group.
-
 ---
 
 ## 7. Binary Frame Format for DHT Records (BEP 44 Value)
@@ -261,213 +253,273 @@ According to BitTorrent BEP 44, the total size of the value field `'v'` after Be
 
 ### 7.2. AEAD and AAD Authentication
 * **Cipher:** AES-256-GCM.
-* **AAD (Additional Authenticated Data):**
+* **1-on-1 AAD (Additional Authenticated Data):**
   $$\text{AAD} = Target \ (20\text{ B}) \parallel Direction \ (\text{"AliceToBob" or "BobToAlice"})$$
-  AAD binding prevents reflection attacks and destination target substitution in DHT nodes.
+* **Group AAD:**
+  $$\text{AAD} = Target \ (20\text{ B}) \parallel GroupID \ (16\text{ B}) \parallel SenderMemberID \ (16\text{ B})$$
+  AAD binding prevents reflection attacks, target slot swapping, and cross-group replay tampering.
 
 ### 7.3. Internal Plaintext Payload Header (13 bytes)
-1. `MsgType` (1 B): Message type identifier.
-   * `0x01` – Handshake Online Finalize
-   * `0x02` – Standard Text Message
-   * `0x03` – PQC Rekey Offer (Fresh Public Key)
-   * `0x04` – PQC Rekey Response (Confirmation Ciphertext)
-   * `0x05` – Block Transfer Segment (Chunk)
-   * `0x06` – Group Control (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
-   * `0x07` – Message Reaction (`TYPE_REACTION`: emoji bound to `(targetSeqEpoch, targetSeqNum)`)
-   * `0x08` – Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`: coordinates and note)
-2. `SeqNum` (2 B, UInt16 BE): Sender sequence counter $Counter_{out}$.
-3. `AckNum` (2 B, UInt16 BE): Last acknowledged recipient sequence number.
-4. `TimestampUTC` (8 B, Int64 BE): Unix epoch timestamp in milliseconds.
-
-### 7.4. Message Types and Payload Structures (859 bytes after 13-byte header)
-* **Type 0x01 (Handshake Finalize):**
-  * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
-  * `Salt`: 24 B
-  * `Key Confirmation Tag`: 32 B
-  * `CSPRNG Padding`: 3 B (859 - 856)
-* **Type 0x02 (Text Message):**
-  * `TextLength` ($L$): 2 B (UInt16, value $\le 857$)
-  * `UTF-8 Payload`: $L$ bytes (up to 857 B of text)
-  * `CSPRNG Padding`: $857 - L$ bytes
-* **Type 0x03 (PQC Rekey Offer):**
-  * `RekeyEpoch`: 4 B (UInt32 BE)
-  * `Combined PublicKey`: 832 B (800 B ML-KEM-512 + 32 B X25519)
-  * `CSPRNG Padding`: 23 B (859 - 836)
-* **Type 0x04 (PQC Rekey Response):**
-  * `RekeyEpoch`: 4 B (UInt32 BE)
-  * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519)
-  * `CSPRNG Padding`: 55 B (859 - 804)
-* **Type 0x05 (Block Transfer Segment — Chunk):**
-  * `TransferID`: 16 B (UUID)
-  * `ChunkIndex`: 2 B (UInt16 BE)
-  * `TotalChunks`: 2 B (UInt16 BE)
-  * `ChunkLength` ($C$): 2 B (UInt16, value $\le 837$)
-  * `BinaryData`: $C$ bytes
-  * `CSPRNG Padding`: $837 - C$ bytes
-* **Type 0x06 (Group Control — TYPE_GROUP_CONTROL):**
-  * `ControlSubType`: 1 B (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
-  * `GroupID`: 16 B (Group UUID)
-  * `GroupEpoch`: 4 B (UInt32 BE)
-  * `SenderMemberID`: 16 B (Sender member UUID)
-  * `SenderGroupChainKey`: 64 B (Current sender group ratchet chain key)
-  * `CurrentCounter`: 4 B (UInt32 BE)
-  * `GroupNameLength` ($N$): 2 B (UInt16, value $\le 64$)
-  * `GroupName`: $N$ bytes UTF-8 (up to 64 bytes)
-  * `MemberCount` ($M$): 2 B (UInt16, number of members, value $\le 64$)
-  * `Members`: Array of $M$ entries: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (up to 32 B UTF-8)
-  * `CSPRNG Padding`: $859 - \text{length}$ bytes
-* **Type 0x07 (Emoji Reaction — TYPE_REACTION):**
-  * `TargetSeqEpoch`: 4 B (UInt32 BE)
-  * `TargetSeqNum`: 2 B (UInt16 BE)
-  * `EmojiLength` ($E$): 1 B (UInt8, value $\le 64$)
-  * `Emoji`: $E$ bytes UTF-8 (up to 64 bytes)
-  * `CSPRNG Padding`: $852 - E$ bytes (padding to 859 B)
-* **Type 0x08 (Location Pin / Offline Safety Status — TYPE_LOCATION_PIN):**
-  * `Latitude`: 8 B (Double IEEE 754 BE)
-  * `Longitude`: 8 B (Double IEEE 754 BE)
-  * `Altitude`: 8 B (Double IEEE 754 BE)
-  * `Accuracy`: 4 B (Float IEEE 754 BE)
-  * `NoteLength` ($P$): 2 B (UInt16 BE, value $\le 829$, or $\le 817$ for ephemeral messages)
-  * `Note`: $P$ bytes UTF-8 (up to 829 bytes, or $\le 817$)
-  * `Optional Ephemeral Header`: `MAGIC_EPHEMERAL` (8 bytes, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bytes, UInt32 Big-Endian) – present only when $TTL > 0$
-  * `CSPRNG Padding`: Padding to 859 B ($829 - P$ or $817 - P$ bytes)
-
-### 7.5. Additional Fixed-Size 900 B Record Types
-* **Cover-Traffic ACK:** Encrypted acknowledgement packet hidden in noise at target $Target_{ACK}$, formatted to exactly 900 bytes (`CoverAckProtocol`).
-* **Cover Traffic Dummy:** Uncoordinated 900-byte record filled with pure CSPRNG noise (`DhtLeafNode.sendCoverTrafficDummy`).
-* **Secure Tombstone (Slot Sanitization Upon Receipt):** Replaces consumed messages with a record of strict fixed size of exactly 900 bytes of pure CSPRNG noise under `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). This supersedes the vulnerable 0 B variant that revealed delivery timing to nodes and eavesdroppers. By maintaining a constant 900 B payload (904 B in Bencode), tombstone operations are indistinguishable from normal messages or cover traffic.
-
----
-
-## 8. Group Chats, Key Distribution, and Database Tables
-
-PQChat.DHT group messaging architecture is based on a decentralized **Sender Keys** protocol transported entirely across point-to-point (1-to-1) secure channels protected by hybrid KEM (ML-KEM-512 + X25519) and AES-256-GCM.
-
-### 8.1. Group Key Distribution (Type 0x06 Frame)
-1. Each participant generates an independent, dedicated 64-byte outgoing ratchet chain state $myChainKeyOut$.
-2. The sender's key ($senderGroupChainKey$) is distributed to other members via Type `0x06` frames (`TYPE_GROUP_CONTROL`):
-   * `GROUP_SUBTYPE_INVITE` (`0x01`): Group invitation, member roster, and initial sender chain key.
-   * `GROUP_SUBTYPE_REKEY` (`0x02`): Sender key rotation (new epoch $groupEpoch + 1$, counter reset to 0).
-   * `GROUP_SUBTYPE_LEAVE` (`0x03`): Member departure notification.
-3. Type `0x06` frames are transmitted solely across 1-to-1 tracks between verified contacts, guaranteeing group key secrecy (proven in ProVerif Lemma 7.1).
-
-### 8.2. Tracking-Free Addressing (Individual Recipient Slots)
-To eliminate network observer correlation (Group Follower Correlation), the sender generates an **independent, unique DHT target address for each group message recipient**:
-$$\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, RecipientMemberID)$$
-where the derivation context is:
-$$\text{Info} = \text{"group\_target:"} \parallel GroupID \ (16\text{ B}) \parallel Counter \ (4\text{ B, BE}) \parallel RecipientMemberID \ (16\text{ B})$$
-$$\text{memberEntropy} = \text{HKDF-Expand}(myChainKeyOut, \text{Info}, 64)$$
-from which payload key $msgKey$ (first 32 bytes) and Ed25519 seed $edSeed$ (subsequent 32 bytes) are derived, yielding unique address $\text{Target} = \text{SHA-1}(pk_{Ed25519})$.
-
-Broadcasting a message to $N$ members results in $N$ separate `putMutable` operations to pseudorandom targets, preventing DHT nodes from linking slots or discovering group composition. In `pollGroupIncoming`, each member polls only their unique target, never a shared one. Rationale: A same-target design enables DHT observers to correlate $N$ recipients via concurrent GETs to the same slot, breaking group destination secrecy.
-
-### 8.3. AEAD Context Binding (Group AAD Binding)
-Every group message (Type `0x02` text or Type `0x05` chunk) is encrypted with AES-256-GCM with strict AAD binding:
-$$\text{AAD} = \text{Target} \ (20\text{ B}) \parallel GroupID \ (16\text{ B}) \parallel SenderMemberID \ (16\text{ B})$$
-Attempting to redirect a record to another group or impersonate another member triggers an immediate AEAD tag verification error (`AEADBadTagException`).
-
-### 8.4. Group Key Rotation: Forward Secrecy and Post-Compromise Security (PCS)
-1. **Automatic Rotation Every 50 Messages:**
-   When $Counter_{out} > 0$ and $Counter_{out} \equiv 0 \pmod{50}$ (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), the sender generates a fresh CSPRNG key, increments epoch $groupEpoch + 1$, zeroes the counter, and transmits `GROUP_SUBTYPE_REKEY` to all active members.
-2. **Mandatory Rotation on Member Departure (`GROUP_SUBTYPE_LEAVE`):**
-   When any member leaves the group and broadcasts `GROUP_SUBTYPE_LEAVE`:
-   * All remaining members immediately mark the departing member as inactive in the database (`isActive = false`).
-   * Each active member immediately ratchets their $myChainKeyOut$ into a new epoch $groupEpoch + 1$.
-   * A `GROUP_SUBTYPE_REKEY` frame is transmitted **exclusively to the remaining active members** (`if (!member.isActive || member.memberId == myMemberId) continue`).
-   * This provides **Post-Compromise Security / Post-Leave Secrecy**: the departing participant has no access to the new chain state and cannot decrypt future group messages. Concurrently, KDF one-wayness protects past messages (**Forward Secrecy**).
-
-### 8.5. Room Database Table Schemas
-
-#### Table `groups`:
-```sql
-CREATE TABLE IF NOT EXISTS groups (
-    groupId TEXT NOT NULL PRIMARY KEY,
-    groupName TEXT NOT NULL,
-    myMemberId TEXT NOT NULL,
-    myChainKeyOut BLOB NOT NULL,
-    myCounterOut INTEGER NOT NULL DEFAULT 0,
-    groupEpoch INTEGER NOT NULL DEFAULT 1,
-    createdAt INTEGER NOT NULL,
-    lastActive INTEGER NOT NULL,
-    isActive INTEGER NOT NULL DEFAULT 1
-);
 ```
-* `myChainKeyOut`: 64-byte outgoing ratchet state encrypted via `EncryptedBlob` with an Android Keystore key bound to `groups_${groupId}`.
-* `groupEpoch`: Key epoch counter (incremented upon rekey or member departure).
-
-#### Table `group_members`:
-```sql
-CREATE TABLE IF NOT EXISTS group_members (
-    groupId TEXT NOT NULL,
-    memberId TEXT NOT NULL,
-    contactId TEXT,
-    memberName TEXT NOT NULL,
-    chainKeyIn BLOB NOT NULL,
-    counterIn INTEGER NOT NULL DEFAULT 0,
-    joinedAt INTEGER NOT NULL,
-    isActive INTEGER NOT NULL DEFAULT 1,
-    receivedBitmapBase INTEGER NOT NULL DEFAULT 0,
-    receivedBitmap BLOB NOT NULL,
-    PRIMARY KEY(groupId, memberId)
-);
-CREATE INDEX IF NOT EXISTS index_group_members_groupId ON group_members (groupId);
-CREATE INDEX IF NOT EXISTS index_group_members_contactId ON group_members (contactId);
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    MsgType    |            SeqNum             |    AckNum     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    (cont.)    |                                               |
++-+-+-+-+-+-+-+-+                 TimestampUTC                  |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-* `chainKeyIn`: 64-byte incoming ratchet state for the member, encrypted via `EncryptedBlob` bound to `group_members_${groupId}_${memberId}`.
-* `isActive`: Membership status flag (`1` = active, `0` = departed / removed).
-* `receivedBitmap`: Sliding bitmap for anti-replay protection preventing duplicate group frames.
+1. `MsgType` (1 B, UInt8): Message type identifier (`0x01`–`0x08`).
+2. `SeqNum` (2 B, UInt16 Big-Endian): Sender monotonic sequence counter $Counter_{out}$.
+3. `AckNum` (2 B, UInt16 Big-Endian): Last acknowledged recipient sequence number.
+4. `TimestampUTC` (8 B, Int64 Big-Endian): Unix epoch transmission timestamp in milliseconds.
+
+### 7.4. Complete Bit and Byte Specification for Types 0x01 to 0x08
+
+Total available space after the 13-byte header is $872 - 13 = 859\text{ bytes}$.
+
+#### Type 0x01: Handshake Online Finalize (`TYPE_HANDSHAKE_FINALIZE`)
+```
++──────────────────────────┬──────────┬─────────────────┬──────────────+
+|    Hybrid Ciphertext     |   Salt   | Key Confirm Tag | CSPRNG Noise |
+|   800 bytes (768 + 32)   | 24 bytes |    32 bytes     |   3 bytes    |
++──────────────────────────┴──────────┴─────────────────┴──────────────+
+```
+* `Hybrid Ciphertext` (800 B): 768 B ML-KEM-512 ciphertext + 32 B ephemeral X25519 public key.
+* `Salt` (24 B): Ephemeral salt for HKDF extraction.
+* `Key Confirmation Tag` (32 B): HKDF expansion tag confirming transcript consistency.
+* `CSPRNG Noise` (3 B): Random noise padding up to 859 bytes ($859 - 856 = 3\text{ B}$).
+
+#### Type 0x02: Standard Text Message (`TYPE_TEXT_MESSAGE`)
+```
++───────────────┬───────────────────────────────────────┬──────────────+
+|  TextLength   |           UTF-8 Text Payload          | CSPRNG Noise |
+| 2 bytes (BE)  |        L bytes (0 <= L <= 857)        | 857 - L bytes|
++───────────────┴───────────────────────────────────────┴──────────────+
+```
+* `TextLength` ($L$, 2 B, UInt16 Big-Endian): Length of UTF-8 encoded string ($L \le 857$).
+* `UTF-8 Text Payload` ($L$ B): Message string content.
+* `CSPRNG Noise` ($857 - L$ B): Pure cryptographic noise padding to exactly 859 bytes.
+
+#### Type 0x03: PQC Rekey Offer (`TYPE_REKEY_OFFER`)
+```
++───────────────┬───────────────────────────────────────┬──────────────+
+|  RekeyEpoch   |          Combined Public Key          | CSPRNG Noise |
+| 4 bytes (BE)  |         832 bytes (800 + 32)          |   23 bytes   |
++───────────────┴───────────────────────────────────────┴──────────────+
+```
+* `RekeyEpoch` (4 B, UInt32 Big-Endian): Target epoch index ($groupEpoch$ or ratchet epoch).
+* `Combined Public Key` (832 B): 800 B ML-KEM-512 public key + 32 B X25519 public key.
+* `CSPRNG Noise` (23 B): Padding to 859 bytes ($859 - 836 = 23\text{ B}$).
+
+#### Type 0x04: PQC Rekey Response (`TYPE_REKEY_RESPONSE`)
+```
++───────────────┬───────────────────────────────────────┬──────────────+
+|  RekeyEpoch   |           Hybrid Ciphertext           | CSPRNG Noise |
+| 4 bytes (BE)  |         800 bytes (768 + 32)          |   55 bytes   |
++───────────────┴───────────────────────────────────────┴──────────────+
+```
+* `RekeyEpoch` (4 B, UInt32 Big-Endian): Acknowledged epoch index.
+* `Hybrid Ciphertext` (800 B): 768 B ML-KEM-512 encapsulation ciphertext + 32 B X25519 ephemeral public key.
+* `CSPRNG Noise` (55 B): Padding to 859 bytes ($859 - 804 = 55\text{ B}$).
+
+#### Type 0x05: Binary Chunk Transfer (`TYPE_CHUNK_TRANSFER`)
+```
++──────────────┬────────────┬─────────────┬─────────────┬─────────────┬──────────────+
+|  TransferID  | ChunkIndex | TotalChunks | ChunkLength | Binary Data | CSPRNG Noise |
+|   16 bytes   | 2 bytes BE | 2 bytes BE  | 2 bytes BE  |   C bytes   | 837 - C bytes|
++──────────────┴────────────┴─────────────┴─────────────┴─────────────┴──────────────+
+```
+* `TransferID` (16 B): Unique Transfer UUID (Big-Endian).
+* `ChunkIndex` (2 B, UInt16 Big-Endian): 0-based chunk sequence index.
+* `TotalChunks` (2 B, UInt16 Big-Endian): Total chunk count in transfer ($TotalChunks \le 1000$).
+* `ChunkLength` ($C$, 2 B, UInt16 Big-Endian): Byte size of this chunk ($C \le 837$).
+* `Binary Data` ($C$ B): Raw chunk data (e.g. PNG8 image fragment).
+* `CSPRNG Noise` ($837 - C$ B): Random noise padding up to 859 bytes.
+
+#### Type 0x06: Group Control Frame (`TYPE_GROUP_CONTROL`)
+```
++─────────┬──────────┬───────────┬──────────────┬──────────────────┬──────────────+
+| SubType | GroupID  |GroupEpoch |SenderMemberID|SenderGroupChainKey|CurrentCounter|
+| 1 byte  | 16 bytes |4 bytes BE |   16 bytes   |     64 bytes     |  4 bytes BE  |
++─────────┴──────────┴───────────┴──────────────┴──────────────────┴──────────────+
+| GroupNameLen |    GroupName    | MemberCount |       Members Array ...         |
+|  2 bytes BE  | N bytes (<= 64) | 2 bytes BE  | M * (16B + 1B + up to 32B UTF-8)|
++──────────────┴─────────────────┴─────────────┴─────────────────────────────────+
+|                          CSPRNG Noise Padding                                  |
++────────────────────────────────────────────────────────────────────────────────+
+```
+* `ControlSubType` (1 B, UInt8):
+  * `0x01` = `GROUP_SUBTYPE_INVITE`: Group invitation and roster.
+  * `0x02` = `GROUP_SUBTYPE_REKEY`: Automatic or forced key rotation.
+  * `0x03` = `GROUP_SUBTYPE_LEAVE`: Departure notice from leaving member.
+* `GroupID` (16 B): Unique group UUID.
+* `GroupEpoch` (4 B, UInt32 Big-Endian): Monotonic group key epoch.
+* `SenderMemberID` (16 B): UUID of the sending member.
+* `SenderGroupChainKey` (64 B): Current 64-byte sender ratchet chain state $myChainKeyOut$.
+* `CurrentCounter` (4 B, UInt32 Big-Endian): Current transmission counter for this sender key.
+* `GroupNameLength` ($N$, 2 B, UInt16 Big-Endian): Length of group name ($N \le 64$).
+* `GroupName` ($N$ B): Group title in UTF-8.
+* `MemberCount` ($M$, 2 B, UInt16 Big-Endian): Number of member descriptor records ($M \le 64$).
+* `Members Array`: Serialized entries: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` ($K$ bytes UTF-8, $K \le 32$).
+* `CSPRNG Noise Padding`: Padding to 859 bytes.
+
+#### Type 0x07: Message Reaction (`TYPE_REACTION`)
+```
++────────────────┬──────────────┬─────────────┬──────────────────┬──────────────+
+| TargetSeqEpoch | TargetSeqNum | EmojiLength |   Emoji UTF-8    | CSPRNG Noise |
+|   4 bytes BE   |  2 bytes BE  | 1 byte (E)  | E bytes (<= 64)  | 852 - E bytes|
++────────────────┴──────────────┴─────────────┴──────────────────┴──────────────+
+```
+* `TargetSeqEpoch` (4 B, UInt32 Big-Endian): Ratchet epoch of the message being reacted to.
+* `TargetSeqNum` (2 B, UInt16 Big-Endian): Monotonic sequence counter $SeqNum$ of target message.
+* `EmojiLength` ($E$, 1 B, UInt8): Length of UTF-8 emoji string ($1 \le E \le 64$).
+* `Emoji UTF-8` ($E$ B): UTF-8 emoji characters (e.g. 👍, ❤️, 🔥).
+* `CSPRNG Noise Padding` ($852 - E$ B): Random noise padding up to 859 bytes.
+
+#### Type 0x08: Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`)
+```
++──────────────┬───────────────┬──────────────┬──────────────┬──────────────┬──────────────+
+|   Latitude   |   Longitude   |   Altitude   |   Accuracy   |  NoteLength  |     Note     |
+| 8 bytes (D)  |  8 bytes (D)  | 8 bytes (D)  | 4 bytes (F)  |  2 bytes BE  |   P bytes    |
++──────────────┴───────────────┴──────────────┴──────────────┴──────────────┴──────────────+
+| Optional Ephemeral: MAGIC_EPHEMERAL (8B) + EphemeralTtlSeconds (4B) | CSPRNG Noise   |
++─────────────────────────────────────────────────────────────────────┴────────────────+
+```
+* `Latitude` (8 B, Double IEEE 754 Big-Endian): Geographical latitude in decimal degrees.
+* `Longitude` (8 B, Double IEEE 754 Big-Endian): Geographical longitude in decimal degrees.
+* `Altitude` (8 B, Double IEEE 754 Big-Endian): Altitude in meters above WGS 84 ellipsoid.
+* `Accuracy` (4 B, Float IEEE 754 Big-Endian): Horizontal accuracy radius in meters ($1\sigma$).
+* `NoteLength` ($P$, 2 B, UInt16 Big-Endian): Length of text note ($P \le 829$ standard, or $P \le 817$ with ephemeral header).
+* `Note` ($P$ B): Status or location annotation in UTF-8.
+* `Optional Ephemeral Header` (12 bytes total, present only when $TTL > 0$):
+  * `MAGIC_EPHEMERAL` (8 B, UInt64 Big-Endian): Constant `0x5051435F4550484DL` ("PQC_EPHM").
+  * `EphemeralTtlSeconds` (4 B, UInt32 Big-Endian): Expiration time-to-live in seconds.
+* `CSPRNG Noise Padding`: Padding to 859 bytes ($829 - P$ or $817 - P$ bytes).
 
 ---
 
-## 9. Sequence Epochs and Lookahead Window
+## 8. Local Database Encryption with Row-Bound Context (`MAGIC_ROW_BOUND_V2`) and Duress PIN
 
-Due to the asynchronous nature of UDP and DHT transport, packets may arrive with latency or out of order.
+### 8.1. Threat: Row/Column Swap Attacks in SQLite Databases
+In standard AES-GCM database column encryption, an adversary with root access, forensic extraction tools, or physical storage dumps could extract an encrypted blob from one row/column (e.g. an admin message or key) and write it into another row/column. Because both records use the same master key, decryption would succeed without error, leading to state corruption, privilege escalation, or message spoofing.
 
-1. **Lookahead Window ($n \dots n+4$):**
-   * A recipient with current counter $Counter_{in} = n$ derives keys and polls the DHT for slots $Target_n, Target_{n+1}, \dots, Target_{n+4}$.
-   * If message $n+2$ arrives out of order, keys for slots $n$ and $n+1$ are preserved in the secure `skipped_keys` table (encrypted via Keystore) in case those packets arrive later.
-2. **Sliding Bitmap Window (Anti-Replay):**
-   * A 1024-bit sliding bitmap in `ContactEntity` and `GroupMemberEntity` detects and rejects duplicates.
-   * Messages with sequence number $SeqNum < Counter_{in} - 1024$ are unconditionally rejected.
+### 8.2. Wire Format of `MAGIC_ROW_BOUND_V2`
+PQChat.DHT implements V2 row-bound encryption (`MAGIC_ROW_BOUND_V2 = 0x52`, ASCII `'R'`) where the Additional Authenticated Data (AAD) cryptographically seals the database location:
+$$\text{AAD} = \text{table} \parallel \text{"+"} \parallel \text{id} \parallel \text{"+"} \parallel \text{column}$$
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| Magic (0x52)  |   tableLen    |          tableName ...        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    idLen (2 bytes BE)         |             rowId ...         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   columnLen   |          columnName ...                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       IV / Nonce (12 bytes)                   |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Ciphertext + AEAD Tag (16 bytes) ...         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+If an adversary moves or swaps an encrypted blob to any other row, column, or table, decryption fails immediately with `AEADBadTagException`, proven formally in ProVerif Model 8 (`pqchat_duress_wipe.pv`, Lemma 8.4).
+
+### 8.3. Duress PIN Mechanism (`KeystoreCrypto.deleteMasterKey`) and Decoy Mode
+Under physical coercion or compelled unlock:
+1. The user enters a preconfigured **Duress PIN** (distinguished from the legitimate Unlock PIN).
+2. The authentication engine triggers an immediate hardware key wipe:
+   * Calls `KeystoreCrypto.deleteMasterKey()`, deleting the master wrapping key from the hardware-backed Android Keystore (StrongBox / TEE).
+   * Irreversibly purges cached keys and session tokens in RAM (`fill(0)`).
+   * Clears sensitive SharedPreferences flags.
+3. The app opens `DecoyNotesScreen`, presenting a realistic, functioning personal notes notepad.
+4. Because the hardware master key is permanently erased from the TEE, the SQLite database becomes mathematically unrecoverable.
 
 ---
 
-## 10. Formal Security Verification (docs/formal/)
+## 9. PNG8 Handshake Steganography Algorithm (`Png8Compressor.kt`)
 
-All fundamental protocol security guarantees have been symbolically verified using **ProVerif 2.05** under `docs/formal/` (24 lemmas across 7 models):
+To circumvent visual inspection, automated QR scanner surveillance, and censorship checkpoints, PQChat.DHT provides an out-of-band pairing mechanism disguised as ordinary PNG images.
+
+### 9.1. Steganography Envelope Structure
+The 864-byte pairing payload ($pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B})$) is encapsulated into an 874-byte binary envelope:
+```
++──────────────────────────┬──────────────┬──────────────────┬──────────────+
+|   STEG_MAGIC ("PQST")    |  PayloadLen  |  Pairing Payload |  CRC32 Check |
+|   4 bytes (0x50515354)   |  2 bytes BE  |    864 bytes     |  4 bytes BE  |
++──────────────────────────┴──────────────┴──────────────────┴──────────────+
+```
+* `STEG_MAGIC` (4 B): Magic prefix `0x50, 0x51, 0x53, 0x54` ("PQST").
+* `PayloadLen` (2 B, UInt16 Big-Endian): Payload length (constant `864`).
+* `Pairing Payload` (864 B): $pk_A \parallel Seed_{init}$.
+* `CRC32 Check` (4 B, UInt32 Big-Endian): IEEE 802.3 CRC32 checksum for payload integrity verification.
+
+### 9.2. Median Cut Color Quantization & Indexed LSB Embedding
+1. **Median Cut Quantization:**
+   The source image is partitioned in RGB color space along the color axis with greatest variance until 256 representative palette clusters are created (PNG8 Indexed Color mode).
+2. **Payload Embedding:**
+   * The 874-byte envelope bitstream is embedded into the least significant bits (LSB) of the palette color entries or indexed pixel stream.
+   * Palette colors are perturbed by at most $\pm 1$ per channel, rendering visual differences invisible to human inspection and statistical image tests.
+3. **Extraction & Verification:**
+   * `Png8Compressor.extractPayload` reads the indexed stream, validates `STEG_MAGIC` and `CRC32`.
+   * If the image has been recompressed or altered, the CRC32 check fails gracefully, allowing the app to fall back to QR code scanning.
+
+---
+
+## 10. Constant-Budget Stratified Polling and Weighted Fair Queueing (WFQ)
+
+### 10.1. Constant-Budget Stratified Polling ($N_{\text{poll}} = 8$)
+Variable query frequencies in DHT polling leak the number of active contacts and conversations to network observers. PQChat.DHT enforces **Constant-Budget Stratified Polling**:
+* Every polling tick queries **exactly 8 target addresses** (`N_POLL_TARGETS = 8`).
+* **Stratified Sampling when Targets $> 8$:**
+  Active slots are partitioned into stratified priority tiers (`FOREGROUND_CHAT` contacts, lookahead window slots, background idle contacts). Target selection employs Weighted Fair Sampling based on contact activity timestamps.
+* **Decoy Target Padding when Targets $< 8$:**
+  If the client has fewer than 8 active targets (e.g. only 2 active contacts), the remaining $8 - K$ queries are drawn from `DecoyTargetPool`. These decoys query valid, live DHT addresses generated by Poisson dummy writes, preventing 0-PUT statistical filtering.
+* **Anonymity Guarantee:** An observer monitoring the smartphone's UDP emission sees a completely invariant rate of 8 queries per interval, leaking zero information about contact count or chat activity.
+
+### 10.2. Outbound Poisson WFQ Queue (`OutboundPoissonQueue`)
+All outbound DHT packets (direct messages, group broadcasts, chunk transfers, acknowledgments, and cover noise) pass through an 8-slot cyclic Weighted Fair Queueing scheduler:
+```
+Slot:     [ 0 ]     [ 1 ]     [ 2 ]     [ 3 ]     [ 4 ]     [ 5 ]     [ 6 ]     [ 7 ]
+Class:   DIRECT    GROUP     DIRECT    GROUP     DIRECT    IMAGE     DIRECT    COVER
+Ratio:    50%       25%       50%       25%       50%      12.5%      50%      12.5%
+```
+* **Traffic Classes:**
+  1. `DIRECT` (Priority 4): 1-on-1 text messages, handshake finalize frames, rekey packets.
+  2. `GROUP` (Priority 3): Group chat messages and member control frames.
+  3. `IMAGE` (Priority 2): PNG8 media chunk packets.
+  4. `ACK` (Priority 1): Symmetrically encrypted cover acknowledgments.
+  5. `COVER` (Priority 0): CSPRNG Poisson dummy traffic.
+* **Anti-Starvation Guarantee:** Even under heavy user texting or image uploads, the `COVER` traffic slot executes every 8th cycle, maintaining continuous Poisson background traffic and preventing metadata leakage.
+
+---
+
+## 11. Formal Security Verification (docs/formal/)
+
+All fundamental protocol security guarantees have been symbolically verified using **ProVerif 2.05** under `docs/formal/` (32 lemmas across 8 models):
 
 | Security Property | Model File | Verified Cryptographic Guarantees | ProVerif Outcome |
 | :--- | :--- | :--- | :--- |
-| **Unified Protocol** | `pqchat_protocol.pv` | MasterKey, tracks $A \to B$ and $B \to A$, AAD payloads, SAS transcript, and anti-replay | `RESULT: True` (8/8) |
+| **Unified Protocol** | `pqchat_protocol.pv` | MasterKey, tracks $A \to B$ and $B \to A$, AAD payloads, SAS transcript, micro-payloads (`0x07`, `0x08`), and anti-replay | `RESULT: True` (12/12) |
 | **Secrecy and Confirmation** | `pqchat_secrecy.pv` | Payload confidentiality and injective authentication in Hybrid KEM (ML-KEM-512 + X25519) | `RESULT: True` (5/5) |
 | **Forward Secrecy (FS)** | `pqchat_forward_secrecy.pv` | Past message protection upon chain state compromise in RAM | `RESULT: True` (2/2) |
 | **Self-Healing (PCS)** | `pqchat_post_compromise.pv` | Secrecy restoration after key compromise via asymmetric KEM rotation | `RESULT: True` (2/2) |
 | **Anti-Replay Protection** | `pqchat_replay.pv` | Injective packet acceptance and monotonic slot invalidation via tombstones | `RESULT: True` (2/2) |
 | **Unlinkability & Tombstones** | `pqchat_unlinkability.pv` | Observational equivalence of target addresses and indistinguishability of 900-byte tombstones | `RESULT: True` (1/1) |
 | **Group Protocol and PCS/FS** | `pqchat_group_protocol.pv` | Sender key distribution, AAD binding, and group PCS/FS on member leave | `RESULT: True` (4/4) |
+| **Duress Wipe & Row-Bound V2**| `pqchat_duress_wipe.pv` | Hardware master key erasure irreversibility, decoy screen activation, and SQLite row/column swap resistance (`MAGIC_ROW_BOUND_V2`) | `RESULT: True` (4/4) |
 
-### In-Depth Summary of Verified Lemmas:
-
-1. **Secrecy:** Proves that $MasterKey$, ratchet states $ChainKey_{A \to B}, ChainKey_{B \to A}$, and message payloads cannot be recovered by a Dolev-Yao adversary monitoring DHT queries and the public QR code (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
-2. **Handshake Authentication & SAS Binding:** Proves injective correspondence (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), binding the transcript, dual **Hybrid KEM (ML-KEM-512 + X25519)** protection, and SAS commitment ($Commitment$).
-3. **Forward Secrecy:** Proves (`pqchat_forward_secrecy.pv`) that compromising ratchet state $ChainKey_1$ does not reveal earlier messages ($msg_0$).
-4. **Post-Compromise Security (PCS):** Proves (`pqchat_post_compromise.pv`) that following a chain compromise, asymmetric hybrid KEM rotation completely restores secrecy for subsequent messages.
-5. **Anti-Replay:** Proves injective packet acceptance (`pqchat_replay.pv` and `pqchat_protocol.pv`), preventing replay injection across the DHT, and verifies safe monotonic slot invalidation.
-6. **Unlinkability & Tombstone Indistinguishability:** Proves observational equivalence (`diff-equivalence` in `pqchat_unlinkability.pv`) establishing that target addresses $\text{Target}_i = \text{SHA-1}(pk_i)$ reveal no identities (Metadata-Free Rendezvous), and 900-byte tombstones (CSPRNG noise) are indistinguishable from active messages or cover traffic.
-7. **Group Messaging & Key Rotation (Group Protocol & PCS/FS):** Proves (`pqchat_group_protocol.pv`):
-   * Secrecy of sender ratchet keys distributed in Type `0x06` frames (`TYPE_GROUP_CONTROL`) across 1-to-1 channels (ML-KEM-512 + X25519).
-   * Authenticity of group messages with AAD binding ($\text{Target} \parallel GroupID \parallel SenderMemberID$).
-   * Forward Secrecy of prior group messages prior to member departure.
-   * Post-Compromise Security / Post-Leave Secrecy of messages in new epoch $groupEpoch + 1$ following departure (`GROUP_SUBTYPE_LEAVE`) and key rotation.
-
-To run formal verification:
+To run the automated formal verification suite:
 ```bash
 bash docs/formal/run_verification.sh
 ```
 
 ---
 
-## 11. Testing Strategy
+## 12. Testing Strategy
 
 In accordance with project guidelines, tests are structured into two categories:
 

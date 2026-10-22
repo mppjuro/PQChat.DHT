@@ -101,8 +101,8 @@ In group messaging, a **Same-Target** design (using a single target address for 
   and then derives slot parameters (`RatchetChain.deriveGroupRecipientSlot`) and performs separate `putMutable` operations under each unique target ($N$ targets for $N$ members).
   In `pollGroupIncoming`, each member queries **only their unique target, never a shared one** (no vulnerable fallback to a shared slot). As a result, GET operations are dispersed across the entire DHT address space, preventing group members from being linked to one another.
 
-### 3.4. Sybil Attacks in Kademlia XOR Metric
-An adversary with a botnet or cloud resources deploys nodes close to target hashes:
+### 3.4. Sybil, Eclipse, and Sequence Rollback Attacks on Malicious DHT Nodes
+An adversary controlling botnet or cloud resources may deploy nodes close to target hashes in the Kademlia XOR metric, attempting to eclipse target slots or manipulate record sequences:
 - In Kademlia, a BEP 44 mutable record is replicated across the $K=8$ closest nodes.
 - The probability of compromising at least one replica grows exponentially:
   - Sybil fraction $f = 5\% \implies P = 33.7\%$
@@ -110,6 +110,17 @@ An adversary with a botnet or cloud resources deploys nodes close to target hash
   - Sybil fraction $f = 20\% \implies P = 83.2\%$
   - Sybil fraction $f = 50\% \implies P = 99.6\%$
 - When no node in the neighborhood belongs to the adversary (honest nodes), the adversary's success rate equals random guessing ($1/N = 4.0\%$).
+
+#### Active DHT Node Attack Vectors & Implemented Mitigations:
+1. **Routing Table Eclipse & /24 Subnet Bucketing:**
+   - *Attack:* A single entity spawns thousands of virtual Kademlia nodes from cloud IP blocks (e.g. AWS or DigitalOcean) to dominate routing tables and intercept KRPC queries.
+   - *Mitigation:* The leaf node applies /24 IPv4 (and /48 IPv6) prefix restrictions, limiting the number of routing table entries accepted from any single subnet. This forces the adversary to acquire globally diverse IP addresses to execute routing table saturation.
+2. **BEP 44 Sequence Monotonicity & Rollback Resistance:**
+   - *Attack:* A malicious storing node attempts to replay an obsolete mutable record (sequence rollback) to revert conversation state or cause message desynchronization.
+   - *Mitigation:* BEP 44 mandates strictly monotonic sequence numbers: a candidate write is accepted only if $seq_{new} > seq_{current}$. When cleaning slots via Secure Tombstones, the client writes pure CSPRNG noise at $seq = DEFAULT\_MUTABLE\_SEQ + 1$, irreversibly superseding the previous payload.
+3. **1024-Bit Sliding Anti-Replay Bitmap:**
+   - *Attack:* An adversary or rogue node captures historical encrypted payloads and delivers them out-of-order or duplicate times.
+   - *Mitigation:* Receivers maintain a 1024-bit sliding window bitmap (`receivedBitmapBase`, `receivedBitmap`) per track and group member. Sequence numbers lower than the base or already marked in the bitmap are dropped immediately with zero processing overhead.
 
 ### 3.5. Real-World Android Lifecycle Profiles and Doze Mode
 In the application, `AdaptivePollingManager` implements 4 energy states:
@@ -146,7 +157,9 @@ In BEP 44-compliant distributed DHT stores, after a message is received and ackn
 │ 4. Delayed PUT & Decoys   │ Delayed emissions and parallel decoy slots │
 │ 5. Poisson Cover Traffic  │ 900 B CSPRNG records via lambda rate       │
 │ 6. Uniform Tombstones     │ 900 B CSPRNG at seq+1 (zero ACK leakage)   │
-│ 7. Lifecycle Adaptation   │ Noise disabled in Doze, intervals to 15m   │
+│ 7. Stratified Polling     │ Constant-budget (N_poll = 8) target sample │
+│ 8. WFQ Poisson Queue      │ 5-class deterministic 8-slot queue frame   │
+│ 9. Lifecycle Adaptation   │ Noise disabled in Doze, intervals to 15m   │
 └───────────────────────────┴────────────────────────────────────────────┘
 ```
 
@@ -312,25 +325,46 @@ To guarantee continuous verification of correlation resistance without prolongin
 
 ## 7. Device, Memory, and Local Storage Hardening
 
-To protect user data from local attacks (physical extraction, on-device spyware, screenshots, flash memory forensics):
+To protect user data from local attacks (physical extraction, on-device spyware, screenshots, flash memory forensics, and physical coercion):
 
-### 7.1. Room Encryption Architecture and Residual Metadata Risk Analysis
+### 7.1. Room Encryption Architecture: V2 Row/Column Binding and Swap Attack Mitigation
 
-Room database (SQLite) implements a hybrid security architecture:
+Room database (SQLite) implements a hybrid security architecture combining hardware-backed AES-256-GCM and cryptographic context binding:
 1. **Encrypted Sensitive Payloads and Keys (Zero Plaintext at Rest):**
-   - All ratchet keys (`chainKeyOut`, `chainKeyIn`, `msgKey`), KEM keys (`skNew`), private Ed25519 seeds (`edPrivateKeySeed`), message texts, and binary files (`textContent`, `imageBytes`, `chunks`) are encrypted with a hardware AES-256-GCM key from **Android Keystore**.
-   - Cryptographic Row-Level Binding is applied: the header of each encrypted blob contains the table identifier and row primary key, injected as Additional Authenticated Data (**AAD = `table + id`**). This prevents *cut-and-paste* attacks between SQLite rows or tables.
-2. **Plaintext Relational Metadata (Contact Names, Timestamps, Ephemeral DHT Targets):**
+   - All ratchet keys (`chainKeyOut`, `chainKeyIn`, `msgKey`), KEM keys (`skNew`), private Ed25519 seeds (`edPrivateKeySeed`), message texts, and binary files (`textContent`, `imageBytes`, `chunks`) are encrypted with a hardware AES-256-GCM master key from **Android Keystore**.
+2. **Row/Column Swap Attack Mitigation (`MAGIC_ROW_BOUND_V2` = `0x52`):**
+   - *Vulnerability Vector in V1 Binding:* In early V1 designs (`AAD = table + id`), an attacker with physical or root access to SQLite could swap two ciphertext columns within the same row (e.g., swapping `chainKeyOut` and `chainKeyIn` in `contacts`, or swapping `textContent` with a draft field) without triggering an AEAD tag mismatch.
+   - *V2 Hardening:* The database engine enforces `MAGIC_ROW_BOUND_V2` (`0x52`, ASCII `'R'`). The binary header encapsulates:
+     `[MAGIC 1B (0x52)] + [tableLen 1B] + [table] + [idLen 2B BE] + [id] + [colLen 1B] + [col] + [IV 12B] + [Ciphertext + Tag 16B]`
+     and verifies Additional Authenticated Data:
+     $$\text{AAD} = table + \text{"+"} + id + \text{"+"} + column$$
+   - *Security Guarantee:* Any attempt to swap ciphertexts across rows or across columns produces an immediate `AEADBadTagException`. Formally proven in ProVerif (`pqchat_duress_wipe.pv`, Lemma 3 & 4).
+3. **Plaintext Relational Metadata (Contact Names, Timestamps, Ephemeral DHT Targets):**
    - Relational and indexed fields (`ContactEntity.name`, `timestamp`, `ContactEntity.lastActive`, `MessageEntity.slotTarget`, `MessageEntity.ackTarget`, `status`, `seqNum`) remain as plaintext SQLite columns.
    - **Architectural Rationale:**
-     - *Query and Indexing Requirements:* SQLite B-trees require plaintext values for efficient sorting (`ORDER BY timestamp ASC/DESC`), pagination, and composite queries `(contactId, seqEpoch, seqNum)`. A random IV in block encryption precludes sorting and fast indexing inside the database engine. Deterministic encryption (e.g., AES-SIV) would introduce frequency analysis and statistical correlation vulnerabilities.
+     - *Query and Indexing Requirements:* SQLite B-trees require plaintext values for efficient sorting (`ORDER BY timestamp ASC/DESC`), pagination, and composite queries `(contactId, seqEpoch, seqNum)`. Block encryption with random IVs precludes sorting and fast indexing inside SQLite. Deterministic encryption (e.g., AES-SIV) would introduce frequency analysis and statistical correlation vulnerabilities.
      - *Elimination of Native C/C++ Libraries:* Full page-level database encryption (e.g., SQLCipher) requires bundling compiled native binaries (`.so`), which would violate the core architectural rule of the project (**AGENTS.md §2: 100% pure Kotlin, zero C++/JNI**).
    - **Residual Risk Assessment:**
      - Metadata exposure risk is limited to an adversary possessing root privileges or performing forensic memory extraction on a powered-off device.
      - In such a scenario, the adversary learns contact labels and transmission timestamps, but **cannot recover a single byte of message text or session keys** (the master key in Keystore is hardware-protected).
      - Ephemerality of DHT targets: addresses `slotTarget` and `ackTarget` undergo *Key Hopping* (changing every message) and expire in the public DHT network after 24–72 hours, preventing long-term external correlation.
 
-### 7.2. Hardware Android Keystore: StrongBox HSM, TEE, and Unlocked Device
+### 7.2. Physical Coercion, Duress PIN, and Plausible Deniability
+
+Under physical coercion (*rubber-hose cryptanalysis* or forced device unlock):
+1. **Duress PIN Activation (`KeystoreCrypto.deleteMasterKey`):**
+   - The user enters a dedicated emergency Duress PIN instead of their normal PIN.
+   - The application immediately invokes `KeystoreCrypto.deleteMasterKey()`, triggering an irreversible hardware-level erasure of the AES-256-GCM master key from the Android Keystore (StrongBox Keymaster / Titan M chip or TEE).
+   - In-memory master key caches and active session secrets are wiped immediately (`MasterKeyHolder.clear()`).
+2. **Cryptographic Irreversibility:**
+   - Without the Keystore master key, all local ciphertexts in Room SQLite become indistinguishable from pure cryptographic noise. The probability of recovering any message, ratchet key, or KEM secret is bounded by AES-256 security:
+     $$P_{\text{recover}} < 2^{-256}$$
+   - Formally proved in ProVerif (`pqchat_duress_wipe.pv`, Lemma 1 & 2).
+3. **Plausible Deniability via `DecoyNotesScreen`:**
+   - Instead of displaying a suspicious crash or wiped screen, the app seamlessly launches `DecoyNotesScreen`, displaying a harmless personal note-taking interface populated with benign decoy notes.
+   - To an adversary inspecting the device, the app appears to be an innocent utility, protecting the user from punitive consequences.
+
+### 7.3. Hardware Android Keystore: StrongBox HSM, TEE, and Unlocked Device
 
 Master key management in `KeystoreCrypto`:
 1. **StrongBox HSM Prioritization (API 28+):**
@@ -343,14 +377,14 @@ Master key management in `KeystoreCrypto`:
    - An optional UI lock (`BiometricAuthHelper` / `BiometricPrompt`) is integrated with `BiometricManager.Authenticators.BIOMETRIC_STRONG or DEVICE_CREDENTIAL`.
    - When enabled, the app requires user authentication (fingerprint, facial recognition, or screen lock PIN) before granting access to conversation screens.
 
-### 7.3. Enforcement of `ro=1` Flag (BEP 43) in All Leaf Node Queries
+### 7.4. Enforcement of `ro=1` Flag (BEP 43) in All Leaf Node Queries
 
 Per BitTorrent BEP 43 (*Read-only DHT Nodes*):
 - PQChat.DHT operates exclusively in **Client-Only Leaf Node** mode (`AGENTS.md §1.4`) — the device never routes third-party queries or buffers third-party data.
 - The `ro=1` flag is strictly enforced in **all** KRPC queries sent by the client, including `find_node`, `get`, `ping`, and **`put` (BEP 44)**.
 - **Rationale for PUT Queries:** Even when a smartphone stores a mutable record (`put`), it does not become a routing node. Nodes receiving a `put` packet with `ro=1` store the record at the destination target, but **do not add the smartphone's IP and port to their Kademlia routing tables**. This shields the smartphone from unwanted incoming traffic, reflection/amplification attacks, and network topology mapping.
 
-### 7.4. UI Capture Protection (`FLAG_SECURE`)
+### 7.5. UI Capture Protection (`FLAG_SECURE`)
 
 Windows handling sensitive material enforce `FLAG_SECURE` (`WindowManager.LayoutParams.FLAG_SECURE`):
 1. **HandshakeScreen (QR Key Exchange):**
@@ -359,7 +393,7 @@ Windows handling sensitive material enforce `FLAG_SECURE` (`WindowManager.Layout
 2. **ChatScreen (Active Conversation):**
    - `FLAG_SECURE` blocks screenshots and hides chat previews in the Android system Recent Apps switcher, protecting against content leakage when the phone is temporarily unlocked by a third party.
 
-### 7.5. Memory Hygiene and Elimination of Sensitive Data from Logs
+### 7.6. Memory Hygiene and Elimination of Sensitive Data from Logs
 
 Per `AGENTS.md §8.1`:
 - All diagnostic modules (`MessageDebugLogger`, `ChatViewModel`, `ChatRepository`) are free of any logging of plaintext message content (`text`), private Ed25519 seeds (`edPrivateKeySeed`), secret handshake seeds (`seedInit`), and symmetric session keys (`msgKey`, `kHs`).
