@@ -96,6 +96,7 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
    * `0x06` – Group Control (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
    * `0x07` – Message Reaction (`TYPE_REACTION`: emoji linked to target message)
    * `0x08` – Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`)
+   * `0x09` – Push-To-Talk Micro-Voice Note (`TYPE_VOICE_NOTE`)
 2. `SeqNum` (2 bytes, UInt16 Big-Endian): Sender's $Counter_{out}$.
 3. `AckNum` (2 bytes, UInt16 Big-Endian): Highest received sequence number from partner.
 4. `TimestampUTC` (8 bytes, Int64 Big-Endian): Unix timestamp of transmission in milliseconds.
@@ -153,6 +154,16 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
   * `Note`: $P$ bytes UTF-8 (maximum 829 bytes, or $\le 817$)
   * `Optional Ephemeral Header`: `MAGIC_EPHEMERAL` (8 bytes, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bytes, UInt32 Big-Endian) – present only when $TTL > 0$
   * `CSPRNG Padding`: padding to 859 B ($829 - P$ or $817 - P$ bytes)
+* **Type 0x09 (Ultra-Low-Bitrate Micro-Voice Note):**
+  * `VoiceClipId`: 8 bytes (Int64 Big-Endian, UUID/clip identifier)
+  * `SegmentIndex`: 1 byte (UInt8, value $0..2$)
+  * `TotalSegments`: 1 byte (UInt8, value $1..3$)
+  * `DurationMs`: 2 bytes (UInt16 Big-Endian, segment duration in ms)
+  * `CodecMode`: 1 byte (`0x01` – `CODEC_MODE_LPC10_COMPACT`, 8 kHz mono, 1280 bps / 160 B/s)
+  * `EphemeralTtlSeconds`: 4 bytes (UInt32 Big-Endian)
+  * `CompressedVoiceBytesLength` ($V$): 2 bytes (UInt16 Big-Endian, value $\le 840$)
+  * `Compressed Voice Stream`: $V$ bytes (up to 840 bytes, ~5.25s per frame, maximum 2520 bytes across 3 frames = ~15.75s)
+  * `CSPRNG Padding`: padding to 859 B ($840 - V$ bytes)
 
 ### Group Chats and Database Tables (`groups` and `group_members`):
 * **Distribution and Addressing Model:** Each participant maintains their own outbound chain ($myChainKeyOut$). Group messages are transmitted to individual recipient slots:

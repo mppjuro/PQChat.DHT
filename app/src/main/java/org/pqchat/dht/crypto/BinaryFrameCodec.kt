@@ -30,6 +30,7 @@ object BinaryFrameCodec {
     const val TYPE_GROUP_CONTROL: Byte = 0x06
     const val TYPE_REACTION: Byte = 0x07
     const val TYPE_LOCATION_PIN: Byte = 0x08
+    const val TYPE_VOICE_NOTE: Byte = 0x09
 
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
@@ -38,6 +39,10 @@ object BinaryFrameCodec {
 
     const val T7_MAX_EMOJI_SIZE = 64
     const val T8_MAX_NOTE_SIZE = 829 // 859 - 30 (lat:8, lon:8, alt:8, acc:4, len:2)
+
+    // Type 0x09 limits: VoiceClipId (8 B) + SegIdx (1 B) + TotSeg (1 B) + DurMs (2 B) + Mode (1 B) + TTL (4 B) + DataLen (2 B) = 19 B header
+    const val T9_HEADER_SIZE = 19
+    const val T9_MAX_VOICE_SIZE = INNER_PAYLOAD_SIZE - T9_HEADER_SIZE // 859 - 19 = 840
 
     // Type 0x01 limits: Hybrid ct (800 B: 768 B ML-KEM + 32 B X25519) + Salt (24 B) + Tag (32 B) = 856 <= 859
     const val T1_CIPHERTEXT_SIZE = HybridKemEngine.HYBRID_CIPHERTEXT_SIZE // 800
@@ -213,6 +218,39 @@ object BinaryFrameCodec {
             val note: String,
             val ephemeralTtlSeconds: Long = 0L
         ) : DecodedPayload()
+
+        data class VoiceNote(
+            val voiceClipId: Long,
+            val segmentIndex: Int,
+            val totalSegments: Int,
+            val durationMs: Int,
+            val codecMode: Byte,
+            val voiceData: ByteArray,
+            val ephemeralTtlSeconds: Long = 0L
+        ) : DecodedPayload() {
+            val voiceBytes: ByteArray get() = voiceData
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is VoiceNote) return false
+                return voiceClipId == other.voiceClipId &&
+                        segmentIndex == other.segmentIndex &&
+                        totalSegments == other.totalSegments &&
+                        durationMs == other.durationMs &&
+                        codecMode == other.codecMode &&
+                        voiceData.contentEquals(other.voiceData) &&
+                        ephemeralTtlSeconds == other.ephemeralTtlSeconds
+            }
+            override fun hashCode(): Int {
+                var result = voiceClipId.hashCode()
+                result = 31 * result + segmentIndex
+                result = 31 * result + totalSegments
+                result = 31 * result + durationMs
+                result = 31 * result + codecMode.toInt()
+                result = 31 * result + voiceData.contentHashCode()
+                result = 31 * result + ephemeralTtlSeconds.hashCode()
+                return result
+            }
+        }
     }
 
     data class FrameMessage(
@@ -567,6 +605,44 @@ object BinaryFrameCodec {
         return packPlaintext(TYPE_LOCATION_PIN, seqNum, ackNum, timestampUTC, buffer.array())
     }
 
+    fun encodeVoiceNote(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        voiceClipId: Long,
+        segmentIndex: Int,
+        totalSegments: Int,
+        durationMs: Int,
+        codecMode: Byte,
+        voiceBytes: ByteArray,
+        ephemeralTtlSeconds: Long = 0L
+    ): ByteArray {
+        val voiceData = voiceBytes
+        require(segmentIndex in 0..2) { "Segment index must be 0..2, got $segmentIndex" }
+        require(totalSegments in 1..3) { "Total segments must be 1..3, got $totalSegments" }
+        require(segmentIndex < totalSegments) { "Segment index $segmentIndex >= total segments $totalSegments" }
+        require(voiceData.size <= T9_MAX_VOICE_SIZE) {
+            "Voice data size ${voiceData.size} exceeds maximum $T9_MAX_VOICE_SIZE bytes"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.putLong(voiceClipId)
+        buffer.put(segmentIndex.toByte())
+        buffer.put(totalSegments.toByte())
+        buffer.putShort(durationMs.toShort())
+        buffer.put(codecMode)
+        buffer.putInt(ephemeralTtlSeconds.toInt())
+        buffer.putShort(voiceData.size.toShort())
+        buffer.put(voiceData)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_VOICE_NOTE, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
     private fun packPlaintext(
         msgType: Byte,
         seqNum: Int,
@@ -789,6 +865,32 @@ object BinaryFrameCodec {
                         }
                     }
                     DecodedPayload.LocationPin(lat, lon, alt, acc, String(noteBytes, Charsets.UTF_8), ttl)
+                }
+                TYPE_VOICE_NOTE -> {
+                    require(buffer.remaining() >= T9_HEADER_SIZE) {
+                        "Malformed voice note payload: expected at least $T9_HEADER_SIZE bytes"
+                    }
+                    val clipId = buffer.long
+                    val segIdx = buffer.get().toInt() and 0xFF
+                    val totSeg = buffer.get().toInt() and 0xFF
+                    val durMs = buffer.short.toInt() and 0xFFFF
+                    val mode = buffer.get()
+                    val ttl = buffer.int.toLong() and 0xFFFFFFFFL
+                    val dataLen = buffer.short.toInt() and 0xFFFF
+                    require(dataLen in 0..T9_MAX_VOICE_SIZE && dataLen <= buffer.remaining()) {
+                        "Invalid voice data length: $dataLen (remaining: ${buffer.remaining()})"
+                    }
+                    val voiceBytes = ByteArray(dataLen)
+                    buffer.get(voiceBytes)
+                    DecodedPayload.VoiceNote(
+                        voiceClipId = clipId,
+                        segmentIndex = segIdx,
+                        totalSegments = totSeg,
+                        durationMs = durMs,
+                        codecMode = mode,
+                        voiceData = voiceBytes,
+                        ephemeralTtlSeconds = ttl
+                    )
                 }
                 else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
             }

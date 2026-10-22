@@ -168,7 +168,9 @@ data class MessageEntity(
     val senderName: EncryptedText? = null,
     val ephemeralTtlSeconds: EncryptedLong = EncryptedLong(0L, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "ephemeralTtlSeconds"),
     val expiresAtTimestamp: EncryptedLong? = null,
-    val reaction: EncryptedText? = null
+    val reaction: EncryptedText? = null,
+    val voiceBytes: EncryptedBlob? = null,
+    val voiceDurationMs: Int = 0
 ) {
     companion object {
         fun computeMessageRowId(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): String =
@@ -200,7 +202,9 @@ data class MessageEntity(
         senderName: String? = null,
         ephemeralTtlSeconds: Long = 0L,
         expiresAtTimestamp: Long? = null,
-        reaction: String? = null
+        reaction: String? = null,
+        voiceBytes: ByteArray? = null,
+        voiceDurationMs: Int = 0
     ) : this(
         id = id,
         contactId = contactId,
@@ -238,7 +242,11 @@ data class MessageEntity(
         },
         reaction = reaction?.let {
             EncryptedText(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "reaction")
-        }
+        },
+        voiceBytes = voiceBytes?.let {
+            EncryptedBlob(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "voiceBytes")
+        },
+        voiceDurationMs = voiceDurationMs
     )
 
     @Ignore
@@ -284,7 +292,58 @@ data class MessageEntity(
         senderName = senderName,
         ephemeralTtlSeconds = ephemeralTtlSeconds,
         expiresAtTimestamp = expiresAtTimestamp,
-        reaction = reaction
+        reaction = reaction,
+        voiceBytes = null,
+        voiceDurationMs = 0
+    )
+
+    @Ignore
+    constructor(
+        id: Long = 0,
+        contactId: String,
+        isOutgoing: Boolean,
+        seqEpoch: Int = 0,
+        seqNum: Int,
+        ackNum: Int = 0,
+        timestamp: Long = System.currentTimeMillis(),
+        voiceBytes: ByteArray,
+        voiceDurationMs: Int,
+        status: String = "PENDING",
+        retryCount: Int = 0,
+        lastAttemptTimestamp: Long = 0L,
+        ackTarget: ByteArray? = null,
+        ackRatchetKey: ByteArray? = null,
+        slotTarget: ByteArray? = null,
+        slotEdSeed: ByteArray? = null,
+        senderMemberId: String? = null,
+        senderName: String? = null,
+        ephemeralTtlSeconds: Long = 0L,
+        expiresAtTimestamp: Long? = null,
+        reaction: String? = null
+    ) : this(
+        id = id,
+        contactId = contactId,
+        isOutgoing = isOutgoing,
+        seqEpoch = seqEpoch,
+        seqNum = seqNum,
+        ackNum = ackNum,
+        timestamp = timestamp,
+        textContent = null as String?,
+        imageBytes = null,
+        status = status,
+        retryCount = retryCount,
+        lastAttemptTimestamp = lastAttemptTimestamp,
+        ackTarget = ackTarget,
+        ackRatchetKey = ackRatchetKey,
+        slotTarget = slotTarget,
+        slotEdSeed = slotEdSeed,
+        senderMemberId = senderMemberId,
+        senderName = senderName,
+        ephemeralTtlSeconds = ephemeralTtlSeconds,
+        expiresAtTimestamp = expiresAtTimestamp,
+        reaction = reaction,
+        voiceBytes = voiceBytes,
+        voiceDurationMs = voiceDurationMs
     )
 
     init {
@@ -315,6 +374,7 @@ data class MessageEntity(
         checkLong(ephemeralTtlSeconds, "ephemeralTtlSeconds")
         checkLong(expiresAtTimestamp, "expiresAtTimestamp")
         checkText(reaction, "reaction")
+        checkBlob(voiceBytes, "voiceBytes")
     }
 
     val rawTextContent: String? get() = textContent?.raw
@@ -326,6 +386,7 @@ data class MessageEntity(
     val rawEphemeralTtlSeconds: Long get() = ephemeralTtlSeconds.raw
     val rawExpiresAtTimestamp: Long? get() = expiresAtTimestamp?.raw
     val rawReaction: String? get() = reaction?.raw
+    val rawVoiceBytes: ByteArray? get() = voiceBytes?.raw
 }
 
 @Entity(
@@ -940,8 +1001,8 @@ interface MessageDao {
         }
     }
 
-    @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage, reaction = NULL WHERE id = :id")
-    suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?)
+    @Query("UPDATE messages SET textContent = :wipedText, imageBytes = :wipedImage, voiceBytes = :wipedVoice, reaction = NULL WHERE id = :id")
+    suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?, wipedVoice: EncryptedBlob? = null)
 
     @Query("UPDATE messages SET reaction = :reaction WHERE id = :id")
     suspend fun updateMessageReactionById(id: Long, reaction: EncryptedText?)

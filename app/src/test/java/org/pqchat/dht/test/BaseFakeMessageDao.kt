@@ -184,10 +184,20 @@ open class BaseFakeMessageDao : MessageDao {
     override suspend fun getUnreadEphemeralMessagesForContact(contactId: String): List<MessageEntity> =
         messages.filter { it.contactId == contactId && it.rawEphemeralTtlSeconds > 0 && it.expiresAtTimestamp == null }
 
-    override suspend fun wipeMessageContent(id: Long, wipedText: EncryptedText?, wipedImage: EncryptedBlob?) {
+    override suspend fun wipeMessageContent(
+        id: Long,
+        wipedText: EncryptedText?,
+        wipedImage: EncryptedBlob?,
+        wipedVoice: EncryptedBlob?
+    ) {
         val idx = messages.indexOfFirst { it.id == id }
         if (idx >= 0) {
-            messages[idx] = messages[idx].copy(textContent = wipedText, imageBytes = wipedImage)
+            messages[idx] = messages[idx].copy(
+                textContent = wipedText,
+                imageBytes = wipedImage,
+                voiceBytes = wipedVoice,
+                reaction = null
+            )
         }
     }
 

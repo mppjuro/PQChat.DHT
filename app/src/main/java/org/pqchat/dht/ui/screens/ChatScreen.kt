@@ -1,9 +1,12 @@
 package org.pqchat.dht.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -91,6 +94,25 @@ fun ChatScreen(
     val ephemeralTtlSeconds by viewModel.ephemeralTtlSeconds.collectAsState()
     var showEphemeralMenu by remember { mutableStateOf(false) }
     var showLocationPinDialog by remember { mutableStateOf(false) }
+
+    val isRecordingVoice by viewModel.isRecordingVoice.collectAsState()
+    val recordingAmplitude by viewModel.recordingAmplitude.collectAsState()
+    val recordingDurationMs by viewModel.recordingDurationMs.collectAsState()
+    val recordingBytesCount by viewModel.recordingBytesCount.collectAsState()
+    val recordingFramesCount by viewModel.recordingFramesCount.collectAsState()
+    val voiceMaxFrames by viewModel.voiceMaxFrames.collectAsState()
+    val playingMessageId by viewModel.playingMessageId.collectAsState()
+    val playbackProgress by viewModel.playbackProgress.collectAsState()
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.startVoiceRecording()
+        } else {
+            Toast.makeText(context, "Microphone permission required for PTT voice notes", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
@@ -500,60 +522,213 @@ fun ChatScreen(
                             }
                         }
 
-                        // Location pin / offline safety status button (single-frame 900B BEP 44 micro-payload)
-                        IconButton(
-                            onClick = { showLocationPinDialog = true },
-                            modifier = Modifier
-                                .size(40.dp)
-                                .testTag("chat_location_pin_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Place,
-                                contentDescription = "Location Pin",
-                                tint = ElectricGreen
-                            )
-                        }
-
-                        OutlinedTextField(
-                            value = textInput,
-                            onValueChange = { textInput = it },
-                            placeholder = { Text("Message (encrypted DHT frame)...", color = appColors.textSecondary) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 8.dp)
-                                .testTag("chat_message_input"),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = appColors.primary,
-                                unfocusedBorderColor = appColors.border,
-                                focusedTextColor = appColors.textPrimary,
-                                unfocusedTextColor = appColors.textPrimary,
-                                focusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f),
-                                unfocusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f)
-                            ),
-                            shape = RoundedCornerShape(24.dp),
-                            maxLines = 4
-                        )
-
-                        IconButton(
-                            onClick = {
-                                if (textInput.isNotBlank()) {
-                                    viewModel.sendMessage(textInput)
-                                    textInput = ""
+                        if (isRecordingVoice) {
+                            // Push-To-Talk Voice Recording HUD
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Cancel / Trash button
+                                IconButton(
+                                    onClick = { viewModel.stopAndSendVoiceRecording(cancel = true) },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .testTag("chat_voice_cancel_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Cancel voice note",
+                                        tint = CrimsonDanger
+                                    )
                                 }
-                            },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("chat_send_button"),
-                            colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = appColors.primary,
-                                contentColor = Color.Black
+
+                                // Pulsing red recording dot
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(CrimsonDanger)
+                                )
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Dynamic Waveform Audio Visualization & Byte/Frame Counter
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(20.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val barCount = 18
+                                        for (i in 0 until barCount) {
+                                            val phase = kotlin.math.sin((i * 0.4) + (recordingDurationMs / 100.0)).toFloat()
+                                            val rawH = 4f + (recordingAmplitude * 16f) * (0.6f + 0.4f * phase.coerceAtLeast(0f))
+                                            val clampedH = rawH.coerceIn(3f, 20f).dp
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(clampedH)
+                                                    .clip(RoundedCornerShape(1.dp))
+                                                    .background(if (recordingAmplitude > 0.05f) ElectricGreen else appColors.primary)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(2.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        val durSec = recordingDurationMs / 1000
+                                        val durSub = (recordingDurationMs % 1000) / 100
+                                        Text(
+                                            text = "${durSec}.${durSub}s",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = CrimsonDanger,
+                                            fontWeight = FontWeight.Bold
+                                        )
+
+                                        val maxAllowedBytes = voiceMaxFrames * 840
+                                        Text(
+                                            text = "${recordingBytesCount} B / ${maxAllowedBytes} B • Frame ${recordingFramesCount}/${voiceMaxFrames}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            color = appColors.textPrimary
+                                        )
+                                    }
+                                }
+
+                                // Frame budget toggle (1 frame = 5s, 3 frames = 15s)
+                                TextButton(
+                                    onClick = {
+                                        val nextBudget = if (voiceMaxFrames == 1) 3 else 1
+                                        viewModel.setVoiceMaxFrames(nextBudget)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("chat_voice_budget_toggle")
+                                ) {
+                                    Text(
+                                        text = "${voiceMaxFrames}F",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (voiceMaxFrames == 1) ElectricGreen else AmberWarning
+                                    )
+                                }
+
+                                // Send Voice Note button
+                                IconButton(
+                                    onClick = { viewModel.stopAndSendVoiceRecording(cancel = false) },
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .testTag("chat_voice_send_button"),
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        containerColor = ElectricGreen,
+                                        contentColor = Color.Black
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Send voice note",
+                                        tint = Color.Black
+                                    )
+                                }
+                            }
+                        } else {
+                            // Location pin / offline safety status button (single-frame 900B BEP 44 micro-payload)
+                            IconButton(
+                                onClick = { showLocationPinDialog = true },
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .testTag("chat_location_pin_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Place,
+                                    contentDescription = "Location Pin",
+                                    tint = ElectricGreen
+                                )
+                            }
+
+                            OutlinedTextField(
+                                value = textInput,
+                                onValueChange = { textInput = it },
+                                placeholder = { Text("Message (encrypted DHT frame)...", color = appColors.textSecondary) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 4.dp)
+                                    .testTag("chat_message_input"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = appColors.primary,
+                                    unfocusedBorderColor = appColors.border,
+                                    focusedTextColor = appColors.textPrimary,
+                                    unfocusedTextColor = appColors.textPrimary,
+                                    focusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f),
+                                    unfocusedContainerColor = appColors.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                shape = RoundedCornerShape(24.dp),
+                                maxLines = 4
                             )
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "Send",
-                                tint = Color.Black
-                            )
+
+                            // Push-To-Talk Microphone button
+                            IconButton(
+                                onClick = {
+                                    val hasPermission = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+
+                                    if (hasPermission) {
+                                        viewModel.startVoiceRecording()
+                                    } else {
+                                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .testTag("chat_voice_record_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Push-To-Talk Voice Note",
+                                    tint = ElectricGreen
+                                )
+                            }
+
+                            if (textInput.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = {
+                                        if (textInput.isNotBlank()) {
+                                            viewModel.sendMessage(textInput)
+                                            textInput = ""
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .testTag("chat_send_button"),
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        containerColor = appColors.primary,
+                                        contentColor = Color.Black
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = "Send",
+                                        tint = Color.Black
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -585,7 +760,7 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Wymiana klucza ML-KEM w toku...",
+                            text = "ML-KEM key exchange in progress...",
                             style = MaterialTheme.typography.labelMedium,
                             color = AmberWarning,
                             fontWeight = FontWeight.SemiBold
@@ -649,7 +824,10 @@ fun ChatScreen(
                         message = msg,
                         onImageClick = { bytes -> fullscreenImageBytes = bytes },
                         onResend = { viewModel.resendMessage(msg.id) },
-                        onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji) }
+                        onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji) },
+                        onPlayVoice = { vmsg -> vmsg.rawVoiceBytes?.let { viewModel.playVoiceNote(vmsg.id, it) } },
+                        isPlayingVoice = (playingMessageId == msg.id),
+                        voiceProgress = if (playingMessageId == msg.id) playbackProgress else 0f
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
@@ -971,7 +1149,10 @@ fun MessageBubble(
     message: MessageEntity,
     onImageClick: ((ByteArray) -> Unit)? = null,
     onResend: (() -> Unit)? = null,
-    onReactionClick: ((String) -> Unit)? = null
+    onReactionClick: ((String) -> Unit)? = null,
+    onPlayVoice: ((MessageEntity) -> Unit)? = null,
+    isPlayingVoice: Boolean = false,
+    voiceProgress: Float = 0f
 ) {
     val context = LocalContext.current
     val appColors = LocalAppColors.current
@@ -1019,6 +1200,109 @@ fun MessageBubble(
                         color = CryptoPurple,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                // Ultra-Low-Bitrate Micro-Voice Note (TYPE_VOICE_NOTE = 0x09)
+                message.rawVoiceBytes?.let { voiceBytes ->
+                    Surface(
+                        color = if (isOut) appColors.primary.copy(alpha = 0.12f) else appColors.secondary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (isOut) appColors.primary.copy(alpha = 0.35f) else appColors.secondary.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("voice_note_bubble_${message.id}")
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                FilledIconButton(
+                                    onClick = { onPlayVoice?.invoke(message) },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .testTag("voice_note_play_button_${message.id}"),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = if (isPlayingVoice) CrimsonDanger else if (isOut) appColors.primary else appColors.secondary,
+                                        contentColor = Color.Black
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPlayingVoice) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isPlayingVoice) "Pause" else "Play Voice Note",
+                                        tint = if (isPlayingVoice) Color.White else Color.Black,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(24.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val barCount = 20
+                                        for (i in 0 until barCount) {
+                                            val barFraction = i.toFloat() / barCount.toFloat()
+                                            val isPast = isPlayingVoice && barFraction <= voiceProgress
+                                            val seed = if (voiceBytes.isNotEmpty()) (voiceBytes[i % voiceBytes.size].toInt() and 0xFF) else 128
+                                            val barHeight = (6 + (seed % 18)).dp
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(3.dp)
+                                                    .height(barHeight)
+                                                    .clip(RoundedCornerShape(1.5.dp))
+                                                    .background(
+                                                        if (isPast) CrimsonDanger
+                                                        else if (isOut) appColors.primary.copy(alpha = 0.7f)
+                                                        else appColors.secondary.copy(alpha = 0.7f)
+                                                    )
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val durSec = (message.voiceDurationMs / 1000).coerceAtLeast(1)
+                                        val timeDisplay = if (isPlayingVoice) {
+                                            val currentSec = (durSec * voiceProgress).toInt()
+                                            String.format(Locale.US, "%d:%02d / %d:%02d", currentSec / 60, currentSec % 60, durSec / 60, durSec % 60)
+                                        } else {
+                                            String.format(Locale.US, "%d:%02d", durSec / 60, durSec % 60)
+                                        }
+
+                                        Text(
+                                            text = timeDisplay,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = appColors.textPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+
+                                        val dhtFrames = ((voiceBytes.size + 839) / 840).coerceIn(1, 3)
+                                        Text(
+                                            text = "PTT • ${voiceBytes.size} B (${dhtFrames} Frame${if (dhtFrames > 1) "s" else ""})",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontSize = 9.sp,
+                                            color = appColors.textSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                 }
 

@@ -271,12 +271,12 @@ According to BitTorrent BEP 44, the total size of the value field `'v'` after Be
 |                                                               |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-1. `MsgType` (1 B, UInt8): Message type identifier (`0x01`–`0x08`).
+1. `MsgType` (1 B, UInt8): Message type identifier (`0x01`–`0x09`).
 2. `SeqNum` (2 B, UInt16 Big-Endian): Sender monotonic sequence counter $Counter_{out}$.
 3. `AckNum` (2 B, UInt16 Big-Endian): Last acknowledged recipient sequence number.
 4. `TimestampUTC` (8 B, Int64 Big-Endian): Unix epoch transmission timestamp in milliseconds.
 
-### 7.4. Complete Bit and Byte Specification for Types 0x01 to 0x08
+### 7.4. Complete Bit and Byte Specification for Types 0x01 to 0x09
 
 Total available space after the 13-byte header is $872 - 13 = 859\text{ bytes}$.
 
@@ -398,6 +398,23 @@ Total available space after the 13-byte header is $872 - 13 = 859\text{ bytes}$.
   * `MAGIC_EPHEMERAL` (8 B, UInt64 Big-Endian): Constant `0x5051435F4550484DL` ("PQC_EPHM").
   * `EphemeralTtlSeconds` (4 B, UInt32 Big-Endian): Expiration time-to-live in seconds.
 * `CSPRNG Noise Padding`: Padding to 859 bytes ($829 - P$ or $817 - P$ bytes).
+
+#### Type 0x09: Ultra-Low-Bitrate Micro-Voice Note (`TYPE_VOICE_NOTE`)
+```
++──────────────┬────────────┬─────────────┬─────────────┬───────────┬──────────────┬──────────────┬─────────────┬──────────────+
+| VoiceClipId  | SegmentIdx | TotalSegs   | DurationMs  | CodecMode | EphemeralTTL | VoiceDataLen | Voice Bytes | CSPRNG Noise |
+| 8 bytes (BE) |   1 byte   |   1 byte    | 2 bytes BE  |  1 byte   |  4 bytes BE  |  2 bytes BE  |   V bytes   | 840 - V bytes|
++──────────────┴────────────┴─────────────┴─────────────┴───────────┴──────────────┴──────────────┴─────────────┴──────────────+
+```
+* `VoiceClipId` (8 B, Int64 Big-Endian): Unique 64-bit random identifier for the voice recording clip.
+* `SegmentIndex` (1 B, UInt8): 0-based segment sequence index ($0 \le SegmentIndex \le 2$).
+* `TotalSegments` (1 B, UInt8): Total segments for this voice clip ($1 \le TotalSegments \le 3$).
+* `DurationMs` (2 B, UInt16 Big-Endian): Duration of this audio segment in milliseconds.
+* `CodecMode` (1 B, UInt8): Codec mode identifier (`0x01` = `CODEC_MODE_LPC10_COMPACT`, 8 kHz mono 16-bit PCM, 25 ms frame = 200 samples, 4 bytes/frame = 1280 bps / 160 B/s).
+* `EphemeralTtlSeconds` (4 B, UInt32 Big-Endian): Ephemeral message time-to-live in seconds (0 = persistent until manually deleted).
+* `VoiceDataLength` ($V$, 2 B, UInt16 Big-Endian): Number of compressed parametric voice bytes in this segment ($V \le 840$).
+* `Voice Bytes` ($V$ B): Raw stream of 4-byte parametric vocoder frames (up to 840 bytes = 210 frames = ~5.25 seconds per BEP 44 frame). Across 3 segments, allows up to 2520 bytes = 630 frames = ~15.75 seconds of speech.
+* `CSPRNG Noise Padding` ($840 - V$ B): Cryptographically secure random padding ensuring rigid 859-byte inner payload size.
 
 ---
 

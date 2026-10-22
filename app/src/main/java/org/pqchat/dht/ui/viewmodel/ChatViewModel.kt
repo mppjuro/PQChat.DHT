@@ -716,8 +716,135 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _statusNotification.value = null
     }
 
+    val voiceRecorder = org.pqchat.dht.media.voice.VoiceRecorder(viewModelScope)
+    val voicePlayer = org.pqchat.dht.media.voice.VoicePlayer(viewModelScope)
+
+    private val _isRecordingVoice = MutableStateFlow(false)
+    val isRecordingVoice: StateFlow<Boolean> = _isRecordingVoice.asStateFlow()
+
+    private val _recordingAmplitude = MutableStateFlow(0f)
+    val recordingAmplitude: StateFlow<Float> = _recordingAmplitude.asStateFlow()
+
+    private val _recordingDurationMs = MutableStateFlow(0)
+    val recordingDurationMs: StateFlow<Int> = _recordingDurationMs.asStateFlow()
+
+    private val _recordingBytesCount = MutableStateFlow(0)
+    val recordingBytesCount: StateFlow<Int> = _recordingBytesCount.asStateFlow()
+
+    private val _recordingFramesCount = MutableStateFlow(1)
+    val recordingFramesCount: StateFlow<Int> = _recordingFramesCount.asStateFlow()
+
+    private val _voiceMaxFrames = MutableStateFlow(3)
+    val voiceMaxFrames: StateFlow<Int> = _voiceMaxFrames.asStateFlow()
+
+    private val _playingMessageId = MutableStateFlow<Long?>(null)
+    val playingMessageId: StateFlow<Long?> = _playingMessageId.asStateFlow()
+
+    private val _playbackProgress = MutableStateFlow(0f)
+    val playbackProgress: StateFlow<Float> = _playbackProgress.asStateFlow()
+
+    fun setVoiceMaxFrames(maxFrames: Int) {
+        _voiceMaxFrames.value = maxFrames.coerceIn(1, 3)
+    }
+
+    fun startVoiceRecording(maxFrames: Int = _voiceMaxFrames.value): Boolean {
+        if (_isRecordingVoice.value) return false
+        _recordingDurationMs.value = 0
+        _recordingBytesCount.value = 0
+        _recordingFramesCount.value = 1
+        _recordingAmplitude.value = 0f
+
+        val started = voiceRecorder.startRecording(
+            maxFrames = maxFrames,
+            onAmplitude = { amp ->
+                _recordingAmplitude.value = amp
+            },
+            onProgress = { dur, bytes, frames ->
+                _recordingDurationMs.value = dur
+                _recordingBytesCount.value = bytes
+                _recordingFramesCount.value = frames
+            },
+            onAutoStop = {
+                stopAndSendVoiceRecording(cancel = false)
+            }
+        )
+
+        if (started) {
+            _isRecordingVoice.value = true
+        }
+        return started
+    }
+
+    fun stopAndSendVoiceRecording(cancel: Boolean = false) {
+        if (!_isRecordingVoice.value) return
+        _isRecordingVoice.value = false
+        _recordingAmplitude.value = 0f
+
+        if (cancel) {
+            voiceRecorder.cancel()
+            _statusNotification.value = "Voice note discarded"
+            return
+        }
+
+        val result = voiceRecorder.stop()
+        if (result == null || result.pcm16Samples.isEmpty()) {
+            _statusNotification.value = "No audio recorded"
+            return
+        }
+
+        val contactId = _selectedContactId.value ?: return
+        val ttl = _ephemeralTtlSeconds.value
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Compressing voice note (LPC-10 / 1280 bps)..."
+            val voiceBytes = org.pqchat.dht.media.voice.VoiceCodec.encode(result.pcm16Samples)
+            val frames = ((voiceBytes.size + org.pqchat.dht.crypto.BinaryFrameCodec.T9_MAX_VOICE_SIZE - 1) / org.pqchat.dht.crypto.BinaryFrameCodec.T9_MAX_VOICE_SIZE).coerceIn(1, 3)
+            _statusNotification.value = "Sending PTT voice note (${voiceBytes.size} B • $frames frame${if (frames > 1) "s" else ""}) to DHT..."
+
+            val group = repository.getGroup(contactId)
+            val success = if (group != null) {
+                repository.sendGroupVoiceNote(contactId, voiceBytes, result.durationMs, ttl)
+            } else {
+                repository.sendVoiceNote(contactId, voiceBytes, result.durationMs, ttl)
+            }
+
+            if (success) {
+                _statusNotification.value = "PTT voice note sent ($frames DHT frame${if (frames > 1) "s" else ""})"
+            } else {
+                _statusNotification.value = "Failed to send voice note to DHT"
+            }
+        }
+    }
+
+    fun playVoiceNote(messageId: Long, voiceBytes: ByteArray) {
+        if (_playingMessageId.value == messageId) {
+            stopVoiceNote()
+            return
+        }
+        _playingMessageId.value = messageId
+        _playbackProgress.value = 0f
+        voicePlayer.play(
+            voiceBytes = voiceBytes,
+            onProgress = { prog ->
+                _playbackProgress.value = prog
+            },
+            onCompletion = {
+                _playingMessageId.value = null
+                _playbackProgress.value = 0f
+            }
+        )
+    }
+
+    fun stopVoiceNote() {
+        voicePlayer.stop()
+        _playingMessageId.value = null
+        _playbackProgress.value = 0f
+    }
+
     override fun onCleared() {
         super.onCleared()
+        voiceRecorder.cancel()
+        voicePlayer.stop()
         bobRepublishJob?.cancel()
         resetHandshakeState()
         if (app == null) {

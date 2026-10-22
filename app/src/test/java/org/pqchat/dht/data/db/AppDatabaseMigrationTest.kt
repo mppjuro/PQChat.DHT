@@ -783,7 +783,7 @@ class AppDatabaseMigrationTest {
 
         // Intra-row column-swap attack resistance
         assertThrows(GeneralSecurityException::class.java) {
-            KeystoreCrypto.decryptString(migratedMsg.reaction!!, "messages", expectedMsgRowId, "textContent")
+            KeystoreCrypto.decryptString(migratedMsg.reaction, "messages", expectedMsgRowId, "textContent")
         }
         assertThrows(GeneralSecurityException::class.java) {
             KeystoreCrypto.decryptLong(migratedMsg.ephemeralTtlSeconds, "messages", expectedMsgRowId, "expiresAtTimestamp")
@@ -799,6 +799,30 @@ class AppDatabaseMigrationTest {
         assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND_V2, updatedChunk.data[0])
         val decData = KeystoreCrypto.decrypt(updatedChunk.data, "chunks", "transfer_abc_0", "data")
         assertArrayEquals(rawChunkData, decData)
+    }
+
+    @Test
+    fun testMigration14To15AddsVoiceColumns() {
+        val executedSql = mutableListOf<String>()
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                when (method.name) {
+                    "execSQL" -> {
+                        val sql = args[0] as String
+                        executedSql.add(sql)
+                        null
+                    }
+                    else -> null
+                }
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_14_15.migrate(dbProxy)
+
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN voiceBytes BLOB") })
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN voiceDurationMs INTEGER NOT NULL DEFAULT 0") })
     }
 }
 

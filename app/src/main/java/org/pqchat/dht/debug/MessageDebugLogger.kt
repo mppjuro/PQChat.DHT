@@ -402,6 +402,17 @@ object MessageDebugLogger {
                 "note" to p.note,
                 "description" to "Single-frame micro-payload: Geographic coordinates pin / Security status"
             )
+            is BinaryFrameCodec.DecodedPayload.VoiceNote -> linkedMapOf<String, Any?>(
+                "type" to "VoiceNote (0x09)",
+                "voiceClipId" to p.voiceClipId,
+                "segmentIndex" to p.segmentIndex,
+                "totalSegments" to p.totalSegments,
+                "durationMs" to p.durationMs,
+                "codecMode" to p.codecMode,
+                "voiceByteLength" to p.voiceData.size,
+                "ephemeralTtlSeconds" to p.ephemeralTtlSeconds,
+                "description" to "Ultra-low-bitrate PTT micro-voice note over BEP 44"
+            )
         }
 
         val pqcAnalysis = when (frameMsg.msgType) {
@@ -437,6 +448,7 @@ object MessageDebugLogger {
             BinaryFrameCodec.TYPE_GROUP_CONTROL -> "GROUP CONTROL"
             BinaryFrameCodec.TYPE_REACTION -> "EMOJI REACTION"
             BinaryFrameCodec.TYPE_LOCATION_PIN -> "LOCATION PIN"
+            BinaryFrameCodec.TYPE_VOICE_NOTE -> "VOICE NOTE"
             else -> "TYPE 0x%02X".format(frameMsg.msgType)
         }
 
