@@ -166,6 +166,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📚 Documentation
 
+- [`dfaea3f`](https://github.com/mppjuro/PQChat.DHT/commit/dfaea3fedcfd12d8874d1d94c0fac67b93eb6d49) (2026-10-22) — **formal**: synchronize technical specs, threat model, and formal proofs to 32 ProVerif lemmas
 - [`47bc9af`](https://github.com/mppjuro/PQChat.DHT/commit/47bc9af3da943a0a548beae57bb3781c76b187ea) (2026-10-21) — clean changelog automation, add group proverif docs, and harden lint and room schema CI
 - [`c093b39`](https://github.com/mppjuro/PQChat.DHT/commit/c093b39f16686d71986e27bf095b8c94a1d53acf) (2026-10-12) — README with project details and instructions
 - [`3c8c26e`](https://github.com/mppjuro/PQChat.DHT/commit/3c8c26e6badbecc4fda6afba53595987e78c0c68) (2026-10-08) — add threat model, DHT correlation simulator, and upgrade CI actions to Node 24
