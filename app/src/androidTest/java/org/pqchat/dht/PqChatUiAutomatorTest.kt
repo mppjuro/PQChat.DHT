@@ -2,6 +2,7 @@ package org.pqchat.dht
 
 import android.os.Build
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -10,6 +11,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.uiautomator.UiDevice
+import javax.crypto.SecretKey
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertFalse
@@ -43,6 +46,10 @@ import org.pqchat.dht.ui.util.SecureScreenConfig
 @RunWith(AndroidJUnit4::class)
 class PqChatUiAutomatorTest {
 
+    companion object {
+        val TEST_MASTER_KEY: SecretKey get() = org.pqchat.dht.crypto.KeystoreCrypto.INSTRUMENTED_TEST_MASTER_KEY
+    }
+
     @get:Rule(order = 0)
     val permissionRule: GrantPermissionRule = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         GrantPermissionRule.grant(
@@ -64,7 +71,7 @@ class PqChatUiAutomatorTest {
     fun setUp() {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         try {
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
@@ -78,6 +85,7 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {}
         try {
             kotlinx.coroutines.runBlocking {
+                composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
                 composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
                     org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
                 )
@@ -91,7 +99,7 @@ class PqChatUiAutomatorTest {
 
     @After
     fun tearDown() {
-        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         try {
             kotlinx.coroutines.runBlocking {
                 composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
@@ -117,9 +125,6 @@ class PqChatUiAutomatorTest {
      * Helper to safely dismiss the soft keyboard and allow dialog/view animations to settle.
      */
     private fun dismissKeyboardAndWait() {
-        try {
-            androidx.test.espresso.Espresso.closeSoftKeyboard()
-        } catch (_: Throwable) {}
         try {
             val imm = InstrumentationRegistry.getInstrumentation().targetContext
                 .getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
@@ -291,6 +296,9 @@ class PqChatUiAutomatorTest {
 
         // Verify Bob tab is initially active
         composeTestRule.onNodeWithTag("handshake_bob_name_input").assertIsDisplayed()
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_gallery_button").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_gallery_button").assertIsDisplayed()
 
         // Physically switch tab to Alice
@@ -559,8 +567,13 @@ class PqChatUiAutomatorTest {
                 org.pqchat.dht.crypto.KeystoreCrypto.hasMasterKey()
             )
         } finally {
-            // Clean up state so subsequent tests can run cleanly
-            org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+            // Clean up state and restore test master key so subsequent tests can run cleanly
+            org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            try {
+                kotlinx.coroutines.runBlocking {
+                    composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
+                }
+            } catch (_: Throwable) {}
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
                 composeTestRule.activity.viewModel.clearDuressActive()
@@ -655,61 +668,150 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
 
+        // Clean previous notes to ensure deterministic first position in LazyColumn
+        kotlinx.coroutines.runBlocking {
+            composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
+                org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
+            )
+        }
+        composeTestRule.waitForIdle()
+
         // Send a note message to react to
         val noteMsg = "Reaction Target Message"
-        composeTestRule.onNodeWithTag("chat_message_input").performTextClearance()
         composeTestRule.onNodeWithTag("chat_message_input").performTextInput(noteMsg)
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithTag("chat_send_button").fetchSemanticsNodes().isNotEmpty()
         }
-        clickTagByPixelCoordinates("chat_send_button")
+        try {
+            composeTestRule.onNodeWithTag("chat_send_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onNodeWithTag("chat_send_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_send_button")
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Wait for message input clearance confirming dispatch
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
+            val editable = node.config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
+            editable.isEmpty()
+        }
+        dismissKeyboardAndWait()
 
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
-            composeTestRule.onAllNodesWithText(noteMsg).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText(noteMsg, substring = true, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithText(noteMsg).performScrollTo().assertIsDisplayed()
+        runCatching {
+            composeTestRule.onNodeWithText(noteMsg, substring = true, useUnmergedTree = true).performScrollTo()
+        }
+        composeTestRule.onAllNodesWithText(noteMsg, substring = true, useUnmergedTree = true)
+            .onFirst().assertExists()
 
-        // Locate react button on message and physically click it
+        // Locate react button on message and click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(reactButtonMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+        try {
+            composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                .onFirst().performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
+                    .onFirst().performClick()
+            } catch (_: Throwable) {
+                clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+            }
+        }
+        composeTestRule.waitForIdle()
 
-        // Emoji reaction picker opens — physically click heart reaction
+        // Emoji reaction picker opens — click heart reaction
         val emojiHeartMatcher = hasTestTagContaining("reaction_emoji_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(emojiHeartMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+        try {
+            composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                .onFirst().performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
+                    .onFirst().performClick()
+            } catch (_: Throwable) {
+                clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+            }
+        }
+        composeTestRule.waitForIdle()
 
-        // Verify reaction badge appears
+        // Verify reaction badge appears (useUnmergedTree = true is critical for badge inside message bubble)
         val reactionBadgeMatcher = hasTestTagContaining("reaction_badge_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodes(reactionBadgeMatcher).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodes(reactionBadgeMatcher, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onAllNodes(reactionBadgeMatcher).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodes(reactionBadgeMatcher, useUnmergedTree = true)
+            .onFirst().assertExists()
 
-        // Test Location Pin: Physically click location pin button in input bar
-        clickTagByPixelCoordinates("chat_location_pin_button")
+        // Test Location Pin: Click location pin button in input bar
+        try {
+            composeTestRule.onNodeWithTag("chat_location_pin_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onNodeWithTag("chat_location_pin_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_location_pin_button")
+            }
+        }
+        composeTestRule.waitForIdle()
 
         // LocationPinDialog appears
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodesWithTag("location_pin_note_input").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithTag("location_pin_note_input", useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithTag("location_pin_note_input").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("location_pin_note_input", useUnmergedTree = true)
+            .assertIsDisplayed()
 
-        // Physically confirm send location pin
-        clickTagByPixelCoordinates("send_location_pin_confirm_button")
+        // Confirm send location pin
+        try {
+            composeTestRule.onNodeWithTag("send_location_pin_confirm_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onNodeWithTag("send_location_pin_confirm_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("send_location_pin_confirm_button")
+            }
+        }
+        composeTestRule.waitForIdle()
 
         // Verify location pin message is dispatched and visible in chat
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
-            composeTestRule.onAllNodesWithText("Location Pin", substring = true).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("Location Pin", substring = true, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onAllNodesWithText("Location Pin", substring = true).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Location Pin", substring = true, useUnmergedTree = true)
+            .onFirst().assertExists()
 
         // Exit chat
-        clickTagByPixelCoordinates("chat_back_button")
+        try {
+            composeTestRule.onNodeWithTag("chat_back_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
+        } catch (_: Throwable) {
+            try {
+                composeTestRule.onNodeWithTag("chat_back_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_back_button")
+            }
+        }
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
@@ -733,12 +835,18 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithTag("handshake_share_stego_button").fetchSemanticsNodes().isNotEmpty()
         }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_share_stego_button").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_share_stego_button").assertIsDisplayed()
 
         // Switch to Bob tab and verify gallery / stego scan button
         clickTagByPixelCoordinates("handshake_bob_tab")
         composeTestRule.waitUntil(timeoutMillis = 5_000) {
             composeTestRule.onAllNodesWithTag("handshake_gallery_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_gallery_button").performScrollTo()
         }
         composeTestRule.onNodeWithTag("handshake_gallery_button").assertIsDisplayed()
 

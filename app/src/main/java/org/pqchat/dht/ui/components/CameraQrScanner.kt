@@ -1,5 +1,8 @@
 package org.pqchat.dht.ui.components
 
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.view.ViewGroup
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material3.*
@@ -47,8 +51,54 @@ fun CameraQrScanner(
     modifier: Modifier = Modifier,
     onQrScanned: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptic = LocalHapticFeedback.current
+
+    val hasCameraHardware = remember(context) {
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            val ids = cameraManager?.cameraIdList ?: emptyArray()
+            ids.any { id ->
+                val chars = cameraManager?.getCameraCharacteristics(id)
+                val facing = chars?.get(CameraCharacteristics.LENS_FACING)
+                facing == CameraCharacteristics.LENS_FACING_BACK || facing == CameraCharacteristics.LENS_FACING_FRONT
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    if (!hasCameraHardware) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(360.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DarkSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CameraAlt,
+                    contentDescription = null,
+                    tint = Color.Gray,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Camera scanner unavailable (no camera hardware detected)",
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        return
+    }
 
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var isTorchOn by remember { mutableStateOf(false) }
@@ -85,6 +135,7 @@ fun CameraQrScanner(
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     scaleType = PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 }
 
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
@@ -97,64 +148,66 @@ fun CameraQrScanner(
                         return@addListener
                     }
 
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
-                    }
+                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                    val imageAnalysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
+                    if (cameraProvider.hasCamera(cameraSelector)) {
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = previewView.surfaceProvider
+                        }
 
-                    imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                        if (!hasScanned) {
-                            val decodedText = decodeQrFromImage(imageProxy)
-                            if (decodedText != null && decodedText.isNotBlank()) {
-                                val result = assembler.processScan(decodedText)
-                                when (result) {
-                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.SingleStatic -> {
-                                        hasScanned = true
-                                        previewView.post {
-                                            progressState = null
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onQrScanned(decodedText)
+                        val imageAnalysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+
+                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            if (!hasScanned) {
+                                val decodedText = decodeQrFromImage(imageProxy)
+                                if (decodedText != null && decodedText.isNotBlank()) {
+                                    val result = assembler.processScan(decodedText)
+                                    when (result) {
+                                        is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.SingleStatic -> {
+                                            hasScanned = true
+                                            previewView.post {
+                                                progressState = null
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onQrScanned(decodedText)
+                                            }
                                         }
-                                    }
-                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Progress -> {
-                                        previewView.post {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            progressState = Pair(result.scannedCount, result.totalCount)
+                                        is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Progress -> {
+                                            previewView.post {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                progressState = Pair(result.scannedCount, result.totalCount)
+                                            }
                                         }
-                                    }
-                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Complete -> {
-                                        hasScanned = true
-                                        previewView.post {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            progressState = Pair(result.scannedCount, result.totalCount)
-                                            onQrScanned(result.rawBase64)
+                                        is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Complete -> {
+                                            hasScanned = true
+                                            previewView.post {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                progressState = Pair(result.scannedCount, result.totalCount)
+                                                onQrScanned(result.rawBase64)
+                                            }
                                         }
-                                    }
-                                    is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Error -> {
-                                        // Ignore corrupted frame, keep scanning
+                                        is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Error -> {
+                                            // Ignore corrupted frame, keep scanning
+                                        }
                                     }
                                 }
                             }
+                            imageProxy.close()
                         }
-                        imageProxy.close()
-                    }
 
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                    try {
-                        cameraProvider.unbindAll()
-                        val camera = cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            cameraSelector,
-                            preview,
-                            imageAnalysis
-                        )
-                        cameraControl = camera.cameraControl
-                    } catch (_: Exception) {
-                        // Camera binding exception
+                        try {
+                            cameraProvider.unbindAll()
+                            val camera = cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                cameraSelector,
+                                preview,
+                                imageAnalysis
+                            )
+                            cameraControl = camera.cameraControl
+                        } catch (_: Exception) {
+                            // Camera binding exception
+                        }
                     }
                 }, ContextCompat.getMainExecutor(ctx))
 

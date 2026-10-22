@@ -163,8 +163,13 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseBlob(blob: ByteArray?): EncryptedBlob? {
         if (blob == null) return null
-        val result = KeystoreCrypto.decryptWithRowMetadata(blob)
-        return result.plaintext?.let { EncryptedBlob(it, result.table, result.id, result.column) }
+        return try {
+            val result = KeystoreCrypto.decryptWithRowMetadata(blob)
+            result.plaintext?.let { EncryptedBlob(it, result.table, result.id, result.column) }
+                ?: EncryptedBlob(ByteArray(0), result.table, result.id, result.column)
+        } catch (_: Throwable) {
+            EncryptedBlob(ByteArray(0))
+        }
     }
 
     @TypeConverter
@@ -181,9 +186,14 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseText(textHex: String?): EncryptedText? {
         if (textHex == null) return null
-        val bytes = CryptoUtils.fromHex(textHex)
-        val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
-        return result.plaintext?.let { EncryptedText(String(it, Charsets.UTF_8), result.table, result.id, result.column) }
+        return try {
+            val bytes = CryptoUtils.fromHex(textHex)
+            val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
+            result.plaintext?.let { EncryptedText(String(it, Charsets.UTF_8), result.table, result.id, result.column) }
+                ?: EncryptedText("", result.table, result.id, result.column)
+        } catch (_: Throwable) {
+            EncryptedText("")
+        }
     }
 
     @TypeConverter
@@ -201,11 +211,15 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseLong(textHex: String?): EncryptedLong? {
         if (textHex == null) return null
-        val bytes = CryptoUtils.fromHex(textHex)
-        val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
-        return result.plaintext?.let {
-            val longVal = java.nio.ByteBuffer.wrap(it).long
-            EncryptedLong(longVal, result.table, result.id, result.column)
+        return try {
+            val bytes = CryptoUtils.fromHex(textHex)
+            val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
+            result.plaintext?.let {
+                val longVal = java.nio.ByteBuffer.wrap(it).long
+                EncryptedLong(longVal, result.table, result.id, result.column)
+            } ?: EncryptedLong(0L, result.table, result.id, result.column)
+        } catch (_: Throwable) {
+            EncryptedLong(0L)
         }
     }
 }

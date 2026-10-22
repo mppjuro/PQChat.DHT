@@ -2,7 +2,7 @@ name: Android CI (Fast Tests)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "fix/**", "test/**" ]
   pull_request:
     branches: [ "main" ]
 
@@ -135,12 +135,12 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --info
+          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --warning-mode summary
 
       - name: Dump Test Failure Reports
         if: failure()
         run: |
-          echo "❌ CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
+          echo "[FAILED] CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
           find app/build/reports/androidTests/connected -type f \( -name "*.html" -o -name "*.xml" \) || true
           find app/build/reports/androidTests -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
           find app/build/outputs/androidTest-results -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
@@ -150,11 +150,7 @@ jobs:
         run: |
           echo "## 📱 Instrumented AVD Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -d "app/build/reports/androidTests/connected" ]; then
-            echo "✅ Connected AndroidTest executed on Android API 34 with hardware KVM acceleration." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Connected AndroidTest reports missing." >> $GITHUB_STEP_SUMMARY
-          fi
+          python3 scripts/summarize_test_results.py >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload Instrumented Test Report
         if: always()

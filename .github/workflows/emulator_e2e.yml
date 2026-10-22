@@ -17,7 +17,7 @@ on:
         default: '34'
         type: string
   push:
-    branches: [ "main" ]
+    branches: [ "main", "fix/**", "test/**" ]
     paths:
       - 'app/**'
       - 'tools/e2e_emulator_orchestrator.py'
@@ -90,12 +90,12 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --info
+          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --warning-mode summary
 
       - name: Dump Test Failure Reports
         if: failure()
         run: |
-          echo "❌ CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
+          echo "[FAILED] CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
           find app/build/reports/androidTests/connected -type f \( -name "*.html" -o -name "*.xml" \) || true
           find app/build/reports/androidTests -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
           find app/build/outputs/androidTest-results -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
@@ -120,10 +120,7 @@ jobs:
             echo "ℹ️ Report file build/e2e-screenshots/report.md was not generated." >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 JUnit Instrumented Test Results" >> $GITHUB_STEP_SUMMARY
-          if [ -d "app/build/reports/androidTests/connected" ]; then
-            echo "- ✅ Connected AndroidTest HTML reports successfully generated." >> $GITHUB_STEP_SUMMARY
-          fi
+          python3 scripts/summarize_test_results.py >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload E2E Screenshots & Trace
         if: always()
