@@ -3,7 +3,7 @@ Sybil_Eclipse,naive_capture_rate_pct,100.00,False,False
 Sybil_Eclipse,bucketed_capture_rate_pct,25.00,True,True
 Bit_Flip_Tampering,mutation_rejection_rate_pct,100.00,True,True
 Sequence_Rollback,highest_seq_tombstone_rate_pct,100.00,True,True
-Sequence_Rollback,naive_tombstone_rate_pct,68.00,False,False
+Sequence_Rollback,naive_tombstone_rate_pct,65.00,False,False
 Timing_Observer,top1_acc_f10,4.77,True,True
 Timing_Observer,entropy_ratio_f10,94.50,True,True
 Timing_Observer,top1_acc_f25,6.72,True,True

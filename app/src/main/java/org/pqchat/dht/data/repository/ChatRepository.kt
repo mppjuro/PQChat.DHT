@@ -2239,14 +2239,7 @@ class ChatRepository(
             contact = contactDao.getContactById(contactId) ?: break
         }
 
-        if (!anyProcessed) {
-            checkLookaheadWindowInternal(contactId)
-            val updatedContact = contactDao.getContactById(contactId)
-            if (updatedContact != null && updatedContact.counterIn > contact.counterIn) {
-                anyProcessed = true
-                drainOutboxInternal(contactId, force = true)
-            }
-        } else {
+        if (anyProcessed) {
             drainOutboxInternal(contactId, force = true)
             triggerLookaheadWindowAsync(contactId)
         }
@@ -4814,6 +4807,51 @@ class ChatRepository(
     }
 
     suspend fun retransmitGroupInviteToOfflineMember(groupId: String, memberContactId: String): Boolean {
+        val previousTasks = pendingGroupControls.values.filter {
+            it.groupId == groupId && it.contactId == memberContactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_INVITE
+        }
+        if (previousTasks.isNotEmpty()) {
+            val isSelf = memberContactId == SELF_CONTACT_ID
+            var allSuccess = true
+            for (task in previousTasks) {
+                val ok = if (isStrictPoissonShaping()) {
+                    val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = task.slotTarget,
+                        payload = task.payload,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = task.slotEdSeed,
+                        skipLocalStore = isSelf,
+                        seqNum = task.seqNum,
+                        contactId = task.contactId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(task.slotTarget)
+                            }
+                        }
+                    )
+                    outboundPoissonQueue.enqueue(outboundFrame)
+                    true
+                } else {
+                    val success = dhtLeafNode.putMutable(
+                        target = task.slotTarget,
+                        v = task.payload,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = task.slotEdSeed,
+                        skipLocalStore = isSelf
+                    )
+                    if (success) {
+                        decoyTargetPool.registerPopulatedTarget(task.slotTarget)
+                    }
+                    success
+                }
+                if (!ok) allSuccess = false
+            }
+            return allSuccess
+        }
+
         val group = groupDao?.getGroupById(groupId) ?: return false
         val groupIdBytes = uuidStringToBytes(groupId)
         val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
@@ -4823,15 +4861,6 @@ class ChatRepository(
                 uuidStringToBytes(m.memberId),
                 m.rawMemberName
             )
-        }
-
-        // Cancel previous unconfirmed invite tasks for this member in this group
-        val previousTasks = pendingGroupControls.values.filter {
-            it.groupId == groupId && it.contactId == memberContactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_INVITE
-        }
-        for (task in previousTasks) {
-            org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(task.taskId)
-            pendingGroupControls.remove(task.taskId)
         }
 
         return sendGroupControlInvite(
@@ -4847,18 +4876,54 @@ class ChatRepository(
     }
 
     suspend fun retransmitGroupRekeyToOfflineMember(groupId: String, memberContactId: String): Boolean {
-        val group = groupDao?.getGroupById(groupId) ?: return false
-        val groupIdBytes = uuidStringToBytes(groupId)
-        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
-
-        // Cancel previous unconfirmed rekey tasks for this member in this group
         val previousTasks = pendingGroupControls.values.filter {
             it.groupId == groupId && it.contactId == memberContactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_REKEY
         }
-        for (task in previousTasks) {
-            org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(task.taskId)
-            pendingGroupControls.remove(task.taskId)
+        if (previousTasks.isNotEmpty()) {
+            val isSelf = memberContactId == SELF_CONTACT_ID
+            var allSuccess = true
+            for (task in previousTasks) {
+                val ok = if (isStrictPoissonShaping()) {
+                    val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = task.slotTarget,
+                        payload = task.payload,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = task.slotEdSeed,
+                        skipLocalStore = isSelf,
+                        seqNum = task.seqNum,
+                        contactId = task.contactId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(task.slotTarget)
+                            }
+                        }
+                    )
+                    outboundPoissonQueue.enqueue(outboundFrame)
+                    true
+                } else {
+                    val success = dhtLeafNode.putMutable(
+                        target = task.slotTarget,
+                        v = task.payload,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = task.slotEdSeed,
+                        skipLocalStore = isSelf
+                    )
+                    if (success) {
+                        decoyTargetPool.registerPopulatedTarget(task.slotTarget)
+                    }
+                    success
+                }
+                if (!ok) allSuccess = false
+            }
+            return allSuccess
         }
+
+        val group = groupDao?.getGroupById(groupId) ?: return false
+        val groupIdBytes = uuidStringToBytes(groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
 
         return sendGroupControlRekeyOrInvite(
             contactId = memberContactId,

@@ -252,17 +252,11 @@ class OutboundPoissonQueue {
                 if (q.isNotEmpty()) {
                     currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
                     return q.pollFirst()
-                } else if (targetClass == PacketClass.BACKGROUND_COVER) {
-                    if (coverProvider != null) {
-                        val coverFrame = coverProvider.invoke()
-                        if (coverFrame != null) {
-                            currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
-                            return coverFrame
-                        }
-                    } else if (hasDirect || hasGroup || hasImage) {
-                        // Yield slot to external cover traffic if user queues are active
+                } else if (targetClass == PacketClass.BACKGROUND_COVER && coverProvider != null) {
+                    val coverFrame = coverProvider.invoke()
+                    if (coverFrame != null) {
                         currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
-                        return null
+                        return coverFrame
                     }
                 }
             }

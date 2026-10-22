@@ -127,12 +127,14 @@ class GroupChatRepositoryTest {
         }
         override suspend fun updateOutgoingState(groupId: String, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
             val g = groups[groupId] ?: return
-            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, lastActive = lastActive)
+            val bound = if (chainKeyOut.boundColumn == null) EncryptedBlob(chainKeyOut.raw, "groups", groupId, "myChainKeyOut") else chainKeyOut
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = bound, lastActive = lastActive)
             flow.value = groups.values.toList()
         }
         override suspend fun updateRekeyedState(groupId: String, epoch: Long, counterOut: Int, chainKeyOut: EncryptedBlob, lastActive: Long) {
             val g = groups[groupId] ?: return
-            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = chainKeyOut, groupEpoch = epoch, lastActive = lastActive)
+            val bound = if (chainKeyOut.boundColumn == null) EncryptedBlob(chainKeyOut.raw, "groups", groupId, "myChainKeyOut") else chainKeyOut
+            groups[groupId] = g.copy(myCounterOut = counterOut, myChainKeyOut = bound, groupEpoch = epoch, lastActive = lastActive)
             flow.value = groups.values.toList()
         }
         override suspend fun updateActiveStatus(groupId: String, isActive: Boolean) {
@@ -238,7 +240,7 @@ class GroupChatRepositoryTest {
         // Verify group stored in DB
         val storedGroup = fakeGroupDao.getGroupById(group.groupId)
         assertNotNull("Group must be stored in DB", storedGroup)
-        assertEquals("Cryptographers", storedGroup!!.groupName)
+        assertEquals("Cryptographers", storedGroup!!.rawGroupName)
         assertEquals(1L, storedGroup.groupEpoch)
         assertEquals(0, storedGroup.myCounterOut)
 
@@ -365,8 +367,8 @@ class GroupChatRepositoryTest {
         val bobMsg = bobMessages[0]
         assertEquals("Hello from Alice to the Post-Quantum Group!", bobMsg.rawTextContent)
         assertEquals(groupId, bobMsg.contactId)
-        assertEquals(aliceMemberId, bobMsg.senderMemberId)
-        assertEquals("Alice", bobMsg.senderName)
+        assertEquals(aliceMemberId, bobMsg.rawSenderMemberId)
+        assertEquals("Alice", bobMsg.rawSenderName)
         assertFalse(bobMsg.isOutgoing)
 
         // 5. Verification: DHT record exists under Bob's individual slot
@@ -636,7 +638,7 @@ class GroupChatRepositoryTest {
         fakeGroupDao.updateOutgoingState(
             group.groupId,
             49,
-            EncryptedBlob(CryptoUtils.secureRandomBytes(64), "groups", group.groupId)
+            EncryptedBlob(CryptoUtils.secureRandomBytes(64), "groups", group.groupId, "myChainKeyOut")
         )
 
         // Rotate sender key
@@ -1637,7 +1639,7 @@ class GroupChatRepositoryTest {
         // Verify Bob has joined the group with matching Unicode group name
         val bobGroup = bobGroupDao.getGroupById(group.groupId)
         assertNotNull(bobGroup)
-        assertEquals(groupName, bobGroup!!.groupName)
+        assertEquals(groupName, bobGroup!!.rawGroupName)
 
         // 4. Bob emits Cover-ACK for the retransmitted invite
         assertEquals(1, bobAckQueue.size)

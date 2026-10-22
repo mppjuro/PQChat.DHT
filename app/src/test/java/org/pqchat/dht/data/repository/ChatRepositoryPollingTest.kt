@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import org.pqchat.dht.crypto.BinaryFrameCodec
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.*
+import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.protocol.RatchetChain
 import java.security.Security
@@ -128,7 +129,7 @@ class ChatRepositoryPollingTest {
         val slot1 = RatchetChain.computeLookaheadSlots(seed, 0, windowSize = 2)[1]
         val plaintext1 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Ahead Msg")
         val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1, slot1.target, contact.inboundDirection)
-        dhtNode.putMutable(slot1.target, frame1, 2L, null, slot1.edPrivateKeySeed)
+        dhtNode.putMutable(slot1.target, frame1, DhtClient.DEFAULT_MUTABLE_SEQ, null, slot1.edPrivateKeySeed)
 
         // Routine check: pollContactIncoming
         val received = repository.pollContactIncoming(contact.id)
@@ -173,7 +174,7 @@ class ChatRepositoryPollingTest {
         val slot1 = RatchetChain.deriveSlot(slot0.nextChainKey, 1)
         val plaintext1 = BinaryFrameCodec.encodeTextMessage(1, 0, System.currentTimeMillis(), "Message 1")
         val frame1 = BinaryFrameCodec.packAeadFrame(slot1.msgKey, plaintext1, slot1.target, contact.inboundDirection)
-        dhtNode.putMutable(slot1.target, frame1, 2L, null, slot1.edPrivateKeySeed)
+        dhtNode.putMutable(slot1.target, frame1, DhtClient.DEFAULT_MUTABLE_SEQ, null, slot1.edPrivateKeySeed)
 
         // Routine poll: message 0 is received at counterIn = 0
         val received = repository.pollContactIncoming(contact.id)
