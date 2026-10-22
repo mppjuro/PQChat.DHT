@@ -13,14 +13,14 @@ from collections import defaultdict
 REPO_URL = "https://github.com/mppjuro/PQChat.DHT"
 
 CATEGORY_MAPPING = [
-    (r"^(feat|feature)(\(.*\))?!?:", "🚀 Nowe Funkcjonalności (Features)", "feat"),
-    (r"^(fix)(\(.*\))?!?:", "🐛 Poprawki Błędów (Bug Fixes)", "fix"),
-    (r"^(refactor)(\(.*\))?!?:", "♻️ Refaktoryzacja (Refactoring)", "refactor"),
-    (r"^(perf|performance)(\(.*\))?!?:", "⚡ Wydajność i Optymalizacje (Performance)", "perf"),
-    (r"^(sec|security)(\(.*\))?!?:", "🔒 Bezpieczeństwo i Kryptografia (Security)", "security"),
-    (r"^(docs|doc)(\(.*\))?!?:", "📚 Dokumentacja (Documentation)", "docs"),
-    (r"^(test|tests)(\(.*\))?!?:", "🧪 Testy (Tests)", "test"),
-    (r"^(build|ci|deps|dependabot)(\(.*\))?!?:", "📦 Budowanie i Zależności (Build & CI)", "build"),
+    (r"^(feat|feature)(\(.*\))?!?:", "🚀 Features", "feat"),
+    (r"^(fix)(\(.*\))?!?:", "🐛 Bug Fixes", "fix"),
+    (r"^(refactor)(\(.*\))?!?:", "♻️ Refactoring", "refactor"),
+    (r"^(perf|performance)(\(.*\))?!?:", "⚡ Performance & Optimizations", "perf"),
+    (r"^(sec|security)(\(.*\))?!?:", "🔒 Security & Cryptography", "security"),
+    (r"^(docs|doc)(\(.*\))?!?:", "📚 Documentation", "docs"),
+    (r"^(test|tests)(\(.*\))?!?:", "🧪 Tests", "test"),
+    (r"^(build|ci|deps|dependabot)(\(.*\))?!?:", "📦 Build & Dependencies", "build"),
 ]
 
 def get_git_commits():
@@ -67,31 +67,58 @@ def categorize_commit(subject):
     # Fallback heuristic based on keywords
     sub_lower = subject.lower()
     if sub_lower.startswith("harden") or "security" in sub_lower or "keystore" in sub_lower:
-        return "🔒 Bezpieczeństwo i Kryptografia (Security)"
+        return "🔒 Security & Cryptography"
     if sub_lower.startswith("add ") or sub_lower.startswith("introduce "):
-        return "🚀 Nowe Funkcjonalności (Features)"
+        return "🚀 Features"
     if sub_lower.startswith("fix ") or sub_lower.startswith("eliminate "):
-        return "🐛 Poprawki Błędów (Bug Fixes)"
+        return "🐛 Bug Fixes"
     if sub_lower.startswith("optimize "):
-        return "⚡ Wydajność i Optymalizacje (Performance)"
+        return "⚡ Performance & Optimizations"
     if "license" in sub_lower or "readme" in sub_lower or "doc" in sub_lower:
-        return "📚 Dokumentacja (Documentation)"
+        return "📚 Documentation"
     if "workflow" in sub_lower or "dependabot" in sub_lower or "gradle" in sub_lower:
-        return "📦 Budowanie i Zależności (Build & CI)"
+        return "📦 Build & Dependencies"
 
-    return "🛠️ Pozostałe Zmiany (Other Changes)"
+    return "🛠️ Other Changes"
 
-def format_subject(subject):
+COMMIT_HASH_TRANSLATIONS = {
+    "b2e150e": "expand empirical telemetry module and research capabilities for master thesis",
+    "01bcf5a": "add fullscreen image viewer with gallery save, single-line SAS, and contact name editing",
+    "18c1a14": "implement Blind Cooperative Republishing in DHT as alternative to synthetic decoy traffic",
+    "049f2f1": "add PNG8 compression with color quantization and gallery picker",
+    "e968816": "research module: traffic shaping metrics, BEP 44 retention, group chats, measurement loop refactoring, firestore.rules hardening and research_analyzer.py script",
+}
+
+# Transliteration table using unicode code points to prevent raw characters in source
+DIACRITICS_MAP = str.maketrans(
+    "\u0105\u0107\u0119\u0142\u0144\u00f3\u015b\u017a\u017c\u0104\u0106\u0118\u0141\u0143\u00d3\u015a\u0179\u017b",
+    "acelnoszzACELNOSZZ"
+)
+
+def format_subject(commit):
+    short_h = commit.get("short_hash", "")
+    subject = commit.get("subject", "")
+    
+    # Check if this specific commit has an English translation
+    if short_h in COMMIT_HASH_TRANSLATIONS:
+        m = re.match(r"^[a-zA-Z]+(\([^\)]+\))?!?:?\s*(.*)$", subject)
+        if m and m.group(1):
+            clean_scope = m.group(1).strip("()")
+            return f"**{clean_scope}**: {COMMIT_HASH_TRANSLATIONS[short_h]}"
+        return COMMIT_HASH_TRANSLATIONS[short_h]
+
     # Highlight scopes nicely, e.g. feat(tor): foo -> **tor**: foo
     m = re.match(r"^[a-zA-Z]+(\([^\)]+\))?!?:?\s*(.*)$", subject)
     if m:
         scope = m.group(1)
         desc = m.group(2)
+        if desc:
+            desc = desc.strip().translate(DIACRITICS_MAP)
         if scope:
             clean_scope = scope.strip("()")
             return f"**{clean_scope}**: {desc}" if desc else f"**{clean_scope}**"
         return desc if desc else subject
-    return subject
+    return subject.translate(DIACRITICS_MAP)
 
 def generate_changelog(commits):
     categories = defaultdict(list)
@@ -104,8 +131,8 @@ def generate_changelog(commits):
     lines = [
         "# 📜 Changelog",
         "",
-        "Wszystkie istotne zmiany w projekcie **PQChat.DHT** są rejestrowane w tym dokumencie.",
-        "Format jest oparty na specyfikacji [Conventional Commits](https://www.conventionalcommits.org/).",
+        "All notable changes to the **PQChat.DHT** project are documented in this file.",
+        "The format is based on the [Conventional Commits](https://www.conventionalcommits.org/) specification.",
         "",
         "---",
         "",
@@ -113,15 +140,15 @@ def generate_changelog(commits):
 
     # Pre-defined ordered categories
     ordered_cats = [
-        "🚀 Nowe Funkcjonalności (Features)",
-        "🔒 Bezpieczeństwo i Kryptografia (Security)",
-        "🐛 Poprawki Błędów (Bug Fixes)",
-        "⚡ Wydajność i Optymalizacje (Performance)",
-        "♻️ Refaktoryzacja (Refactoring)",
-        "📦 Budowanie i Zależności (Build & CI)",
-        "🧪 Testy (Tests)",
-        "📚 Dokumentacja (Documentation)",
-        "🛠️ Pozostałe Zmiany (Other Changes)",
+        "🚀 Features",
+        "🔒 Security & Cryptography",
+        "🐛 Bug Fixes",
+        "⚡ Performance & Optimizations",
+        "♻️ Refactoring",
+        "📦 Build & Dependencies",
+        "🧪 Tests",
+        "📚 Documentation",
+        "🛠️ Other Changes",
     ]
 
     for cat in ordered_cats:
@@ -132,7 +159,7 @@ def generate_changelog(commits):
         lines.append(f"## {cat}")
         lines.append("")
         for c in commit_list:
-            formatted_desc = format_subject(c["subject"])
+            formatted_desc = format_subject(c)
             hash_link = f"[`{c['short_hash']}`]({REPO_URL}/commit/{c['hash']})"
             date_str = c["date"]
             lines.append(f"- {hash_link} ({date_str}) — {formatted_desc}")

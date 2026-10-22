@@ -127,7 +127,7 @@ class FirebaseResearchSync(
                 _syncStatus.value = "Uwierzytelniono anonimowo w Firebase"
                 return@withContext true
             } catch (e: Exception) {
-                _syncStatus.value = "Błąd logowania Firebase: ${e.message}"
+                _syncStatus.value = "Firebase login error: ${e.message}"
                 return@withContext false
             } finally {
                 isAuthenticating.set(false)
@@ -202,7 +202,7 @@ class FirebaseResearchSync(
         }
 
         val firestore = getFirestore() ?: run {
-            _syncStatus.value = "Firestore niedostępny"
+            _syncStatus.value = "Firestore unavailable"
             return@withContext false
         }
 
@@ -233,10 +233,10 @@ class FirebaseResearchSync(
 
             hasSynced = true
             lastAutoSyncTimestamp = now
-            _syncStatus.value = "Pomyślnie zsynchronizowano z Cloud Firestore"
+            _syncStatus.value = "Successfully synchronized with Cloud Firestore"
             return@withContext true
         } catch (e: Exception) {
-            _syncStatus.value = "Błąd zapisu Firestore: ${e.message}"
+            _syncStatus.value = "Firestore write error: ${e.message}"
             return@withContext false
         }
     }

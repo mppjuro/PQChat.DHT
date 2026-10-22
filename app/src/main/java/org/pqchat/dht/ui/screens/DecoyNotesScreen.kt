@@ -30,7 +30,7 @@ data class DecoyNoteItem(
 )
 
 /**
- * Decoy View shown when the user enters the Duress PIN (Kod przymusu).
+ * Decoy View shown when the user enters the Duress PIN.
  * Displays exclusively empty/local harmless self-notes per AGENTS.md duress specifications.
  * The master database key in AndroidKeyStore has already been permanently wiped.
  */
@@ -59,13 +59,13 @@ fun DecoyNotesScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Notatki własne",
+                                text = "Personal Notes",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = appColors.textPrimary
                             )
                             Text(
-                                text = "Prywatny notes offline",
+                                text = "Private offline notes",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 fontSize = 12.sp
@@ -92,7 +92,7 @@ fun DecoyNotesScreen(
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        placeholder = { Text("Wpisz nową notatkę...", color = appColors.textSecondary) },
+                        placeholder = { Text("Write a new note...", color = appColors.textSecondary) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(24.dp),
                         maxLines = 4,
@@ -121,7 +121,7 @@ fun DecoyNotesScreen(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Zapisz notatkę"
+                            contentDescription = "Save note"
                         )
                     }
                 }
@@ -150,7 +150,7 @@ fun DecoyNotesScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Brak zapisanych notatek",
+                        text = "No saved notes",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = appColors.textPrimary,
@@ -158,7 +158,7 @@ fun DecoyNotesScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Wpisz poniżej tekst, aby utworzyć nową notatkę osobistą.",
+                        text = "Type below to create a new personal note.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         textAlign = TextAlign.Center

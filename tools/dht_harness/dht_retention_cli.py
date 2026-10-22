@@ -618,7 +618,7 @@ def run_summary(args):
     print(f"\nTelemetry summary for {len(rows)} records in {args.output}:")
     horizons = [0.083, 1.0, 2.0, 6.0, 12.0, 24.0]
     # Aggregate by horizon and republish_enabled
-    print("\n| Horyzont Czasowy | Tryb Bez Odświeżania [MEASURED] | Tryb z Republish (1.5h) [MEASURED] | Model Teoretyczny [SIMULATED] |")
+    print("\n| Time Horizon | Mode Without Refresh [MEASURED] | Mode with Republish (1.5h) [MEASURED] | Theoretical Model [SIMULATED] |")
     print("| :--- | :---: | :---: | :---: |")
     for h in horizons:
         matching = [r for r in rows if abs(float(r.get("retention_hours", -1)) - h) < 0.35]

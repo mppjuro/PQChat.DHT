@@ -15,65 +15,65 @@ enum class PacketRole(val displayName: String) {
     /**
      * Initial outbound packet sent by user (original text, handshake, or media chunk).
      */
-    FIRST_SEND("Pierwsze wysłanie (oryginał)"),
+    FIRST_SEND("First send (original)"),
 
     /**
      * Periodic retransmission of own unacknowledged message (RepublishWorker / PollingWorker).
      */
-    OWN_REPUBLISH("Republish własnej wiadomości"),
+    OWN_REPUBLISH("Republish own message"),
 
     /**
      * Cooperative relay of third-party BEP 44 record from BlindRepublishPool (crowdsourced relay).
      */
-    CROWD_REPUBLISH("Republish wiadomości innego użytkownika"),
+    CROWD_REPUBLISH("Republish other user message"),
 
     /**
      * Incoming packet received from DHT (incoming chat, handshake finalize, or ACK).
      */
-    PACKET_RECEIVED("Odebranie pakietu z DHT"),
+    PACKET_RECEIVED("Packet received from DHT"),
 
     /**
      * Secure 900-byte noise tombstone overwriting consumed message slot on DHT.
      */
-    TOMBSTONE_SENT("Wysłanie rekordu Tombstone (900B)"),
+    TOMBSTONE_SENT("Send Tombstone record (900B)"),
 
     /**
      * Cover traffic ACK token routed to partner's ACK rendezvous target.
      */
-    COVER_ACK_SENT("Potwierdzenie w szumie (Cover ACK)"),
+    COVER_ACK_SENT("Cover ACK sent"),
 
     /**
      * Cover traffic ACK token received from partner's ACK rendezvous target.
      */
-    COVER_ACK_RECEIVED("Odebranie potwierdzenia w szumie (Cover ACK)"),
+    COVER_ACK_RECEIVED("Cover ACK received"),
 
     /**
      * Pure synthetic CSPRNG noise packet emitted by Poisson traffic generator.
      */
-    COVER_DUMMY_SENT("Syntetyczny pakiet maskujący (Dummy)"),
+    COVER_DUMMY_SENT("Synthetic decoy packet (Dummy)"),
 
     /**
      * Empirical DHT retention probe checking if a historical record is still alive on DHT.
      */
-    TTL_PROBE("Próbka retencji DHT (TTL)"),
+    TTL_PROBE("DHT retention sample (TTL)"),
 
     /**
      * Decoy target query emitted to disguise real contact rendezvous.
      */
-    DECOY_GET("Odpytanie celu maskującego (Decoy GET)"),
+    DECOY_GET("Query decoy target (Decoy GET)"),
 
     /**
      * Group broadcast packet transmission to a single group participant slot (fan-out).
      */
-    GROUP_FAN_OUT("Wysłanie do grupy (Group Fan-out)"),
+    GROUP_FAN_OUT("Group broadcast (Group Fan-out)"),
 
     /**
      * Real scheduled contact polling query in an adaptive batch.
      */
-    POLL_BATCH_REAL("Odpytanie kontaktu w partii (Poll Batch Real)"),
+    POLL_BATCH_REAL("Contact query in batch (Poll Batch Real)"),
 
     /**
      * Decoy query executed within an adaptive polling batch to mask contact count.
      */
-    POLL_BATCH_DECOY("Odpytanie celu maskującego w partii (Poll Batch Decoy)")
+    POLL_BATCH_DECOY("Decoy target query in batch (Poll Batch Decoy)")
 }

@@ -97,19 +97,19 @@ class ContactRenameAndMediaTest {
         assertEquals("Bob", repository.getContact(contactId)?.rawName)
         assertEquals("Bob", repository.getAllContactsFlow().first().first { it.id == contactId }.rawName)
 
-        // Rename Bob to "Mój kolega z pracy Bob"
-        repository.updateContactName(contactId, "Mój kolega z pracy Bob")
+        // Rename Bob to "My coworker Bob"
+        repository.updateContactName(contactId, "My coworker Bob")
 
         val updatedContact = repository.getContact(contactId)
         assertNotNull(updatedContact)
-        assertEquals("Mój kolega z pracy Bob", updatedContact?.rawName)
+        assertEquals("My coworker Bob", updatedContact?.rawName)
         assertEquals(1, updatedContact?.counterOut)
         assertEquals(2, updatedContact?.counterIn)
         assertEquals("1234-5678", updatedContact?.rawSas)
 
         // Flow also reflects new name
         val contactsFromFlow = repository.getAllContactsFlow().first()
-        assertEquals("Mój kolega z pracy Bob", contactsFromFlow.first { it.id == contactId }.rawName)
+        assertEquals("My coworker Bob", contactsFromFlow.first { it.id == contactId }.rawName)
     }
 
     @Test

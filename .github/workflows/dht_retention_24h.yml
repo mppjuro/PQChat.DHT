@@ -2,12 +2,12 @@ name: DHT Retention 24h Verification (Live Mainline DHT)
 
 on:
   schedule:
-    # Uruchamiane co godzinę
+    # Runs every hour
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       force_publish:
-        description: 'Wymuś publikację nowej serii (publish N>=300)'
+        description: 'Force publish of new series (publish N>=300)'
         type: boolean
         required: false
         default: false

@@ -60,8 +60,8 @@ object NotificationHelper {
 
         return NotificationCompat.Builder(context, FOREGROUND_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("PQChat: Stały nasłuch w tle")
-            .setContentText("Połączenie z siecią DHT jest aktywne (tryb niskich opóźnień)")
+            .setContentTitle("PQChat: Persistent background listener")
+            .setContentText("BitTorrent DHT connection active (low-latency mode)")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

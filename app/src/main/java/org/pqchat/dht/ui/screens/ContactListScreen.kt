@@ -127,7 +127,7 @@ fun ContactListScreen(
                             if (isSyncing) {
                                 Icon(
                                     imageVector = Icons.Default.Sync,
-                                    contentDescription = "Synchronizowanie…",
+                                    contentDescription = "Syncing…",
                                     tint = appColors.primary,
                                     modifier = Modifier
                                         .size(16.dp)
@@ -145,7 +145,7 @@ fun ContactListScreen(
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Timer,
-                                    contentDescription = "Następny polling DHT",
+                                    contentDescription = "Next DHT poll",
                                     tint = appColors.primary,
                                     modifier = Modifier.size(15.dp)
                                 )
@@ -196,7 +196,7 @@ fun ContactListScreen(
                     containerColor = CryptoPurple,
                     contentColor = Color.White,
                     icon = { Icon(Icons.Default.GroupAdd, contentDescription = null) },
-                    text = { Text("Nowa grupa") },
+                    text = { Text("New Group") },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .padding(bottom = 8.dp)
@@ -331,7 +331,7 @@ fun ContactListScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Prywatna przestrzeń testowa",
+                            text = "Private Test Space",
                             style = MaterialTheme.typography.labelSmall,
                             color = CryptoPurple,
                             fontWeight = FontWeight.Bold
@@ -371,14 +371,14 @@ fun ContactListScreen(
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = selfContact?.rawName ?: "🔒 Moje Notatki (Test DHT)",
+                                    text = selfContact?.rawName ?: "🔒 My Notes (DHT Test)",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = appColors.textPrimary,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Szyfrowana pętla zwrotna BEP 44 • Notes",
+                                    text = "Encrypted BEP 44 Loopback • Notes",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = appColors.textSecondary
                                 )
@@ -424,7 +424,7 @@ fun ContactListScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Czaty grupowe (Sender Keys)",
+                                text = "Group Chats (Sender Keys)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CryptoPurple,
                                 fontWeight = FontWeight.Bold
@@ -458,7 +458,7 @@ fun ContactListScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Kontakty P2P (DHT)",
+                            text = "P2P Contacts (DHT)",
                             style = MaterialTheme.typography.labelSmall,
                             color = appColors.primary,
                             fontWeight = FontWeight.Bold
@@ -490,14 +490,14 @@ fun ContactListScreen(
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "Brak zewnętrznych kontaktów",
+                                    text = "No external contacts",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = appColors.textPrimary,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "Użyj 'New Chat (Alice)' by wygenerować QR handshake lub 'Scan (Bob)' by dołączyć do relacji.",
+                                    text = "Use 'New Chat (Alice)' to generate a QR handshake or 'Scan (Bob)' to join.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = appColors.textSecondary,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -579,7 +579,7 @@ fun ContactItem(
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = Icons.Default.VerifiedUser,
-                            contentDescription = "Zweryfikowany",
+                            contentDescription = "Verified",
                             tint = ElectricGreen,
                             modifier = Modifier.size(16.dp)
                         )
@@ -587,7 +587,7 @@ fun ContactItem(
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = Icons.Default.GppMaybe,
-                            contentDescription = "Niezweryfikowany SAS",
+                            contentDescription = "Unverified SAS",
                             tint = AmberWarning,
                             modifier = Modifier.size(16.dp)
                         )
@@ -684,7 +684,7 @@ fun GroupItem(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Post-Quantum Sender Keys • Epoka ${group.groupEpoch}",
+                    text = "Post-Quantum Sender Keys • Epoch ${group.groupEpoch}",
                     style = MaterialTheme.typography.bodySmall,
                     color = CryptoPurple.copy(alpha = 0.85f)
                 )
@@ -735,7 +735,7 @@ fun CreateGroupDialog(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Nowy czat grupowy",
+                    text = "New Group Chat",
                     style = MaterialTheme.typography.titleMedium,
                     color = appColors.textPrimary
                 )
@@ -744,7 +744,7 @@ fun CreateGroupDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Zdecentralizowany czat grupowy oparty na Post-Quantum Sender Keys over BEP 44. Każda wiadomość jest publikowana jako pojedyncza ramka 900B w DHT (koszt O(1)).",
+                    text = "Decentralized group chat based on Post-Quantum Sender Keys over BEP 44. Every message is published as a single 900 B frame in the DHT (O(1) cost).",
                     style = MaterialTheme.typography.bodySmall,
                     color = appColors.textSecondary
                 )
@@ -752,7 +752,7 @@ fun CreateGroupDialog(
                 OutlinedTextField(
                     value = groupName,
                     onValueChange = { groupName = it },
-                    label = { Text("Nazwa grupy") },
+                    label = { Text("Group Name") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -766,7 +766,7 @@ fun CreateGroupDialog(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "Wybierz uczestników (${selectedContactIds.size}/${contacts.size}):",
+                    text = "Select participants (${selectedContactIds.size}/${contacts.size}):",
                     style = MaterialTheme.typography.labelMedium,
                     color = appColors.textPrimary,
                     fontWeight = FontWeight.SemiBold
@@ -774,7 +774,7 @@ fun CreateGroupDialog(
                 Spacer(modifier = Modifier.height(6.dp))
                 if (contacts.isEmpty()) {
                     Text(
-                        text = "Brak zewnętrznych kontaktów do zaproszenia. Grupa zostanie utworzona lokalnie.",
+                        text = "No external contacts to invite. The group will be created locally.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary
                     )
@@ -821,7 +821,7 @@ fun CreateGroupDialog(
                                     )
                                     if (contact.isVerified) {
                                         Text(
-                                            text = "Zweryfikowany SAS",
+                                            text = "Verified SAS",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = ElectricGreen
                                         )
@@ -847,7 +847,7 @@ fun CreateGroupDialog(
                 ),
                 modifier = Modifier.testTag("create_group_confirm_button")
             ) {
-                Text("Utwórz grupę")
+                Text("Create Group")
             }
         },
         dismissButton = {
@@ -855,7 +855,7 @@ fun CreateGroupDialog(
                 onClick = onDismiss,
                 modifier = Modifier.testTag("create_group_cancel_button")
             ) {
-                Text("Anuluj", color = appColors.textSecondary)
+                Text("Cancel", color = appColors.textSecondary)
             }
         },
         containerColor = appColors.surface

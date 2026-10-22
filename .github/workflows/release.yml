@@ -9,7 +9,7 @@ on:
         type: string
         default: '0.0.1'
       prerelease:
-        description: 'Czy oznaczyć jako wersję wstępną (Pre-release)?'
+        description: 'Mark as pre-release?'
         required: false
         type: boolean
         default: false
@@ -52,7 +52,7 @@ jobs:
         id: prepare_release
         run: |
           RAW_VERSION="${{ inputs.version }}"
-          # Usuń ewentualny prefiks 'v' jeśli podano 'v0.0.1'
+          # Strip optional 'v' prefix if given e.g. 'v0.0.1'
           CLEAN_VERSION="${RAW_VERSION#v}"
           APK_NAME="PQChat.DHT-${CLEAN_VERSION}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "${APK_NAME}"
@@ -75,13 +75,13 @@ jobs:
           body: |
             ## 🚀 PQChat.DHT v${{ env.VERSION }}
 
-            Oficjalne wydanie aplikacji **PQChat.DHT** — zdecentralizowanego komunikatora P2P z kryptografią post-kwantową (ML-KEM-512) i maskowaniem ruchu w BitTorrent Mainline DHT.
+            Official release of **PQChat.DHT** — decentralized P2P messenger with post-quantum cryptography (ML-KEM-512) and traffic shaping over BitTorrent Mainline DHT.
 
             - **Wersja:** `v${{ env.VERSION }}`
             - **Commit:** [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            - **Dołączony pakiet APK:** `${{ env.APK_NAME }}`
+            - **Included APK package:** `${{ env.APK_NAME }}`
 
-            Szczegółowa lista zmian znajduje się w pliku [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+            Detailed list of changes is available in [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
           files: ${{ env.APK_NAME }}

@@ -227,14 +227,14 @@ class GroupChatCryptoTest {
         val asciiTrunc = BinaryFrameCodec.truncateUtf8ToMaxBytes(ascii, 20)
         assertEquals(ascii, String(asciiTrunc, Charsets.UTF_8))
 
-        // 2. Polish multi-byte characters: "Zażółć gęślą jaźń"
-        // 'Z' (1), 'a' (1), 'ż' (2), 'ó' (2) = 6 bytes.
-        // 'ł' is 2 bytes -> total 8 bytes.
-        // If maxBytes = 7, it must truncate at 6 bytes ("Zażó") rather than splitting 'ł'
-        val polish = "Zażółć gęślą jaźń"
-        val polishTrunc7 = BinaryFrameCodec.truncateUtf8ToMaxBytes(polish, 7)
-        assertEquals(6, polishTrunc7.size)
-        assertEquals("Zażó", String(polishTrunc7, Charsets.UTF_8))
+        // 2. UTF-8 multi-byte characters: "Café résumé"
+        // 'C' (1), 'a' (1), 'f' (1), 'é' (2) = 5 bytes. ' ' (1) = 6 bytes. 'r' (1) = 7 bytes.
+        // 'é' is 2 bytes -> total 9 bytes.
+        // If maxBytes = 8, it must truncate at 7 bytes ("Café r") rather than splitting 'é'
+        val multiByte = "Café résumé"
+        val multiByteTrunc8 = BinaryFrameCodec.truncateUtf8ToMaxBytes(multiByte, 8)
+        assertEquals(7, multiByteTrunc8.size)
+        assertEquals("Café r", String(multiByteTrunc8, Charsets.UTF_8))
 
         // 3. 4-byte Emojis (Surrogate pairs in Java/Kotlin CharSequence)
         // 🚀 (U+1F680) is 4 bytes in UTF-8
@@ -262,7 +262,7 @@ class GroupChatCryptoTest {
         val memberSummaries = listOf(
             BinaryFrameCodec.DecodedPayload.GroupMemberSummary(senderMemberId, "Alicja 🚀"),
             BinaryFrameCodec.DecodedPayload.GroupMemberSummary(bobId, "Bober 🦆"),
-            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(charlieId, "Grzegorz Brzęczyszczykiewicz")
+            BinaryFrameCodec.DecodedPayload.GroupMemberSummary(charlieId, "Charlie Example")
         )
 
         val plaintext = BinaryFrameCodec.encodeGroupControl(
@@ -288,7 +288,7 @@ class GroupChatCryptoTest {
         assertEquals(3, decoded.members.size)
         assertEquals("Alicja 🚀", decoded.members[0].memberName)
         assertEquals("Bober 🦆", decoded.members[1].memberName)
-        assertEquals("Grzegorz Brzęczyszczykiewicz", decoded.members[2].memberName)
+        assertEquals("Charlie Example", decoded.members[2].memberName)
     }
 
     @Test

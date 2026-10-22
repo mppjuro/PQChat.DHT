@@ -397,7 +397,7 @@ class PqChatUiAutomatorTest {
         }
         composeTestRule.onNodeWithTag("leave_group_button").assertIsDisplayed()
 
-        // Physically click 'Opuść grupę' (leave group)
+        // Physically click 'Leave group'
         clickTagByPixelCoordinates("leave_group_button")
 
         // Wait for navigation back to ContactListScreen
@@ -459,7 +459,7 @@ class PqChatUiAutomatorTest {
                 composeTestRule.onAllNodesWithTag("decoy_notes_empty_text").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("decoy_notes_empty_text").assertIsDisplayed()
-            composeTestRule.onNodeWithText("Notatki własne").assertIsDisplayed()
+            composeTestRule.onNodeWithText("Personal Notes").assertIsDisplayed()
 
             // 8. Verify that master encryption key has been wiped from Keystore
             assertFalse(
@@ -644,7 +644,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitUntil(timeoutMillis = 5_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithText("Świadoma Zgoda Badawcza", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Informed Research Consent", substring = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("GWARANCJA ZEROWEGO WYCIEKU", substring = true).assertIsDisplayed()
 
         // Physically confirm informed consent

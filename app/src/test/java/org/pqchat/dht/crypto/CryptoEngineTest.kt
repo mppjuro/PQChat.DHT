@@ -102,7 +102,7 @@ class CryptoEngineTest {
     @Test
     fun testBinaryFrameCodecTextMessageExactPayloadSize() {
         val key = CryptoUtils.secureRandomBytes(32)
-        val testText = "Zażółć gęślą jaźń! 🛡️ Post-quantum metadata-free chat."
+        val testText = "Quick brown fox jumps over lazy dog! 🛡️ Post-quantum metadata-free chat."
 
         val target = CryptoUtils.secureRandomBytes(20)
         val direction = "AliceToBob"

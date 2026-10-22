@@ -81,7 +81,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Ustawienia", fontWeight = FontWeight.Bold) },
+                title = { Text("Settings", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -89,7 +89,7 @@ fun SettingsScreen(
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Wróć",
+                            contentDescription = "Back",
                             tint = appColors.textPrimary
                         )
                     }
@@ -111,7 +111,7 @@ fun SettingsScreen(
         ) {
             // ==================== SECTION 1: THEME ====================
             SettingsSectionHeader(
-                title = "Wygląd i motyw aplikacji",
+                title = "Appearance & App Theme",
                 icon = Icons.Default.Palette
             )
 
@@ -124,13 +124,13 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Wybór motywu graficznego",
+                        text = "Theme Selection",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Domyślnie aplikacja automatycznie dopasowuje się do motywu Twojego systemu w telefonie.",
+                        text = "By default, the app automatically matches your phone system theme.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -141,8 +141,8 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         ThemeOptionCard(
-                            label = "Systemowy",
-                            subtitle = "Domyślny",
+                            label = "System",
+                            subtitle = "Default",
                             icon = Icons.Default.BrightnessAuto,
                             isSelected = themeMode == ThemeMode.SYSTEM,
                             onClick = { viewModel.setThemeMode(ThemeMode.SYSTEM) },
@@ -152,7 +152,7 @@ fun SettingsScreen(
                         )
 
                         ThemeOptionCard(
-                            label = "Ciemny",
+                            label = "Dark",
                             subtitle = "Dark Mode",
                             icon = Icons.Default.DarkMode,
                             isSelected = themeMode == ThemeMode.DARK,
@@ -163,7 +163,7 @@ fun SettingsScreen(
                         )
 
                         ThemeOptionCard(
-                            label = "Jasny",
+                            label = "Light",
                             subtitle = "Light Mode",
                             icon = Icons.Default.LightMode,
                             isSelected = themeMode == ThemeMode.LIGHT,
@@ -180,7 +180,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 2: IMAGE COMPRESSION (PNG8) ====================
             SettingsSectionHeader(
-                title = "Kompresja obrazów (Transfer DHT / PNG8)",
+                title = "Image Compression (DHT Transfer / PNG8)",
                 icon = Icons.Default.Image
             )
 
@@ -193,19 +193,19 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Format PNG8 z kwantyzacją palety barw",
+                        text = "PNG8 Format with Palette Quantization",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Przesyłanie plików przez sieć BitTorrent DHT dzieli dane na 800-bajtowe fragmenty. Kompresja do formatu PNG8 pozwala przesłać zdjęcia w zaledwie kilkudziesięciu pakietach UDP.",
+                        text = "Transferring files over the BitTorrent DHT splits data into 800-byte chunks. PNG8 compression allows sending images in just a few dozen UDP packets.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    // 1. Rozdzielczość (najdłuższa krawędź)
+                    // 1. Resolution (longest edge)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -213,13 +213,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(
-                                text = "Rozdzielczość (najdłuższa krawędź)",
+                                text = "Resolution (longest edge)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = appColors.textPrimary
                             )
                             Text(
-                                text = "Dłuższy bok zdjęcia jest skalowany do wybranej wartości",
+                                text = "Longer edge of the image is scaled to the selected value",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 fontSize = 12.sp
@@ -242,7 +242,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Szybkie presety rozdzielczości
+                    // Resolution quick presets
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -294,7 +294,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // 2. Ilość kolorów palety (PNG8)
+                    // 2. Palette Color Count (PNG8)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -302,13 +302,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(
-                                text = "Ilość kolorów palety (PNG8)",
+                                text = "Palette Color Count (PNG8)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = appColors.textPrimary
                             )
                             Text(
-                                text = "Mniejsza liczba kolorów = wyższa kompresja i szybszy transfer DHT",
+                                text = "Fewer colors = higher compression and faster DHT transfer",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 fontSize = 12.sp
@@ -320,7 +320,7 @@ fun SettingsScreen(
                             border = androidx.compose.foundation.BorderStroke(1.dp, appColors.primary.copy(alpha = 0.5f))
                         ) {
                             Text(
-                                text = "$imageColorCount kolorów",
+                                text = "$imageColorCount colors",
                                 color = appColors.primary,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
@@ -331,7 +331,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Szybkie presety palety kolorów
+                    // Color palette quick presets
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -383,7 +383,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 3: DHT INTERVALS ====================
             SettingsSectionHeader(
-                title = "Interwały synchronizacji DHT (4 tryby)",
+                title = "DHT Sync Intervals (4 Modes)",
                 icon = Icons.Default.Sync
             )
 
@@ -396,22 +396,22 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Częstotliwość odpytywania slotów BEP 44",
+                        text = "BEP 44 Slot Polling Frequency",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Dostosuj czasy sprawdzania nadejścia nowych wiadomości w sieci BitTorrent DHT dla każdego z 4 stanów aplikacji. Domyślne wartości oznaczono pogrubioną czcionką.",
+                        text = "Customize message check frequencies in the BitTorrent DHT for each of the 4 application states. Default values are shown in bold.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    // Mode 1: Foreground Active Chat (Default: 10 sekund)
+                    // Mode 1: Foreground Active Chat (Default: 10 seconds)
                     IntervalDropdownRow(
-                        title = "1. Aktywny czat na pierwszym planie",
-                        subtitle = "Gdy rozmawiasz w otwartym oknie czatu",
+                        title = "1. Active Foreground Chat",
+                        subtitle = "When chatting in an open conversation",
                         currentMillis = intervalForeground,
                         defaultMillis = DefaultIntervals.FOREGROUND_CHAT,
                         onSelect = { viewModel.setIntervalForegroundChat(it) }
@@ -422,10 +422,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Mode 2: App Active / Other Screen (Default: 1 minuta)
+                    // Mode 2: App Active / Other Screen (Default: 1 minute)
                     IntervalDropdownRow(
-                        title = "2. Aplikacja otwarta (lista kontaktów)",
-                        subtitle = "Gdy aplikacja jest widoczna, ale czat nie jest otwarty",
+                        title = "2. App Active (Contact List)",
+                        subtitle = "When the app is open, but no chat is selected",
                         currentMillis = intervalAppActive,
                         defaultMillis = DefaultIntervals.APP_ACTIVE,
                         onSelect = { viewModel.setIntervalAppActive(it) }
@@ -436,10 +436,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Mode 3: Background Idle (Default: 5 minut)
+                    // Mode 3: Background Idle (Default: 5 minutes)
                     IntervalDropdownRow(
-                        title = "3. Aplikacja w tle (ekran włączony)",
-                        subtitle = "Gdy aplikacja jest zminimalizowana przy włączonym ekranie",
+                        title = "3. Background Idle (Screen On)",
+                        subtitle = "When the app is minimized while screen is active",
                         currentMillis = intervalBgIdle,
                         defaultMillis = DefaultIntervals.BACKGROUND_IDLE,
                         onSelect = { viewModel.setIntervalBackgroundIdle(it) }
@@ -450,10 +450,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Mode 4: Deep Sleep / Doze (Default: 15 minut)
+                    // Mode 4: Deep Sleep / Doze (Default: 15 minutes)
                     IntervalDropdownRow(
-                        title = "4. Głębokie uśpienie (ekran wygaszony)",
-                        subtitle = "Tryb oszczędzania baterii Doze przy wygaszonym telefonie",
+                        title = "4. Deep Sleep / Doze (Screen Off)",
+                        subtitle = "Doze battery optimization while phone is locked",
                         currentMillis = intervalDoze,
                         defaultMillis = DefaultIntervals.DOZE_SLEEP,
                         onSelect = { viewModel.setIntervalDozeSleep(it) }
@@ -473,13 +473,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Tryb ciągłego nasłuchu (Foreground Service)",
+                                text = "Continuous Listening Mode (Foreground Service)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Podtrzymuje stały serwis w tle z powiadomieniem o niskim opóźnieniu (~10s) kosztem większego zużycia baterii.",
+                                text = "Maintains a persistent foreground service with a low-latency notification (~10s) at the expense of higher battery usage.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -508,16 +508,16 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Wyłączenie optymalizacji baterii (Doze whitelist)",
+                                text = "Battery Optimization Whitelist (Doze)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
                                 text = if (isBatteryIgnored) {
-                                    "Optymalizacje wyłączone — alarmy Doze i radio wybudzają się bez przeszkód."
+                                    "Optimizations disabled — Doze alarms and radio wake up without restrictions."
                                 } else {
-                                    "Wymagane, aby system Android nie blokował budzenia radia w trybie uśpienia Doze."
+                                    "Required so Android does not throttle radio wakeups during Doze sleep."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isBatteryIgnored) appColors.primary else appColors.textSecondary,
@@ -533,11 +533,11 @@ fun SettingsScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                Text("Wyłącz", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Disable", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                             }
                         } else {
                             Text(
-                                text = "Aktywne ✓",
+                                text = "Active ✓",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = appColors.primary,
                                 fontWeight = FontWeight.Bold
@@ -551,7 +551,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 3: DHT REPUBLISHING & TTL ====================
             SettingsSectionHeader(
-                title = "Republishing DHT i limit TTL (Exponential Backoff)",
+                title = "DHT Republishing & TTL (Exponential Backoff)",
                 icon = Icons.Default.Autorenew
             )
 
@@ -564,22 +564,22 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Odświeżanie rekordu w DHT i limit TTL",
+                        text = "DHT Record Refresh & TTL Limit",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Dla niepotwierdzonych wiadomości węzeł odświeża wpisy w sieci DHT ze stopniowo wydłużającymi się przerwami (Exponential Backoff) w celu ochrony baterii i radia urządzenia. Po przekroczeniu limitu TTL wiadomość zostaje oznaczona jako EXPIRED_OFFLINE, a wybudzanie radia urządzenia całkowicie zatrzymane.",
+                        text = "For unacknowledged messages, the node republishes DHT entries with exponentially increasing delays to conserve battery and radio resources. When TTL is exceeded, the message is marked EXPIRED_OFFLINE and radio wakeups are halted.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    // Tier 1: 0 - 2h (Default: 15 minut)
+                    // Tier 1: 0 - 2h (Default: 15 minutes)
                     IntervalDropdownRow(
-                        title = "1. Pierwsze 2 godziny (Tier 1)",
-                        subtitle = "Częste odświeżanie po nadaniu (domyślnie 15 minut)",
+                        title = "1. First 2 Hours (Tier 1)",
+                        subtitle = "Frequent republishing after sending (default 15 minutes)",
                         currentMillis = intervalRepublishTier1,
                         defaultMillis = DefaultRepublishConfig.TIER1_INTERVAL,
                         options = REPUBLISH_TIER1_OPTIONS,
@@ -591,10 +591,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Tier 2: 2h - 12h (Default: 1 godzina)
+                    // Tier 2: 2h - 12h (Default: 1 hour)
                     IntervalDropdownRow(
-                        title = "2. Od 2 do 12 godzin (Tier 2)",
-                        subtitle = "Średni interwał ponawiania (domyślnie 1 godzina)",
+                        title = "2. 2 to 12 Hours (Tier 2)",
+                        subtitle = "Intermediate retry interval (default 1 hour)",
                         currentMillis = intervalRepublishTier2,
                         defaultMillis = DefaultRepublishConfig.TIER2_INTERVAL,
                         options = REPUBLISH_TIER2_OPTIONS,
@@ -606,10 +606,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Tier 3: Powyżej 12h do TTL (Default: 1.5 godziny / 90 minut)
+                    // Tier 3: Beyond 12h to TTL (Default: 1.5 hours / 90 minutes)
                     IntervalDropdownRow(
-                        title = "3. Powyżej 12 godzin (Tier 3)",
-                        subtitle = "Odświeżanie długoterminowe (domyślnie 1.5 godziny / 90 minut, zabezpiecza przed wygaśnięciem BEP 44 ~2h)",
+                        title = "3. Beyond 12 Hours (Tier 3)",
+                        subtitle = "Long-term republishing (default 1.5 hours / 90 min, prevents BEP 44 expiration ~2h)",
                         currentMillis = intervalRepublishTier3,
                         defaultMillis = DefaultRepublishConfig.TIER3_INTERVAL,
                         options = REPUBLISH_TIER3_OPTIONS,
@@ -621,10 +621,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Max TTL: (Default: 48 godzin)
+                    // Max TTL: (Default: 48 hours)
                     IntervalDropdownRow(
-                        title = "4. Maksymalny czas życia rekordu (TTL)",
-                        subtitle = "Po tym czasie wiadomość staje się EXPIRED_OFFLINE i radio przestaje się wybudzać (domyślnie 48 godzin)",
+                        title = "4. Maximum Record Lifetime (TTL)",
+                        subtitle = "After this time, message becomes EXPIRED_OFFLINE and radio ceases wakeups (default 48 hours)",
                         currentMillis = republishMaxTtl,
                         defaultMillis = DefaultRepublishConfig.MAX_TTL,
                         options = REPUBLISH_TTL_OPTIONS,
@@ -636,7 +636,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Współdzielone odświeżanie DHT (przekaźnik P2P)
+                    // Crowdsourced DHT Republishing (P2P Relay)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -644,13 +644,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Współdzielone odświeżanie DHT (przekaźnik P2P)",
+                                text = "Crowdsourced DHT Republishing (P2P Relay)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Pomaga dostarczać wiadomości użytkownikom offline i zwiększa anonimowość kosztem minimalnego transferu.",
+                                text = "Helps deliver messages to offline users and enhances anonymity at minimal bandwidth cost.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -668,7 +668,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 4: PRIVACY & TOR NETWORK ====================
             SettingsSectionHeader(
-                title = "Prywatność i Sieć TOR",
+                title = "Privacy & TOR Network",
                 icon = Icons.Default.Security
             )
 
@@ -681,19 +681,19 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Wbudowane trasowanie przez sieć TOR (Embedded Tor)",
+                        text = "Embedded TOR Routing",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Ukrywa Twój adres IP przed publicznymi węzłami BitTorrent DHT (BEP 44). Pakiety KRPC są trasowane przez sieć cebulową TOR bez konieczności instalowania zewnętrznych aplikacji (np. Orbot).",
+                        text = "Hides your IP address from public BitTorrent DHT (BEP 44) nodes. KRPC packets are routed through the TOR onion network without external apps (e.g. Orbot).",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    // Przełącznik: Połączenie przez sieć TOR
+                    // Switch: TOR connection
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -701,13 +701,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Połączenie przez sieć TOR",
+                                text = "TOR Network Connection",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = if (isTorEnabled) "Włączone (aktywne trasowanie SOCKS5)" else "Wyłączone (bezpośrednie gniazdo UDP)",
+                                text = if (isTorEnabled) "Enabled (active SOCKS5 routing)" else "Disabled (direct UDP socket)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isTorEnabled) appColors.primary else appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -724,7 +724,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Przełącznik: Blokada biometryczna aplikacji
+                    // Switch: Biometric lock
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -732,13 +732,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Blokada biometryczna aplikacji",
+                                text = "Biometric App Lock",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = if (isBiometricLockEnabled) "Włączona (wymaga biometrii/kodu)" else "Wyłączona (bezpośredni dostęp)",
+                                text = if (isBiometricLockEnabled) "Enabled (requires biometric/PIN)" else "Disabled (direct access)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isBiometricLockEnabled) appColors.primary else appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -755,7 +755,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Kod PIN aplikacji
+                    // App PIN
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -763,13 +763,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Kod PIN aplikacji",
+                                text = "App Lock PIN",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = if (isAppLockPinSet) "Ustawiony (wymagany przy odblokowaniu)" else "Nieustawiony (dostęp bezpośredni lub biometria)",
+                                text = if (isAppLockPinSet) "Set (required to unlock)" else "Not set (direct access or biometric)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isAppLockPinSet) appColors.primary else appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -781,7 +781,7 @@ fun SettingsScreen(
                                     onClick = { viewModel.setAppLockPin(null) },
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
-                                    Text("Usuń", fontSize = 12.sp)
+                                    Text("Remove", fontSize = 12.sp)
                                 }
                             }
                             Button(
@@ -794,7 +794,7 @@ fun SettingsScreen(
                                 modifier = Modifier.testTag("settings_pin_setup_button")
                             ) {
                                 Text(
-                                    if (isAppLockPinSet) "Zmień" else "Ustaw",
+                                    if (isAppLockPinSet) "Change" else "Set",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.Black
@@ -808,7 +808,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Kod przymusu (Duress PIN)
+                    // Duress PIN
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -817,7 +817,7 @@ fun SettingsScreen(
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "Kod przymusu (Duress PIN)",
+                                    text = "Duress PIN",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = appColors.textPrimary,
                                     fontWeight = FontWeight.SemiBold
@@ -831,14 +831,14 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "Wpisanie tego kodu na ekranie blokady natychmiast kasuje klucz bazy danych w AndroidKeyStore i otwiera niewinny widok pustych notatek własnych (Decoy).",
+                                text = "Entering this PIN on the lock screen immediately wipes the database master key in AndroidKeyStore and opens an innocent empty personal notes screen (Decoy).",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                             if (isDuressPinSet) {
                                 Text(
-                                    text = "Skonfigurowany i aktywny ✓",
+                                    text = "Configured and active ✓",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = appColors.primary,
                                     fontWeight = FontWeight.Bold,
@@ -852,7 +852,7 @@ fun SettingsScreen(
                                     onClick = { viewModel.setDuressPin(null) },
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
-                                    Text("Usuń", fontSize = 12.sp)
+                                    Text("Remove", fontSize = 12.sp)
                                 }
                             }
                             Button(
@@ -865,7 +865,7 @@ fun SettingsScreen(
                                 modifier = Modifier.testTag("settings_duress_pin_setup_button")
                             ) {
                                 Text(
-                                    if (isDuressPinSet) "Zmień" else "Ustaw",
+                                    if (isDuressPinSet) "Change" else "Set",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
@@ -879,7 +879,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
 
-                    // Przełącznik: Ścisłe kształtowanie ruchu Poissona (Strict Poisson Traffic Shaping)
+                    // Switch: Strict Poisson Traffic Shaping
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -887,16 +887,16 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Ścisłe kształtowanie ruchu Poissona (Traffic Shaping)",
+                                text = "Strict Poisson Traffic Shaping",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = if (isStrictPoissonShapingEnabled) {
-                                    "Włączone — wiadomości, rekeying i obrazy czekają w kolejce 900B i są emitowane ściśle według taktu Poissona (zastępując Delayed PUT), zapewniając pełną tajność godzin i częstotliwości konwersacji."
+                                    "Enabled — messages, rekeying, and images queue in 900 B frames and emit strictly at Poisson intervals (replacing Delayed PUT), providing full secrecy of communication timing."
                                 } else {
-                                    "Wyłączone — wiadomości są wysyłane natychmiastowo z losowym opóźnieniem (Delayed PUT) i równoległymi slotami-wabikami."
+                                    "Disabled — messages are transmitted immediately with random jitter (Delayed PUT) and parallel decoy slots."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isStrictPoissonShapingEnabled) appColors.primary else appColors.textSecondary,
@@ -909,7 +909,7 @@ fun SettingsScreen(
                         )
                     }
 
-                    // Informacja o potencjalnym zwiększeniu opóźnień (DHT latency tradeoff)
+                    // DHT latency tradeoff info
                     Surface(
                         color = appColors.surfaceVariant.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(12.dp),
@@ -929,13 +929,13 @@ fun SettingsScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Zwiększone opóźnienia (DHT latency tradeoff)",
+                                    text = "Increased Latency (DHT Tradeoff)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = appColors.textPrimary
                                 )
                                 Text(
-                                    text = "Trasowanie przez 3 przekaźniki sieci Tor zwiększa czas odpowiedzi węzłów DHT (RTT) z kilkudziesięciu milisekund do 1–3 sekund. Pobieranie oraz wysyłanie wiadomości może trwać dłużej.",
+                                    text = "Routing through 3 Tor relays increases DHT response times (RTT) from tens of milliseconds to 1–3 seconds. Sending and receiving messages may take longer.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = appColors.textSecondary,
                                     fontSize = 11.sp,
@@ -954,7 +954,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 5: SELF-CONVERSATION / DHT TEST ====================
             SettingsSectionHeader(
-                title = "Rozmowa ze sobą (Test DHT & Notatki)",
+                title = "Self-Conversation (DHT Test & Notes)",
                 icon = Icons.Default.Bookmark
             )
 
@@ -967,13 +967,13 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "🔒 Szyfrowane Notatki i Test Pętli DHT",
+                        text = "🔒 Encrypted Notes & DHT Loopback Test",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Możesz pisać wiadomości do samego siebie. Wiadomości są szyfrowane post-kwantowo (ML-KEM/AES-256-GCM), publikowane do sieci Mainline BitTorrent DHT i odczytywane z powrotem, umożliwiając natychmiastowe testowanie działania węzła P2P.",
+                        text = "You can send messages to yourself. Messages are post-quantum encrypted (ML-KEM/AES-256-GCM), published to the BitTorrent DHT and read back, verifying P2P leaf node operation.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
@@ -997,7 +997,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Otwórz rozmowę ze sobą / Notatki",
+                            text = "Open Self-Conversation / Notes",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1008,7 +1008,7 @@ fun SettingsScreen(
 
             // ==================== SECTION 6: MASTER'S THESIS RESEARCH & FIREBASE ====================
             SettingsSectionHeader(
-                title = "Badania naukowe (Praca Magisterska)",
+                title = "Academic Research (Master's Thesis)",
                 icon = Icons.Default.Analytics
             )
 
@@ -1021,19 +1021,19 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "🔬 Anonimowe Statystyki i Analiza Republishingu",
+                        text = "🔬 Anonymous Telemetry & Retention Analysis",
                         style = MaterialTheme.typography.titleSmall,
                         color = appColors.textPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Zgoda na rejestrowanie i anonimowe przesyłanie do Google Firebase dokładnych czasów emisji i odbioru pakietów, pełnej analizy cykli republishingu oraz pomiaru czasu wygasania rekordów w sieci DHT (próbkowanie TTL co 15 minut). Wszystkie dane są całkowicie anonimowe (brak tożsamości, brak treści wiadomości, brak kluczy kryptograficznych).",
+                        text = "Consent to record and anonymously sync telemetry to Google Firebase: packet send/receive latencies, republishing cycle analysis, and empirical DHT record retention (15-min TTL sampling). All data is strictly anonymized (zero identities, zero message payloads, zero cryptographic keys).",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
 
-                    // Przełącznik: Wysyłaj anonimowe statystyki (domyślnie wyłączony)
+                    // Switch: Send anonymous stats (default off)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1041,13 +1041,13 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(
-                                text = "Wysyłaj anonimowe statystyki",
+                                text = "Send Anonymous Telemetry",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = appColors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
-                                text = if (isAnonymousStatsEnabled) "Włączone (aktywne próbkowanie i synchronizacja Firebase)" else "Wyłączone (domyślnie, brak zapisu i transferu)",
+                                text = if (isAnonymousStatsEnabled) "Enabled (active sampling and Firebase sync)" else "Disabled (default, no recording or transfer)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isAnonymousStatsEnabled) appColors.primary else appColors.textSecondary,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -1072,13 +1072,13 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 14.dp)
                         )
 
-                        // Status synchronizacji Firebase
+                        // Firebase sync status
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(bottom = 12.dp)
                         ) {
                             Text(
-                                text = "Status Firebase: ",
+                                text = "Firebase Status: ",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = appColors.textPrimary
@@ -1086,13 +1086,13 @@ fun SettingsScreen(
                             Text(
                                 text = researchSyncStatus,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (researchSyncStatus.contains("Zsynchronizowano") || researchSyncStatus.contains("Uwierzytelniono")) ElectricGreen else appColors.primary
+                                color = if (researchSyncStatus.contains("Synced") || researchSyncStatus.contains("Authenticated")) ElectricGreen else appColors.primary
                             )
                         }
 
-                        // Liczniki telemetryczne w kafelkach
+                        // Telemetry metric cards
                         Text(
-                            text = "Zarejestrowane metryki badawcze:",
+                            text = "Recorded research metrics:",
                             style = MaterialTheme.typography.labelMedium,
                             color = appColors.textSecondary,
                             modifier = Modifier.padding(bottom = 8.dp)
@@ -1107,12 +1107,12 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 ResearchMetricCard(
-                                    title = "Wysłane (pierwszy raz)",
+                                    title = "Sent (initial)",
                                     count = researchFirstSendCount,
                                     modifier = Modifier.weight(1f)
                                 )
                                 ResearchMetricCard(
-                                    title = "Własny republish",
+                                    title = "Own republishes",
                                     count = researchOwnRepublishCount,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -1122,12 +1122,12 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 ResearchMetricCard(
-                                    title = "Przekaźnik P2P (inni)",
+                                    title = "P2P relay (others)",
                                     count = researchCrowdRepublishCount,
                                     modifier = Modifier.weight(1f)
                                 )
                                 ResearchMetricCard(
-                                    title = "Odebrane z DHT",
+                                    title = "Received from DHT",
                                     count = researchPacketsReceivedCount,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -1137,12 +1137,12 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 ResearchMetricCard(
-                                    title = "Próbki retencji (TTL)",
+                                    title = "Retention samples (TTL)",
                                     count = researchTtlSamplesCount,
                                     modifier = Modifier.weight(1f)
                                 )
                                 ResearchMetricCard(
-                                    title = "Łącznie zdarzeń",
+                                    title = "Total events",
                                     count = researchEventsCount,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -1151,10 +1151,10 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Częstotliwość próbkowania wygasania rekordów (TTL)
+                        // Retention sampling interval (TTL)
                         IntervalDropdownRow(
-                            title = "Częstotliwość próbkowania wygasania (TTL)",
-                            subtitle = "Jak często badać sieć DHT pod kątem przeżywalności oryginalnych pakietów (domyślnie co 15 minut)",
+                            title = "Retention Sampling Interval (TTL)",
+                            subtitle = "How often to probe the DHT for packet survival (default every 15 minutes)",
                             currentMillis = statsProbeIntervalMs,
                             defaultMillis = 15 * 60 * 1000L,
                             options = RESEARCH_PROBE_INTERVAL_OPTIONS,
@@ -1163,14 +1163,14 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Główny przycisk: Eksport kompletnej paczki badawczej (.ZIP)
+                        // Main button: Export complete research package (.ZIP)
                         Button(
                             onClick = {
                                 val intent = viewModel.getShareZipIntent(context)
                                 if (intent != null) {
-                                    context.startActivity(Intent.createChooser(intent, "Udostępnij paczkę badawczą .ZIP"))
+                                    context.startActivity(Intent.createChooser(intent, "Share research ZIP bundle"))
                                 } else {
-                                    android.widget.Toast.makeText(context, "Brak danych badawczych do eksportu", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, "No research data to export", android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1187,7 +1187,7 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Eksportuj paczkę badawczą (.ZIP)",
+                                text = "Export research package (.ZIP)",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
                             )
@@ -1195,7 +1195,7 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Przyciski akcji: Eksport CSV oraz Wymuszenie synchronizacji
+                        // Action buttons: Export CSV and Force Firebase Sync
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1204,7 +1204,7 @@ fun SettingsScreen(
                                 onClick = {
                                     val intent = viewModel.getShareCsvIntent(context)
                                     if (intent != null) {
-                                        context.startActivity(Intent.createChooser(intent, "Udostępnij / Pobierz plik .CSV"))
+                                        context.startActivity(Intent.createChooser(intent, "Share / Download .CSV file"))
                                     }
                                 },
                                 shape = RoundedCornerShape(12.dp),
@@ -1217,7 +1217,7 @@ fun SettingsScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "Eksportuj CSV",
+                                    text = "Export CSV",
                                     fontSize = 11.sp
                                 )
                             }
@@ -1234,7 +1234,7 @@ fun SettingsScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "Wyślij do Firebase",
+                                    text = "Sync to Firebase",
                                     fontSize = 11.sp
                                 )
                             }
@@ -1248,18 +1248,18 @@ fun SettingsScreen(
     if (showPinDialog) {
         AlertDialog(
             onDismissRequest = { showPinDialog = false },
-            title = { Text("Ustaw kod PIN aplikacji") },
+            title = { Text("Set App Lock PIN") },
             text = {
                 Column {
                     Text(
-                        "Wprowadź kod PIN (4-16 cyfr), który będzie wymagany do odblokowania aplikacji.",
+                        "Enter a PIN (4-16 digits) required to unlock the app.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
                         value = pinDialogInput,
                         onValueChange = { pinDialogInput = it },
-                        label = { Text("Nowy kod PIN") },
+                        label = { Text("New PIN") },
                         singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1279,7 +1279,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.testTag("pin_dialog_confirm_button")
                 ) {
-                    Text("Zapisz")
+                    Text("Save")
                 }
             },
             dismissButton = {
@@ -1287,7 +1287,7 @@ fun SettingsScreen(
                     onClick = { showPinDialog = false },
                     modifier = Modifier.testTag("pin_dialog_dismiss_button")
                 ) {
-                    Text("Anuluj")
+                    Text("Cancel")
                 }
             }
         )
@@ -1296,11 +1296,11 @@ fun SettingsScreen(
     if (showDuressPinDialog) {
         AlertDialog(
             onDismissRequest = { showDuressPinDialog = false },
-            title = { Text("Ustaw kod przymusu (Duress PIN)") },
+            title = { Text("Set Duress PIN") },
             text = {
                 Column {
                     Text(
-                        "⚠️ UWAGA: Wpisanie tego kodu na ekranie blokady bezpowrotnie wyczyści klucz szyfrujący w bezpiecznym module sprzętowym (AndroidKeyStore) i przekieruje do pustego ekranu notatek (Decoy).",
+                        "⚠️ WARNING: Entering this PIN on the lock screen permanently wipes the master encryption key from hardware security (AndroidKeyStore) and opens an empty decoy notes screen.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFE53935)
                     )
@@ -1308,7 +1308,7 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = duressPinDialogInput,
                         onValueChange = { duressPinDialogInput = it },
-                        label = { Text("Kod przymusu (różny od normalnego PIN)") },
+                        label = { Text("Duress PIN (different from normal PIN)") },
                         singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
@@ -1328,7 +1328,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.testTag("duress_pin_dialog_confirm_button")
                 ) {
-                    Text("Zapisz kod przymusu")
+                    Text("Save Duress PIN")
                 }
             },
             dismissButton = {
@@ -1336,7 +1336,7 @@ fun SettingsScreen(
                     onClick = { showDuressPinDialog = false },
                     modifier = Modifier.testTag("duress_pin_dialog_dismiss_button")
                 ) {
-                    Text("Anuluj")
+                    Text("Cancel")
                 }
             }
         )
@@ -1348,52 +1348,52 @@ fun SettingsScreen(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("🔬 ", fontSize = 20.sp)
-                    Text("Świadoma Zgoda Badawcza\n(Informed Consent)", fontWeight = FontWeight.Bold)
+                    Text("Informed Research Consent", fontWeight = FontWeight.Bold)
                 }
             },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "Projekt badawczy realizowany w ramach pracy magisterskiej z informatyki (Wydział Informatyki).\nBadanie dotyczy odporności na cenzurę, właściwości maskowania ruchu Poissona oraz empirycznej retencji rekordów w zdecentralizowanej sieci BitTorrent Mainline DHT (BEP 44) z kryptografią post-kwantową.",
+                        "Research project conducted as part of a Master's Thesis in Computer Science.\nThe study evaluates censorship resistance, Poisson traffic masking properties, and empirical DHT record retention in BitTorrent Mainline DHT (BEP 44) with post-quantum cryptography.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textPrimary
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        "🛡️ GWARANCJA ZEROWEGO WYCIEKU (Zero-Leakage):",
+                        "🛡️ ZERO LEAK GUARANTEE (Zero-Leakage):",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF00E676)
                     )
                     Text(
-                        "• ŻADNE klucze prywatne (ML-KEM-512, X25519, Ed25519) ani ziarna KDF nigdy nie opuszczają urządzenia.\n" +
-                        "• ŻADNE treści wiadomości, nazwy kontaktów ani tożsamości nie są rejestrowane.\n" +
-                        "• ŻADNE adresy IP użytkowników ani rozmówców nie są przesyłane (hashe slotów DHT są ucinane do 8-znakowych prefiksów).\n" +
-                        "• Dane telemetryczne są w 100% zanonimizowane i przetwarzane lokalnie w plikach CSV.",
+                        "• NO private keys (ML-KEM-512, X25519, Ed25519) or KDF seeds ever leave the device.\n" +
+                        "• NO message contents, contact names, or user identities are ever recorded.\n" +
+                        "• NO user or peer IP addresses are collected (DHT slot hashes are truncated to 8-character prefixes).\n" +
+                        "• Telemetry data is 100% anonymized and processed locally in CSV files.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         fontSize = 11.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        "📊 JAKIE METRYKI BĘDĄ ZBIERANE:",
+                        "📊 METRICS COLLECTED:",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = appColors.primary
                     )
                     Text(
-                        "1. Kształtowanie ruchu Poissona: interwały pakietów (Δt_actual vs Δt_theoretical), statystyki testu Kołmogorowa-Smirnowa, jitter wybudzeń w trybie Android Doze, rozkład ról pakietów.\n" +
-                        "2. Zbieżność DHT: opóźnienia operacji put/get, odsetek timeoutów KRPC, krzywe przeżywalności replik (TTL decay) oraz entropia podsieci /24.\n" +
-                        "3. Dostarczanie i Rekeying: czasy dostarczenia wiadomości i Cover ACK wg stanów cyklu życia i transportu (Wi-Fi, Cellular, Tor), czas trwania KEM rekeyingu.\n" +
-                        "4. Wykrywanie anomalii: liczniki błędnych podpisów Ed25519, błędnych tagów AEAD, prób cofnięcia sekwencji oraz zablokowanych prób wycieku IP przy zimnym starcie Tora.\n" +
-                        "5. Zużycie energii i zasobów: prąd baterii (μAh), narzut pamięci RAM/PSS oraz sumaryczny transfer UDP.",
+                        "1. Poisson Traffic Shaping: packet intervals (Δt_actual vs Δt_theoretical), Kolmogorov-Smirnov test statistics, Android Doze wakeup jitter, packet role distribution.\n" +
+                        "2. DHT Convergence: put/get latencies, KRPC timeout rates, replica survival curves (TTL decay), /24 subnet entropy.\n" +
+                        "3. Delivery & Rekeying: message delivery and Cover ACK times across lifecycle states and network transports (Wi-Fi, Cellular, Tor), KEM rekeying duration.\n" +
+                        "4. Anomaly Detection: invalid Ed25519 signatures, invalid AEAD tags, sequence rollback attempts, clearnet leak blocks on cold Tor start.\n" +
+                        "5. Energy & Resource Consumption: battery current (μAh), RAM/PSS overhead, total UDP traffic.",
                         style = MaterialTheme.typography.bodySmall,
                         color = appColors.textSecondary,
                         fontSize = 11.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        "Udział jest w pełni dobrowolny. W każdej chwili możesz wyłączyć telemetrię jednym kliknięciem, co natychmiast zatrzyma wszelkie próbkowanie i synchronizację.",
+                        "Participation is completely voluntary. You can disable telemetry at any time with a single click, immediately halting all sampling and synchronization.",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = appColors.textPrimary,
@@ -1410,7 +1410,7 @@ fun SettingsScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = appColors.primary),
                     modifier = Modifier.testTag("research_consent_confirm_button")
                 ) {
-                    Text("Wyrażam zgodę i włączam", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text("I Agree and Enable", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1420,7 +1420,7 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.testTag("research_consent_dismiss_button")
                 ) {
-                    Text("Anuluj", color = appColors.textSecondary)
+                    Text("Cancel", color = appColors.textSecondary)
                 }
             }
         )
@@ -1568,7 +1568,7 @@ fun IntervalDropdownRow(
             modifier = Modifier.fillMaxWidth()
         ) {
             OutlinedTextField(
-                value = currentOption.label + if (currentOption.millis == defaultMillis) " (Domyślne)" else "",
+                value = currentOption.label + if (currentOption.millis == defaultMillis) " (Default)" else "",
                 onValueChange = {},
                 readOnly = true,
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
@@ -1606,7 +1606,7 @@ fun IntervalDropdownRow(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = option.label + if (isDefault) " (Domyślne)" else "",
+                                    text = option.label + if (isDefault) " (Default)" else "",
                                     fontWeight = if (isDefault) FontWeight.Bold else FontWeight.Normal,
                                     color = if (isSelected) appColors.primary else appColors.textPrimary,
                                     fontSize = 14.sp
@@ -1653,7 +1653,7 @@ fun TorStatusCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Status węzła TOR",
+                    text = "TOR Node Status",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = appColors.textPrimary
@@ -1665,18 +1665,18 @@ fun TorStatusCard(
                 val badgeBorder: Color
 
                 if (!isTorEnabled) {
-                    badgeText = "Wyłączony"
+                    badgeText = "Disabled"
                     badgeColor = appColors.textSecondary.copy(alpha = 0.2f)
                     badgeBorder = appColors.border
                 } else {
                     when (torState) {
                         is TorState.Disconnected -> {
-                            badgeText = "Odłączony"
+                            badgeText = "Disconnected"
                             badgeColor = appColors.textSecondary.copy(alpha = 0.2f)
                             badgeBorder = appColors.border
                         }
                         is TorState.Starting -> {
-                            badgeText = "Inicjalizacja"
+                            badgeText = "Starting"
                             badgeColor = Color(0xFFFF9800).copy(alpha = 0.2f)
                             badgeBorder = Color(0xFFFF9800)
                         }
@@ -1686,12 +1686,12 @@ fun TorStatusCard(
                             badgeBorder = NeonCyan
                         }
                         is TorState.Connected -> {
-                            badgeText = "Połączono"
+                            badgeText = "Connected"
                             badgeColor = ElectricGreen.copy(alpha = 0.2f)
                             badgeBorder = ElectricGreen
                         }
                         is TorState.Error -> {
-                            badgeText = "Błąd"
+                            badgeText = "Error"
                             badgeColor = Color(0xFFE53935).copy(alpha = 0.2f)
                             badgeBorder = Color(0xFFE53935)
                         }
@@ -1717,7 +1717,7 @@ fun TorStatusCard(
 
             if (!isTorEnabled) {
                 Text(
-                    text = "Tryb TOR jest obecnie wyłączony. Pakiety DHT wysyłane są bezpośrednim gniazdem transportowym UDP.",
+                    text = "TOR mode is currently disabled. DHT packets are sent via direct UDP transport socket.",
                     style = MaterialTheme.typography.bodySmall,
                     color = appColors.textSecondary
                 )
@@ -1725,14 +1725,14 @@ fun TorStatusCard(
                 when (torState) {
                     is TorState.Disconnected -> {
                         Text(
-                            text = "Oczekiwanie na start klienta TOR...",
+                            text = "Waiting for TOR client to start...",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary
                         )
                     }
                     is TorState.Starting -> {
                         Text(
-                            text = "Uruchamianie wbudowanego silnika Tor i generowanie pliku torrc...",
+                            text = "Starting embedded Tor engine and generating torrc...",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary
                         )
@@ -1745,7 +1745,7 @@ fun TorStatusCard(
                     }
                     is TorState.Bootstrapping -> {
                         Text(
-                            text = "Łączenie z węzłami Tor: ${torState.progress}% ${if (torState.summary.isNotBlank()) "— ${torState.summary}" else ""}",
+                            text = "Connecting to Tor relays: ${torState.progress}% ${if (torState.summary.isNotBlank()) "— ${torState.summary}" else ""}",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textPrimary,
                             fontWeight = FontWeight.Medium
@@ -1768,14 +1768,14 @@ fun TorStatusCard(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Połączono z siecią TOR (Port SOCKS5: ${torState.socksPort})",
+                                text = "Connected to TOR network (SOCKS5 Port: ${torState.socksPort})",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Bold,
                                 color = ElectricGreen
                             )
                         }
                         Text(
-                            text = "Ruch DHT KRPC jest hermetyzowany przez proxy SOCKS5 (UDP ASSOCIATE lub tunel strumieniowy TCP dla standardowych demonów Tor). Rozwiązywanie nazw domenowych (RFC 1928) następuje po stronie węzła wyjściowego.",
+                            text = "DHT KRPC traffic is encapsulated through SOCKS5 proxy (UDP ASSOCIATE or TCP stream tunnel for standard Tor daemons). Domain name resolution (RFC 1928) occurs at exit relays.",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary,
                             fontSize = 11.sp,
@@ -1784,14 +1784,14 @@ fun TorStatusCard(
                     }
                     is TorState.Error -> {
                         Text(
-                            text = "Błąd klienta Tor: ${torState.message}",
+                            text = "Tor client error: ${torState.message}",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFE53935),
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Zabezpieczenie Fail-Closed aktywne: bezpośrednia transmisja UDP przez sieć komórkową/Wi-Fi została wstrzymana, aby wykluczyć wyciek Twojego adresu IP (clearnet leak).",
+                            text = "Fail-Closed security active: direct UDP transmission over cellular/Wi-Fi is halted to prevent clearnet IP leaks.",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary,
                             fontSize = 11.sp

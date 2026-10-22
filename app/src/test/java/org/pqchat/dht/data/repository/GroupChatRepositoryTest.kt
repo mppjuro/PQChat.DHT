@@ -378,7 +378,7 @@ class GroupChatRepositoryTest {
 
     @Test
     fun testGroupEachMemberQueriesDistinctTarget() = runBlocking {
-        // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
+        // Same-target for all members allows a DHT observer to correlate N recipients via parallel GETs to the same slot, breaking group destination privacy.
         val dhtNode = FakeDht()
 
         val aliceContactDao = FakeContactDao()
@@ -1807,7 +1807,7 @@ class GroupChatRepositoryTest {
         assertTrue("Alice must have 0 pending controls after ACK", aliceRepo.getPendingGroupControls().isEmpty())
 
         // 5. Alice sends an Epoch 2 group message with Polish/Unicode text
-        val messageText = "Zażółć gęślą jaźń w epoce 2! 🛡️"
+        val messageText = "Post-quantum encrypted test in epoch 2! 🛡️"
         aliceRepo.sendGroupMessage(groupId, messageText)
 
         val bobGotMsg = bobRepo.pollGroupIncoming(groupId)

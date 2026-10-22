@@ -1,11 +1,11 @@
 # 📜 Changelog
 
-Wszystkie istotne zmiany w projekcie **PQChat.DHT** są rejestrowane w tym dokumencie.
-Format jest oparty na specyfikacji [Conventional Commits](https://www.conventionalcommits.org/).
+All notable changes to the **PQChat.DHT** project are documented in this file.
+The format is based on the [Conventional Commits](https://www.conventionalcommits.org/) specification.
 
 ---
 
-## 🚀 Nowe Funkcjonalności (Features)
+## 🚀 Features
 
 - [`7f0e982`](https://github.com/mppjuro/PQChat.DHT/commit/7f0e9828295d7d31e8e966122612580cb904010a) (2026-10-22) — **security**: implement Byzantine and adversarial DHT attack simulation framework with /24 subnet bucketing and highest-seq rollback defenses
 - [`a51879d`](https://github.com/mppjuro/PQChat.DHT/commit/a51879d9bf1ab1d4304490bab97f49795dca77c3) (2026-10-22) — **research**: expand empirical telemetry module, consent dialog, and thesis analyzer
@@ -17,7 +17,7 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 - [`0e57077`](https://github.com/mppjuro/PQChat.DHT/commit/0e57077cd6a8e015716c85cbb9c27673125f703f) (2026-10-20) — **traffic**: Constant-Size Decoy-Padded Poll Batch eliminating chat screen correlation and traffic pairing
 - [`2103513`](https://github.com/mppjuro/PQChat.DHT/commit/21035136caed2ffd5f5ddbd45cbb88919fcd10f0) (2026-10-20) — **traffic**: enforce strict Poisson traffic shaping and eliminate group correlation vulnerability
 - [`b0640c2`](https://github.com/mppjuro/PQChat.DHT/commit/b0640c2dc02ecaeea2e6db8b913c99aa76426aa8) (2026-10-19) — **group-chat**: implement decentralized Post-Quantum Sender Keys over BEP 44
-- [`b2e150e`](https://github.com/mppjuro/PQChat.DHT/commit/b2e150ed2b7ea5878bd78c0e6c088aa2600599af) (2026-10-19) — **research**: rozbudowa modułu badawczego i telemetrii pod kątem pracy magisterskiej
+- [`b2e150e`](https://github.com/mppjuro/PQChat.DHT/commit/b2e150ed2b7ea5878bd78c0e6c088aa2600599af) (2026-10-19) — **research**: expand empirical telemetry module and research capabilities for master thesis
 - [`e397907`](https://github.com/mppjuro/PQChat.DHT/commit/e3979073102c4622c4e2f11070720d2cd2ce2c9a) (2026-10-19) — **traffic**: implement strict Poisson traffic shaping and statistical tests
 - [`e28c99a`](https://github.com/mppjuro/PQChat.DHT/commit/e28c99a0b02e296c1e1345628d3bc0635800d32a) (2026-10-18) — **research**: adapt telemetry to Firebase Spark plan with Cloud Firestore batch metrics
 - [`79d1fdb`](https://github.com/mppjuro/PQChat.DHT/commit/79d1fdb207bb51938310b62b88d9d7f31d733a81) (2026-10-18) — **research**: implement Local-First Batch Archiving, scrub secrets, and harden CI
@@ -36,9 +36,9 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 - [`2ce8f72`](https://github.com/mppjuro/PQChat.DHT/commit/2ce8f7274645734e116856360ac2dd08f309a8d4) (2026-10-12) — **security**: implement security hardening, keystore strongbox, bep43 ro=1, flag_secure and minify
 - [`dd703e5`](https://github.com/mppjuro/PQChat.DHT/commit/dd703e5dc5512cd8814bca8a52f642054502325f) (2026-10-12) — GNU General Public License v3
 - [`665360f`](https://github.com/mppjuro/PQChat.DHT/commit/665360f69ee49c1a088acf51c1ecba94d47d05cb) (2026-10-11) — **tor**: add embedded Tor engine with SOCKS5 KRPC routing and UI integration
-- [`01bcf5a`](https://github.com/mppjuro/PQChat.DHT/commit/01bcf5a70cdc3871b18ab0ae064a950559fcdf3a) (2026-10-11) — **ui**: dodaj pelnoekranowy podglad zdjec z zapisem do galerii, jednoliniowy SAS i edycje nazwy kontaktu
-- [`18c1a14`](https://github.com/mppjuro/PQChat.DHT/commit/18c1a143f03a16c3016677a37f24eb250cdbe0f2) (2026-10-11) — **traffic**: zaimplementuj Blind Cooperative Republishing w DHT jako zamiennik syntetycznego decoy traffic
-- [`049f2f1`](https://github.com/mppjuro/PQChat.DHT/commit/049f2f14021265ba18d276ef81eed51804e0339a) (2026-10-11) — **media**: dodanie kompresji PNG8 z kwantyzacja barw i gallery pickera
+- [`01bcf5a`](https://github.com/mppjuro/PQChat.DHT/commit/01bcf5a70cdc3871b18ab0ae064a950559fcdf3a) (2026-10-11) — **ui**: add fullscreen image viewer with gallery save, single-line SAS, and contact name editing
+- [`18c1a14`](https://github.com/mppjuro/PQChat.DHT/commit/18c1a143f03a16c3016677a37f24eb250cdbe0f2) (2026-10-11) — **traffic**: implement Blind Cooperative Republishing in DHT as alternative to synthetic decoy traffic
+- [`049f2f1`](https://github.com/mppjuro/PQChat.DHT/commit/049f2f14021265ba18d276ef81eed51804e0339a) (2026-10-11) — **media**: add PNG8 compression with color quantization and gallery picker
 - [`07b49de`](https://github.com/mppjuro/PQChat.DHT/commit/07b49debc3495a015af9ac28f1be20cb5f057ce2) (2026-10-11) — **handshake**: add ability to load and decode handshake QR from gallery
 - [`f360784`](https://github.com/mppjuro/PQChat.DHT/commit/f3607845ee4e53a690e00aaf78f35fba0784b1c3) (2026-10-10) — **protocol**: add PROTOCOL.md, ProVerif models in docs/formal, anti-grinding SAS, verified contacts, and nightly slow tests workflow
 - [`e8968f3`](https://github.com/mppjuro/PQChat.DHT/commit/e8968f335376b65fcb8444a9bd67d6944e30d984) (2026-10-10) — **security**: harden data at rest with fail-closed Keystore, row-bound AAD, and Room migration v7
@@ -60,14 +60,14 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 - [`38cdc0b`](https://github.com/mppjuro/PQChat.DHT/commit/38cdc0ba480c304ca75999d6026cdf71a0e6070d) (2026-10-06) — Add DHT sync timer with instant poll in TopAppBar
 - [`2d8ca10`](https://github.com/mppjuro/PQChat.DHT/commit/2d8ca10661b91475a18ce4706ceea7e7bdb38cd8) (2026-10-05) — Settings screen with Theme Switcher, Polling Interval dropdowns, and Self-Conversation Notes
 
-## 🔒 Bezpieczeństwo i Kryptografia (Security)
+## 🔒 Security & Cryptography
 
 - [`e078692`](https://github.com/mppjuro/PQChat.DHT/commit/e078692f9ba1bb6c7cb79fa6c46b0c2bf280f193) (2026-10-21) — **traffic**: enforce constant-budget polling and weighted fair stratified sampling across direct and group chats
 - [`71889c3`](https://github.com/mppjuro/PQChat.DHT/commit/71889c377019859d32df9e28d3096573edca3e61) (2026-10-21) — **db**: eliminate Column-Swap and Intra-Row Swap vulnerabilities and encrypt social graph metadata
 - [`d073c44`](https://github.com/mppjuro/PQChat.DHT/commit/d073c4454b531a032f250c989b6ac3ac37f15243) (2026-10-08) — Bencode and KRPC parsing against untrusted UDP inputs and add Jazzer fuzzing
 - [`1a250a7`](https://github.com/mppjuro/PQChat.DHT/commit/1a250a7cac2fb6815a7a2efe19094a4b35e44ff1) (2026-10-07) — logging behind DEBUG, remove ChainKey hex from diagnostics, add Room migrations, and encrypt sensitive DB fields with Android Keystore
 
-## 🐛 Poprawki Błędów (Bug Fixes)
+## 🐛 Bug Fixes
 
 - [`55a7687`](https://github.com/mppjuro/PQChat.DHT/commit/55a7687087f7b487e5ab453b0c11c78774f687b4) (2026-10-22) — **crypto,db,traffic**: standardize frame codecs, enforce V2 row binding and implement WFQ traffic shaping
 - [`726f50d`](https://github.com/mppjuro/PQChat.DHT/commit/726f50d3271294d60c3cac2512a0f5f5c93a1911) (2026-10-21) — **crypto**: handle IV collision with row-bound magic bytes during Keystore raw decryption
@@ -113,12 +113,12 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 - [`faa880a`](https://github.com/mppjuro/PQChat.DHT/commit/faa880a8b4ebf57f52ff3d0d5aa5e87c3a0c2d19) (2026-10-05) — DHT BEP 44 v field size limit to 900B, bypass local store for self-notes, and align confirmed loopback messages to left
 - [`97294cc`](https://github.com/mppjuro/PQChat.DHT/commit/97294cc308e0790ebd843aa1168b532d7c5e976d) (2026-10-05) — BEP 44 mutable storage, chunk retrieval and loopback DHT delivery confirmation
 
-## ⚡ Wydajność i Optymalizacje (Performance)
+## ⚡ Performance & Optimizations
 
 - [`0cbec4a`](https://github.com/mppjuro/PQChat.DHT/commit/0cbec4a64423dd1192b6e35122d9a2ab9ca04094) (2026-10-07) — screen change polling recalculation and resolve compiler and lint warnings
 - [`e4d3094`](https://github.com/mppjuro/PQChat.DHT/commit/e4d3094a1a1aa8a2ad988f1ba22ce112ab503362) (2026-10-07) — DHT message polling with Fast Termination and asynchronous lookahead window
 
-## 📦 Budowanie i Zależności (Build & CI)
+## 📦 Build & Dependencies
 
 - [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
 - [`c575e47`](https://github.com/mppjuro/PQChat.DHT/commit/c575e4723b97834be5ef464b36ee6c67f9fcd7aa) (2026-10-19) — **deps**: bump com.google.firebase:firebase-bom from 33.9.0 to 35.0.2
@@ -154,21 +154,21 @@ Format jest oparty na specyfikacji [Conventional Commits](https://www.convention
 - [`0232705`](https://github.com/mppjuro/PQChat.DHT/commit/0232705c8cd0bd52527d6c1606003d0ae12734c4) (2026-10-07) — update - emulator OS updated to ubuntu-latest
 - [`8b34ef6`](https://github.com/mppjuro/PQChat.DHT/commit/8b34ef64034ab82f79dbc237183a8672af482df7) (2026-10-07) — gradle-wrapper.jar and set as exclusion in .gitignore
 
-## 🧪 Testy (Tests)
+## 🧪 Tests
 
 - [`af04901`](https://github.com/mppjuro/PQChat.DHT/commit/af049014b59f2a1d18c0cc4f3f8ebbb5dcb8334f) (2026-10-22) — **e2e**: expand physical pixel UI Automator tests and full GitHub Workflows automation
 - [`4d1d93a`](https://github.com/mppjuro/PQChat.DHT/commit/4d1d93a2b2be5ea9add09e715cf30f55b8111a01) (2026-10-20) — **e2e**: implement multi-emulator orchestration and instrumented physical UI tests
 - [`04b6293`](https://github.com/mppjuro/PQChat.DHT/commit/04b62930a9f063e82c1f20cf14098190f9c8415c) (2026-10-08) — fix recovery round budget and initiator roles in testRandomizedLossAndReorderingProperty
 
-## 📚 Dokumentacja (Documentation)
+## 📚 Documentation
 
 - [`47bc9af`](https://github.com/mppjuro/PQChat.DHT/commit/47bc9af3da943a0a548beae57bb3781c76b187ea) (2026-10-21) — clean changelog automation, add group proverif docs, and harden lint and room schema CI
 - [`c093b39`](https://github.com/mppjuro/PQChat.DHT/commit/c093b39f16686d71986e27bf095b8c94a1d53acf) (2026-10-12) — README with project details and instructions
 - [`3c8c26e`](https://github.com/mppjuro/PQChat.DHT/commit/3c8c26e6badbecc4fda6afba53595987e78c0c68) (2026-10-08) — add threat model, DHT correlation simulator, and upgrade CI actions to Node 24
 
-## 🛠️ Pozostałe Zmiany (Other Changes)
+## 🛠️ Other Changes
 
-- [`e968816`](https://github.com/mppjuro/PQChat.DHT/commit/e96881641d7ac62903c0bab46eeffce89886af62) (2026-10-20) — modulu badawczego: metryki ksztaltowania ruchu, retencji BEP 44, czatow grupowych, refaktoryzacja petli pomiarowej, utwardzenie firestore.rules i skrypt research_analyzer.py
+- [`e968816`](https://github.com/mppjuro/PQChat.DHT/commit/e96881641d7ac62903c0bab46eeffce89886af62) (2026-10-20) — research module: traffic shaping metrics, BEP 44 retention, group chats, measurement loop refactoring, firestore.rules hardening and research_analyzer.py script
 - [`3dcf409`](https://github.com/mppjuro/PQChat.DHT/commit/3dcf409e14239001cd0afbb5cba01242887a9283) (2026-10-18) — decoupled 60-90m republish, ACK tombstones, resend expired messages, adaptive K (16 on LTE/CGNAT), and active chat keepalive (20-25s)
 - [`121515d`](https://github.com/mppjuro/PQChat.DHT/commit/121515d9e077782f83f18679e03d96d150a62f12) (2026-10-07) — DhtClient interface, implement FakeDht, isolate integration tests, and add GitHub Actions CI
 - [`cd50430`](https://github.com/mppjuro/PQChat.DHT/commit/cd50430176153aaae86435296effcd5d279eb09e) (2026-10-05) — commit

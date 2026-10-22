@@ -53,7 +53,7 @@ fun BiometricLockScreen(
 
     fun submitPin() {
         if (pinInput.isBlank()) {
-            errorMessage = "Wprowadź kod PIN"
+            errorMessage = "Enter PIN code"
             return
         }
         val result = onPinSubmitted?.invoke(pinInput) ?: PinAuthResult.NO_PIN_SET
@@ -67,7 +67,7 @@ fun BiometricLockScreen(
                 onDuressTriggered?.invoke()
             }
             PinAuthResult.INVALID -> {
-                errorMessage = "Nieprawidłowy kod PIN"
+                errorMessage = "Invalid PIN code"
                 pinInput = ""
             }
         }
@@ -94,7 +94,7 @@ fun BiometricLockScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Lock,
-                    contentDescription = "Zablokowano",
+                    contentDescription = "Locked",
                     tint = appColors.primary,
                     modifier = Modifier.size(44.dp)
                 )
@@ -103,7 +103,7 @@ fun BiometricLockScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "PQChat Zablokowany",
+                text = "PQChat Locked",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
@@ -112,7 +112,7 @@ fun BiometricLockScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Wprowadź PIN lub użyj biometrii, aby odblokować bezpieczne rozmowy.",
+                text = "Enter PIN or use biometrics to unlock secure conversations.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -129,7 +129,7 @@ fun BiometricLockScreen(
                         errorMessage = null
                     }
                 },
-                label = { Text("Kod PIN / Kod przymusu") },
+                label = { Text("PIN code / Duress PIN") },
                 singleLine = true,
                 visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
@@ -143,7 +143,7 @@ fun BiometricLockScreen(
                     IconButton(onClick = { pinVisible = !pinVisible }) {
                         Icon(
                             imageVector = if (pinVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (pinVisible) "Ukryj PIN" else "Pokaż PIN"
+                            contentDescription = if (pinVisible) "Hide PIN" else "Show PIN"
                         )
                     }
                 },
@@ -251,7 +251,7 @@ fun BiometricLockScreen(
                     .testTag("pin_unlock_button")
             ) {
                 Text(
-                    text = "Odblokuj kodem PIN",
+                    text = "Unlock with PIN",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -275,7 +275,7 @@ fun BiometricLockScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Użyj biometrii",
+                        text = "Use Biometrics",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Medium,
                         color = appColors.primary

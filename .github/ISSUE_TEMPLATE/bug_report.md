@@ -1,37 +1,37 @@
 ---
-name: Zgłoszenie błędu (Bug Report)
-about: Utwórz zgłoszenie błędu, aby pomóc nam ulepszyć PQChat.DHT
+name: Bug Report
+about: Create a bug report to help us improve PQChat.DHT
 title: '[BUG] '
 labels: ['bug']
 assignees: ''
 ---
 
-## Opis błędu
-Jasny i zwięzły opis błędu.
+## Bug Description
+A clear and concise description of the bug.
 
-## Kroki do odtworzenia
-Kroki do odtworzenia nieprawidłowego zachowania:
-1. Otwórz aplikację '...'
-2. Przejdź do ekranu '...'
-3. Wykonaj czynność '...'
-4. Zauważ błąd
+## Steps to Reproduce
+Steps to reproduce the behavior:
+1. Open application '...'
+2. Navigate to screen '...'
+3. Perform action '...'
+4. Observe error
 
-## Oczekiwane zachowanie
-Jasny i zwięzły opis oczekiwanego rezultatu.
+## Expected Behavior
+A clear and concise description of what you expected to happen.
 
-## Rzeczywiste zachowanie
-Opis faktycznego przebiegu (komunikaty o błędach, zrzuty stosu, nieoczekiwane zachowanie).
+## Actual Behavior
+Description of actual behavior (error messages, stack traces, unexpected behavior).
 
-## Zrzuty ekranu / Logi
-Jeśli dotyczy, dołącz zrzuty ekranu lub fragmenty logów z `adb logcat`.
+## Screenshots / Logs
+If applicable, attach screenshots or log snippets from `adb logcat`.
 > [!IMPORTANT]
-> Zgodnie z zasadami bezpieczeństwa projektu, upewnij się, że logi **NIE ZAWIERAJĄ** żadnych kluczy prywatnych, ziaren KDF, zdeszyfrowanych wiadomości ani danych osobowych.
+> In accordance with project security rules, ensure logs **DO NOT CONTAIN** any private keys, KDF seeds, decrypted messages, or personal data.
 
-## Środowisko testowe
-- **Wersja aplikacji / Commit:** [np. nightly-9219c9c / v0.0.1]
-- **Urządzenie:** [np. Google Pixel 8 / Samsung Galaxy S23 / Emulator AVD API 34]
-- **Wersja systemu Android:** [np. Android 14 (API 34)]
-- **Konfiguracja sieciowa:** [np. Wi-Fi / Dane komórkowe / Tor włączony]
+## Environment
+- **App Version / Commit:** [e.g. nightly-9219c9c / v0.0.1]
+- **Device:** [e.g. Google Pixel 8 / Samsung Galaxy S23 / AVD Emulator API 34]
+- **Android Version:** [e.g. Android 14 (API 34)]
+- **Network Configuration:** [e.g. Wi-Fi / Cellular Data / Tor enabled]
 
-## Dodatkowy kontekst
-Dodatkowe informacje (np. zachowanie po przejściu w tryb Doze, stan bazy Room, zachowanie węzłów DHT).
+## Additional Context
+Additional context (e.g. behavior after entering Doze mode, Room database state, DHT node behavior).

@@ -282,9 +282,9 @@ The compiled APK will be available in `app/build/outputs/apk/debug/app-debug.apk
 
 ## 📜 Changelog & Releases
 
-- **Historia zmian:** Pełna lista wprowadzonych funkcji, poprawek i zmian znajduje się w pliku [`CHANGELOG.md`](CHANGELOG.md).
-- **Oficjalne wydania (Releases):** Przejdź do zakładki [Releases](https://github.com/mppjuro/PQChat.DHT/releases), aby pobrać stabilne pakiety instalacyjne APK.
-- **Wydania codzienne (Nightly Builds):** Najnowsza wersja deweloperska APK jest automatycznie kompilowana co noc i dostępna w [Nightly Release](https://github.com/mppjuro/PQChat.DHT/releases/tag/nightly).
+- **Changelog History:** A comprehensive list of introduced features, bug fixes, and changes is documented in [`CHANGELOG.md`](CHANGELOG.md).
+- **Official Releases:** Visit [Releases](https://github.com/mppjuro/PQChat.DHT/releases) to download stable APK installation packages.
+- **Nightly Builds:** The latest developer APK is built automatically every night and available under [Nightly Release](https://github.com/mppjuro/PQChat.DHT/releases/tag/nightly).
 
 ---
 
@@ -299,7 +299,7 @@ If you utilize this work or its formal models in academic research, please cite:
 ```bibtex
 @mastersthesis{pqchat_dht_2026,
   author       = {Miłosz Piórkowski},
-  title        = {Zdecentralizowany komunikator mobilny P2P odporny na analizę ruchu, oparty na sieci DHT i kryptografii postkwantowej},
+  title        = {Decentralized P2P Mobile Messenger Resistant to Traffic Analysis Based on DHT and Post-Quantum Cryptography},
   school       = {Nicolaus Copernicus University in Toruń (UMK)},
   year         = {2026},
   note         = {GitHub: [https://github.com/mppjuro/PQChat.DHT](https://github.com/mppjuro/PQChat.DHT)}

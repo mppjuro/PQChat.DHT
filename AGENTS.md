@@ -1,223 +1,223 @@
-# AGENTS.md — Wytyczne Architektoniczne i Implementacyjne dla Agentów AI
+# AGENTS.md — Architectural and Implementation Guidelines for AI Agents
 
-Niniejszy plik definiuje specyfikację techniczną, model kryptograficzny, architekturę kodu oraz zasady implementacji dla zdecentralizowanego, post-kwantowego komunikatora mobilnego na platformę Android. Każdy agent AI pracujący w tym repozytorium jest zobowiązany do bezwzględnego przestrzegania poniższych wytycznych.
-
----
-
-## 1. Przegląd Projektu i Filozofia Architektury
-
-Projekt to w pełni zdecentralizowany (serverless), odporny na cenzurę i chroniący metadane komunikator mobilny na system Android, wykorzystujący publiczną sieć **BitTorrent Mainline DHT (BEP 44)** jako efemeryczny magazyn buforujący (Store-and-Forward) na okres 24–72 godzin.
-
-### Główne Filary:
-1. **Zero Centralizacji:** Brak jakichkolwiek serwerów pośredniczących, brokerów push (brak FCM/APNs) oraz stałych adresów IP/kont.
-2. **Ochrona Metadanych (Metadata-Free Rendezvous):** Obserwator sieciowy ani węzły DHT nie są w stanie powiązać nadawcy z odbiorcą, określić faktu prowadzenia rozmowy ani zmierzyć częstotliwości wymiany wiadomości.
-3. **Odporność Post-Kwantowa (PQC):** Ochrona przed atakiem *Harvest Now, Decrypt Later* za pomocą algorytmów standaryzowanych przez NIST (FIPS 203).
-4. **Tryb Klienta Liścia (Client-Only / Leaf Node):** Smartfon nigdy nie trasuje cudzych zapytań ani nie buforuje danych innych użytkowników w RAM; jest wyłącznie inicjatorem efemerycznych zapytań UDP.
+This file defines the technical specification, cryptographic model, code architecture, and implementation rules for the decentralized, post-quantum mobile messenger on Android. Every AI agent working in this repository is strictly required to adhere to the guidelines below.
 
 ---
 
-## 2. Stos Technologiczny
+## 1. Project Overview and Architectural Philosophy
 
-* **Język główny i wyłączny:** Kotlin (100% kodu aplikacji, sieci UDP KRPC DHT, Bencode, kryptografii, UI i serwisów tła — brak warstwy C++/JNI).
-* **Interfejs UI:** Jetpack Compose + Material 3.
-* **Baza danych:** Room (SQLite) z szyfrowaniem wrażliwych pól kluczem z Android Keystore.
-* **Wielowątkowość:** Kotlin Coroutines (`Dispatchers.IO`, `Dispatchers.Default`) + Flow.
-* **Praca w tle:** AndroidX WorkManager (zadania periodyczne) + Foreground Service (dla aktywnego czatu) + AlarmManager (`setAndAllowWhileIdle` dla trybu Doze).
-* **Biblioteka kryptograficzna:** Bouncy Castle Java/Kotlin PQC Provider (`org.bouncycastle:bcprov-jdk18on`) + natywne API Androida `javax.crypto` (dla AES-GCM).
+The project is a fully decentralized (serverless), censorship-resistant, metadata-protecting mobile messenger for Android, utilizing the public **BitTorrent Mainline DHT (BEP 44)** as an ephemeral store-and-forward buffer for 24–72 hours.
+
+### Core Pillars:
+1. **Zero Centralization:** No intermediary servers, no push notification brokers (no FCM/APNs), and no static IP addresses or user accounts.
+2. **Metadata Protection (Metadata-Free Rendezvous):** Network observers and DHT nodes cannot link sender to recipient, determine that a conversation is taking place, or measure message exchange frequency.
+3. **Post-Quantum Cryptography (PQC):** Protection against *Harvest Now, Decrypt Later* attacks using NIST-standardized algorithms (FIPS 203).
+4. **Leaf Node Mode (Client-Only / Leaf Node):** The smartphone never routes third-party traffic or stores other users' data in RAM; it acts strictly as an ephemeral UDP query initiator.
 
 ---
 
-## 3. Specyfikacja Kryptograficzna
+## 2. Technology Stack
 
-| Komponent | Standard / Algorytm | Zastosowanie |
+* **Primary & Exclusive Language:** Kotlin (100% application code, DHT KRPC UDP networking, Bencode, cryptography, UI, and background services — no C++/JNI layer).
+* **UI Framework:** Jetpack Compose + Material 3.
+* **Database:** Room (SQLite) with sensitive fields encrypted using keys backed by Android Keystore.
+* **Concurrency:** Kotlin Coroutines (`Dispatchers.IO`, `Dispatchers.Default`) + Flow.
+* **Background Work:** AndroidX WorkManager (periodic tasks) + Foreground Service (for active chat) + AlarmManager (`setAndAllowWhileIdle` for Doze mode).
+* **Cryptographic Library:** Bouncy Castle Java/Kotlin PQC Provider (`org.bouncycastle:bcprov-jdk18on`) + native Android `javax.crypto` API (for AES-GCM).
+
+---
+
+## 3. Cryptographic Specification
+
+| Component | Standard / Algorithm | Purpose |
 | :--- | :--- | :--- |
-| **KEM (Handshake & Rekey)** | Hybrydowy X25519 + ML-KEM-512 (FIPS 203 + RFC 7748) | Asymetryczne uzgadnianie wspólnego sekretu ($pk=832\text{ B}$, $ct=800\text{ B}$, $SS=32\text{ B}$) |
-| **Szyfrowanie ładunku (AEAD)** | AES-256-GCM | Szyfrowanie symetryczne wiadomości (Klucz: 32 B, IV: 12 B, Tag: 16 B) |
-| **Wyprowadzanie kluczy (KDF)** | HKDF-SHA512 (RFC 5869) | Derywacja łańcuchów kluczy, ziaren slotów i kluczy AES |
-| **Wymóg transportowy DHT** | Ed25519 (RFC 8032) | Wymagany przez BEP 44 podpis węzła (używany wyłącznie jako **jednorazowy token efemeryczny**) |
+| **KEM (Handshake & Rekey)** | Hybrid X25519 + ML-KEM-512 (FIPS 203 + RFC 7748) | Asymmetric shared secret agreement ($pk=832	ext{ B}$, $ct=800	ext{ B}$, $SS=32	ext{ B}$) |
+| **Payload Encryption (AEAD)** | AES-256-GCM | Symmetric message encryption (Key: 32 B, IV: 12 B, Tag: 16 B) |
+| **Key Derivation (KDF)** | HKDF-SHA512 (RFC 5869) | Derivation of ratchet chains, slot seeds, and AES keys |
+| **DHT Transport Requirement** | Ed25519 (RFC 8032) | Required by BEP 44 node signature (used strictly as an **ephemeral one-time token**) |
 
-### Deterministyczne Rozdzielenie Torów (Dual Unidirectional Chains):
-Każdy kontakt posiada dwa niezależne łańcuchy sterowane odrębnymi licznikami:
-* **Tor $A \to B$:** Alice inkrementuje $Counter_{out}$, Bob inkrementuje $Counter_{in}$.
-* **Tor $B \to A$:** Bob inkrementuje $Counter_{out}$, Alice inkrementuje $Counter_{in}$.
+### Deterministic Dual Unidirectional Chains:
+Each contact maintains two independent chains governed by separate monotonic counters:
+* **Track $A 	o B$:** Alice increments $Counter_{out}$, Bob increments $Counter_{in}$.
+* **Track $B 	o A$:** Bob increments $Counter_{out}$, Alice increments $Counter_{in}$.
 
-Wysłanie wiadomości przez jedną stronę **nigdy** nie wpływa na numerację ani adresowanie w torze przeciwnym.
+Sending a message on one track **never** impacts the counter sequence or addressing of the opposite track.
 
 ---
 
-## 4. Specyfikacja Binarna Rekordów DHT (BEP 44 Value)
+## 4. Binary DHT Record Specification (BEP 44 Value)
 
-Każdy pakiet binarny ('v') zapisywany w DHT ma **sztywny rozmiar dokładnie 900 bajtów** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES = 900`). Wszelkie wolne bajty są wypełniane kryptograficznie bezpiecznym szumem (`CryptoUtils.secureRandomBytes`).
+Every binary payload ('v') stored on the DHT has a **rigid size of exactly 900 bytes** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES = 900`). Any unused trailing bytes are padded with cryptographically secure pseudo-random noise (`CryptoUtils.secureRandomBytes`).
 
-### Uzasadnienie rozmiaru 900 B i zgodność ze specyfikacją BEP 44:
-Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'v'` po zakodowaniu formatem Bencode **nie może przekraczać 1000 bajtów**:
-* Format Bencode koduje ciąg bajtów jako `<długość>:<dane>`.
-* Dla surowego ładunku 900 bajtów zakodowany ciąg wynosi `"900:"` (4 bajty prefiksu) + 900 bajtów danych = **dokładnie 904 bajty**, co spełnia sztywny limit BEP 44 ($\le 1000$ B).
-* **Uwaga krytyczna:** Gdyby surowy ładunek miał 1000 bajtów, jego zakodowana postać Bencode wynosiłaby `"1000:"` (5 bajtów prefiksu) + 1000 bajtów danych = **1005 bajtów**, co **przekracza dopuszczalny limit BEP 44** i skutkuje natychmiastowym odrzuceniem pakietu przez publiczne węzły sieci BitTorrent DHT!
+### Rationale for 900 B Size and BEP 44 Compliance:
+Under the BitTorrent BEP 44 specification, the total size of the value field `'v'` after Bencode encoding **must not exceed 1000 bytes**:
+* Bencode encodes a byte string as `<length>:<data>`.
+* For a 900-byte raw payload, the encoded string is `"900:"` (4-byte prefix) + 900 bytes of data = **exactly 904 bytes**, satisfying the rigid BEP 44 limit ($`\le 1000`$ B).
+* **Critical Note:** If the raw payload were 1000 bytes, its Bencode-encoded representation would be `"1000:"` (5-byte prefix) + 1000 bytes of data = **1005 bytes**, which **exceeds the BEP 44 limit** and triggers immediate rejection by public BitTorrent DHT nodes!
 
 ```
 +───────────────────────────────────────────────────────────────────────────────+
-|                   REKORD BEP 44 VALUE (SZTYWNE 900 BAJTÓW)                    |
+|                    BEP 44 VALUE RECORD (EXACTLY 900 BYTES)                    |
 +────────────┬─────────────┬────────────────────────────────────────────────────+
-| IV (Nonce) |  AEAD Tag   |              SZYFROWANY ŁADUNEK                    |
-|  12 bajtów |  16 bajtów  |                 872 bajty                          |
+| IV (Nonce) |  AEAD Tag   |                ENCRYPTED PAYLOAD                   |
+|  12 bytes  |  16 bytes   |                    872 bytes                       |
 +────────────┴─────────────┴──────────────────┬──────────────────┬──────────────+
-                           | Nagłówek (13 B)  |   Dane Typu      | CSPRNG Szum  |
+                           |  Header (13 B)   |   Type Payload   | CSPRNG Noise |
                            +──────────────────┴──────────────────┴──────────────+
 ```
 
-### Nagłówek wewnętrzny ładunku (Plaintext Header – 13 bajtów):
-1. `MsgType` (1 bajt):
+### Internal Plaintext Header (13 bytes):
+1. `MsgType` (1 byte):
    * `0x01` – Handshake Online Finalize
-   * `0x02` – Standardowa wiadomość tekstowa
-   * `0x03` – PQC Rekey Offer (Nowy klucz publiczny)
-   * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
-   * `0x05` – Segment transferu blokowego (Chunk)
-   * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
-   * `0x07` – Reakcja na wiadomość (`TYPE_REACTION`: emoji powiązane z `(targetSeqEpoch, targetSeqNum)`)
-   * `0x08` – Pinezka lokalizacji / Status bezpieczeństwa offline (`TYPE_LOCATION_PIN`: współrzędne i notatka statusowa)
-2. `SeqNum` (2 bajty, UInt16 Big-Endian): Licznik $`Counter_{out}`$ nadawcy.
-3. `AckNum` (2 bajty, UInt16 Big-Endian): Ostatnio odebrany numer sekwencyjny partnera.
-4. `TimestampUTC` (8 bajtów, Int64 Big-Endian): Czas uniksowy nadania w milisekundach.
+   * `0x02` – Standard Text Message
+   * `0x03` – PQC Rekey Offer (New public key)
+   * `0x04` – PQC Rekey Response (Confirmation ciphertext)
+   * `0x05` – Binary Chunk Transfer (e.g., PNG image)
+   * `0x06` – Group Control (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+   * `0x07` – Message Reaction (`TYPE_REACTION`: emoji linked to `(targetSeqEpoch, targetSeqNum)`)
+   * `0x08` – Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`: coordinates and status note)
+2. `SeqNum` (2 bytes, UInt16 Big-Endian): Sender's $`Counter_{out}`$.
+3. `AckNum` (2 bytes, UInt16 Big-Endian): Highest received sequence number from partner.
+4. `TimestampUTC` (8 bytes, Int64 Big-Endian): Unix timestamp of transmission in milliseconds.
 
-### Dedykowane formaty wewnętrzne (przestrzeń 859 bajtów po odliczeniu nagłówka 872 - 13):
+### Dedicated Internal Formats (859-byte space after 872 - 13 header):
 
-* **Typ 0x01 (Handshake Finalize):**
-  * `Hybrid Ciphertext`: 800 bajtów (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
-  * `Salt`: 24 bajty
-  * `Key Confirmation Tag`: 32 bajty
-  * `CSPRNG Padding`: 3 bajty (859 - 856)
-* **Typ 0x02 (Tekst):**
-  * `TextLength` ($`L`$): 2 bajty (UInt16, wartość $`\le 857`$)
-  * `UTF-8 Payload`: $`L`$ bajtów (maksymalnie 857 bajtów tekstu)
-  * `CSPRNG Padding`: $`857 - L`$ bajtów
-* **Typ 0x03 (PQC Rekey Offer):**
-  * `RekeyEpoch`: 4 bajty (UInt32)
-  * `Combined PublicKey`: 832 bajty (800 B ML-KEM-512 + 32 B X25519)
-  * `CSPRNG Padding`: 23 bajty (859 - 836)
-* **Typ 0x04 (PQC Rekey Response):**
-  * `RekeyEpoch`: 4 bajty (UInt32)
-  * `Hybrid Ciphertext`: 800 bajtów (768 B ML-KEM-512 ct + 32 B X25519)
-  * `CSPRNG Padding`: 55 bajtów (859 - 804)
-* **Typ 0x05 (Chunk Transfer – np. PNG):**
-  * `TransferID`: 16 bajtów (UUID transferu)
-  * `ChunkIndex`: 2 bajty (UInt16)
-  * `TotalChunks`: 2 bajty (UInt16)
-  * `ChunkLength` ($`C`$): 2 bajty (UInt16, wartość $`\le 837`$)
-  * `BinaryData`: $`C`$ bajtów
-  * `CSPRNG Padding`: $`837 - C`$ bajtów
-* **Typ 0x06 (Group Control – ramka kontrolna grupy):**
-  * `ControlSubType`: 1 bajt (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
-  * `GroupID`: 16 bajtów (UUID grupy)
-  * `GroupEpoch`: 4 bajty (UInt32 Big-Endian)
-  * `SenderMemberID`: 16 bajtów (UUID nadawcy w grupie)
-  * `SenderGroupChainKey`: 64 bajty (bieżący łańcuch nadawcy grupy)
-  * `CurrentCounter`: 4 bajty (UInt32 Big-Endian)
-  * `GroupNameLength` ($`N`$): 2 bajty (UInt16, wartość $`\le 64`$)
-  * `GroupName`: $`N`$ bajtów UTF-8 (maksymalnie 64 bajty)
-  * `MemberCount` ($`M`$): 2 bajty (UInt16, liczba uczestników, wartość $`\le 64`$)
-  * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
-  * `CSPRNG Padding`: wypełnienie do 859 bajtów.
-* **Typ 0x07 (Reakcja – Reaction):**
-  * `TargetSeqEpoch`: 4 bajty (UInt32 Big-Endian)
-  * `TargetSeqNum`: 2 bajty (UInt16 Big-Endian)
-  * `EmojiLength` ($`E`$): 1 bajt (UInt8, wartość $`\le 64`$)
-  * `Emoji`: $`E`$ bajtów UTF-8 (maksymalnie 64 bajty)
-  * `CSPRNG Padding`: $`852 - E`$ bajtów (wypełnienie do 859 B)
-* **Typ 0x08 (Pinezka Lokalizacji / Status Bezpieczeństwa Offline – Location Pin):**
-  * `Latitude`: 8 bajtów (Double IEEE 754 Big-Endian)
-  * `Longitude`: 8 bajtów (Double IEEE 754 Big-Endian)
-  * `Altitude`: 8 bajtów (Double IEEE 754 Big-Endian)
-  * `Accuracy`: 4 bajty (Float IEEE 754 Big-Endian)
-  * `NoteLength` ($`P`$): 2 bajty (UInt16 Big-Endian, wartość $`\le 829`$, lub $`\le 817`$ dla wiadomości efemerycznych)
-  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów, lub $`\le 817`$)
-  * `Opcjonalny Nagłówek Efemeryczny`: `MAGIC_EPHEMERAL` (8 bajtów, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bajty, UInt32 Big-Endian) – obecny wyłącznie gdy $`TTL > 0`$
-  * `CSPRNG Padding`: wypełnienie do 859 B ($`829 - P`$ lub $`817 - P`$ bajtów)
+* **Type 0x01 (Handshake Finalize):**
+  * `Hybrid Ciphertext`: 800 bytes (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
+  * `Salt`: 24 bytes
+  * `Key Confirmation Tag`: 32 bytes
+  * `CSPRNG Padding`: 3 bytes (859 - 856)
+* **Type 0x02 (Text Message):**
+  * `TextLength` ($`L`$): 2 bytes (UInt16, value $`\le 857`$)
+  * `UTF-8 Payload`: $`L`$ bytes (maximum 857 text bytes)
+  * `CSPRNG Padding`: $`857 - L`$ bytes
+* **Type 0x03 (PQC Rekey Offer):**
+  * `RekeyEpoch`: 4 bytes (UInt32)
+  * `Combined PublicKey`: 832 bytes (800 B ML-KEM-512 + 32 B X25519)
+  * `CSPRNG Padding`: 23 bytes (859 - 836)
+* **Type 0x04 (PQC Rekey Response):**
+  * `RekeyEpoch`: 4 bytes (UInt32)
+  * `Hybrid Ciphertext`: 800 bytes (768 B ML-KEM-512 ct + 32 B X25519)
+  * `CSPRNG Padding`: 55 bytes (859 - 804)
+* **Type 0x05 (Chunk Transfer – e.g. PNG):**
+  * `TransferID`: 16 bytes (Transfer UUID)
+  * `ChunkIndex`: 2 bytes (UInt16)
+  * `TotalChunks`: 2 bytes (UInt16)
+  * `ChunkLength` ($`C`$): 2 bytes (UInt16, value $`\le 837`$)
+  * `BinaryData`: $`C`$ bytes
+  * `CSPRNG Padding`: $`837 - C`$ bytes
+* **Type 0x06 (Group Control Frame):**
+  * `ControlSubType`: 1 byte (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
+  * `GroupID`: 16 bytes (Group UUID)
+  * `GroupEpoch`: 4 bytes (UInt32 Big-Endian)
+  * `SenderMemberID`: 16 bytes (Sender UUID within group)
+  * `SenderGroupChainKey`: 64 bytes (Current group sender chain)
+  * `CurrentCounter`: 4 bytes (UInt32 Big-Endian)
+  * `GroupNameLength` ($`N`$): 2 bytes (UInt16, value $`\le 64`$)
+  * `GroupName`: $`N`$ bytes UTF-8 (maximum 64 bytes)
+  * `MemberCount` ($`M`$): 2 bytes (UInt16, count of participants, value $`\le 64`$)
+  * `Members`: array of $`M`$ entries: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (up to 32 B UTF-8)
+  * `CSPRNG Padding`: padding to 859 bytes.
+* **Type 0x07 (Reaction):**
+  * `TargetSeqEpoch`: 4 bytes (UInt32 Big-Endian)
+  * `TargetSeqNum`: 2 bytes (UInt16 Big-Endian)
+  * `EmojiLength` ($`E`$): 1 byte (UInt8, value $`\le 64`$)
+  * `Emoji`: $`E`$ bytes UTF-8 (maximum 64 bytes)
+  * `CSPRNG Padding`: $`852 - E`$ bytes (padding to 859 B)
+* **Type 0x08 (Location Pin / Offline Safety Status):**
+  * `Latitude`: 8 bytes (Double IEEE 754 Big-Endian)
+  * `Longitude`: 8 bytes (Double IEEE 754 Big-Endian)
+  * `Altitude`: 8 bytes (Double IEEE 754 Big-Endian)
+  * `Accuracy`: 4 bytes (Float IEEE 754 Big-Endian)
+  * `NoteLength` ($`P`$): 2 bytes (UInt16 Big-Endian, value $`\le 829`$, or $`\le 817`$ for ephemeral messages)
+  * `Note`: $`P`$ bytes UTF-8 (maximum 829 bytes, or $`\le 817`$)
+  * `Optional Ephemeral Header`: `MAGIC_EPHEMERAL` (8 bytes, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bytes, UInt32 Big-Endian) – present only when $`TTL > 0`$
+  * `CSPRNG Padding`: padding to 859 B ($`829 - P`$ or $`817 - P`$ bytes)
 
-### Czaty Grupowe i Tabele Bazy Danych (`groups` i `group_members`):
-* **Model Dystrybucji i Adresowania:** Każdy uczestnik posiada własny łańcuch nadawczy ($`myChainKeyOut`$). Wiadomości grupowe nadawane są na indywidualne sloty odbiorców:
-  $`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)`$
-  co całkowicie eliminuje korelację obserwatorów (Group Follower Correlation).
-* **Wiązanie AAD:** Szyfrowanie ładunku grupowego AEAD AES-256-GCM wiąże kontekst:
-  $`AAD = \text{Target} \parallel GroupID \parallel SenderMemberID`$
-  co uniemożliwia podmianę nadawcy, grupy lub slotu docelowego.
-* **Rotacja Automatyczna Nadawcy:** Następuje automatycznie co 50 wysłanych wiadomości grupowych (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), generując świeży 64-bajtowy klucz CSPRNG, nową epokę $`groupEpoch + 1`$, zerując licznik wyjściowy i transmitując ramkę Typu `0x06` (`GROUP_SUBTYPE_REKEY`) do wszystkich aktywnych członków.
-* **Wymuszona Rotacja Klucza przy Odejściu Członka (Forward Secrecy & PCS):** Po odebraniu ramki `GROUP_SUBTYPE_LEAVE` od dowolnego członka grupy następuje natychmiastowe oznaczenie wychodzącego członka jako nieaktywnego (`isActive = 0`), rotacja własnego klucza $`myChainKeyOut`$ do nowej epoki $`groupEpoch + 1`$ oraz rozesłanie ramki `GROUP_SUBTYPE_REKEY` wyłącznie do pozostałych, aktywnych członków grupy. Wyklucza to wychodzącego członka z dostępu do jakichkolwiek przyszłych wiadomości (Post-Compromise Security / Post-Leave Secrecy), chroniąc jednocześnie wiadomości przeszłe (Forward Secrecy).
-* **Tabela `groups`:**
+### Group Chats and Database Tables (`groups` and `group_members`):
+* **Distribution and Addressing Model:** Each participant maintains their own outbound chain ($`myChainKeyOut`$). Group messages are transmitted to individual recipient slots:
+  $`	ext{Target}_{slot} = 	ext{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)`$
+  which completely eliminates observer correlation (Group Follower Correlation).
+* **AAD Binding:** AEAD AES-256-GCM encryption of group payloads strictly binds the context:
+  $`AAD = 	ext{Target} \parallel GroupID \parallel SenderMemberID`$
+  preventing any tampering with sender, group, or destination slot.
+* **Automatic Sender Key Rotation:** Occurs automatically every 50 sent group messages (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), generating a fresh 64-byte CSPRNG key, advancing to $`groupEpoch + 1`$, resetting counter to 0, and transmitting Type `0x06` frame (`GROUP_SUBTYPE_REKEY`) to all active members.
+* **Forced Key Rotation on Member Leave (Forward Secrecy & PCS):** Upon receiving a `GROUP_SUBTYPE_LEAVE` frame from any member, the leaving participant is immediately marked inactive (`isActive = 0`), the local $`myChainKeyOut`$ is rotated to $`groupEpoch + 1`$, and a `GROUP_SUBTYPE_REKEY` frame is broadcast strictly to remaining active members. This isolates the departed member from all future messages (Post-Compromise Security / Post-Leave Secrecy) while protecting past conversations (Forward Secrecy).
+* **`groups` Table:**
   * `groupId` (TEXT, PRIMARY KEY, UUID), `groupName` (TEXT), `myMemberId` (TEXT, UUID)
-  * `myChainKeyOut` (BLOB, `EncryptedBlob` powiązany z wierszem w Keystore), `myCounterOut` (INTEGER), `groupEpoch` (INTEGER)
+  * `myChainKeyOut` (BLOB, `EncryptedBlob` bound to row in Keystore), `myCounterOut` (INTEGER), `groupEpoch` (INTEGER)
   * `createdAt` (INTEGER), `lastActive` (INTEGER), `isActive` (INTEGER, BOOLEAN)
-* **Tabela `group_members`:**
+* **`group_members` Table:**
   * `groupId` (TEXT), `memberId` (TEXT), PRIMARY KEY (`groupId`, `memberId`)
-  * `contactId` (TEXT, NULLABLE — klucz obcy do kontaktu 1-na-1), `memberName` (TEXT)
-  * `chainKeyIn` (BLOB, `EncryptedBlob` powiązany z wierszem w Keystore), `counterIn` (INTEGER)
+  * `contactId` (TEXT, NULLABLE — foreign key to 1-on-1 contact), `memberName` (TEXT)
+  * `chainKeyIn` (BLOB, `EncryptedBlob` bound to row in Keystore), `counterIn` (INTEGER)
   * `joinedAt` (INTEGER), `isActive` (INTEGER, BOOLEAN)
-  * `receivedBitmapBase` (INTEGER), `receivedBitmap` (BLOB — przesuwna mapa bitowa replay protection)
+  * `receivedBitmapBase` (INTEGER), `receivedBitmap` (BLOB — sliding bitmap for replay protection)
 
-### Dodatkowe Typy Rekordów o Tożsamym Rozmiarze 900 B:
-* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, o stałym rozmiarze 900 bajtów (`CoverAckProtocol`).
-* **Cover Traffic Dummy:** Nieskoordynowany rekord 900 bajtów wypełniony czystym szumem CSPRNG (`DhtLeafNode.sendCoverTrafficDummy`).
-* **Bezpieczny Tombstone (Czyszczenie slotu po odebraniu):** Zastąpienie skonsumowanej wiadomości rekordem o sztywnym rozmiarze dokładnie 900 bajtów czystego szumu CSPRNG pod `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). Zastępuje to podatny wariant 0 B, który ujawniał węzłom i podsłuchiwaczom fakt oraz moment dostarczenia wiadomości. Dzięki zachowaniu stałego rozmiaru 900 B (904 B w Bencode) operacja tombstone jest całkowicie nierozróżnialna od normalnego zapisu lub ruchu maskującego.
-
----
-
-## 5. Przebiegi Procesów (Workflows)
-
-### A. Handshake (Skanowanie QR + Zakończenie Online):
-1. **Alice (QR):** Generuje parę hybrydową X25519 + ML-KEM-512 $(pk_A, sk_A)$ oraz losowe $Seed_{init}$ (32 B). Prezentuje kod QR zawierający $pk_A \parallel Seed_{init}$ (łącznie 864 bajty).
-2. **Bob (Scan & Put):** Skanuje kod, wykonuje `Encapsulate(pk_A)` $\to (SS_{init}, ct_B)$ (gdzie $ct_B$ ma 800 B: 768 B ML-KEM-512 + 32 B X25519 eph pk). Wylicza adres docelowy:
-   $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
-   Wysyła pakiet Typu `0x01` pod $\text{Target}_0$ za pomocą efemerycznego rekordu BEP 44 (900 B).
-3. **Alice (Get & Derive):** Odpytuje DHT o $\text{Target}_0$. Po pobraniu odszyfrowuje pakiet, wykonuje `Decapsulate(sk_A, ct_B)` i odzyskuje $SS_{init}$.
-4. **Wyprowadzenie stanów:** Obie strony wyprowadzają:
-   * $ChainKey_{A \to B} = \text{HKDF-Expand}(SS_{init}, \text{"AliceToBob"}, 64)$
-   * $ChainKey_{B \to A} = \text{HKDF-Expand}(SS_{init}, \text{"BobToAlice"}, 64)$
-   * Inicjalizują liczniki $Counter = 0$.
-
-### B. Przeskakiwanie Adresów (Key Hopping):
-Dla każdej wiadomości $i$:
-1. $\text{Entropy}_i = \text{HKDF-Expand}(ChainKey^i, \text{"step"} \parallel i, 128)$.
-2. Bajty 0–31: $MsgKey_i$ (klucz AES-256).
-3. Bajty 32–63: $EdSeed_i$ (ziarno do generacji jednorazowej pary Ed25519 $pk_i, sk_i$).
-4. Bajty 64–127: $ChainKey^{i+1}$.
-5. Adres docelowy: $\text{Target}_i = \text{SHA-1}(pk_i)$.
-
-### C. Rotacja PQC (Re-keying co 50 wiadomości):
-* Gdy $Counter_{out} \equiv 0 \pmod{50}$ i $Counter_{out} > 0$:
-  * Nadawca dołącza nowy efemeryczny hybrydowy klucz publiczny X25519 + ML-KEM-512 (832 B) w pakiecie Typu `0x03`.
-  * Odbiorca odpowiada w swoim kanale wyjściowym hybrydowym kryptogramem KEM (800 B) w pakiecie Typu `0x04`.
-  * Po skonsumowaniu obu stron nowy sekret $SS_{rekey}$ jest wstrzykiwany do głównego stanu:
-    $$ChainKey \leftarrow \text{HKDF-Extract}(ChainKey, SS_{rekey})$$
+### Additional Fixed 900 B Record Types:
+* **Cover-Traffic ACK:** Symmetrically encrypted acknowledgment packet concealed in noise at $`Target_{ACK}`$, with rigid 900-byte size (`CoverAckProtocol`).
+* **Cover Traffic Dummy:** Uncoordinated 900-byte record filled with pure CSPRNG noise (`DhtLeafNode.sendCoverTrafficDummy`).
+* **Secure Tombstone (Slot Wipe Upon Receipt):** Overwrites consumed message slots with a record of rigid 900 bytes of pure CSPRNG noise at `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). This replaces vulnerable 0-byte tombstone variants that leaked delivery timing to DHT nodes and eavesdroppers. Because the size remains exactly 900 B (904 B in Bencode), the tombstone is completely indistinguishable from normal writes or cover traffic.
 
 ---
 
-## 6. Cykle Odpytywania i Ruch Maskujący (Anti-Traffic Analysis)
+## 5. Workflows
 
-### Adaptacyjny Harmonogram Odpytywania (Polling):
-1. **10 sekund:** Aktywne okno czatu z danym rozmówcą (`FOREGROUND_CHAT` — ekran włączony, aplikacja na pierwszym planie, wybrana konwersacja).
-2. **1 minuta:** Aplikacja otwarta na pierwszym planie (`APP_ACTIVE_OTHER` — ekran włączony, lista kontaktów, diagnostyka lub ustawienia).
-3. **5 minut:** Urządzenie jest w użyciu (`BACKGROUND_IDLE` — ekran włączony, ale aplikacja działa w tle / zminimalizowana).
-4. **15 minut:** Urządzenie zablokowane / uśpione (`DOZE_SLEEP` — ekran wyłączony; realizowane przez `WorkManager` oraz `AlarmManager.setAndAllowWhileIdle`).
+### A. Handshake (QR Scan + Online Finalize):
+1. **Alice (QR):** Generates hybrid X25519 + ML-KEM-512 keypair $(pk_A, sk_A)$ and random $Seed_{init}$ (32 B). Displays QR code encoding $pk_A \parallel Seed_{init}$ (total 864 bytes).
+2. **Bob (Scan & Put):** Scans code, executes `Encapsulate(pk_A)` $	o (SS_{init}, ct_B)$ (where $ct_B$ is 800 B: 768 B ML-KEM-512 + 32 B X25519 eph pk). Derives rendezvous target:
+   $$	ext{Target}_0 = 	ext{SHA-1}(	ext{HMAC-SHA512}(Seed_{init}, 	ext{"handshake\_rendezvous"}))$$
+   Sends Type `0x01` packet to $	ext{Target}_0$ via an ephemeral BEP 44 record (900 B).
+3. **Alice (Get & Derive):** Polls DHT for $	ext{Target}_0$. Upon retrieval, decrypts packet, executes `Decapsulate(sk_A, ct_B)` to recover $SS_{init}$.
+4. **State Derivation:** Both parties derive:
+   * $ChainKey_{A 	o B} = 	ext{HKDF-Expand}(SS_{init}, 	ext{"AliceToBob"}, 64)$
+   * $ChainKey_{B 	o A} = 	ext{HKDF-Expand}(SS_{init}, 	ext{"BobToAlice"}, 64)$
+   * Initialize counters $Counter = 0$.
 
-Szczegółowy model maszyny stanów, obsługa Android 12+ Cached App Freezer (CAF), limity Android 15 `dataSync` FGS (targetSdk 35) oraz mechanizm `BOOT_COMPLETED` opisane są w [docs/android_lifecycle_background_execution.md](docs/android_lifecycle_background_execution.md).
+### B. Address Hopping (Key Hopping):
+For each message $i$:
+1. $	ext{Entropy}_i = 	ext{HKDF-Expand}(ChainKey^i, 	ext{"step"} \parallel i, 128)$.
+2. Bytes 0–31: $MsgKey_i$ (AES-256 key).
+3. Bytes 32–63: $EdSeed_i$ (seed for one-time Ed25519 keypair $pk_i, sk_i$).
+4. Bytes 64–127: $ChainKey^{i+1}$.
+5. Destination Address: $	ext{Target}_i = 	ext{SHA-1}(pk_i)$.
 
-### Spójne Przejścia Cyklu Życia (PollingLifecycleCoordinator):
-Przejścia pomiędzy 4 stanami pollingu są centralnie koordynowane przez `PollingLifecycleCoordinator`:
-* Wykorzystuje `ProcessLifecycleOwner` (śledzenie obecności procesu na pierwszym planie / w tle, niezależnie od rotacji i cyklu pojedynczych `Activity`).
-* Wykrywa rzeczywisty stan ekranu za pomocą dynamicznego `ScreenStateReceiver` (`ACTION_SCREEN_ON`, `ACTION_SCREEN_OFF`) i `PowerManager.isInteractive`.
-* Zdarzenie `ON_STOP` aktywności **nigdy nie jest tożsame z wyłączeniem ekranu**; minimalizacja aplikacji przy włączonym ekranie prowadzi do `BACKGROUND_IDLE` (5 min), a nie `DOZE_SLEEP`.
-
-### Ruch Maskujący (Poisson Cover Traffic):
-* W tle działa niezależny proces wyznaczający czas do kolejnego fałszywego zapisu na podstawie rozkładu wykładniczego:
-  $`\Delta t = - \frac{1}{\lambda} \ln(U), \quad U \sim \mathcal{U}(0, 1)`$
-* Po upływie $`\Delta t`$ generowany jest losowy $`\text{Target}_{dummy}`$ oraz rekord o stałym rozmiarze dokładnie 900 bajtów (904 bajty w Bencode) wypełniony czystym szumem.
-* Pakiet jest wysyłany operacją `put` do sieci DHT w celu zatarcia korelacji pomiędzy aktywnością użytkownika a emisją pakietów UDP.
+### C. PQC Rotation (Re-keying Every 50 Messages):
+* When $Counter_{out} \equiv 0 \pmod{50}$ and $Counter_{out} > 0$:
+  * Sender includes a new ephemeral hybrid X25519 + ML-KEM-512 public key (832 B) in a Type `0x03` packet.
+  * Recipient responds on their outbound channel with a hybrid KEM ciphertext (800 B) in a Type `0x04` packet.
+  * Upon processing both sides, the new secret $SS_{rekey}$ is injected into the master chain:
+    $$ChainKey \leftarrow 	ext{HKDF-Extract}(ChainKey, SS_{rekey})$$
 
 ---
 
-## 7. Struktura Modułów Projektu
+## 6. Polling Cycles and Anti-Traffic Analysis
 
-Kod projektu zorganizowany jest w 100% w języku Kotlin:
+### Adaptive Polling Schedule:
+1. **10 seconds:** Active chat window with specific contact (`FOREGROUND_CHAT` — screen on, app in foreground, conversation selected).
+2. **1 minute:** App open in foreground (`APP_ACTIVE_OTHER` — screen on, contacts list, diagnostics, or settings).
+3. **5 minutes:** Device in use (`BACKGROUND_IDLE` — screen on, but app in background / minimized).
+4. **15 minutes:** Device locked / sleeping (`DOZE_SLEEP` — screen off; handled by `WorkManager` and `AlarmManager.setAndAllowWhileIdle`).
+
+Detailed state machine model, Android 12+ Cached App Freezer (CAF) handling, Android 15 `dataSync` FGS limits (targetSdk 35), and `BOOT_COMPLETED` flow are documented in [docs/android_lifecycle_background_execution.md](docs/android_lifecycle_background_execution.md).
+
+### Consistent Lifecycle Transitions (PollingLifecycleCoordinator):
+Transitions between the 4 polling states are centrally managed by `PollingLifecycleCoordinator`:
+* Utilizes `ProcessLifecycleOwner` (tracking foreground/background status independent of activity recreation or rotation).
+* Detects physical screen state via dynamic `ScreenStateReceiver` (`ACTION_SCREEN_ON`, `ACTION_SCREEN_OFF`) and `PowerManager.isInteractive`.
+* Activity `ON_STOP` **is never treated as screen off**; minimizing the app while screen is active leads to `BACKGROUND_IDLE` (5 min), not `DOZE_SLEEP`.
+
+### Poisson Cover Traffic:
+* An independent background process calculates the delay to the next dummy write using an exponential distribution:
+  $`\Delta t = - rac{1}{\lambda} \ln(U), \quad U \sim \mathcal{U}(0, 1)`$
+* After $`\Delta t`$, a random $`	ext{Target}_{dummy}`$ is derived and a rigid 900-byte record (904 bytes in Bencode) filled with CSPRNG noise is generated.
+* The packet is published via a DHT `put` operation to conceal correlation between user activity and UDP packet emission.
+
+---
+
+## 7. Project Module Structure
+
+The project code is organized 100% in Kotlin:
 
 ```
 app/src/main/java/org/pqchat/dht/
@@ -227,13 +227,13 @@ app/src/main/java/org/pqchat/dht/
 │   ├── repository/      # ChatRepository, MessageChunker
 │   └── settings/        # AppSettingsManager (SharedPreferences & DataStore)
 ├── dht/
-│   ├── bencode/         # Wydajny dekoder/enkoder słowników Bencode w czystym Kotlinie
-│   ├── krpc/            # Zarządzanie gniazdami UDP KRPC DHT
-│   └── leaf/            # DhtLeafNode (klient BEP 44 put/get w trybie Leaf)
-├── media/               # Png8Compressor, optymalizacja transferu obrazów
+│   ├── bencode/         # Efficient Kotlin Bencode decoder/encoder
+│   ├── krpc/            # KRPC DHT UDP socket management
+│   └── leaf/            # DhtLeafNode (Leaf-mode BEP 44 put/get client)
+├── media/               # Png8Compressor, image transfer optimization
 ├── network/
-│   └── tor/             # Obsługa embedded Tor i proxy SOCKS5
-├── protocol/            # ProtocolEngine, CoverAckProtocol (potwierdzenia w szumie)
+│   └── tor/             # Embedded Tor and SOCKS5 proxy support
+├── protocol/            # ProtocolEngine, CoverAckProtocol (acknowledgments in noise)
 ├── research/            # ResearchTelemetryManager, FirebaseResearchSync, HistoricalTtlSampler
 ├── service/             # PollingScheduler, PollingLifecycleCoordinator, ScreenStateReceiver, BootReceiver, DhtAlarmReceiver, ChatHeadService
 ├── traffic/             # AdaptivePollingManager, PoissonTrafficGenerator, BlindRepublishPool, DecoyTargetPool, PollingWorker
@@ -245,24 +245,24 @@ app/src/main/java/org/pqchat/dht/
 
 ---
 
-## 8. Wskazówki i Ograniczenia Implementacyjne dla Agenta AI
+## 8. Implementation Guidelines and Constraints for AI Agents
 
-1. **Bezpieczeństwo Pamięci i Kluczy:**
-   * Po zakończeniu operacji kryptograficznych na kluczach efemerycznych tablice `ByteArray` muszą być bezzwłocznie zerowane (`array.fill(0)`).
-   * Żadne dane jawne (plaintext), klucze prywatne ani zdeszyfrowane payloady nie mogą trafiać do logów systemowych (`Log.d`, `println`).
-   * Przed każdym wypchnięciem commitu zweryfikuj czy nie są wysyłane klucze prywatne, np. API keys.
-2. **Obsługa Błędów Sieci:**
-   * Operacje `get` w sieci DHT są asynchroniczne i mogą zakończyć się przekroczeniem czasu oczekiwania (*timeout*). Brak odpowiedzi nie oznacza błędu krytycznego — oznacza jedynie brak nowej wiadomości lub konieczność ponowienia próby w kolejnym cyklu okna.
-3. **Odporność na Replay i Kolizje:**
-   * Wiadomości o numerach sekwencyjnych mniejszych niż bieżący stan $Counter_{in}$ muszą być natychmiast odrzucane.
-   * Każdy rekord o nieprawidłowym tagu AEAD (`AEADBadTagException`) lub niezgodnym podpisie Ed25519 jest bezwzględnie ignorowany i usuwany z bufora.
-4. **Czystość Kodu:**
-   * Preferuj niemutowalne struktury danych (`data class`).
-   * Zapewnij pełne pokrycie testami jednostkowymi modułów kryptograficznych (`KdfChainTest`, `PqcEngineTest`, `ChunkingTest`, `CryptoEngineTest`).
-5. **Strategia Testowania i Praca z Repozytorium:**
-   * **Podstawowe testy co commit (Fast Unit Tests):** Przed każdym commitem uruchamiaj standardowe testy jednostkowe: `.\gradlew.bat testDebugUnitTest`. Testy te pomijają czasochłonne scenariusze (`@Tag("slow")`) i wykonują się w kilkadziesiąt sekund. Gdy testy trwają dłużej niż 5 minut sprawdź log, zdecyduj czy implementacja jest błędna czy test powinien robić się tak długo, jeśli to normalne, że test trwa długo,przenieś test do testów czasochłonnych ("slow"), żeby zrobiły się w ramach testów nightly, a nie od razu, i poinformuj o tym fakcie, zrób commit po akceptacji wyniku testów zwykłych, nie jest wymagane ukończenie testów "slow", żeby wypchnąć commit do repozytorium (git push). Niedopuszczalne jest czekanie dłużej niż 10 minut na wynik testu bez żadnego działania - albo test nie ma być robiony lokalnie tylko jako "slow" w github workflows, albo trzeba go poprawić jeśli przewidywania co do długości trwania testu są inne.
-   * **Testy czasochłonne (Slow Tests):** Testy repozytorium (`org.pqchat.dht.data.repository.*`), testy statystyczne Monte Carlo oraz symulacje loopback są oznaczone tagiem `@Tag("slow")`. Są one wykonywane automatycznie jako nocne zadanie CI w GitHub Workflows (`.github/workflows/nightly.yml`) oraz lokalnie na żądanie za pomocą: `.\gradlew.bat testDebugUnitTest -DrunSlowTests=true` lub `.\gradlew.bat slowTest`.
-   * **Weryfikacja modeli formalnych:** Modele formalne ProVerif znajdujące się w `docs/formal/` weryfikuje się skryptem `bash docs/formal/run_verification.sh`. Obejmują one 7 modeli (.pv) weryfikujących 24 lematy (m.in. poufność kluczy i ładunków, uwierzytelnienie i transkrypt SAS anti-grinding, hybrydowy KEM ML-KEM-512 + X25519, Forward Secrecy, Post-Compromise Security, odporność na replay, nierozróżnialność 900-bajtowych tombstone'ów i cover traffic oraz poufność dystrybucji kluczy grupowych w ramce 0x06, autentyczność wiadomości grupowych z wiązaniem AAD i grupowe PCS/FS po odejściu członka).
-   * **Pliki tekstowe:** W plikach README oraz innych plikach .md wyrażenia matematyczne muszą być w znacznikach $`wyrażenie\_pierwsze_{abc}`$ (jest to metoda bardziej odporna niż $wyrażenie\_pierwsze_{abc}$)
-   * **Weryfikacja w emulatorze:** Każdą istotną zmianę interfejsu lub logiki czatu przetestuj w emulatorze (np. instalacja przez `.\gradlew.bat installDebug`, uruchomienie aktywności, zrobienie screenshotu do analizy).
-   * **Zatwierdzanie zmian:** Po pomyślnym zakończeniu testów zrób commit z precyzyjnym opisem, a następnie push do repozytorium zdalnego.
+1. **Memory Safety and Key Zeroization:**
+   * After completing cryptographic operations on ephemeral keys, `ByteArray` instances must be immediately zeroed (`array.fill(0)`).
+   * Plaintext data, private keys, seeds, and decrypted payloads must never be logged (`Log.d`, `println`).
+   * Before every commit, verify that no credentials or private API keys are committed.
+2. **Network Error Handling:**
+   * DHT `get` operations are asynchronous and can time out. A timeout is not a fatal error — it simply indicates no new message or a need to retry in the next polling window.
+3. **Replay and Collision Resistance:**
+   * Messages with sequence numbers lower than the current $Counter_{in}$ state must be immediately dropped.
+   * Any record with an invalid AEAD tag (`AEADBadTagException`) or mismatched Ed25519 signature is strictly dropped and purged.
+4. **Clean Code:**
+   * Prefer immutable data structures (`data class`).
+   * Maintain full unit test coverage for cryptographic modules (`KdfChainTest`, `PqcEngineTest`, `ChunkingTest`, `CryptoEngineTest`).
+5. **Testing Strategy and Repository Workflow:**
+   * **Fast Unit Tests (Per Commit):** Before every commit, execute fast unit tests: `.\gradlew.bat testDebugUnitTest`. These skip long-running scenarios (`@Tag("slow")`) and finish in under 2 minutes. If tests exceed 5 minutes, inspect logs and decide whether the implementation has an issue or the test should be categorized as `@Tag("slow")` for nightly CI. Never wait more than 10 minutes without acting. Fast unit tests must pass before pushing commits.
+   * **Slow Tests:** Repository integration tests (`org.pqchat.dht.data.repository.*`), Monte Carlo statistical tests, and loopback simulations are annotated with `@Tag("slow")`. They run automatically in nightly GitHub Workflows (`.github/workflows/nightly.yml`) and locally on demand via `.\gradlew.bat testDebugUnitTest -DrunSlowTests=true` or `.\gradlew.bat slowTest`.
+   * **Formal Verification Models:** ProVerif formal models in `docs/formal/` are verified using `bash docs/formal/run_verification.sh`. They comprise 7 models (.pv) verifying 24 security lemmas (including secrecy of session keys and payloads, anti-grinding SAS authentication and transcript binding, hybrid ML-KEM-512 + X25519 KEM, Forward Secrecy, Post-Compromise Security, replay protection, indistinguishability of 900-byte tombstones and cover traffic, secrecy of group key distribution in 0x06 frames, AAD binding authenticity, and group PCS/FS on member leave).
+   * **Markdown Math Formatting:** In README and other `.md` files, mathematical expressions must use $`expression`$ formatting (which renders robustly across GitHub and markdown previewers).
+   * **Emulator Verification:** Test major UI or chat logic changes in an Android emulator (e.g. install via `.\gradlew.bat installDebug`, launch activity, capture screenshot for inspection).
+   * **Commit & Push:** After tests pass, commit with a clear Conventional Commits message and push to remote.

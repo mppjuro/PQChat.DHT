@@ -2,7 +2,7 @@
 (* PQChat.DHT Protocol — Unified Formal Security Model (ProVerif 2.05)            *)
 (*                                                                                *)
 (* Verified Properties:                                                           *)
-(* 1. Poufność (Secrecy): MasterKey, ChainKey_A2B, ChainKey_B2A, Message Payloads *)
+(* 1. Secrecy: MasterKey, ChainKey_A2B, ChainKey_B2A, Message Payloads *)
 (* 2. Uwierzytelnienie (Authentication): Injective Agreement on Handshake & SAS   *)
 (* 3. Dual-Defense Hybrid KEM: ML-KEM-512 (FIPS 203) + X25519 (RFC 7748)          *)
 (* 4. Replay Resistance: Injective message correspondences                        *)
@@ -100,19 +100,19 @@ event AliceRecvReply(bitstring, bitstring, bitstring).
 (* SECURITY QUERIES                                                               *)
 (* ============================================================================== *)
 
-(* (1) Poufność (Secrecy): MasterKey, ChainKeys, Payloads *)
+(* (1) Secrecy: MasterKey, ChainKeys, Payloads *)
 query attacker(secret_master_key).
 query attacker(secret_chain_A2B).
 query attacker(secret_chain_B2A).
 query attacker(secret_msg_A2B).
 query attacker(secret_msg_B2A).
 
-(* (2) Uwierzytelnienie & Zobowiązanie SAS (Mutual Authentication with Transcript & SAS Binding) *)
+(* (2) Mutual Authentication with Transcript & SAS Binding *)
 query pkA_kem: kem_pkey, pkA_x: x_pkey, seed: bitstring, ckA2B: bitstring, ckB2A: bitstring, sas: bitstring;
   inj-event(AliceFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)) ==> 
   inj-event(BobFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)).
 
-(* (3) Odporność na Replay (Replay Resistance): Injective message correspondences *)
+(* (3) Replay Resistance: Injective message correspondences *)
 query target: bitstring, seq: bitstring, msg: bitstring;
   inj-event(BobRecvMsg(target, seq, msg)) ==> inj-event(AliceSentMsg(target, seq, msg)).
 

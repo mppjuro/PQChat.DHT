@@ -1,26 +1,26 @@
 ---
-name: Propozycja funkcji (Feature Request)
-about: Zaproponuj nową funkcję lub ulepszenie dla PQChat.DHT
+name: Feature Request
+about: Suggest a new feature or improvement for PQChat.DHT
 title: '[FEAT] '
 labels: ['enhancement']
 assignees: ''
 ---
 
-## Zarys problemu / Motywacja
-Czy propozycja wiąże się z konkretnym problemem lub ograniczeniem? Jasny opis: "Irytuje mnie, gdy [...]" lub "Chciałbym móc [...]".
+## Problem Overview / Motivation
+Is your feature request related to a specific problem or limitation? Clear description: "I get frustrated when [...]" or "I would like to be able to [...]".
 
-## Proponowane rozwiązanie
-Dokładny opis proponowanej funkcjonalności lub modyfikacji. W jaki sposób powinna działać z perspektywy użytkownika i protokołu?
+## Proposed Solution
+Detailed description of the proposed functionality or change. How should it work from user and protocol perspectives?
 
-## Wpływ na model bezpieczeństwa i metadane
+## Impact on Security Model and Metadata
 > [!IMPORTANT]
-> PQChat.DHT opiera się na zasadzie **Zero Centralizacji**, **Metadata-Free Rendezvous** oraz odporności post-kwantowej (FIPS 203).
-- Czy funkcja wprowadza jakiekolwiek nowe metadane lub punkty centralne?
-- Czy ładunek mieści się w sztywnym limicie rekordu BEP 44 (dokładnie 900 bajtów)?
-- Czy rozwiązanie wymaga modyfikacji protokołu kryptograficznego?
+> PQChat.DHT is built on the principles of **Zero Centralization**, **Metadata-Free Rendezvous**, and post-quantum security (FIPS 203).
+- Does the feature introduce any new metadata or central points of failure?
+- Does the payload fit within the rigid BEP 44 record limit (exactly 900 bytes)?
+- Does the solution require modifications to the cryptographic protocol?
 
-## Rozważane alternatywy
-Opis alternatywnych rozwiązań lub obejść, które były brane pod uwagę.
+## Alternatives Considered
+Description of alternative solutions or workarounds considered.
 
-## Dodatkowy kontekst
-Makiety interfejsu UI, diagramy przepływu lub odnośniki do powiązanych specyfikacji/badań.
+## Additional Context
+UI mockups, flow diagrams, or links to relevant specifications/research.

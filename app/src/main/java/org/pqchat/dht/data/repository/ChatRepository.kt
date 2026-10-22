@@ -4518,12 +4518,12 @@ class ChatRepository(
                 activeMembers
             }
 
-            // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
-            // Zamiast jednego target = RatchetChain.deriveSlot(myChainKeyOut, counterOut) używanego dla wszystkich członków,
-            // wyprowadzamy unikalny slot dla każdego członka:
+            // Same-target for all members allows a DHT observer to correlate N recipients via parallel GETs to the same slot, breaking group destination privacy.
+            // Instead of a single target = RatchetChain.deriveSlot(myChainKeyOut, counterOut) used for all members,
+            // we derive a unique slot for each member:
             // memberTarget = HKDF-Expand(myChainKeyOut, "group_target:" || groupId || counterOut || memberId, 32)
-            // a następnie RatchetChain.deriveSlot z odpowiednim msgKey/edSeed per członek.
-            // Wykonujemy osobne putMutable pod każdym unikalnym targetem (N targetów dla N członków).
+            // and then RatchetChain.deriveSlot with corresponding msgKey/edSeed per member.
+            // We perform separate putMutable under each unique target (N targets for N members).
             val targetSlots = if (shuffledMembers.isNotEmpty()) {
                 shuffledMembers.map { member ->
                     val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
@@ -5034,8 +5034,8 @@ class ChatRepository(
                         recipientMemberId = myMemberIdBytes
                     )
 
-                    // Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
-                    // Każdy członek odpytuje wyłącznie swój unikalny target, a nie wspólny.
+                    // Same-target for all members allows a DHT observer to correlate N recipients via parallel GETs to the same slot, breaking group destination privacy.
+                    // Each member queries only their unique target, not a shared one.
                     val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false) ?: break
                     val activeSlot = individualSlot
                     val isIndividualSlot = true

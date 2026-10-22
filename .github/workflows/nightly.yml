@@ -2,12 +2,12 @@ name: Nightly Tests & Release
 
 on:
   schedule:
-    # Uruchamiane codziennie o północy w Polsce (22:00 UTC)
+    # Runs daily at midnight Polish time (22:00 UTC)
     - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       skip_release:
-        description: 'Pomiń publikację Nightly Release (tylko uruchom testy)'
+        description: 'Skip publishing Nightly Release (run tests only)'
         type: boolean
         required: false
         default: false
@@ -17,7 +17,7 @@ on:
         required: false
         default: false
       use_fake_dht:
-        description: 'Użyj FakeDht w teście end-to-end dwóch urządzeń (domyślnie false = prawdziwy DhtLeafNode)'
+        description: 'Use FakeDht in two-device end-to-end test (default false = real DhtLeafNode)'
         type: boolean
         required: false
         default: false
@@ -491,14 +491,14 @@ jobs:
           body: |
             ## 🌙 PQChat.DHT Nightly Build
 
-            Automatyczna codzienna kompilacja wersji deweloperskiej (`app-debug.apk`) po pomyślnym zaliczeniu pełnego pakietu testów nocnych:
+            Automated daily developer build (`app-debug.apk`) after passing the full nightly test suite:
             - **Fast Unit Tests:** Zaliczone (standardowa suita jednostkowa)
             - **Slow Repository & Rekey Tests:** Zaliczone (PQC Rekey, ChatRepository Concurrency, Polling, Property)
             - **Slow Statistical & Tor Tests:** Zaliczone (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
-            - **Two Devices End-to-End Lifecycle:** Zaliczone (Handshake, >10 Msg, Rekey po 50 wiadomościach, Out-of-Order / SlidingWindowBitmap, DhtLeafNode / FakeDht)
+            - **Two Devices End-to-End Lifecycle:** Passed (Handshake, >10 Msg, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, DhtLeafNode / FakeDht)
             - **Real BEP 44 Remote Integration Tests:** Zaliczone (Live Mainline DHT)
-            - **Real DHT Loopback & Retention Suite:** Zaliczone (500 iteracji per środowisko, live Mainline DHT)
-            - **DHT Real Traffic Testbed & Threat Analysis:** Zaliczone (150 węzłów Kademlia)
+            - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
+            - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
             - **Byzantine & Adversarial DHT Attack Simulation:** Zaliczone (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
 
             ### Metadane kompilacji:
@@ -507,7 +507,7 @@ jobs:
             - **Pakiet APK:** `${{ env.APK_NAME }}`
 
             > [!NOTE]
-            > Niniejszy pakiet APK jest wersją deweloperską z publicznym kluczem debugowania. Wymaga włączenia instalacji z nieznanych źródeł w systemie Android.
+            > This APK package is a developer build signed with a public debug key. Requires enabling installation from unknown sources on Android.
           prerelease: true
           files: ${{ env.APK_NAME }}
         env:

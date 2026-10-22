@@ -124,14 +124,14 @@ def generate_dht_retention_tables(repo_root: str, update_file: bool = True) -> s
         })
 
     sec1_table_text = (
-        "| Środowisko Sieciowe | Źródło | Próby | Success Rate | PUT p50 | PUT p90 | PUT p99 | GET p50 | GET p90 | GET p99 | TOTAL p50 | TOTAL p90 | TOTAL p99 | Śr. Retransmisje |\n"
+        "| Network Environment | Source | Trials | Success Rate | PUT p50 | PUT p90 | PUT p99 | GET p50 | GET p90 | GET p99 | TOTAL p50 | TOTAL p90 | TOTAL p99 | Avg. Retransmissions |\n"
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n"
         + "\n".join(rows_sec1)
     )
 
     # Build Section 4 Interleaved Table
     sec4_lines = [
-        "| Środowisko Sieciowe (Profil) | Źródło Danych | Próby | Delivery Success Rate | Retransmisje (Średnia) | Total RTT $`p_{50}`$ (Mediana) | Total RTT $`p_{90}`$ | Total RTT $`p_{99}`$ (Ogon) |",
+        "| Network Environment (Profile) | Data Source | Trials | Delivery Success Rate | Retransmissions (Average) | Total RTT $`p_{50}`$ (Median) | Total RTT $`p_{90}`$ | Total RTT $`p_{99}`$ (Tail) |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
     ]
 
@@ -158,14 +158,14 @@ def generate_dht_retention_tables(repo_root: str, update_file: bool = True) -> s
 
         # Replace Section 1.1 Table
         sec1_pattern = re.compile(
-            r"(### 1\.1\. Tabela Wyników Latencji i Sukcesu Dostarczenia \(MEASURED\)\s*\n\n)(?:\|.*?\n)+",
+            r"(### 1\.1\. Latency and Delivery Success Results Table \(MEASURED\)\s*\n\n)(?:\|.*?\n)+",
             re.MULTILINE
         )
         content = sec1_pattern.sub(r"\g<1>" + sec1_table_text + "\n", content)
 
         # Replace Section 4 Table
         sec4_pattern = re.compile(
-            r"(## 4\. Wyniki Pomiarów Latencji i Sukcesu Dostarczenia: SIMULATED vs MEASURED\s*\n\n.*?\n\n)(?:\|.*?\n)+",
+            r"(## 4\. Latency and Delivery Success Measurement Results: SIMULATED vs MEASURED\s*\n\n.*?\n\n)(?:\|.*?\n)+",
             re.MULTILINE
         )
         content = sec4_pattern.sub(r"\g<1>" + sec4_table_text + "\n", content)
@@ -212,13 +212,13 @@ def generate_threat_model_tables(repo_root: str, update_file: bool = True) -> st
         ("0PUT_SYNTHETIC", "**+ Decoy GETs (Syntetyczne 0-PUT)**", "98.4% (odfiltrowane)", "Potwierdzony"),
         ("DELAYED_PUT", "**+ Delayed PUT & Populated Decoys**", "14.8%", "Potwierdzony"),
         ("FULL_DEFENSE", "**Full Defense (+ Poisson 1/480s)**", "**5.2%**", "Potwierdzony"),
-        ("STORING_NODE_NO_DEFENSE", "**Węzeł Przechowujący (No Defense)**", "100.0%", "Potwierdzony"),
-        ("STORING_NODE_FULL_DEFENSE", "**Węzeł Przechowujący (Full Defense)**", "**12.0%**", "Potwierdzony"),
+        ("STORING_NODE_NO_DEFENSE", "**Storing Node (No Defense)**", "100.0%", "Confirmed"),
+        ("STORING_NODE_FULL_DEFENSE", "**Storing Node (Full Defense)**", "**12.0%**", "Confirmed"),
         ("VPN_FULL_DEFENSE", "**Full Defense + VPN / Tor**", "**4.0% (Losowe $`1/N`$)**", "Potwierdzony (IP nie ujawnia klienta)")
     ]
 
     table_lines = [
-        "| Postawa Obronna / Scenariusz | Top-1 Accuracy [SIMULATED] | Top-1 Accuracy [MEASURED] | Entropia Shannona [MEASURED] | Rzeczywisty Rozmiar Zbioru Kandydatów | Status Walidacji |",
+        "| Defense Posture / Scenario | Top-1 Accuracy [SIMULATED] | Top-1 Accuracy [MEASURED] | Shannon Entropy [MEASURED] | Empirical Candidate Set Size | Validation Status |",
         "| :--- | :---: | :---: | :---: | :---: | :---: |"
     ]
 
@@ -259,7 +259,7 @@ def generate_threat_model_tables(repo_root: str, update_file: bool = True) -> st
             content = f.read()
 
         table_pattern = re.compile(
-            r"(#### B\. Porównanie Wyników: Symulator Probabilistyczny vs Testbed Rzeczywistego Ruchu\s*\n\n)(?:\|.*?\n)+",
+            r"(#### B\. Results Comparison: Probabilistic Simulator vs Real Traffic Testbed\s*\n\n)(?:\|.*?\n)+",
             re.MULTILINE
         )
         content = table_pattern.sub(r"\g<1>" + table_text + "\n", content)

@@ -104,7 +104,7 @@ class DefaultTorProcessRunner(
 
             if (activeExternalPort != null) {
                 // An active external Tor/Orbot daemon is responding on SOCKS5 port
-                onBootstrapUpdate(100, "Połączono z zewnętrznym proxy Tor/Orbot na porcie $activeExternalPort")
+                onBootstrapUpdate(100, "Connected to external Tor/Orbot proxy on port $activeExternalPort")
                 onReady(activeExternalPort, 0)
 
                 // Monitor external proxy liveness
@@ -114,7 +114,7 @@ class DefaultTorProcessRunner(
                         if (!probeSocks5Proxy("127.0.0.1", activeExternalPort, 2000)) {
                             if (running.get()) {
                                 onError(
-                                    "Zewnętrzny demon Tor/Orbot na porcie $activeExternalPort przestał odpowiadać",
+                                    "External Tor/Orbot daemon on port $activeExternalPort stopped responding",
                                     null
                                 )
                             }
@@ -125,9 +125,9 @@ class DefaultTorProcessRunner(
             } else {
                 running.set(false)
                 val errorMessage = if (isAndroid && forceSimulation) {
-                    "Symulator Tor jest niedozwolony na urządzeniach Android. Wymagany natywny silnik libtor.so lub zewnętrzny Orbot na porcie 9050."
+                    "Tor simulator is not permitted on Android devices. Native libtor.so engine or external Orbot on port 9050 required."
                 } else {
-                    "Natywny silnik Tor (libtor.so) nie jest dostępny i nie wykryto aktywnego proxy Tor/Orbot na porcie SOCKS5 (127.0.0.1:9050/9150)."
+                    "Native Tor engine (libtor.so) is unavailable and no active Tor/Orbot proxy detected on SOCKS5 port (127.0.0.1:9050/9150)."
                 }
                 onError(errorMessage, java.io.FileNotFoundException("Native Tor binary (libtor.so) not found"))
             }

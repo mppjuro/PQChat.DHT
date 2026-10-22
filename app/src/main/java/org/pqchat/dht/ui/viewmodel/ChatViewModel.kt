@@ -210,7 +210,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val researchCrowdRepublishCount: StateFlow<Int> = researchTelemetry?.crowdRepublishCount ?: MutableStateFlow(0)
     val researchPacketsReceivedCount: StateFlow<Int> = researchTelemetry?.packetsReceivedCount ?: MutableStateFlow(0)
     val researchTtlSamplesCount: StateFlow<Int> = researchTelemetry?.ttlSamplesCount ?: MutableStateFlow(0)
-    val researchSyncStatus: StateFlow<String> = researchTelemetry?.syncStatus ?: MutableStateFlow("Wyłączone")
+    val researchSyncStatus: StateFlow<String> = researchTelemetry?.syncStatus ?: MutableStateFlow("Disabled")
 
     fun setAnonymousStatsEnabled(enabled: Boolean) {
         settingsManager.setAnonymousStatsEnabled(enabled)
@@ -404,7 +404,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 repository.sendReaction(contactId, targetMessage, emoji)
             }
             if (!success) {
-                _statusNotification.value = "Nie udało się wysłać reakcji do DHT"
+                _statusNotification.value = "Failed to send reaction to DHT"
             }
         }
     }
@@ -419,7 +419,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val contactId = _selectedContactId.value ?: return
         val ttl = _ephemeralTtlSeconds.value
         viewModelScope.launch(Dispatchers.IO) {
-            _statusNotification.value = "Wysyłanie pinezki lokalizacji przez DHT..."
+            _statusNotification.value = "Sending location pin via DHT..."
             val group = repository.getGroup(contactId)
             val success = if (group != null) {
                 repository.sendGroupLocationPin(contactId, latitude, longitude, altitude, accuracy, note, ttl)
@@ -427,21 +427,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 repository.sendLocationPin(contactId, latitude, longitude, altitude, accuracy, note, ttl)
             }
             if (success) {
-                _statusNotification.value = "Wysłano pinezkę lokalizacji"
+                _statusNotification.value = "Location pin sent"
             } else {
-                _statusNotification.value = "Błąd wysyłania pinezki lokalizacji"
+                _statusNotification.value = "Error sending location pin"
             }
         }
     }
 
     fun resendMessage(messageId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            _statusNotification.value = "Ponowne wysyłanie wiadomości..."
+            _statusNotification.value = "Resending message..."
             val success = repository.resendMessage(messageId)
             if (success) {
-                _statusNotification.value = "Wiadomość wysłana pomyślnie"
+                _statusNotification.value = "Message sent successfully"
             } else {
-                _statusNotification.value = "Nie udało się wysłać wiadomości do DHT"
+                _statusNotification.value = "Failed to send message to DHT"
             }
         }
     }
@@ -449,10 +449,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun initiateRekey() {
         val contactId = _selectedContactId.value ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            _statusNotification.value = "Inicjowanie wymiany klucza ML-KEM..."
+            _statusNotification.value = "Initiating ML-KEM key exchange..."
             val success = repository.initiateRekey(contactId)
             if (success) {
-                _statusNotification.value = "Wysłano ofertę wymiany klucza ML-KEM (Type 0x03)"
+                _statusNotification.value = "Sent ML-KEM key exchange offer (Type 0x03)"
             }
         }
     }
@@ -467,14 +467,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val colorCount = settingsManager.imageColorCount.value
 
         viewModelScope.launch(Dispatchers.IO) {
-            _statusNotification.value = "Kompresowanie obrazu (PNG8)..."
+            _statusNotification.value = "Compressing image (PNG8)..."
             val finalBytes = org.pqchat.dht.media.Png8Compressor.compressToPng8(rawBytes, maxEdge, colorCount)
-            _statusNotification.value = "Wysyłanie obrazu (${finalBytes.size} B) przez DHT..."
+            _statusNotification.value = "Sending image (${finalBytes.size} B) via DHT..."
             val success = repository.sendImagePayload(contactId, finalBytes)
             if (success) {
-                _statusNotification.value = "Wysłano obraz (${finalBytes.size} B) przez DHT"
+                _statusNotification.value = "Image (${finalBytes.size} B) sent via DHT"
             } else {
-                _statusNotification.value = "Błąd wysyłania obrazu"
+                _statusNotification.value = "Error sending image"
             }
         }
     }

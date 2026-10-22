@@ -18,8 +18,8 @@ import java.security.Security
  * Specifically verifies:
  * 1. Alice screen state when aliceInitState is null (prevents NullPointerException).
  * 2. Successful generation of static and animated multipart QR code bitmaps when aliceInitState is non-null.
- * 3. Secure key erasure and state clearing on reset ("Zresetuj").
- * 4. Safe regeneration of fresh ML-KEM-512 keypair and new Target_0 ("Nowy kod QR").
+ * 3. Secure key erasure and state clearing on reset ("Reset").
+ * 4. Safe regeneration of fresh ML-KEM-512 keypair and new Target_0 ("New QR Code").
  * 5. Full cryptographic handshake compatibility between Alice QR and Bob scanner.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -126,7 +126,7 @@ class HandshakeScreenStateTest {
         val originalSkA = aliceInitState!!.skA.copyOf()
         assertFalse("Original skA must contain non-zero key bytes", originalSkA.all { it == 0.toByte() })
 
-        // User clicks "Zresetuj"
+        // User clicks "Reset"
         aliceInitState.destroySensitiveKeys()
         assertTrue("Destroyed skA must be filled with 0s", aliceInitState.skA.all { it == 0.toByte() })
 
@@ -150,7 +150,7 @@ class HandshakeScreenStateTest {
         val firstTarget0 = CryptoUtils.toHex(firstState.target0)
         val firstSeed = firstState.seedInit.copyOf()
 
-        // User clicks "Nowy kod QR" (reset and start new handshake)
+        // User clicks "New QR Code" (reset and start new handshake)
         firstState.destroySensitiveKeys()
         val secondState = HandshakeManager.aliceCreateHandshake()
         val secondTarget0 = CryptoUtils.toHex(secondState.target0)

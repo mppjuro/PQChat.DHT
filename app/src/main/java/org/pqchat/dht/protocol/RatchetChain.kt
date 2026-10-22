@@ -156,9 +156,9 @@ object RatchetChain {
      * Ensures strict mathematical independence of DHT targets and encryption keys across
      * all group members, eliminating Group Follower Correlation and Tombstone Collisions.
      *
-     * Uzasadnienie: Same-target dla wszystkich członków umożliwia obserwatorowi DHT
-     * skorelowanie N odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność
-     * celu komunikacji grupowej.
+     * Rationale: Same-target for all members allows a DHT observer
+     * to correlate N recipients via parallel GETs to the same slot, breaking
+     * group communication privacy.
      */
     fun buildGroupTargetInfo(
         groupId: ByteArray,

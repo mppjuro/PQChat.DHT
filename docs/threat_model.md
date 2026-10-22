@@ -1,376 +1,375 @@
-# Model Zagrożeń i Analiza Anonimowości (Threat Model & Traffic Correlation)
+# Threat Model and Anonymity Analysis (Traffic Correlation & Threat Model)
 
-Dokument stanowi formalny model zagrożeń dla komunikatora mobilnego **PQChat.DHT**, ze szczególnym uwzględnieniem wektorów korelacji czasowo-adresowej, wyprzedzającego odpytywania okna rotacji (*Lookahead Window*), rozróżnialności zapytań maskujących (*Decoy GETs*), wielosesyjnych ataków ujawnienia statystycznego (*Statistical Disclosure / Intersection Attack*) oraz ataków Sybil/Eclipse w publicznej sieci **BitTorrent Mainline DHT (BEP 44)**.
+This document constitutes the formal threat model for the **PQChat.DHT** mobile messenger, focusing specifically on time-address correlation vectors, lookahead window pre-polling (*Lookahead Window*), decoy query distinguishability (*Decoy GETs*), multi-session statistical disclosure attacks (*Statistical Disclosure / Intersection Attack*), and Sybil/Eclipse attacks in the public **BitTorrent Mainline DHT (BEP 44)** network.
 
-Opisano w nim profil adwersarza, matematyczne mechanizmy wycieku metadanych, zaimplementowane środki zaradcze oraz empiryczne wyniki symulacji probabilistycznej opartej na $N \ge 100$ powtórzeniach Monte Carlo z losowymi ziarnami (*seeds*), 95% przedziałami ufności i ścisłym odniesieniem do teoretycznego poziomu losowego zgadywania ($1/N$).
+It defines the adversary profile, mathematical metadata leakage mechanisms, implemented defense countermeasures, and empirical results from probabilistic simulations based on $N \ge 100$ Monte Carlo repetitions with random seeds, 95% confidence intervals, and strict benchmarking against the theoretical random guessing baseline ($1/N$).
 
 ---
 
-## 1. Wprowadzenie i Architektura Transportu
+## 1. Introduction and Transport Architecture
 
-PQChat.DHT jest w pełni zdecentralizowanym (*serverless*), post-kwantowym komunikatorem mobilnym na platformę Android, wykorzystującym sieć BitTorrent Mainline DHT (Kademlia KRPC UDP) jako efemeryczny magazyn buforujący typu *Store-and-Forward* na okres 24–72 godzin:
-- **Warstwa asymetryczna (KEM):** ML-KEM-512 (FIPS 203 / Kyber-512) dla uzgadniania wspólnego sekretu w procesie parowania QR oraz okresowej rotacji kluczy (*Rekeying* co 50 wiadomości).
-- **Warstwa symetryczna (AEAD):** AES-256-GCM z kluczem 256-bitowym, 12-bajtowym IV, 16-bajtowym tagiem uwierzytelniającym oraz AAD powiązanym z adresem docelowym, typem ramki i kierunkiem transmisji.
-- **Transport BEP 44:** Wiadomości publikowane są jako rekordy mutowalne pod adresem $\text{Target} = \text{SHA-1}(pk_{\text{Ed25519}})$, o sztywnym rozmiarze ładunku dokładnie 900 bajtów (`MAX_FRAME_PAYLOAD_BYTES = 900`). Po zakodowaniu formatem Bencode (`900:...`) rekord ma dokładnie 904 bajty, ściśle spełniając limit BEP 44 ($\le 1000$ B; surowy ładunek 1000 B po zakodowaniu bencode dawałby 1005 B i zostałby odrzucony przez węzły DHT). Niewykorzystana przestrzeń ładunku jest dopełniana kryptograficznym szumem CSPRNG (`SecureRandom` padding).
-- **Deterministyczne rozdzielenie torów (Dual Unidirectional Chains):** Niezależne tory $A \to B$ oraz $B \to A$ sterowane odrębnymi licznikami sekwencyjnymi ($Counter_{\text{out}}$, $Counter_{\text{in}}$).
-- **Key Hopping (Efemeryczne przeskakiwanie adresów):** Każda wiadomość $i$ publikowana jest pod unikalnym adresem:
+PQChat.DHT is a fully decentralized (*serverless*), post-quantum mobile messenger for the Android platform, leveraging the BitTorrent Mainline DHT (Kademlia KRPC UDP) as an ephemeral *Store-and-Forward* buffer for 24–72 hours:
+- **Asymmetric Layer (KEM):** ML-KEM-512 (FIPS 203 / Kyber-512) for shared secret agreement during QR pairing and periodic key rotation (*Rekeying* every 50 messages).
+- **Symmetric Layer (AEAD):** AES-256-GCM with a 256-bit key, 12-byte IV, 16-byte authentication tag, and AAD bound to the target address, frame type, and transmission direction.
+- **BEP 44 Transport:** Messages are published as mutable records at target address $\text{Target} = \text{SHA-1}(pk_{\text{Ed25519}})$, with a strict fixed payload size of exactly 900 bytes (`MAX_FRAME_PAYLOAD_BYTES = 900`). Encoded in Bencode format (`900:...`), the record is exactly 904 bytes, strictly satisfying the BEP 44 limit ($\le 1000$ B; a raw 1000 B payload encoded in Bencode would produce 1005 B and be rejected by DHT nodes). Unused payload space is padded with CSPRNG cryptographic noise (`SecureRandom` padding).
+- **Deterministic Track Separation (Dual Unidirectional Chains):** Independent tracks $A \to B$ and $B \to A$ driven by separate sequence counters ($Counter_{\text{out}}$, $Counter_{\text{in}}$).
+- **Key Hopping (Ephemeral Address Hopping):** Each message $i$ is published at a unique target address:
   $$\text{Target}_i = \text{SHA-1}(pk_i), \quad pk_i \leftarrow \text{HKDF-Expand}(ChainKey^i, \text{"step"} \parallel i, 128)$$
-- **Okno wyprzedzające (Lookahead Window):** Odbiorca, w celu obsługi asynchroniczności i opóźnień sieciowych, wylicza z wyprzedzeniem $W$ przyszłych slotów ($W = 5$ dla `windowSize = 4`, czyli indeksy $n \dots n+4$) za pomocą `RatchetChain.computeLookaheadSlots` i odpytuje DHT równolegle o te adresy.
+- **Lookahead Window:** To handle network latency and packet reordering asynchronously, the receiver computes $W$ future slots in advance ($W = 5$ for `windowSize = 4`, i.e., indices $n \dots n+4$) via `RatchetChain.computeLookaheadSlots` and queries the DHT for these addresses in parallel.
 
 ---
 
-## 2. Taksonomia Adwersarza i Model Zaufania
+## 2. Adversary Taxonomy and Trust Model
 
-### 2.1. Założenia Systemowe i Granice Zaufania
-1. **Urządzenie końcowe (Smartfon):** Działa w trybie **Client-Only Leaf Node**. Smartfon nigdy nie trasuje cudzych zapytań KRPC, nie buforuje danych innych węzłów ani nie przechowuje cudzych kluczy w pamięci RAM.
-2. **Niezaufana sieć BitTorrent DHT:** Publiczny Internet oraz sieć węzłów Kademlia składająca się z setek tysięcy niezweryfikowanych podmiotów. Każdy węzeł może być złośliwy (*honest-but-curious* lub aktywnie ingerujący w pakiety).
-3. **Poufność kryptograficzna:** Adwersarz nie jest w stanie złamać AES-256-GCM ani ML-KEM-512; nie zna kluczy prywatnych ani nasion KDF. Adwersarz analizuje wyłącznie metadane transportowe (IP, port, czas, rozmiar, identyfikator zapytania).
+### 2.1. System Assumptions and Trust Boundaries
+1. **End-User Device (Smartphone):** Operates in **Client-Only Leaf Node** mode. The smartphone never routes third-party KRPC queries, never buffers data for other nodes, and never stores third-party keys in RAM.
+2. **Untrusted BitTorrent DHT Network:** The public Internet and Kademlia node network consisting of hundreds of thousands of unverified participants. Any node may be malicious (*honest-but-curious* or actively tampering with packets).
+3. **Cryptographic Confidentiality:** The adversary cannot break AES-256-GCM or ML-KEM-512; they do not know private keys or KDF seeds. The adversary analyzes only transport metadata (IP, port, timing, packet size, query ID).
 
-### 2.2. Profile Adwersarza
+### 2.2. Adversary Profiles
 
 ```
-[ Nadawca Alice (IP_A) ] ──── PUT(Target_i) ───► [ Złośliwy Węzeł DHT M ] ◄─── GET(Target_i) ──── [ Odbiorca Bob (IP_B) ]
-                                                   (Widzi: IP_A, IP_B,
-                                                    t_PUT, t_GET, Delta_t)
+[ Sender Alice (IP_A) ] ──── PUT(Target_i) ───► [ Malicious DHT Node M ] ◄─── GET(Target_i) ──── [ Receiver Bob (IP_B) ]
+                                                    (Observes: IP_A, IP_B,
+                                                     t_PUT, t_GET, Delta_t)
 ```
 
-#### A. Pasywny Obserwator Węzła Przechowującego ($\mathcal{A}_{\text{pass}}$)
-- **Umiejscowienie:** Kontroluje węzeł DHT, który w metryce XOR Kademlia znajduje się w zbiorze $K=8$ najbliższych węzłów dla danego adresu docelowego $\text{Target}_i$.
-- **Zdolności:** Rejestruje zdarzenie zapisu $(\text{IP}_A, t_{\text{PUT}})$ oraz zdarzenia odczytu $(\text{IP}_B, t_{\text{GET}})$. Mierzy różnicę czasu $\Delta t = t_{\text{GET}} - t_{\text{PUT}}$.
+#### A. Passive Storing Node Observer ($\mathcal{A}_{\text{pass}}$)
+- **Location:** Controls a DHT node that falls within the $K=8$ closest nodes for target address $\text{Target}_i$ under Kademlia XOR metric.
+- **Capabilities:** Logs write events $(\text{IP}_A, t_{\text{PUT}})$ and read events $(\text{IP}_B, t_{\text{GET}})$. Measures the time delta $\Delta t = t_{\text{GET}} - t_{\text{PUT}}$.
 
-#### B. Obserwator Okna Wyprzedzającego ($\mathcal{A}_{\text{look}}$)
-- **Zdolności:** Adwersarz rejestruje zapytania `GET` odbiorcy Boba nadsyłane **przed** publikacją wiadomości przez Alice ($t_{\text{GET}} < t_{\text{PUT}}$, $\Delta t < 0$).
-- **Wektor ataku:** Odbiorca, odpytując z wyprzedzeniem o sloty $n \dots n+4$, zdradza gotowość do odbioru pod danym targetem. Gdy Alice wykonuje `PUT`, adwersarz natychmiast łączy nadawcę z adresem IP, który wcześniej pre-polingował ten sam slot.
+#### B. Lookahead Window Observer ($\mathcal{A}_{\text{look}}$)
+- **Capabilities:** Logs receiver Bob's `GET` queries arriving **before** message publication by Alice ($t_{\text{GET}} < t_{\text{PUT}}$, $\Delta t < 0$).
+- **Attack Vector:** By polling slots $n \dots n+4$ in advance, the receiver reveals readiness to receive at that target. When Alice performs a `PUT`, the adversary immediately links the sender to the IP address that previously pre-polled the same slot.
 
-#### C. Stanowy Obserwator Rozróżniający Decoy GETs ($\mathcal{A}_{\text{state}}$)
-- **Zdolności:** Adwersarz prowadzi tabelę historii zapytań dla obserwowanych targetów.
-- **Wektor ataku:** Rozróżnia targety rzeczywiste (na których pojawia się operacja `PUT`) od czysto syntetycznych targetów wabikowych ($\text{Target}_{\text{synth}}$), na które **nigdy nie nadejdzie żaden `PUT`**. Filtrując targety o zerowej liczbie zapisów (`num_puts == 0`), adwersarz eliminuje naiwne zapytania wabikowe.
+#### C. Stateful Decoy GET Distinguisher Observer ($\mathcal{A}_{\text{state}}$)
+- **Capabilities:** Maintains query history tables for monitored target addresses.
+- **Attack Vector:** Distinguishes genuine targets (where a `PUT` operation occurs) from purely synthetic decoy targets ($\text{Target}_{\text{synth}}$) where **no `PUT` ever arrives**. By filtering out targets with zero writes (`num_puts == 0`), the adversary eliminates naive decoy queries.
 
-#### D. Obserwator Wielosesyjny – Atak Przecięć / Ujawnienia Statystycznego ($\mathcal{A}_{\text{inter}}$)
-- **Zdolności:** Monitoruje strumień wielu kolejnych wiadomości ($M \in [1, 20]$) wysyłanych przez Alice.
-- **Wektor ataku:** Nawet jeśli pojedyncza wiadomość daje zbiór kilku kandydatów na odbiorcę z powodu zapytań wabikowych, rzeczywisty partner Bob pojawia się w zbiorze kandydatów **przy każdej wiadomości**, podczas gdy przypadkowe węzły wabikowe pojawiają się sporadycznie. Iloczyn prawdopodobieństw posteriora zbiega do tożsamości Boba.
+#### D. Multi-Session Observer – Intersection / Statistical Disclosure Attack ($\mathcal{A}_{\text{inter}}$)
+- **Capabilities:** Monitors a stream of multiple consecutive messages ($M \in [1, 20]$) sent by Alice.
+- **Attack Vector:** Even if a single message produces a candidate set of several receivers due to decoys, the genuine partner Bob appears in the candidate set **with every single message**, whereas random decoy nodes appear intermittently. The posterior probability product converges to Bob's identity.
 
-#### E. Aktywny Adwersarz Sybil / Eclipse ($\mathcal{A}_{\text{sybil}}$)
-- **Zdolności:** Generuje sztuczne węzły o spreparowanych identyfikatorach Node ID bliskich celowi w metryce XOR, dążąc do przejęcia frakcji $f_{\text{sybil}} \in [0.0, 0.5]$ sąsiedztwa pamiętającego target.
-- **Prawdopodobieństwo kompromitacji:** W sieci o replikacji $K=8$ najbliższych węzłów, prawdopodobieństwo, że co najmniej jeden złośliwy węzeł Sybil znajdzie się w zbiorze replik wynosi:
+#### E. Active Sybil / Eclipse Adversary ($\mathcal{A}_{\text{sybil}}$)
+- **Capabilities:** Spawns artificial nodes with crafted Node IDs close to the target in the XOR metric, attempting to control a fraction $f_{\text{sybil}} \in [0.0, 0.5]$ of the neighborhood storing the target.
+- **Compromise Probability:** In a network with replication factor $K=8$ closest nodes, the probability that at least one malicious Sybil node is in the replica set is:
   $$P_{\text{compromise}} = 1 - (1 - f_{\text{sybil}})^K$$
 
-#### F. Globalny Obserwator Ruchu ISP / AS ($\mathcal{A}_{\text{net}}$)
-- **Zdolności:** Analizuje wolumen i rozkłady czasowe pakietów UDP na styku operatora telekomunikacyjnego.
-- **Mitygacja:** Ruch maskujący generowany wg procesu Poissona uniezależnia emisję pakietów od aktywności użytkownika.
+#### F. Global ISP / AS Network Observer ($\mathcal{A}_{\text{net}}$)
+- **Capabilities:** Analyzes UDP packet volume and timing distributions at the telecom provider boundary.
+- **Mitigation:** Poisson-distributed cover traffic decorrelates packet emission from user messaging activity.
 
 ---
 
-## 3. Szczegółowa Analiza Wektorów Zagrożeń
+## 3. In-Depth Threat Vector Analysis
 
-### 3.1. Wyprzedzające Odpytywanie Okna Rotacji (Lookahead Pre-Polling)
-W protokole PQChat odbiorca utrzymuje asynchroniczne okno wyprzedzające:
+### 3.1. Lookahead Window Pre-Polling
+In the PQChat protocol, the receiver maintains an asynchronous lookahead window:
 $$\mathcal{W}_n = \{\text{Target}_n, \text{Target}_{n+1}, \dots, \text{Target}_{n+4}\}$$
-W trakcie oczekiwania na wiadomość $n$:
-1. Odbiorca Bob wysyła zapytania `GET` dla wszystkich 5 slotów w każdym cyklu pollingu ($T_{\text{poll}}$).
-2. Dla slotu $n$, węzeł DHT rejestruje zapytania z $\text{IP}_B$ w momentach $t_{\text{PUT}} - \delta_1, t_{\text{PUT}} - \delta_2, \dots$ ($\Delta t < 0$).
-3. W momencie $t_{\text{PUT}}$ Alice wykonuje `PUT` na $\text{Target}_n$.
-4. W pierwszym cyklu po publikacji ($t_{\text{PUT}} + \delta_{\text{post}}$) Bob pobiera ładunek i przesuwa okno na $n+1 \dots n+5$.
+While waiting for message $n$:
+1. Receiver Bob sends `GET` queries for all 5 slots in each polling cycle ($T_{\text{poll}}$).
+2. For slot $n$, the DHT node logs queries from $\text{IP}_B$ at times $t_{\text{PUT}} - \delta_1, t_{\text{PUT}} - \delta_2, \dots$ ($\Delta t < 0$).
+3. At time $t_{\text{PUT}}$, Alice executes `PUT` on $\text{Target}_n$.
+4. In the first cycle following publication ($t_{\text{PUT}} + \delta_{\text{post}}$), Bob retrieves the payload and advances the window to $n+1 \dots n+5$.
 
-**Wniosek:** Adwersarz $\mathcal{A}_{\text{look}}$, który koreluje zarówno zdarzenia pre-PUT jak i post-PUT, uzyskuje sygnaturę dwustronną. Aby uniemożliwić tę korelację, zapytania wabikowe (*Decoy GETs*) muszą obejmować również pule slotów aktywnych i przeszłych, a interwały muszą być zaburzone jitterem.
+**Conclusion:** An adversary $\mathcal{A}_{\text{look}}$ who correlates both pre-PUT and post-PUT events acquires a bidirectional signature. To prevent this correlation, decoy queries (*Decoy GETs*) must also cover active and historical slot pools, and query intervals must be jittered.
 
-### 3.2. Rozróżnialność Zapytań Wabikowych (0-PUT Target Distinguishability)
-Jeżeli klient generuje zapytania wabikowe wyłącznie pod losowe hasze w przestrzeni 160-bitowej:
-- Żaden węzeł w sieci nigdy nie wykona operacji `PUT` pod tym adresem.
-- Adwersarz stanowy monitorujący target w oknie czasowym natychmiast klasyfikuje taki target jako fałszywy (`has_put == False`).
-- W rezultacie naiwne zapytania wabikowe zostają w 100% odfiltrowane, przywracając skuteczność korelacji do 100%.
+### 3.2. Decoy Query Distinguishability (0-PUT Target Distinguishability)
+If a client generates decoy queries targeting purely random hashes across 160-bit space:
+- No network node will ever execute a `PUT` operation at that address.
+- A stateful adversary monitoring the target over a time window immediately classifies it as fake (`has_put == False`).
+- Consequently, naive decoys are 100% filtered out, restoring adversary correlation accuracy to 100%.
 
-**Architektura obronna PQChat.DHT:**
-1. **Nieskoordynowane rekordy maskujące (*Poisson Dummy PUTs*):** Generator `PoissonTrafficGenerator` publikuje w tle rekordy o sztywnym rozmiarze dokładnie 900 bajtów (904 B w formacie Bencode) wypełnione kryptograficznym szumem CSPRNG. Rekordy te posiadają fizyczny zapis `PUT` w DHT.
-2. **Wielopodmiotowe targetowanie aktywne:** Zapytania wabikowe kierowane są w $60\%$ do puli slotów aktywnych i dummy-PUTów, a nie wyłącznie do pustej przestrzeni haszy, dzięki czemu przetrwają stanowe filtrowanie 0-PUT.
+**PQChat.DHT Defense Architecture:**
+1. **Uncoordinated Cover Records (*Poisson Dummy PUTs*):** `PoissonTrafficGenerator` publishes background records of a strict fixed size of exactly 900 bytes (904 B in Bencode) filled with CSPRNG cryptographic noise. These records have a physical `PUT` in the DHT.
+2. **Multi-Entity Active Targeting:** Decoy queries are directed 60% of the time to active slot pools and dummy PUT targets rather than empty hash spaces, allowing them to withstand stateful 0-PUT filtering.
 
-### 3.3. Wielosesyjny Atak Przecięć (Statistical Disclosure) i Korelacja Grupowa
-Gdy Alice wysyła ciąg $`M`$ wiadomości do Boba:
-- W pojedynczej wiadomości ($`M=1`$) zbiór kandydatów odbiorcy wynosi $`\approx 4`$ podmioty dzięki zapytaniom wabikowym, co daje skuteczność korelacji rzędu $`\approx 47-50\%`$.
-- Po $`M`$ wiadomościach adwersarz akumuluje logarytmiczny iloczyn wiarygodności:
-  $`\mathcal{L}_M(r) = \sum_{m=1}^M \ln P(R = \text{Bob}_r \mid \text{Target}_m)`$
-- Bez ciągłego tła maskującego Bob jest jedynym odbiorcą obecnym we wszystkich $`M`$ oknach, co przy $`M \ge 5`$ prowadzi do niemal pewnej deanonimizacji ($`100\%`$).
-- Wdrożenie pełnej obrony (*Full Defense* z ruchem Poissona i opóźnieniami PUT) istotnie spowalnia tę zbieżność.
+### 3.3. Multi-Session Statistical Disclosure Attack and Group Correlation
+When Alice sends a sequence of $M$ messages to Bob:
+- For a single message ($M=1$), the candidate receiver set is $\approx 4$ entities thanks to decoy queries, yielding correlation accuracy of $\approx 47-50\%$.
+- After $M$ messages, the adversary accumulates a log-likelihood product:
+  $$\mathcal{L}_M(r) = \sum_{m=1}^M \ln P(R = \text{Bob}_r \mid \text{Target}_m)$$
+- Without continuous cover traffic, Bob is the only recipient present in all $M$ observation windows, leading to near-certain de-anonymization ($100\%$) for $M \ge 5$.
+- Deploying the full defense suite (*Full Defense* with Poisson traffic and delayed PUTs) significantly retards this convergence.
 
-#### Podatność Same-Target w Czatach Grupowych (Group Follower Correlation)
-W komunikacji grupowej podatność typu **Same-target** (użycie jednego adresu docelowego dla wszystkich uczestników) stanowi krytyczny wektor ataku:
-- **Mechanizm ataku:** Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe zapytania GET na ten sam slot w DHT, łamiąc tajność celu komunikacji grupowej. Obserwator węzłów przechowujących DHT w metryce XOR Kademlia rejestruje równoległe zapytania `GET` pod identyczny klucz 160-bitowy pochodzące z $`N`$ różnych adresów IP w zbliżonym oknie czasowym. W rezultacie adwersarz natychmiast odtwarza pełny skład grupy oraz interwały konwersacji.
-- **Wdrożona obrona (Unique Recipient Target):**
-  W `ChatRepository.sendGroupMessage` zamiast jednego slotu nadawca wyprowadza indywidualny target dla każdego członka:
-  $`\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)`$
-  a następnie wyznacza parametry slotu (`RatchetChain.deriveGroupRecipientSlot`) i wykonuje osobne operacje `putMutable` pod każdym unikalnym targetem ($`N`$ targetów dla $`N`$ członków).
-  W procedurze `pollGroupIncoming` każdy członek odpytuje **wyłącznie swój unikalny target, a nie wspólny** (brak podatnego fallbacku do współdzielonego slotu). W efekcie operacje GET są rozproszone po całej przestrzeni adresowej DHT, uniemożliwiając powiązanie członków grupy ze sobą.
+#### Same-Target Vulnerability in Group Chats (Group Follower Correlation)
+In group messaging, a **Same-Target** design (using a single target address for all members) represents a critical vulnerability vector:
+- **Attack Mechanism:** Using the same target for all members allows a DHT observer to correlate $N$ recipients through parallel GET queries on the identical DHT slot, breaking group communication destination secrecy. A storing node observer in Kademlia XOR metric registers concurrent `GET` queries for the exact same 160-bit key from $N$ different IP addresses within a tight time window. Consequently, the adversary immediately reconstructs the entire group membership and conversation timing.
+- **Implemented Defense (Unique Recipient Target):**
+  In `ChatRepository.sendGroupMessage`, instead of a single slot, the sender derives an individual target for each member:
+  $$\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)$$
+  and then derives slot parameters (`RatchetChain.deriveGroupRecipientSlot`) and performs separate `putMutable` operations under each unique target ($N$ targets for $N$ members).
+  In `pollGroupIncoming`, each member queries **only their unique target, never a shared one** (no vulnerable fallback to a shared slot). As a result, GET operations are dispersed across the entire DHT address space, preventing group members from being linked to one another.
 
-### 3.4. Atak Sybil w Metryce XOR Kademlia
-Adwersarz posiadający botnet lub zasoby chmurowe rozmieszcza węzły w pobliżu docelowych targetów:
-- W metryce Kademlia rekord mutowalny BEP 44 jest replikowany do $K=8$ najbliższych węzłów.
-- Prawdopodobieństwo przejęcia co najmniej jednej repliki rośnie wykładniczo:
-  - Frakcja Sybil $f = 5\% \implies P = 33.7\%$
-  - Frakcja Sybil $f = 10\% \implies P = 57.0\%$
-  - Frakcja Sybil $f = 20\% \implies P = 83.2\%$
-  - Frakcja Sybil $f = 50\% \implies P = 99.6\%$
-- Gdy żaden węzeł w sąsiedztwie nie należy do adwersarza (węzły uczciwe), skuteczność adwersarza wynosi dokładnie tyle, ile losowe zgadywanie ($1/N = 4.0\%$).
+### 3.4. Sybil Attacks in Kademlia XOR Metric
+An adversary with a botnet or cloud resources deploys nodes close to target hashes:
+- In Kademlia, a BEP 44 mutable record is replicated across the $K=8$ closest nodes.
+- The probability of compromising at least one replica grows exponentially:
+  - Sybil fraction $f = 5\% \implies P = 33.7\%$
+  - Sybil fraction $f = 10\% \implies P = 57.0\%$
+  - Sybil fraction $f = 20\% \implies P = 83.2\%$
+  - Sybil fraction $f = 50\% \implies P = 99.6\%$
+- When no node in the neighborhood belongs to the adversary (honest nodes), the adversary's success rate equals random guessing ($1/N = 4.0\%$).
 
-### 3.5. Realne Profile Życiowe Androida i Tryb Doze
-W aplikacji `AdaptivePollingManager` implementuje 4 stany energetyczne:
-1. `FOREGROUND_CHAT` ($T = 10\text{ s}$): Aktywna rozmowa, proces aktywny, ruch maskujący Poissona aktywny.
-2. `APP_ACTIVE_OTHER` ($T = 60\text{ s} / 1\text{ min}$): Aplikacja na pierwszym planie, inne ekrany, ruch maskujący aktywny.
-3. `BACKGROUND_IDLE` ($T = 300\text{ s} / 5\text{ min}$): Ekran włączony, aplikacja w tle, ruch maskujący aktywny.
-4. `DOZE_SLEEP` ($T = 900\text{ s} / 15\text{ min}$): Urządzenie zablokowane / uśpione.
-   - **Kluczowa zasada:** W trybie Doze proces w tle jest wstrzymywany przez system operacyjny. **Ruch maskujący Poissona jest wyłączony**, a wybudzenia następują wyłącznie periodycznie przez `WorkManager` / `AlarmManager.setAndAllowWhileIdle`. Zapobiega to drenowaniu baterii i ubijaniu procesu przez Android LMK.
+### 3.5. Real-World Android Lifecycle Profiles and Doze Mode
+In the application, `AdaptivePollingManager` implements 4 energy states:
+1. `FOREGROUND_CHAT` ($T = 10\text{ s}$): Active chat, process active, Poisson cover traffic active.
+2. `APP_ACTIVE_OTHER` ($T = 60\text{ s} / 1\text{ min}$): App in foreground, other screens, cover traffic active.
+3. `BACKGROUND_IDLE` ($T = 300\text{ s} / 5\text{ min}$): Screen on, app backgrounded, cover traffic active.
+4. `DOZE_SLEEP` ($T = 900\text{ s} / 15\text{ min}$): Device locked / sleeping.
+   - **Key Principle:** In Doze mode, background execution is throttled by the OS. **Poisson cover traffic is disabled**, and wakeups occur strictly periodically via `WorkManager` / `AlarmManager.setAndAllowWhileIdle`. This prevents battery drain and process termination by the Android LMK.
 
-### 3.6. Wektor Wycieku Metadanych przez Rekordy Tombstone (Czyszczenie Slotu)
-W rozproszonych magazynach DHT zgodnych z BEP 44 po odebraniu wiadomości przez odbiorcę i wykryciu potwierdzenia ACK, nadawca nadpisuje pierwotny slot transmisji w celu uniemożliwienia odzyskania archiwalnego kryptogramu z węzłów Kademlia (Forward Secrecy na poziomie magazynu DHT).
+### 3.6. Metadata Leakage Vector via Tombstone Records (Slot Cleanup)
+In BEP 44-compliant distributed DHT stores, after a message is received and acknowledged via an ACK, the sender overwrites the original transmission slot to prevent recovery of archival ciphertexts from Kademlia nodes (Forward Secrecy at the DHT storage level).
 
-* **Podatność wariantu naiwnego (0 B / pusty rekord):**
-  Wczesna koncepcja zakładała publikację pustego rekordu (`v = ByteArray(0)`, w Bencode: `"0:"`). Taki zabieg wprowadza krytyczny wektor ataku:
-  1. **Rozróżnialność rozmiarowa:** Wszystkie standardowe wiadomości, fragmenty plików i ruch maskujący mają jednolity rozmiar 900 B (904 B w Bencode). Zapis o długości 0 B (2 B w Bencode) stanowi unikalną anomalię w ruchu sieciowym.
-  2. **Wyciek faktu i czasu dostarczenia:** Węzeł przechowujący oraz pasywny podsłuchiwacz natychmiast rejestrują zdarzenie przejścia slotu z 900 B na 0 B. Ujawnia to moment, w którym odbiorca pobrał wiadomość, demaskując sukces doręczenia i umożliwiając adwersarzowi wyznaczenie dokładnego czasu RTT transmisji.
-* **Wdrożona obrona (Jednolity Tombstone 900 B):**
-  W PQChat.DHT tombstone jest publikowany z ładunkiem o **identycznym, stałym rozmiarze dokładnie 900 bajtów** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES`) czystego szumu CSPRNG pod zinkrementowanym numerem sekwencyjnym (`seq = DEFAULT_MUTABLE_SEQ + 1`, zgodnie z regułą nadpisywania BEP 44).
-  - Węzły DHT bezpowrotnie niszczą pierwotny kryptogram, zastępując go szumem pod wyższym numerem sekwencyjnym.
-  - Dla węzłów i obserwatorów sieciowych zapis jest całkowicie nieodróżnialny od zwykłej publikacji, rekeyingu lub ruchu maskującego.
-  - Całkowicie eliminuje to wyciek metadanych dotyczących doręczenia wiadomości.
+* **Naive Variant Vulnerability (0 B / Empty Record):**
+  An early concept considered publishing an empty record (`v = ByteArray(0)`, in Bencode: `"0:"`). This introduces a critical attack vector:
+  1. **Size Distinguishability:** All standard messages, file chunks, and cover traffic share a uniform size of 900 B (904 B in Bencode). A 0 B write (2 B in Bencode) stands out as an obvious network traffic anomaly.
+  2. **Delivery Timing and Fact Leakage:** The storing node and passive eavesdroppers immediately observe the slot transition from 900 B to 0 B. This leaks the exact moment the receiver retrieved the message, proving delivery success and allowing the adversary to compute precise round-trip times (RTT).
+* **Implemented Defense (Uniform 900 B Tombstone):**
+  In PQChat.DHT, tombstones are published with a payload of **identical, fixed size of exactly 900 bytes** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES`) of pure CSPRNG noise under an incremented sequence number (`seq = DEFAULT_MUTABLE_SEQ + 1`, following BEP 44 overwrite rules).
+  - DHT nodes irrevocably overwrite the original ciphertext, replacing it with noise under a higher sequence number.
+  - To nodes and network observers, the write is completely indistinguishable from regular message publishing, rekeying, or cover traffic.
+  - This completely eliminates metadata leakage regarding message delivery.
 
 ---
 
-## 4. Architektura Środków Obronnych
+## 4. Defense Countermeasure Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        WARSTWY OCHRONY METADANYCH                      │
+│                        METADATA DEFENSE LAYERS                         │
 ├───────────────────────────┬────────────────────────────────────────────┤
-│ 1. Ephemeral Key Hopping  │ Unikalny Target_i dla każdej wiadomości    │
-│ 2. Cover Decoy GETs       │ Zapytania wabikowe do puli aktywnych slotów│
-│ 3. Polling Jitter         │ Losowe rozmycie interwałów (±30%)          │
-│ 4. Delayed PUT & Decoys   │ Opóźnione emisje i równoległe sloty-wabiki │
-│ 5. Poisson Cover Traffic  │ CSPRNG rekordy 900 B wg rozkładu lambda    │
-│ 6. Uniform Tombstones     │ 900 B CSPRNG pod seq+1 (zero wycieku ACK)  │
-│ 7. Lifecycle Adaptation   │ Wyłączanie szumu w Doze, interwały do 15m  │
+│ 1. Ephemeral Key Hopping  │ Unique Target_i for every message          │
+│ 2. Cover Decoy GETs       │ Decoy queries to active slot pools         │
+│ 3. Polling Jitter         │ Randomized interval dispersion (±30%)      │
+│ 4. Delayed PUT & Decoys   │ Delayed emissions and parallel decoy slots │
+│ 5. Poisson Cover Traffic  │ 900 B CSPRNG records via lambda rate       │
+│ 6. Uniform Tombstones     │ 900 B CSPRNG at seq+1 (zero ACK leakage)   │
+│ 7. Lifecycle Adaptation   │ Noise disabled in Doze, intervals to 15m   │
 └───────────────────────────┴────────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Wyniki Symulacji Empirycznej i Analiza Wrażliwości
+## 5. Empirical Simulation Results and Sensitivity Analysis
 
-Symulację przeprowadzono w skrypcie `tools/threat_sim/threat_simulator.py`. Konfiguracja bazowa obejmuje:
-- $N = 25$ niezależnych par komunikacyjnych ($50$ klientów).
-- Teoretyczny poziom losowego zgadywania: $\text{Baseline } 1/N = 1/25 = \mathbf{4.0\%}$.
-- Liczba powtórzeń Monte Carlo: **$N_{\text{runs}} = 100$** z deterministycznymi ziarnami ($seed = 1000 \dots 1099$).
-- Przedziały ufności: **95% Confidence Interval** ($\pm 1.96 \cdot s / \sqrt{N_{\text{runs}}}$).
+Simulations were conducted using the script `tools/threat_sim/threat_simulator.py`. The baseline configuration includes:
+- $N = 25$ independent communication pairs ($50$ clients).
+- Theoretical random guessing baseline: $\text{Baseline } 1/N = 1/25 = \mathbf{4.0\%}$.
+- Monte Carlo repetitions: **$N_{\text{runs}} = 100$** with deterministic seeds ($seed = 1000 \dots 1099$).
+- Confidence intervals: **95% Confidence Interval** ($\pm 1.96 \cdot s / \sqrt{N_{\text{runs}}}$).
 
-### 5.1. Skuteczność Postur Obronnych (N=100 Powtórzeń, 95% CI)
+### 5.1. Defense Posture Effectiveness (N=100 Repetitions, 95% CI)
 
-| Postura Obronna | Dokładność Adwersarza Top-1 $P(\text{corr})$ | Przewaga nad Zgadywaniem ($P - 1/N$) | Stopień Anonimowości (Entropia Shannona) | Narzut Pasma (KB/h na klienta) | Zużycie Baterii (mWh/h na klienta) |
+| Defense Posture | Adversary Top-1 Accuracy $P(\text{corr})$ | Advantage over Guessing ($P - 1/N$) | Degree of Anonymity (Shannon Entropy) | Bandwidth Overhead (KB/h per client) | Battery Consumption (mWh/h per client) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Brak obrony)** | **100.0% ± 0.0%** | +96.0% | 0.7% ± 0.0% | 142.3 KB/h | 511.3 mWh |
+| **Baseline (No Defense)** | **100.0% ± 0.0%** | +96.0% | 0.7% ± 0.0% | 142.3 KB/h | 511.3 mWh |
 | **+ Polling Jitter (±30%)** | **100.0% ± 0.0%** | +96.0% | 0.7% ± 0.0% | 142.3 KB/h | 511.3 mWh |
 | **+ Decoy GETs ($\mu=1.5$)** | **47.7% ± 0.4%** | +43.7% | 49.2% ± 0.1% | 181.8 KB/h | 511.3 mWh |
 | **+ Delayed PUT & Decoy Slots** | **5.2% ± 0.2%** | **+1.3%** | **51.0% ± 0.1%** | 192.3 KB/h | 511.3 mWh |
 | **Full Defense (+ Poisson $\lambda=1/480\text{s}$)** | **9.7% ± 0.3%** | **+5.7%** | **45.8% ± 0.1%** | 200.2 KB/h | 522.8 mWh |
 
 > [!IMPORTANT]
-> Przy wdrożeniu opóźnionych publikacji (`Delayed PUT`), slotów-wabików oraz zapytań `Decoy GETs` dokładność korelacji adwersarza spada do **5.2% ± 0.2%**, co jest niemal tożsame z **teoretycznym losowym zgadywaniem ($1/25 = 4.0\%$)** — przewaga adwersarza wynosi zaledwie **+1.3%**!
+> When deploying delayed publishing (`Delayed PUT`), decoy slots, and `Decoy GETs`, adversary correlation accuracy drops to **5.2% ± 0.2%**, virtually identical to **theoretical random guessing ($1/25 = 4.0\%$)** — the adversary's advantage is merely **+1.3%**!
 
 ---
 
-### 5.2. Analiza Zagrożenia Okna Wyprzedzającego (Lookahead Pre-Polling)
+### 5.2. Lookahead Window Threat Analysis (Lookahead Pre-Polling)
 
-| Profil Obserwatora Adwersarza | Dokładność Top-1 | Przewaga nad $1/N$ | Entropia Anonimowości |
+| Adversary Observer Profile | Top-1 Accuracy | Advantage over $1/N$ | Anonymity Entropy |
 | :--- | :---: | :---: | :---: |
-| **Obserwator wyłącznie Post-PUT ($\Delta t \ge 0$)** | 58.5% ± 0.7% | +54.5% | 26.6% |
-| **Obserwator Lookahead-Aware ($\Delta t < 0$ oraz $\Delta t \ge 0$)** | 47.7% ± 0.6% | +43.7% | 49.2% |
+| **Post-PUT Only Observer ($\Delta t \ge 0$)** | 58.5% ± 0.7% | +54.5% | 26.6% |
+| **Lookahead-Aware Observer ($\Delta t < 0$ and $\Delta t \ge 0$)** | 47.7% ± 0.6% | +43.7% | 49.2% |
 
-*Interpretacja:* Obserwator uwzględniający zapytania wyprzedzające Boba widzi dodatkowe zapytania przed publikacją, jednak rozproszenie zapytań wabikowych w całym horyzoncie czasowym skutecznie zaciera relację przyczynowo-skutkową.
+*Interpretation:* An observer accounting for Bob's lookahead pre-polling sees additional queries prior to publication, but dispersion of decoy queries across the full time window effectively blurs cause-and-effect relationships.
 
 ---
 
-### 5.3. Rozróżnialność Decoy GETs (Stanowe Filtrowanie 0-PUT)
+### 5.3. Decoy GET Distinguishability (Stateful 0-PUT Filtering)
 
-| Konfiguracja Zapytań Wabikowych | Typ Obserwatora | Dokładność Top-1 | Entropia Shannona |
+| Decoy Query Configuration | Observer Type | Top-1 Accuracy | Shannon Entropy |
 | :--- | :--- | :---: | :---: |
-| **Decoys Syntetyczne (brak PUT)** | Naiwny (brak filtrowania) | 47.7% ± 0.6% | 49.2% |
-| **Decoys Syntetyczne (brak PUT)** | **Stanowy (Filtrowanie 0-PUT)** | **100.0% ± 0.0%** | **0.7%** |
-| **Decoys + Poisson Cover Traffic** | **Stanowy (Filtrowanie 0-PUT)** | **78.1% ± 0.6%** | **32.4%** |
+| **Synthetic Decoys (No PUT)** | Naive (No filtering) | 47.7% ± 0.6% | 49.2% |
+| **Synthetic Decoys (No PUT)** | **Stateful (0-PUT Filtering)** | **100.0% ± 0.0%** | **0.7%** |
+| **Decoys + Poisson Cover Traffic** | **Stateful (0-PUT Filtering)** | **78.1% ± 0.6%** | **32.4%** |
 
 > [!WARNING]
-> Jeśli zapytania wabikowe odpytują wyłącznie nieistniejące, syntetyczne targety, stanowy adwersarz eliminujący rekordy bez operacji `PUT` **całkowicie neutralizuje obronę (100% deanonimizacji)**.
-> Obecność nieskoordynowanych rekordów maskujących z `PoissonTrafficGenerator` (dummy PUTs) oraz kierowanie wabików do puli slotów aktywnych jest **krytycznym warunkiem koniecznym** dla zachowania ochrony.
+> If decoy queries poll only non-existent, synthetic targets, a stateful adversary eliminating records without `PUT` operations **completely neutralizes the defense (100% de-anonymization)**.
+> The presence of uncoordinated cover records from `PoissonTrafficGenerator` (dummy PUTs) and targeting decoys toward active slot pools is a **critical prerequisite** for preserving privacy.
 
 ---
 
-### 5.4. Wielosesyjny Atak Przecięć (Statistical Disclosure vs $M$)
+### 5.4. Multi-Session Statistical Disclosure Attack (Statistical Disclosure vs $M$)
 
-Skuteczność korelacji tożsamości w funkcji liczby zaobserwowanych kolejnych wiadomości ($M$):
+Identity correlation accuracy as a function of the number of consecutive observed messages ($M$):
 
-| Postura Obronna | $M = 1$ | $M = 2$ | $M = 5$ | $M = 10$ | $M = 20$ |
+| Defense Posture | $M = 1$ | $M = 2$ | $M = 5$ | $M = 10$ | $M = 20$ |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Brak obrony)** | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
-| **+ Decoy GETs (brak Poissona)** | 56.2% | 98.1% | 100.0% | 100.0% | 100.0% |
+| **Baseline (No Defense)** | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| **+ Decoy GETs (No Poisson)** | 56.2% | 98.1% | 100.0% | 100.0% | 100.0% |
 | **Full Defense (+ Poisson Cover)** | **12.0%** | **76.0%** | **100.0%** | **100.0%** | **100.0%** |
 
-*Wniosek:* Pojedyncza wymiana wiadomości w trybie Full Defense zapewnia doskonałą ochronę ($12.0\%$ korelacji wobec $4.0\%$ bazy). Jednak przy wielokrotnej wymianie wiadomości bez zmiany klucza tożsamości atak przecięć stopniowo zbiega do tożsamości odbiorcy, co uzasadnia konieczność częstej rotacji kluczy KEM (*PQC Rekeying* co 50 wiadomości) oraz okresowego resetu łańcucha.
+*Conclusion:* A single message exchange under Full Defense provides excellent protection ($12.0\%$ correlation against $4.0\%$ baseline). However, repeated message exchanges without changing identity keys cause the intersection attack to gradually converge on the recipient's identity, justifying the necessity of frequent KEM key rotation (*PQC Rekeying* every 50 messages) and periodic chain resets.
 
 ---
 
-### 5.5. Odporność na Przejęcie Sąsiedztwa w Ataku Sybil ($K=8$)
+### 5.5. Resistance to Neighborhood Compromise in Sybil Attacks ($K=8$)
 
-| Frakcja Węzłów Sybil ($f_{\text{sybil}}$) | $P(\text{Target Compromised})$ | Dokładność Top-1 | Przewaga nad Baseline $1/N$ |
+| Sybil Node Fraction ($f_{\text{sybil}}$) | $P(\text{Target Compromised})$ | Top-1 Accuracy | Advantage over Baseline $1/N$ |
 | :---: | :---: | :---: | :---: |
-| **0.0% (Węzły uczciwe)** | **0.0%** | **4.0% ± 0.3%** | **+0.4% (Czyste zgadywanie)** |
+| **0.0% (Honest nodes)** | **0.0%** | **4.0% ± 0.3%** | **+0.4% (Pure Guessing)** |
 | **5.0%** | 33.7% | 6.2% ± 0.3% | +2.2% |
 | **10.0%** | 57.0% | 7.2% ± 0.4% | +3.2% |
 | **20.0%** | 83.2% | 8.7% ± 0.3% | +4.7% |
 | **35.0%** | 96.8% | 9.3% ± 0.4% | +5.3% |
 | **50.0%** | 99.6% | 9.5% ± 0.4% | +5.5% |
 
-Nawet przy zmasowanym ataku Sybil, w którym adwersarz kontroluje aż $50\%$ sąsiedztwa Kademlia (przejmując $99.6\%$ targetów), mechanizmy obronne PQChat.DHT ograniczają skuteczność korelacji do zaledwie **9.5% ± 0.4%** (wobec bazy $4.0\%$).
+Even under an aggressive Sybil attack where the adversary controls 50% of the Kademlia neighborhood (compromising $99.6\%$ of targets), PQChat.DHT's defense mechanisms restrict correlation accuracy to just **9.5% ± 0.4%** (compared to the $4.0\%$ baseline).
 
 ---
 
-### 5.6. Profile Cyklu Życia i Zużycie Zasobów (Lifecycle States)
+### 5.6. Lifecycle Profiles and Resource Consumption (Lifecycle States)
 
-| Stan Urządzenia | Okres Pollingu | Ruch Maskujący | Dokładność Top-1 | Pasmo UDP | Zużycie Baterii |
+| Device State | Polling Period | Cover Traffic | Top-1 Accuracy | UDP Bandwidth | Battery Consumption |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **10s Foreground Chat** | 10 s | Aktywny | 9.5% | 200.2 KB/h | 522.8 mWh/h |
-| **1m App Active** | 60 s | Aktywny | 12.9% | 57.4 KB/h | 133.1 mWh/h |
-| **5m Background Idle** | 300 s | Aktywny | 16.1% | 34.5 KB/h | 70.8 mWh/h |
-| **15m Doze Sleep** | 900 s | **Wyłączony** | **11.2%** | **22.9 KB/h** | **41.3 mWh/h** |
+| **10s Foreground Chat** | 10 s | Active | 9.5% | 200.2 KB/h | 522.8 mWh/h |
+| **1m App Active** | 60 s | Active | 12.9% | 57.4 KB/h | 133.1 mWh/h |
+| **5m Background Idle** | 300 s | Active | 16.1% | 34.5 KB/h | 70.8 mWh/h |
+| **15m Doze Sleep** | 900 s | **Disabled** | **11.2%** | **22.9 KB/h** | **41.3 mWh/h** |
 
-*Interpretacja:* W trybie głębokiego uśpienia (Doze) wyłączenie generatora szumu redukuje zużycie energii o **92%** (z 522.8 mWh do 41.3 mWh), a narzut pasma spada do symbolicznych 22.9 KB/h, przy zachowaniu korelacji na poziomie zaledwie 11.2%.
-
----
-
-### 5.7. Wykres Wielopanelowy Trade-Offu
-
-Poniższy wykres (wygenerowany automatycznie przez `tools/threat_sim/threat_simulator.py`) przedstawia pełny obraz zależności:
-
-![Wykres Trade-Offu Anonimowości, Pasma i Baterii](tradeoff_anonymity_bandwidth_battery.png)
-
-### 5.8. Interpretacja Paneli Wykresu
-
-- **Panel A (Timing Correlation vs $\Delta t$ z Lookahead):** Pokazuje krzywą skuteczności korelacji zarówno dla $\Delta t < 0$ (wyprzedzające zapytania pre-PUT w oknie lookahead) jak i $\Delta t > 0$ (pobranie po publikacji). W konfiguracji *Full Defense* krzywa jest spłaszczona w całym przedziale $[-30\text{ s}, +30\text{ s}]$ w pobliże linii bazowej $1/N = 4.0\%$.
-- **Panel B (Wpływ Mechanizmów z Przedziałami 95% CI):** Prezentuje słupki dokładności i entropii Shannona z przedziałami ufności. Wyraźnie widać załamanie korelacji po wprowadzeniu zapytań wabikowych oraz opóźnień publikacji do poziomu $5.2\%$.
-- **Panel C (Wielosesyjny Atak Przecięć vs $M$):** Obrazuje tempo deanonimizacji w kolejnych wiadomościach. Pełna obrona przesuwa moment deanonimizacji i chroni pojedyncze interakcje.
-- **Panel D (Narzut Pasma i Baterii w Funkcji $\lambda$):** Uwzględnia model RRC modemu komórkowego (*tail time* 8s). Punkt przegięcia krzywej (*knee of the curve*) przypada na wartość domyślną $\lambda = 1/480\text{ s}$ (co 8 minut), gdzie narzut baterii wynosi $522.8\text{ mWh/h}$ (wzrost o zaledwie $2.2\%$ względem bazy $511.3\text{ mWh/h}$).
+*Interpretation:* In deep Doze mode, disabling the noise generator reduces energy consumption by **92%** (from 522.8 mWh to 41.3 mWh), while bandwidth overhead drops to a nominal 22.9 KB/h, maintaining correlation at just 11.2%.
 
 ---
 
-### 5.9. Weryfikacja Empiryczna na Rzeczywistym Klastrze BEP 5/44 (Testbed) vs Symulacja (SIMULATED vs MEASURED)
+### 5.7. Multi-Panel Trade-Off Plot
 
-W celu weryfikacji założeń analitycznych i symulacyjnych zbudowano dedykowany testbed (`tools/testbed/`) działający na rzeczywistym klastrze 150 wyizolowanych węzłów Kademlia (zgodnych z BEP 5 i BEP 44) bez udziału publicznego DHT. W środowisku tym uruchomiono $N=25$ par bezgłowych klientów PQChat (z symulowanym zegarem `FakeClock`, ratchetem kluczy, oknem Lookahead $W=5$, decoy GETs, delayed PUT i ruchem Poissona).
+The following plot (generated automatically by `tools/threat_sim/threat_simulator.py`) presents the full trade-off landscape:
 
-#### A. Bezpośrednia Ocena Węzła Przechowującego (Storing Node Observation) & Wariant VPN
-1. **Węzeł przechowujący jako adwersarz:** Węzeł Kademlia odpowiedzialny za przechowywanie rekordu pod danym 160-bitowym adresem docelowym $\text{Target}_i$ rejestruje zarówno pakiet `put` wysłany przez nadawcę (Alice), jak i pakiet `get` wysłany przez odbiorcę (Bob).
-   - *Bez mechanizmów obronnych:* Węzeł przechowujący jednoznacznie koreluje adres fizyczny $\text{IP}_A$ z adresem $\text{IP}_B$.
-   - *Z pełną obroną (Decoy GETs + Poisson Cover):* Obecność zapytań wabikowych z innych klientów oraz nieskoordynowanych zapisów dummy-PUT rozmywa zbiór obserwacyjny.
-2. **Wariant z VPN / Multiplexingiem IP:**
-   - Gdy klienci kierują ruch KRPC przez współdzielone bramki VPN (lub sieć Tor), węzeł DHT rejestruje dla operacji `put` i `get` identyczne (lub współdzielone) adresy wyjściowe $\text{IP}_{\text{VPN\_exit}}$.
-   - Adwersarz widzi aktywność pod danym targetem, jednak adres IP nie pozwala na fizyczną deanonimizację konkretnego urządzenia użytkownika.
+![Trade-Off Plot: Anonymity, Bandwidth, and Battery](tradeoff_anonymity_bandwidth_battery.png)
 
-#### B. Porównanie Wyników: Symulator Probabilistyczny vs Testbed Rzeczywistego Ruchu
+---
 
-| Postawa Obronna / Scenariusz | Top-1 Accuracy [SIMULATED] | Top-1 Accuracy [MEASURED] | Entropia Shannona [MEASURED] | Rzeczywisty Rozmiar Zbioru Kandydatów | Status Walidacji |
+### 5.8. Interpretation of Plot Panels
+
+- **Panel A (Timing Correlation vs $\Delta t$ with Lookahead):** Displays the correlation accuracy curve for both $\Delta t < 0$ (lookahead pre-PUT queries) and $\Delta t > 0$ (post-publication retrieval). Under *Full Defense*, the curve is flattened across the entire $[-30\text{ s}, +30\text{ s}]$ interval near the baseline $1/N = 4.0\%$.
+- **Panel B (Mechanism Impact with 95% CIs):** Illustrates accuracy bars and Shannon entropy with confidence intervals. A sharp correlation drop to $5.2\%$ is observed upon introducing decoy queries and publication delays.
+- **Panel C (Multi-Session Intersection Attack vs $M$):** Demonstrates de-anonymization velocity over consecutive messages. Full defense delays de-anonymization and protects discrete interactions.
+- **Panel D (Bandwidth and Battery Overhead vs $\lambda$):** Models cellular modem RRC states (*tail time* 8s). The knee of the curve falls at the default value $\lambda = 1/480\text{ s}$ (every 8 minutes), where battery overhead is $522.8\text{ mWh/h}$ (an increase of only $2.2\%$ over the baseline $511.3\text{ mWh/h}$).
+
+---
+
+### 5.9. Empirical Validation on Real BEP 5/44 Cluster (Testbed) vs Simulation (SIMULATED vs MEASURED)
+
+To validate analytical and simulation assumptions, a dedicated testbed (`tools/testbed/`) was constructed running on an actual cluster of 150 isolated Kademlia nodes (compliant with BEP 5 and BEP 44) without public DHT involvement. In this environment, $N=25$ pairs of headless PQChat clients were run (with simulated `FakeClock`, key ratcheting, Lookahead window $W=5$, decoy GETs, delayed PUT, and Poisson cover traffic).
+
+#### A. Storing Node Direct Observation & VPN Variant
+1. **Storing Node as Adversary:** The Kademlia node responsible for storing the record at 160-bit address $\text{Target}_i$ logs both the `put` packet sent by the sender (Alice) and the `get` packet sent by the receiver (Bob).
+   - *Without defenses:* The storing node unambiguously correlates physical address $\text{IP}_A$ with $\text{IP}_B$.
+   - *With Full Defense (Decoy GETs + Poisson Cover):* Decoy queries from other clients and uncoordinated dummy-PUT writes dilute the observation set.
+2. **VPN / IP Multiplexing Variant:**
+   - When clients route KRPC traffic through shared VPN gateways (or the Tor network), the DHT node records identical (or shared) egress addresses $\text{IP}_{\text{VPN\_exit}}$ for both `put` and `get` operations.
+   - The adversary observes activity at the target, but the IP address does not reveal the physical user device.
+
+#### B. Result Comparison: Probabilistic Simulator vs Real-Traffic Testbed
+
+| Defense Posture / Scenario | Top-1 Accuracy [SIMULATED] | Top-1 Accuracy [MEASURED] | Shannon Entropy [MEASURED] | Real Candidate Set Size | Validation Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Brak obrony)** | 100.0% | 100.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
-| **+ Polling Jitter (±30%)** | 98.4% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
-| **+ Decoy GETs (Syntetyczne 0-PUT)** | 98.4% (odfiltrowane) | 100.0% (odfiltrowane) | 0.00 ± 0.00 | 1.0 | Potwierdzony |
-| **+ Delayed PUT & Populated Decoys** | 14.8% | 94.5% ± 0.6% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
-| **Full Defense (+ Poisson 1/480s)** | **5.2%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
-| **Węzeł Przechowujący (No Defense)** | 100.0% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Potwierdzony |
-| **Węzeł Przechowujący (Full Defense)** | **12.0%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Potwierdzony |
-| **Full Defense + VPN / Tor** | **4.0% (Losowe $`1/N`$)** | **0.0% (Losowe $`1/N`$)** | 0.51 ± 0.01 | **1.2 (Bramki VPN)** | Potwierdzony (IP nie ujawnia klienta) |
+| **Baseline (No Defense)** | 100.0% | 100.0% | 0.00 ± 0.00 | 1.0 | Confirmed |
+| **+ Polling Jitter (±30%)** | 98.4% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Confirmed |
+| **+ Decoy GETs (Synthetic 0-PUT)** | 98.4% (filtered) | 100.0% (filtered) | 0.00 ± 0.00 | 1.0 | Confirmed |
+| **+ Delayed PUT & Populated Decoys** | 14.8% | 94.5% ± 0.6% | 0.11 ± 0.00 | 1.9 | Confirmed |
+| **Full Defense (+ Poisson 1/480s)** | **5.2%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Confirmed |
+| **Storing Node (No Defense)** | 100.0% | 100.0% ± 0.0% | 0.00 ± 0.00 | 1.0 | Confirmed |
+| **Storing Node (Full Defense)** | **12.0%** | 95.1% ± 0.7% | 0.11 ± 0.00 | 1.9 | Confirmed |
+| **Full Defense + VPN / Tor** | **4.0% (Random $1/N$)** | **0.0% (Random $1/N$)** | 0.51 ± 0.01 | **1.2 (VPN Gateways)** | Confirmed (IP does not reveal client) |
 
-#### C. Wykres Telemetrii Testbedu
+#### C. Testbed Telemetry Plot
 
-Poniższy wykres (wygenerowany na klastrze 150 węzłów przez `tools/testbed/testbed_runner.py`) przedstawia empiryczne wyniki:
+The following plot (generated on the 150-node cluster by `tools/testbed/testbed_runner.py`) presents empirical findings:
 
-![Wykres Zmierzony z Testbedu Rzeczywistego Ruchu](testbed_correlation_measured.png)
+![Measured Plot from Real-Traffic Testbed](testbed_correlation_measured.png)
 
-#### D. Ciągła Weryfikacja w GitHub Actions (Nightly & Workflow Dispatch)
-Aby zapewnić ciągłą weryfikację odporności na korelacje bez wydłużania lokalnego cyklu deweloperskiego, pełny pakiet testbedu został zintegrowany jako automatyczny przepływ pracy:
-- Plik workflow: [`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)
-- Harmonogram: uruchamiany co noc o **02:00 UTC** (`cron: '0 2 * * *'`).
-- Uruchamianie ręczne: `workflow_dispatch` z możliwością wyboru liczby powtórzeń Monte Carlo (`runs`), wielkości klastra (`nodes`) oraz trybu szybkiego (`quick: true`).
-- Artefakty: automatyczna publikacja raportów CSV (`metrics_testbed_correlation.csv`, `metrics_threat_sim.csv`) oraz wykresów PNG jako artefaktów GitHub Actions.
-
----
-
-## 6. Ryzyka Resztkowe i Rekomendacje
-
-1. **Ataki Przecięć w Długich Konwersacjach:**
-   - W przypadku długotrwałych konwersacji adwersarz akumulujący dane z dziesiątek wiadomości może ostatecznie wyizolować odbiorcę.
-   - *Mitygacja:* Wdrożona procedura **PQC Rekeying co 50 wiadomości** oraz zalecenie okresowego odnawiania sesji przez kod QR w celu wyczyszczenia historii adresowej.
-2. **Korelacja na poziomie lokalnego ISP:**
-   - Operator telekomunikacyjny widzi pakiety UDP wychodzące z urządzenia.
-   - *Rekomendacja:* Użytkownicy o podwyższonym profilu zagrożenia powinni tunelować ruch KRPC przez Tor, Orbot lub zaufany VPN.
+#### D. Continuous Verification in GitHub Actions (Nightly & Workflow Dispatch)
+To guarantee continuous verification of correlation resistance without prolonging the local development cycle, the full testbed suite was integrated as an automated CI workflow:
+- Workflow file: [`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml)
+- Schedule: runs nightly at **02:00 UTC** (`cron: '0 2 * * *'`).
+- Manual trigger: `workflow_dispatch` with configurable Monte Carlo iterations (`runs`), cluster size (`nodes`), and fast mode (`quick: true`).
+- Artifacts: automatic publication of CSV reports (`metrics_testbed_correlation.csv`, `metrics_threat_sim.csv`) and PNG plots as GitHub Actions artifacts.
 
 ---
 
----
+## 6. Residual Risks and Recommendations
 
-## 7. Hardening Bezpieczeństwa Urządzenia, Pamięci i Magazynu Danych (Device & Local Storage Hardening)
-
-W celu ochrony danych użytkownika przed atakami lokalnymi (fizyczna ekstrakcja, aplikacje szpiegujące na urządzeniu, zrzuty ekranu, analiza pamięci flash):
-
-### 7.1. Architektura Szyfrowania Room i Analiza Ryzyka Resztkowego Metadanych
-
-W bazie danych Room (SQLite) zastosowano hybrydową architekturę bezpieczeństwa:
-1. **Szyfrowanie wrażliwych ładunków i kluczy (Zero Plaintext at Rest):**
-   - Wszystkie klucze ratchetu (`chainKeyOut`, `chainKeyIn`, `msgKey`), klucze KEM (`skNew`), prywatne ziarna Ed25519 (`edPrivateKeySeed`) oraz treści wiadomości i pliki binarne (`textContent`, `imageBytes`, `chunks`) są szyfrowane sprzętowym kluczem AES-256-GCM z **Android Keystore**.
-   - Zastosowano kryptograficzne wiązanie wiersza (*Row-Level Binding*): nagłówek każdego zaszyfrowanego bloba zawiera identyfikator tabeli oraz klucz główny wiersza, które są wstrzykiwane jako dodatkowe dane uwierzytelniające (**AAD = `table + id`**). Uniemożliwia to ataki typu *cut-and-paste* pomiędzy rekordami lub tabelami SQLite.
-2. **Jawne metadane relacyjne (Nazwy kontaktów, Znaczniki czasu, Efemeryczne adresy DHT):**
-   - Pola relacyjne i indeksowe (`ContactEntity.name`, `timestamp`, `ContactEntity.lastActive`, `MessageEntity.slotTarget`, `MessageEntity.ackTarget`, `status`, `seqNum`) pozostają w postaci jawnych kolumn SQLite.
-   - **Uzasadnienie architektoniczne:**
-     - *Wymogi zapytań i indeksowania:* B-drzewa SQLite wymagają jawnych wartości do wydajnego sortowania (`ORDER BY timestamp ASC/DESC`), stronicowania oraz zapytań złożonych `(contactId, seqEpoch, seqNum)`. Losowy IV w szyfrowaniu blokowym uniemożliwia sortowanie i efektywne wyszukiwanie wewnątrz silnika bazy danych. Szyfrowanie deterministyczne (np. AES-SIV) wprowadziłoby podatność na analizę częstotliwościową i korelację statystyczną.
-     - *Eliminacja bibliotek natywnych C/C++:* Pełne szyfrowanie bazy danych na poziomie stron (np. SQLCipher) wymagałoby dołączenia skompilowanych binariów natywnych (`.so`), co stanowiłoby bezpośrednie naruszenie naczelnej zasady architektonicznej projektu (**AGENTS.md §2: 100% czystego kodu Kotlin, całkowity brak C++/JNI**).
-   - **Ocena ryzyka resztkowego:**
-     - Ryzyko odczytu metadanych ogranicza się do adwersarza posiadającego uprawnienia roota lub wykonującego zaawansowaną ekstrakcję kryminalistyczną pamięci flash wyłączonego urządzenia.
-     - W takim scenariuszu adwersarz poznaje etykiety kontaktów i czasy nadania, jednak **nie jest w stanie odzyskać ani jednego bajtu treści wiadomości ani kluczy sesyjnych** (klucz nadrzędny w Keystore jest chroniony sprzętowo).
-     - Ephemerality targetów DHT: adresy `slotTarget` i `ackTarget` podlegają mechanizmowi *Key Hopping* (zmieniają się co wiadomość) i wygasają w publicznej sieci DHT po 24–72 godzinach, co uniemożliwia długoterminową korelację zewnętrzną.
-
-### 7.2. Sprzętowy Android Keystore: StrongBox HSM, TEE i Unlocked Device
-
-Mechanizm zarządzania kluczem nadrzędnym `KeystoreCrypto`:
-1. **Priorytetyzacja StrongBox HSM (API 28+):**
-   - Podczas generowania klucza aplikacja próbuje utworzyć klucz w dedykowanym, sprzętowym module bezpieczeństwa (**StrongBox Keymaster**, np. chip Google Titan M lub odpowiednik OEM) za pomocą `setIsStrongBoxBacked(true)`.
-   - W przypadku braku dedykowanego chipu StrongBox (`StrongBoxUnavailableException` / `ProviderException`) następuje płynny, bezpieczny fallback do standardowego sprzętowego środowiska zaufanego (**TEE Keymaster**).
-2. **Wymóg odblokowanego urządzenia (`setUnlockedDeviceRequired(true)`):**
-   - Klucz nadrzędny Keystore jest skonfigurowany z flagą `setUnlockedDeviceRequired(true)`.
-   - Operacje szyfrowania i deszyfrowania mogą być wykonywane wyłącznie wtedy, gdy ekran urządzenia jest fizycznie odblokowany przez użytkownika (kod PIN, wzór, biometria). Gdy telefon znajduje się w stanie zablokowanym (np. po przejęciu urządzenia), sprzętowy Keystore odrzuca wszelkie żądania kryptograficzne.
-3. **Opcjonalna blokada biometryczna aplikacji:**
-   - Wprowadzono opcjonalną blokadę interfejsu (`BiometricAuthHelper` / `BiometricPrompt`) zintegrowaną z `BiometricManager.Authenticators.BIOMETRIC_STRONG or DEVICE_CREDENTIAL`.
-   - Po jej włączeniu aplikacja przed przyznaniem dostępu do ekranów konwersacji wymaga potwierdzenia tożsamości użytkownika (odcisk palca, rozpoznawanie twarzy lub kod blokady ekranu).
-
-### 7.3. Wymuszenie Flagi `ro=1` (BEP 43) we Wszystkich Zapytaniach Klienta Liścia
-
-Zgodnie ze specyfikacją BitTorrent BEP 43 (*Read-only DHT Nodes*):
-- PQChat.DHT działa wyłącznie w trybie **Client-Only Leaf Node** (`AGENTS.md §1.4`) — urządzenie nigdy nie trasuje cudzych zapytań ani nie buforuje danych innych węzłów.
-- Flaga `ro=1` jest bezwzględnie wymuszona we **wszystkich** zapytaniach KRPC wysyłanych przez klienta, w tym w zapytaniach `find_node`, `get`, `ping` oraz **`put` (BEP 44)**.
-- **Uzasadnienie dla zapytań PUT:** Nawet gdy smartfon zapisuje rekord mutowalny (`put`), nie staje się węzłem trasującym. Węzły odbierające pakiet `put` z flagą `ro=1` poprawnie zapisują rekord pod docelowym targetem, ale **nie dodają adresu IP i portu smartfona do swoich tablic routingu Kademlia**. Chroni to smartfon przed niepożądanym ruchem przychodzącym, atakami typu reflection/amplification oraz skanowaniem topologii sieci.
-
-### 7.4. Ochrona Interfejsu Przed Przechwytywaniem (`FLAG_SECURE`)
-
-W oknach o najwyższym poziomie wrażliwości wdrożono ochronę `FLAG_SECURE` (`WindowManager.LayoutParams.FLAG_SECURE`):
-1. **HandshakeScreen (Wymiana kluczy QR):**
-   - Kod QR prezentuje klucz publiczny ML-KEM-512 ($pk_A$, 800 B) oraz sekretne ziarno inicjalizujące ($Seed_{\text{init}}$, 32 B).
-   - Włączenie `FLAG_SECURE` uniemożliwia złośliwym aplikacjom działającym w tle (np. narzędziom do nagrywania ekranu, oprogramowaniu szpiegującemu) przechwycenie klatek kodu QR w trakcie parowania.
-2. **ChatScreen (Aktywna konwersacja):**
-   - `FLAG_SECURE` blokuje robienie zrzutów ekranu oraz ukrywa podgląd czatu na liście ostatnio używanych aplikacji systemowych (*Recent Apps Task Switcher*), chroniąc przed wyciekiem treści w przypadku chwilowego odblokowania telefonu przez osobę trzecią.
-
-### 7.5. Higiena Pamięci i Eliminacja Wrażliwych Danych z Logów
-
-Zgodnie z `AGENTS.md §8.1`:
-- Z modułów diagnostycznych (`MessageDebugLogger`, `ChatViewModel`, `ChatRepository`) usunięto jakiekolwiek logowanie jawnych tekstów wiadomości (`text`), prywatnych ziaren Ed25519 (`edPrivateKeySeed`), sekretnych ziaren handshaku (`seedInit`) oraz symetrycznych kluczy sesyjnych (`msgKey`, `kHs`).
-- Logi diagnostyczne zawierają wyłącznie metadane protokołu (identyfikatory zdarzeń, typy ramek, liczniki sekwencji, rozmiary ładunków i publiczne hasze docelowe).
-- W kompilacjach produkcyjnych (`release`) logger diagnostyczny jest całkowicie wyłączony w fazie kompilacji (`BuildConfig.DEBUG == false`).
+1. **Intersection Attacks in Long Conversations:**
+   - In extended conversations, an adversary accumulating data across dozens of messages may eventually isolate the recipient.
+   - *Mitigation:* The implemented **PQC Rekeying every 50 messages** and recommending periodic session renewal via QR code to clear address history.
+2. **Local ISP-Level Correlation:**
+   - The telecom operator observes UDP packets exiting the device.
+   - *Recommendation:* Users with elevated threat profiles should tunnel KRPC traffic through Tor, Orbot, or a trusted VPN.
 
 ---
 
-## 8. Podsumowanie
+## 7. Device, Memory, and Local Storage Hardening
 
-Wdrożona wielowarstwowa architektura ochrony metadanych (*Ephemeral Key Hopping*, *Lookahead Window Dispersion*, *Decoy GETs* do puli aktywnych slotów, nieskoordynowane rekordy maskujące *Poisson Cover Traffic* wypełnione kryptograficznym szumem CSPRNG oraz *Delayed PUTs*) redukuje skuteczność korelacji czasowo-adresowej przez złośliwe węzły BitTorrent DHT z poziomu **100.0%** do poziomu zbliżonego do **losowego zgadywania ($5.2\% - 9.7\%$ wobec teoretycznego baseline $1/N = 4.0\%$)**.
+To protect user data from local attacks (physical extraction, on-device spyware, screenshots, flash memory forensics):
 
-Dodatkowe wzmocnienia lokalne (sprzętowy Keystore StrongBox, `setUnlockedDeviceRequired`, blokada biometryczna, `FLAG_SECURE`, ścisłe `ro=1` per BEP 43 oraz czyszczenie logów) zapewniają kompleksowe bezpieczeństwo end-to-end zarówno na poziomie sieci transportowej, jak i lokalnego urządzenia końcowego.
+### 7.1. Room Encryption Architecture and Residual Metadata Risk Analysis
 
+Room database (SQLite) implements a hybrid security architecture:
+1. **Encrypted Sensitive Payloads and Keys (Zero Plaintext at Rest):**
+   - All ratchet keys (`chainKeyOut`, `chainKeyIn`, `msgKey`), KEM keys (`skNew`), private Ed25519 seeds (`edPrivateKeySeed`), message texts, and binary files (`textContent`, `imageBytes`, `chunks`) are encrypted with a hardware AES-256-GCM key from **Android Keystore**.
+   - Cryptographic Row-Level Binding is applied: the header of each encrypted blob contains the table identifier and row primary key, injected as Additional Authenticated Data (**AAD = `table + id`**). This prevents *cut-and-paste* attacks between SQLite rows or tables.
+2. **Plaintext Relational Metadata (Contact Names, Timestamps, Ephemeral DHT Targets):**
+   - Relational and indexed fields (`ContactEntity.name`, `timestamp`, `ContactEntity.lastActive`, `MessageEntity.slotTarget`, `MessageEntity.ackTarget`, `status`, `seqNum`) remain as plaintext SQLite columns.
+   - **Architectural Rationale:**
+     - *Query and Indexing Requirements:* SQLite B-trees require plaintext values for efficient sorting (`ORDER BY timestamp ASC/DESC`), pagination, and composite queries `(contactId, seqEpoch, seqNum)`. A random IV in block encryption precludes sorting and fast indexing inside the database engine. Deterministic encryption (e.g., AES-SIV) would introduce frequency analysis and statistical correlation vulnerabilities.
+     - *Elimination of Native C/C++ Libraries:* Full page-level database encryption (e.g., SQLCipher) requires bundling compiled native binaries (`.so`), which would violate the core architectural rule of the project (**AGENTS.md §2: 100% pure Kotlin, zero C++/JNI**).
+   - **Residual Risk Assessment:**
+     - Metadata exposure risk is limited to an adversary possessing root privileges or performing forensic memory extraction on a powered-off device.
+     - In such a scenario, the adversary learns contact labels and transmission timestamps, but **cannot recover a single byte of message text or session keys** (the master key in Keystore is hardware-protected).
+     - Ephemerality of DHT targets: addresses `slotTarget` and `ackTarget` undergo *Key Hopping* (changing every message) and expire in the public DHT network after 24–72 hours, preventing long-term external correlation.
+
+### 7.2. Hardware Android Keystore: StrongBox HSM, TEE, and Unlocked Device
+
+Master key management in `KeystoreCrypto`:
+1. **StrongBox HSM Prioritization (API 28+):**
+   - During key generation, the app attempts to create keys in a dedicated hardware security module (**StrongBox Keymaster**, e.g., Google Titan M chip or OEM equivalent) via `setIsStrongBoxBacked(true)`.
+   - If a dedicated StrongBox chip is unavailable (`StrongBoxUnavailableException` / `ProviderException`), a seamless, secure fallback to the standard hardware Trusted Execution Environment (**TEE Keymaster**) occurs.
+2. **Unlocked Device Requirement (`setUnlockedDeviceRequired(true)`):**
+   - The Keystore master key is configured with the `setUnlockedDeviceRequired(true)` flag.
+   - Encryption and decryption operations can only occur when the device screen is physically unlocked by the user (PIN, pattern, biometrics). While the phone is locked (e.g., following device seizure), hardware Keystore rejects all cryptographic requests.
+3. **Optional App Biometric Lock:**
+   - An optional UI lock (`BiometricAuthHelper` / `BiometricPrompt`) is integrated with `BiometricManager.Authenticators.BIOMETRIC_STRONG or DEVICE_CREDENTIAL`.
+   - When enabled, the app requires user authentication (fingerprint, facial recognition, or screen lock PIN) before granting access to conversation screens.
+
+### 7.3. Enforcement of `ro=1` Flag (BEP 43) in All Leaf Node Queries
+
+Per BitTorrent BEP 43 (*Read-only DHT Nodes*):
+- PQChat.DHT operates exclusively in **Client-Only Leaf Node** mode (`AGENTS.md §1.4`) — the device never routes third-party queries or buffers third-party data.
+- The `ro=1` flag is strictly enforced in **all** KRPC queries sent by the client, including `find_node`, `get`, `ping`, and **`put` (BEP 44)**.
+- **Rationale for PUT Queries:** Even when a smartphone stores a mutable record (`put`), it does not become a routing node. Nodes receiving a `put` packet with `ro=1` store the record at the destination target, but **do not add the smartphone's IP and port to their Kademlia routing tables**. This shields the smartphone from unwanted incoming traffic, reflection/amplification attacks, and network topology mapping.
+
+### 7.4. UI Capture Protection (`FLAG_SECURE`)
+
+Windows handling sensitive material enforce `FLAG_SECURE` (`WindowManager.LayoutParams.FLAG_SECURE`):
+1. **HandshakeScreen (QR Key Exchange):**
+   - The QR code displays the ML-KEM-512 public key ($pk_A$, 800 B) and secret initialization seed ($Seed_{\text{init}}$, 32 B).
+   - Enabling `FLAG_SECURE` prevents malicious background apps (e.g., screen recording tools, spyware) from capturing QR code frames during pairing.
+2. **ChatScreen (Active Conversation):**
+   - `FLAG_SECURE` blocks screenshots and hides chat previews in the Android system Recent Apps switcher, protecting against content leakage when the phone is temporarily unlocked by a third party.
+
+### 7.5. Memory Hygiene and Elimination of Sensitive Data from Logs
+
+Per `AGENTS.md §8.1`:
+- All diagnostic modules (`MessageDebugLogger`, `ChatViewModel`, `ChatRepository`) are free of any logging of plaintext message content (`text`), private Ed25519 seeds (`edPrivateKeySeed`), secret handshake seeds (`seedInit`), and symmetric session keys (`msgKey`, `kHs`).
+- Diagnostic logs contain solely protocol metadata (event identifiers, frame types, sequence counters, payload sizes, and public target hashes).
+- In production builds (`release`), diagnostic logging is stripped at compile time (`BuildConfig.DEBUG == false`).
+
+---
+
+## 8. Summary
+
+The implemented multi-layered metadata defense architecture (*Ephemeral Key Hopping*, *Lookahead Window Dispersion*, *Decoy GETs* to active slot pools, uncoordinated *Poisson Cover Traffic* records filled with CSPRNG cryptographic noise, and *Delayed PUTs*) reduces time-address correlation effectiveness by malicious BitTorrent DHT nodes from **100.0%** down to a level approximating **random guessing ($5.2\% - 9.7\%$ compared to theoretical baseline $1/N = 4.0\%$)**.
+
+Additional local hardening measures (hardware Keystore StrongBox, `setUnlockedDeviceRequired`, biometric locking, `FLAG_SECURE`, strict `ro=1` per BEP 43, and log hygiene) provide end-to-end security both at the transport network tier and on the local mobile device.

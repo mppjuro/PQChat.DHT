@@ -550,8 +550,8 @@ def run_full_harness():
                     meas_retention_points.setdefault((round(h, 2), repub), []).append(1.0 if succ else 0.0)
 
     # Plot SIMULATED reference curves
-    ax_ret.plot(h_vals, sim_with_rep, marker='s', markersize=6, linewidth=2.0, linestyle='--', color='#00acc1', label='Z odświeżaniem (~1.5h refresh) [SIMULATED]')
-    ax_ret.plot(h_vals, sim_no_rep, marker='o', markersize=6, linewidth=2.0, linestyle='--', color='#f57c00', label='Bez odświeżania (Single Put) [SIMULATED]')
+    ax_ret.plot(h_vals, sim_with_rep, marker='s', markersize=6, linewidth=2.0, linestyle='--', color='#00acc1', label='With refresh (~1.5h refresh) [SIMULATED]')
+    ax_ret.plot(h_vals, sim_no_rep, marker='o', markersize=6, linewidth=2.0, linestyle='--', color='#f57c00', label='Without refresh (Single Put) [SIMULATED]')
 
     if meas_retention_points:
         meas_h_rep = []
@@ -567,11 +567,11 @@ def run_full_harness():
                 meas_h_norep.append(h)
                 meas_rate_norep.append(rate)
         if meas_h_rep:
-            ax_ret.plot(meas_h_rep, meas_rate_rep, marker='s', markersize=7, linewidth=2.8, color='#1565c0', label='Z odświeżaniem [MEASURED]')
+            ax_ret.plot(meas_h_rep, meas_rate_rep, marker='s', markersize=7, linewidth=2.8, color='#1565c0', label='With refresh [MEASURED]')
         if meas_h_norep:
-            ax_ret.plot(meas_h_norep, meas_rate_norep, marker='o', markersize=7, linewidth=2.8, color='#c62828', label='Bez odświeżania [MEASURED]')
+            ax_ret.plot(meas_h_norep, meas_rate_norep, marker='o', markersize=7, linewidth=2.8, color='#c62828', label='Without refresh [MEASURED]')
     else:
-        # Pusty panel z adnotacją dla brakujących pomiarów rzeczywistych
+        # Empty panel with annotation for missing empirical measurements
         ax_ret.text(
             0.5, 0.5,
             "Brak zmierzonych danych retencji (MEASURED)\nOczekiwanie na rzeczywiste pomiary publicznego DHT (1–24h)\n(.github/workflows/dht_retention_24h.yml)",

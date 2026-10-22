@@ -332,14 +332,14 @@ fun HandshakeScreen(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Część ${currentFrameIndex + 1}/${animatedFrames.size} (350 ms)",
+                                    text = "Part ${currentFrameIndex + 1}/${animatedFrames.size} (350 ms)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = NeonCyan,
                                     fontFamily = FontFamily.Monospace
                                 )
                             } else {
                                 Text(
-                                    text = "Gęsty statyczny kod QR (${HandshakeManager.QR_DATA_SIZE} B)",
+                                    text = "Dense static QR code (${HandshakeManager.QR_DATA_SIZE} B)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = TextSecondary
                                 )
@@ -381,7 +381,7 @@ fun HandshakeScreen(
                             onClick = {
                                 val stegoBytes = QrCodeUtil.generateHarmlessStegoPng(state.qrBytes)
                                 val shareIntent = QrCodeUtil.createShareStegoImageIntent(context, stegoBytes)
-                                context.startActivity(Intent.createChooser(shareIntent, "Udostępnij zdjęcie steganograficzne"))
+                                context.startActivity(Intent.createChooser(shareIntent, "Share steganographic image"))
                             },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
                             border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.7f)),
@@ -393,7 +393,7 @@ fun HandshakeScreen(
                         ) {
                             Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp), tint = NeonCyan)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Ukryj w zdjęciu (Steganografia PNG)", fontWeight = FontWeight.SemiBold)
+                            Text("Hide in image (PNG Steganography)", fontWeight = FontWeight.SemiBold)
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -412,7 +412,7 @@ fun HandshakeScreen(
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Zresetuj")
+                                Text("Reset")
                             }
                             Button(
                                 onClick = {
@@ -425,7 +425,7 @@ fun HandshakeScreen(
                                     .weight(1.5f)
                                     .testTag("handshake_new_qr_button")
                             ) {
-                                Text("Nowy kod QR", fontWeight = FontWeight.Bold)
+                                Text("New QR Code", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -530,7 +530,7 @@ fun HandshakeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Skanuj QR lub zdjęcie steganograficzne z galerii",
+                            text = "Scan QR or steganographic image from gallery",
                             fontWeight = FontWeight.SemiBold,
                             color = NeonCyan
                         )
@@ -700,7 +700,7 @@ fun HandshakeScreen(
                 },
                 title = {
                     Text(
-                        text = "Sesja Post-Kwantowa Ustanowiona",
+                        text = "Post-Quantum Session Established",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -712,14 +712,14 @@ fun HandshakeScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "Nowy rozmówca: ${completedState.contactName}",
+                            text = "New contact: ${completedState.contactName}",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = NeonCyan
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Porównaj poniższy 8-cyfrowy kod SAS (Short Authentication String) z rozmówcą poza pasmem (np. osobiście lub telefonicznie):",
+                            text = "Compare the 8-digit SAS (Short Authentication String) code below with your peer out-of-band (e.g. in person or by phone):",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -749,7 +749,7 @@ fun HandshakeScreen(
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Zgodność kodów potwierdza brak ataku Man-in-the-Middle (MitM) na poziomie ML-KEM-512.",
+                            text = "Matching codes confirm absence of Man-in-the-Middle (MitM) attacks on ML-KEM-512.",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextSecondary,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -774,7 +774,7 @@ fun HandshakeScreen(
                     ) {
                         Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Zatwierdź tożsamość (SAS zgodny)", fontWeight = FontWeight.Bold)
+                        Text("Confirm identity (SAS match)", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
@@ -793,7 +793,7 @@ fun HandshakeScreen(
                             .fillMaxWidth()
                             .testTag("handshake_confirm_unverified_button")
                     ) {
-                        Text("Przejdź bez weryfikacji", fontWeight = FontWeight.Normal)
+                        Text("Continue without verification", fontWeight = FontWeight.Normal)
                     }
                 },
                 containerColor = DarkSurface

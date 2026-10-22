@@ -1,107 +1,107 @@
-# Formalna Weryfikacja Bezpieczeństwa Protokołu PQChat.DHT (ProVerif 2.05)
+# Formal Security Verification of the PQChat.DHT Protocol (ProVerif 2.05)
 
-Katalog zawiera kompletne formalne modele kryptograficzne oraz dowody bezpieczeństwa protokołu **PQChat.DHT** w symbolicznym modelu Dolev-Yao przy użyciu analizatora **ProVerif 2.05**.
+This directory contains complete formal cryptographic models and automated machine-checked security proofs for the **PQChat.DHT** protocol in the symbolic Dolev-Yao model using the **ProVerif 2.05** protocol verifier.
 
 ---
 
-## 1. Zakres Modeli i Weryfikowane Własności
+## 1. Scope of Models and Verified Security Properties
 
-Protokół łączy:
-* **Hybrydowy mechanizm hermetyzacji kluczy (Hybrid KEM):** Połączenie post-kwantowego **ML-KEM-512** (FIPS 203) oraz klasycznego **X25519 ECDH** (RFC 7748) dla obrony dualnej (*Dual-Defense / IND-CCA2*).
-* **Jednostronne podwójne łańcuchy (Dual Unidirectional Chains):** Oparte na **HKDF-SHA512** (RFC 5869), gdzie tor $A \to B$ i tor $B \to A$ są całkowicie odseparowane numerycznie i adresowo.
-* **Szyfrowanie ładunków z dowiązanym kontekstem (AEAD):** **AES-256-GCM** z dowiązaniem AAD do adresu target i kierunku transmisji.
-* **Zobowiązanie przeciw mieleniu i SAS (Anti-Grinding & SAS):** Skrót **SHA-256** ze zobowiązaniem transkryptu $`Commitment = \text{SHA-256}(\text{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)`$ oraz 8-cyfrowy kod **Short Authentication String (SAS)**.
-* **Jednorazowe podpisy transportowe Ed25519 (BEP 44):** Wykorzystywane jako jednorazowy token efemeryczny do zapisu w sieci DHT.
-* **Skakanie po slotach (Key Hopping):** Efemeryczny adres docelowy $\text{Target}_i = \text{SHA-1}(pk_i)$.
-* **Bezpieczne czyszczenie slotu (900-bajtowy Tombstone):** Nadpisanie skonsumowanego rekordu w DHT sztywną 900-bajtową ramką szumu CSPRNG pod numerem sekwencji $\text{seq} + 1$, co uniemożliwia węzłom DHT oraz podsłuchiwaczom wykrycie momentu odbioru wiadomości.
+The protocol combines:
+* **Hybrid Key Encapsulation Mechanism (Hybrid KEM):** Combining post-quantum **ML-KEM-512** (FIPS 203) and classical **X25519 ECDH** (RFC 7748) for dual defense (*Dual-Defense / IND-CCA2*).
+* **Dual Unidirectional Chains:** Based on **HKDF-SHA512** (RFC 5869), where track $A 	o B$ and track $B 	o A$ are completely decoupled numerically and in addressing space.
+* **Context-Bound AEAD Payload Encryption:** **AES-256-GCM** with AAD binding to destination target and transmission direction.
+* **Anti-Grinding Commitment and SAS:** **SHA-256** hash with transcript commitment $`Commitment = 	ext{SHA-256}(	ext{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)`$ and 8-digit **Short Authentication String (SAS)**.
+* **One-Time Ed25519 Transport Signatures (BEP 44):** Used strictly as an ephemeral single-use token for writing to the DHT.
+* **Key Hopping:** Ephemeral destination address $	ext{Target}_i = 	ext{SHA-1}(pk_i)$.
+* **Secure Slot Sanitization (900-Byte Tombstone):** Overwriting consumed DHT records with a rigid 900-byte CSPRNG noise frame at sequence number $	ext{seq} + 1$, preventing DHT nodes and eavesdroppers from detecting message consumption timing.
 
-Weryfikacji poddano sześć fundamentalnych filarów bezpieczeństwa:
+Six fundamental security pillars were formally verified:
 
-### (1) Poufność (Secrecy)
-* **Poufność Klucza Głównego i Łańcuchów (`pqchat_protocol.pv`, `pqchat_secrecy.pv`):**
+### (1) Secrecy
+* **Secrecy of Master Key and Ratchet Chains (`pqchat_protocol.pv`, `pqchat_secrecy.pv`):**
   * `Query not attacker(secret_master_key[]) is true`
   * `Query not attacker(secret_chain_A2B[]) is true`
   * `Query not attacker(secret_chain_B2A[]) is true`
-  * Obserwator publicznej sieci DHT oraz fizyczny obserwator jawnego kodu QR ($pk_A^{hybrid} \parallel Seed_{init}$) nie są w stanie poznać klucza głównego $MasterKey$ ani kluczy torów $ChainKey_{A \to B}$, $ChainKey_{B \to A}$.
-* **Poufność Ładunków Wiadomości:**
+  * A public DHT network observer or physical observer of the plaintext QR code ($pk_A^{hybrid} \parallel Seed_{init}$) cannot learn the master key $MasterKey$ or channel keys $ChainKey_{A 	o B}$, $ChainKey_{B 	o A}$.
+* **Secrecy of Message Payloads:**
   * `Query not attacker(secret_msg_A2B[]) is true`
   * `Query not attacker(secret_msg_B2A[]) is true`
-  * Treści wymieniane w obu kierunkach są nieosiągalne dla adwersarza Dolev-Yao.
+  * Message contents exchanged in both directions are unreachable by a Dolev-Yao adversary.
 
-### (2) Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding)
-* **Zgodność Injektywna Stron (`pqchat_protocol.pv`, `pqchat_secrecy.pv`):**
+### (2) Mutual Authentication and Transcript Binding (Authentication & SAS Binding)
+* **Injective Correspondence Agreement (`pqchat_protocol.pv`, `pqchat_secrecy.pv`):**
   * `Query inj-event(AliceFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)) ==> inj-event(BobFinished(pkA_kem, pkA_x, seed, ckA2B, ckB2A, sas)) is true`
-  * Zakończenie fazy handshake przez Alice gwarantuje, że Bob brał udział w tej samej sesji z identycznym transkryptem, tożsamymi kluczami hybrydowymi KEM (ML-KEM-512 + X25519) oraz zgodnym kodem SAS.
-  * Zobowiązanie przeciw mieleniu $Commitment$ uniemożliwia adwersarzowi manipulację parametrami w locie przy zachowaniu zgodnego kodu SAS.
+  * Completion of the handshake by Alice guarantees Bob participated in the identical session with matching transcript, identical hybrid KEM keys (ML-KEM-512 + X25519), and identical SAS code.
+  * The anti-grinding commitment $Commitment$ prevents an adversary from manipulating parameters in transit while maintaining matching SAS codes.
 
-### (3) Forward Secrecy (Poufność Przeszła)
-* **Odporność na Kompromitację Stanu Łańcucha (`pqchat_forward_secrecy.pv`):**
+### (3) Forward Secrecy
+* **Resistance to Chain State Compromise (`pqchat_forward_secrecy.pv`):**
   * `Query not attacker(secret_msg_0[]) is true`
-  * `Query not attacker(secret_msg_1[]) is false` (dowód nietrywialności ataku)
-  * Gdy adwersarz uzyska fizyczny dostęp do pamięci urządzenia w kroku $i=1$ i pozna $ChainKey_1$, jednokierunkowość HKDF-SHA512 gwarantuje, że nie może on wyliczyć wstecz $ChainKey_0$, a zatem wiadomość $msg_0$ pozostaje w pełni poufna.
+  * `Query not attacker(secret_msg_1[]) is false` (proof of non-triviality)
+  * When an adversary obtains physical access to device RAM at step $i=1$ and learns $ChainKey_1$, the one-way property of HKDF-SHA512 guarantees that $ChainKey_0$ cannot be computed backward; message $msg_0$ remains fully secret.
 
-### (4) Post-Compromise Security / PCS (Samoleczenie Stanu)
-* **Regeneracja Poufności po Rotacji Hybrydowej KEM (`pqchat_post_compromise.pv`):**
+### (4) Post-Compromise Security / PCS (Self-Healing State)
+* **Secrecy Recovery after Hybrid KEM Rotation (`pqchat_post_compromise.pv`):**
   * `Query not attacker(secret_new_chain_key[]) is true`
   * `Query not attacker(secret_msg_post_rekey[]) is true`
-  * Nawet jeśli adwersarz całkowicie przejmie stan łańcucha ($ChainKey_{old}$), po przeprowadzeniu asymetrycznego rekeyingu hybrydowego ML-KEM-512 + X25519 (oferta Typu `0x03` + odpowiedź Typu `0x04`), wstrzyknięcie świeżego sekretu:
-    $$ChainKey_{new} \leftarrow \text{HKDF-Extract}(ChainKey_{old}, SS_{rekey}^{hybrid})$$
-    przywraca pełną poufność kluczy i wszystkich kolejnych wiadomości.
+  * Even if an adversary completely compromises the chain state ($ChainKey_{old}$), following an asymmetric hybrid ML-KEM-512 + X25519 rekey (Type `0x03` offer + Type `0x04` response), injecting a fresh secret:
+    $$ChainKey_{new} \leftarrow 	ext{HKDF-Extract}(ChainKey_{old}, SS_{rekey}^{hybrid})$$
+    restores full secrecy of subsequent session keys and all future messages.
 
-### (5) Odporność na Replay (Replay Resistance)
-* **Injektywność Dostarczenia Pakietów (`pqchat_replay.pv` i `pqchat_protocol.pv`):**
+### (5) Replay Resistance
+* **Injective Packet Delivery (`pqchat_replay.pv` and `pqchat_protocol.pv`):**
   * `Query inj-event(HandshakeAccepted(target, ct, pkx, salt)) ==> inj-event(HandshakeSent(target, ct, pkx, salt)) is true`
   * `Query inj-event(BobRecvMsg(target, seq, msg)) ==> inj-event(AliceSentMsg(target, seq, msg)) is true`
   * `Query inj-event(AliceRecvReply(target, seq, msg)) ==> inj-event(BobSentReply(target, seq, msg)) is true`
-  * Żaden pakiet w sieci DHT nie może zostać zaakceptowany powtórnie. Wynika to z unikalnych adresów przeskakiwania $Target_i = \text{SHA-1}(pk_i)$, świeżych wektorów IV, wiązania AAD, okna sekwencji oraz bezpiecznego nadpisywania slotu tombstone'em.
+  * No packet in the DHT can be accepted more than once, guaranteed by key-hopping targets $Target_i = 	ext{SHA-1}(pk_i)$, fresh IVs, AAD context binding, sequence windows, and slot sanitization via tombstones.
 
-### (6) Anonimowość i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability)
-* **Równoważność Obserwacyjna (`pqchat_unlinkability.pv`):**
+### (6) Unlinkability and Tombstone Indistinguishability
+* **Observational Equivalence (`pqchat_unlinkability.pv`):**
   * `Query Observational equivalence is true`
-  * Węzły sieci DHT obserwujące zapytania pod adresy $`\text{Target}_i = \text{SHA-1}(pk_i)`$ nie są w stanie odróżnić zapytań sesji $`(Alice, Bob)`$ od zapytań sesji $`(Charlie, Dave)`$ (Metadata-Free Rendezvous).
-  * Sztywny 900-bajtowy rekord Tombstone (CSPRNG noise) zapisywany po odebraniu wiadomości jest matematycznie nierozróżnialny od normalnej 900-bajtowej ramki zaszyfrowanej AES-256-GCM ani od 900-bajtowego pakietu ruchu maskującego (Poisson cover traffic dummy).
+  * DHT nodes observing queries to $`	ext{Target}_i = 	ext{SHA-1}(pk_i)`$ cannot distinguish queries of session $`(Alice, Bob)`$ from queries of session $`(Charlie, Dave)`$ (Metadata-Free Rendezvous).
+  * The rigid 900-byte Tombstone record (CSPRNG noise) written upon message receipt is mathematically indistinguishable from normal 900-byte AES-256-GCM ciphertexts and from 900-byte Poisson cover traffic dummy packets.
 
-### (7) Czaty Grupowe i Rotacja Kluczy (Group Chat Protocol & PCS/FS)
-* **Poufność Klucza Łańcucha Grupowego (`pqchat_group_protocol.pv`):**
+### (7) Group Chat Protocol and Key Rotation (Group Protocol & PCS/FS)
+* **Secrecy of Group Sender Chain Key (`pqchat_group_protocol.pv`):**
   * `Query not attacker(secret_sender_group_chain_key[]) is true`
-  * Dystrybucja klucza łańcucha nadawcy grupy w ramce Typu `0x06` (`TYPE_GROUP_CONTROL`, subtype `0x01` INVITE / `0x02` REKEY) przez hybrydowy kanał 1-na-1 (ML-KEM-512 + X25519) gwarantuje pełną poufność przed adwersarzem sieciowym Dolev-Yao.
-* **Autentyczność Wiadomości Grupowych z Wiązaniem AAD:**
+  * Distribution of the group sender chain key in Type `0x06` frame (`TYPE_GROUP_CONTROL`, subtype `0x01` INVITE / `0x02` REKEY) over a 1-on-1 hybrid channel (ML-KEM-512 + X25519) guarantees full secrecy against a Dolev-Yao network adversary.
+* **Authenticity of Group Messages with AAD Context Binding:**
   * `Query inj-event(BobRecvGroupMsg(target_x, g_id, sender_id, msg)) ==> inj-event(AliceSentGroupMsg(target_x, g_id, sender_id, msg)) is true`
-  * Wiązanie AAD $`AAD = \text{Target} \parallel GroupID \parallel SenderMemberID`$ w szyfrowaniu AES-256-GCM zapobiega podmianie nadawcy, identyfikatora grupy lub celu slotu przez atakującego.
-* **Forward Secrecy i Post-Compromise Security (PCS) w Grupie:**
-  * `Query not attacker(secret_group_msg_pre_leave[]) is true` (Forward Secrecy: dawne wiadomości grupowe pozostają poufne po odejściu członka)
-  * `Query not attacker(secret_group_msg_post_leave[]) is true` (Post-Compromise Security: wiadomości nadane w nowej epoce $`groupEpoch + 1`$ po odejściu członka `GROUP_SUBTYPE_LEAVE` i rotacji kluczy są poufne przed byłym członkiem grupy).
+  * AAD context binding $`AAD = 	ext{Target} \parallel GroupID \parallel SenderMemberID`$ in AES-256-GCM prevents sender spoofing, group substitution, or target slot swapping.
+* **Forward Secrecy and Post-Compromise Security (PCS) in Groups:**
+  * `Query not attacker(secret_group_msg_pre_leave[]) is true` (Forward Secrecy: prior group messages remain secret after a member leaves).
+  * `Query not attacker(secret_group_msg_post_leave[]) is true` (Post-Compromise Security: messages transmitted in new epoch $`groupEpoch + 1`$ after member leave `GROUP_SUBTYPE_LEAVE` and key rotation are secret from the former group member).
 
 ---
 
-## 2. Zunifikowany Zestaw Modeli Formalnych
+## 2. Unified Formal Model Suite
 
-| Plik | Opis i Weryfikowane Własności |
+| File | Description and Verified Properties |
 | :--- | :--- |
-| `pqchat_protocol.pv` | **Główny, zunifikowany model protokołu:** dowodzi poufności klucza głównego i łańcuchów, ładunków wiadomości, injektywnego uwierzytelnienia z dowiązaniem SAS i transcriptu, dwukierunkowej wymiany z AAD oraz odporności na replay i bezpiecznych 900-bajtowych tombstone'ów. |
-| `pqchat_secrecy.pv` | **Dedykowany model poufności i potwierdzenia klucza:** weryfikacja $`ChainKey_{A \to B}, ChainKey_{B \to A}`$, poufności ładunków oraz injektywnego porozumienia stron z handshake'iem hybrydowym X25519 + ML-KEM-512. |
-| `pqchat_forward_secrecy.pv` | **Model Forward Secrecy:** formalny dowód ochrony przeszłych wiadomości przy wycieku późniejszych stanów łańcucha w pamięci RAM. |
-| `pqchat_post_compromise.pv` | **Model Post-Compromise Security (PCS):** formalny dowód samoleczenia stanu po rotacji hybrydowej X25519 + ML-KEM-512. |
-| `pqchat_replay.pv` | **Model Anti-Replay:** dowód injektywnej akceptacji pakietów handshake i transmisji danych z unieważnianiem slotu. |
-| `pqchat_unlinkability.pv` | **Model Unlinkability & Tombstones:** dowód równoważności obserwacyjnej (`diff-equivalence`) dla przeskakiwania targetów oraz nierozróżnialności 900-bajtowych tombstone'ów od normalnych ramek i cover traffic. |
-| `pqchat_group_protocol.pv` | **Model Czatów Grupowych i Rotacji Kluczy:** dowód poufności dystrybucji kluczy nadawcy grupy w ramce `0x06` przez kanał 1-na-1 (ML-KEM-512 + X25519), autentyczności wiadomości grupowych z wiązaniem AAD ($`\text{Target} \parallel GroupID \parallel SenderMemberID`$) oraz Forward Secrecy i Post-Compromise Security po odejściu członka grupy ($`groupEpoch + 1`$). |
-| `run_verification.sh` | Skrypt automatyzujący uruchomienie dowodów w ProVerif, agregację wyników, rygorystyczne sprawdzenie 24 lematów i generowanie raportu `report.txt`. |
-| `report.txt` | Pełny raport z wynikami analizy Dolev-Yao wygenerowany przez ProVerif. |
+| `pqchat_protocol.pv` | **Main Unified Protocol Model:** Proves secrecy of master key and chains, message payloads, injective mutual authentication with SAS and transcript binding, bidirectional exchange with AAD, replay resistance, and 900-byte secure tombstones. |
+| `pqchat_secrecy.pv` | **Dedicated Secrecy & Key Confirmation Model:** Verification of $`ChainKey_{A 	o B}, ChainKey_{B 	o A}`$, payload secrecy, and injective agreement with hybrid X25519 + ML-KEM-512 handshake. |
+| `pqchat_forward_secrecy.pv` | **Forward Secrecy Model:** Formal proof protecting past messages upon compromise of subsequent chain states in device RAM. |
+| `pqchat_post_compromise.pv` | **Post-Compromise Security (PCS) Model:** Formal proof of self-healing state recovery following hybrid X25519 + ML-KEM-512 rotation. |
+| `pqchat_replay.pv` | **Anti-Replay Model:** Proof of injective packet acceptance for handshake and data transmission with slot invalidation. |
+| `pqchat_unlinkability.pv` | **Unlinkability & Tombstones Model:** Proof of observational equivalence (`diff-equivalence`) for target hopping and indistinguishability of 900-byte tombstones from normal frames and cover traffic. |
+| `pqchat_group_protocol.pv` | **Group Chat Protocol & Key Rotation Model:** Proof of secrecy of group sender key distribution in `0x06` frame via 1-on-1 channel (ML-KEM-512 + X25519), authenticity of group messages with AAD binding ($`	ext{Target} \parallel GroupID \parallel SenderMemberID`$), and Forward Secrecy / Post-Compromise Security upon member departure ($`groupEpoch + 1`$). |
+| `run_verification.sh` | Shell script automating execution of proofs in ProVerif, result aggregation, verification of all 24 lemmas, and generating `report.txt`. |
+| `report.txt` | Full Dolev-Yao verification report generated by ProVerif. |
 
 ---
 
-## 3. Instrukcja Uruchomienia Dowodów
+## 3. Running Formal Verification
 
-Do uruchomienia modeli wymagane jest środowisko z zainstalowanym **ProVerif** (wersja $`\ge 2.04`$):
+Executing the formal models requires **ProVerif** (version $`\ge 2.04`$):
 
 ```bash
-# Uruchomienie pełnego zestawu dowodów (24 lematy w 7 modelach):
+# Execute full verification suite (24 lemmas across 7 models):
 bash docs/formal/run_verification.sh
 ```
 
-Skrypt automatycznie:
-1. Wykrywa binaria ProVerif w PATH, `/usr/local/bin`, WSL Ubuntu lub kompiluje bezpośrednio ze źródeł Inria w środowisku Linux/CI.
-2. Wykonuje analizę symboliczną każdego z 7 modeli `.pv`.
-3. Weryfikuje dokładne formuły lematów (24/24 PASS).
-4. Generuje szczegółowy raport w pliku `docs/formal/report.txt`.
-5. Zwraca kod wyjścia `0` w przypadku zdania wszystkich lematów.
+The script automatically:
+1. Detects ProVerif binaries in PATH, `/usr/local/bin`, WSL Ubuntu, or compiles from Inria sources in Linux/CI environments.
+2. Executes symbolic analysis across each of the 7 `.pv` models.
+3. Verifies exact lemma formulas (24/24 PASS).
+4. Generates a detailed verification report in `docs/formal/report.txt`.
+5. Returns exit code `0` when all lemmas pass.

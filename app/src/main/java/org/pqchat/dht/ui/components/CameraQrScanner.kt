@@ -269,7 +269,7 @@ fun CameraQrScanner(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = if (scanned == total) "✓ Zeskanowano $scanned/$total części" else "Zeskanowano $scanned/$total części",
+                            text = if (scanned == total) "✓ Scanned $scanned/$total parts" else "Scanned $scanned/$total parts",
                             color = if (scanned == total) ElectricGreen else NeonCyan,
                             style = MaterialTheme.typography.labelMedium,
                             fontSize = 12.sp

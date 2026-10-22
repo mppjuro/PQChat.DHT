@@ -14,9 +14,9 @@ import java.util.concurrent.ConcurrentLinkedDeque
  */
 enum class PacketClass(val priority: Int, val weight: Int) {
     URGENT_CONTROL(1, 8),          // 1: pilne Rekey/Handshake
-    DIRECT_MESSAGE(2, 4),          // 2: wiadomości 1-na-1 i reakcje
-    GROUP_MESSAGE(3, 2),           // 3: wiadomości grupowe
-    IMAGE_CHUNK(4, 1),             // 4: chunki obrazów PNG8
+    DIRECT_MESSAGE(2, 4),          // 2: 1-on-1 messages and reactions
+    GROUP_MESSAGE(3, 2),           // 3: group messages
+    IMAGE_CHUNK(4, 1),             // 4: PNG8 image chunks
     BACKGROUND_COVER(5, 1);        // 5: Cover ACK / Blind Republish / Decoy
 
     companion object {

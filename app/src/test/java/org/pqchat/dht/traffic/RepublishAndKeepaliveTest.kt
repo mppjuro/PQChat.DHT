@@ -279,7 +279,7 @@ class RepublishAndKeepaliveTest {
         )
         contactDao.insertOrUpdate(contact)
 
-        // 1. Insert an expired message with status EXPIRED_OFFLINE ("Wygasła w DHT")
+        // 1. Insert an expired message with status EXPIRED_OFFLINE ("Expired in DHT")
         val expiredTarget = CryptoUtils.secureRandomBytes(20)
         val expiredEdSeed = CryptoUtils.secureRandomBytes(32)
         val msgId = messageDao.insertMessage(
@@ -307,7 +307,7 @@ class RepublishAndKeepaliveTest {
         assertNotNull(beforeResend)
         assertEquals("EXPIRED_OFFLINE", beforeResend!!.status)
 
-        // 2. User taps "Ponów" (resendMessage)
+        // 2. User taps "Resend" (resendMessage)
         val resendSuccess = repository.resendMessage(msgId)
         assertTrue("resendMessage must return true on success", resendSuccess)
 

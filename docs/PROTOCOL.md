@@ -1,384 +1,384 @@
 # PQChat.DHT Protocol Specification (v2.0)
 
-Niniejszy dokument stanowi pełną specyfikację techniczną protokołu komunikacyjnego **PQChat.DHT** — zdecentralizowanego, post-kwantowego, asynchronicznego komunikatora mobilnego na platformę Android, wykorzystującego publiczną sieć BitTorrent Mainline DHT (BEP 44) jako efemeryczny bufor *Store-and-Forward*.
+This document provides the complete technical specification of the **PQChat.DHT** communication protocol — a decentralized, post-quantum, asynchronous mobile messaging system for Android, leveraging the public BitTorrent Mainline DHT (BEP 44) as an ephemeral *Store-and-Forward* buffer.
 
 ---
 
-## 1. Architektura Systemu i Model Zagrożeń
+## 1. System Architecture and Threat Model
 
-### 1.1. Podstawowe Filary Architektury
-1. **Serverless & Zero Metadata:** Całkowity brak serwerów centralnych, brokerów powiadomień Push (FCM/APNs) czy stałych identyfikatorów/kont.
-2. **Tryb Klienta Liścia (Client-Only / Leaf Node):** Urządzenie mobilne nie trasuje cudzych pakietów KRPC ani nie buforuje danych innych węzłów w pamięci RAM. Jest wyłącznie inicjatorem zapytań UDP `put` / `get` (BEP 44).
-3. **Efemeryczny Bufor DHT (Store-and-Forward):** Wiadomości są zapisywane jako mutowalne rekordy BEP 44 z czasem retencji rzędu 24–72 godzin.
-4. **Odporność Post-Kwantowa (PQC):** Ochrona przed atakiem *Harvest Now, Decrypt Later* za pomocą standaryzowanego algorytmu NIST **ML-KEM-512** (FIPS 203 / Kyber-512).
-5. **Maskowanie Ruchu (Anti-Traffic Analysis):** Emisja pakietów szumowych (dummy traffic) o rozkładzie Poissona w celu zatarcia korelacji czasowej między aktywnością użytkownika a emisją ramek UDP.
+### 1.1. Core Architectural Pillars
+1. **Serverless & Zero Metadata:** Complete absence of centralized servers, push notification brokers (FCM/APNs), and static user identifiers or accounts.
+2. **Client-Only Leaf Node Mode:** Mobile devices never route third-party KRPC packets and never buffer data for other nodes in RAM. They function exclusively as initiators of UDP `put` / `get` queries (BEP 44).
+3. **Ephemeral DHT Buffer (Store-and-Forward):** Messages are stored as mutable BEP 44 records with a retention lifespan of 24–72 hours.
+4. **Post-Quantum Cryptography (PQC):** Protection against *Harvest Now, Decrypt Later* attacks using the NIST-standardized **ML-KEM-512** algorithm (FIPS 203 / Kyber-512).
+5. **Anti-Traffic Analysis:** Emission of Poisson-distributed dummy noise packets to eliminate temporal correlation between user activity and UDP frame transmissions.
 
-### 1.2. Założenia Kryptograficzne i Model Zagrożeń (Security Assumptions)
+### 1.2. Cryptographic Assumptions & Security Model (Security Assumptions)
 
 > [!IMPORTANT]
-> **Założenie 1: Jawność ziarna w kodzie QR ($Seed_{init}$ jest jawny)**
-> Kod QR prezentowany podczas parowania (Handshake) zawiera:
-> $$QR = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B}) \quad (\text{łącznie } 864\text{ bajty})$$
-> Protokół **nie zakłada poufności** kodu QR przed obserwatorem fizycznym (np. osobą patrzącą zza pleców lub kamerą monitoringu).
-> * $Seed_{init}$ służy wyłącznie do jednorazowego deterministycznego wyznaczenia punktu spotkania w sieci DHT:
+> **Assumption 1: Public Seed in QR Code ($Seed_{init}$ is Public)**
+> The QR code presented during out-of-band pairing (Handshake) contains:
+> $$QR = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B}) \quad (\text{total } 864\text{ bytes})$$
+> The protocol **does not assume confidentiality** of the QR code against physical observers (e.g., shoulder surfing or surveillance cameras).
+> * $Seed_{init}$ is used exclusively for one-time deterministic derivation of the DHT rendezvous point:
 >   $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
->   oraz do powiązania transkryptu (transcript binding) i ochrony przed kolizjami.
-> * Nawet jeśli adwersarz pozna $pk_A$ oraz $Seed_{init}$, **nie jest w stanie odszyfrować wiadomości ani poznać wspólnego sekretu**, ponieważ poufność wynika wprost z trudności problemów ML-KEM-512 (Module Learning With Errors — M-LWE) oraz ECDH X25519 (DLP).
-> * Przed atakiem typu Man-in-the-Middle (podmiana odpowiedzi na DHT) chroni **Key Confirmation Tag** oraz **Short Authentication String (SAS)**.
+>   as well as for transcript binding and collision avoidance.
+> * Even if an adversary learns $pk_A$ and $Seed_{init}$, **they cannot decrypt messages or determine the shared secret**, because secrecy relies strictly on the hardness of ML-KEM-512 (Module Learning With Errors — M-LWE) and X25519 ECDH (DLP).
+> * Man-in-the-Middle attacks (tampering with DHT responses) are prevented by the **Key Confirmation Tag** and **Short Authentication String (SAS)**.
 
 > [!WARNING]
-> **Założenie 2: Podpis Ed25519 w BEP 44 nie jest post-kwantowy**
-> Publiczna sieć BitTorrent DHT (specyfikacja BEP 44) wymaga, aby każdy rekord mutowalny był autoryzowany kluczem publicznym $k$ ($32\text{ B}$) i podpisem Ed25519 ($64\text{ B}$).
-> * W PQChat.DHT klucz Ed25519 jest **jednorazowym, efemerycznym tokenem transportowym** wyprowadzanym z bieżącego stanu łańcucha ($EdSeed_i$).
-> * Ed25519 **nie szyfruje ładunku i nie uczestniczy w uzgadnianiu sekretu**.
-> * Przeciwnik z dostępem do komputera kwantowego (algorytm Shora) mógłby złamać podpis Ed25519 i nadpisać wpis w DHT (atak typu Denial of Service lub podmiana ramek w locie), lecz **nie jest w stanie złamać szyfrowania ładunku (ML-KEM + AES-256-GCM)**. Wszelkie zmodyfikowane ramki zostaną natychmiast odrzucone przez odbiorcę z uwagi na błąd weryfikacji taga AEAD.
+> **Assumption 2: Ed25519 Signature in BEP 44 is Not Post-Quantum**
+> The public BitTorrent DHT network (BEP 44 specification) requires each mutable record to be signed with Ed25519 public key $k$ ($32\text{ B}$) and signature ($64\text{ B}$).
+> * In PQChat.DHT, the Ed25519 key is a **one-time, ephemeral transport token** derived from the current ratchet chain state ($EdSeed_i$).
+> * Ed25519 **does not encrypt payloads and does not participate in shared secret negotiation**.
+> * An adversary with access to a quantum computer (Shor's algorithm) could break the Ed25519 signature and overwrite the DHT record (Denial of Service or in-flight frame tampering), but **cannot break payload encryption (ML-KEM + AES-256-GCM)**. Any tampered frames are immediately discarded by the recipient due to AEAD tag verification failure.
 
 ---
 
-## 2. Faza Rendezvous i Handshake
+## 2. Rendezvous Phase and Handshake
 
-Proces parowania składa się z 3 kroków: generacji QR przez Alice, przetworzenia i publikacji przez Boba oraz finalizacji i weryfikacji przez Alice.
+The pairing workflow consists of 3 steps: QR generation by Alice, processing and publishing by Bob, and retrieval and verification by Alice.
 
 ```
        Alice                                                  Bob
-  (Wyświetla QR)                                         (Skanuje QR)
+  (Displays QR)                                          (Scans QR)
          |                                                    |
-  1. Generuje (pk_A, sk_A)                                    |
+  1. Generates (pk_A, sk_A)                                   |
      Seed_init <- CSPRNG(32)                                  |
      Target_0 = SHA-1(...)                                    |
-     Prezentuje QR: pk_A || Seed_init                         |
-         | ---------------- Skanowanie QR (OOB) ------------> |
+     Presents QR: pk_A || Seed_init                           |
+         | ---------------- Scan QR (OOB) ------------------> |
          |                                                    |
          |                                            2. Encapsulate(pk_A) -> (SS_init, ct_B)
-         |                                               Generuje salt (24 B)
+         |                                               Generates salt (24 B)
          |                                               Transcript = pk_A || ct_B || Seed_init || salt
          |                                               Commitment = SHA-256("PQChat_AntiGrind_v2" || Seed_init || Transcript)
          |                                               PRK = HKDF-Extract(salt, SS_init)
          |                                               MasterKey = HKDF-Expand(PRK, label || SHA-512(Transcript), 64)
          |                                               ConfirmTag = HKDF-Expand(MasterKey, "KeyConfirmationBob", 32)
          |                                               SAS = HKDF-Expand(MasterKey, "PQChat_SAS_v2_AntiGrind" || Commitment, 8)
-         |                                               Tworzy ramkę Typu 0x01 (ct_B, salt, ConfirmTag)
+         |                                               Builds Type 0x01 frame (ct_B, salt, ConfirmTag)
          |                                               DHT putMutable(Target_0, Frame_0x01, sk_Ed)
          | <================= DHT PUT/GET (Target_0) ======== |
          |
-  3. DHT GET(Target_0) -> Odbiera ramkę Typu 0x01
+  3. DHT GET(Target_0) -> Receives Type 0x01 frame
      Decapsulate(sk_A, ct_B) -> SS_init
      Transcript = pk_A || ct_B || Seed_init || salt
      Commitment = SHA-256("PQChat_AntiGrind_v2" || Seed_init || Transcript)
      PRK = HKDF-Extract(salt, SS_init)
      MasterKey = HKDF-Expand(PRK, label || SHA-512(Transcript), 64)
-     Weryfikacja ConfirmTag == computeConfirmationTag(MasterKey)
-     [BŁĄD -> zachowaj sk_A, oczekuj dalej]
-     [SUKCES -> zeruj sk_A, wyprowadź łańcuchy, SAS = computeSas(MasterKey, Commitment)]
+     Verify ConfirmTag == computeConfirmationTag(MasterKey)
+     [FAIL -> keep sk_A, continue awaiting valid frame]
+     [SUCCESS -> zero sk_A, derive chains, SAS = computeSas(MasterKey, Commitment)]
 ```
 
-### 2.1. Krok 1 (Alice): Inicjalizacja i Prezentacja QR
-1. Generacja pary kluczy: $(pk_A, sk_A) \leftarrow \text{Hybrid-KEM.KeyGen}()$ (832 B klucz publiczny: 800 B ML-KEM-512 + 32 B X25519).
-2. Generacja losowego ziarna: $Seed_{init} \leftarrow \text{CSPRNG}(32\text{ bajty})$.
-3. Wyznaczenie punktu rendezvous $Target_0$:
+### 2.1. Step 1 (Alice): Initialization and QR Presentation
+1. Keypair Generation: $(pk_A, sk_A) \leftarrow \text{Hybrid-KEM.KeyGen}()$ (832 B public key: 800 B ML-KEM-512 + 32 B X25519).
+2. Random Seed Generation: $Seed_{init} \leftarrow \text{CSPRNG}(32\text{ bytes})$.
+3. Rendezvous Address Derivation ($Target_0$):
    $$HMAC_0 = \text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"})$$
    $$Target_0 = \text{SHA-1}(HMAC_0)$$
-4. Prezentacja ładunku QR o sztywnym rozmiarze 864 bajtów:
+4. QR Payload Presentation (strict 864 bytes size):
    $$QR_{payload} = pk_A \ (832\text{ B}) \parallel Seed_{init} \ (32\text{ B})$$
 
-### 2.2. Krok 2 (Bob): Skanowanie, Enkapsulacja i Publikacja BEP 44
-1. Rozpakowanie QR: odzyskanie $pk_A$ i $Seed_{init}$.
-2. Enkapsulacja sekretu hybrydowego:
+### 2.2. Step 2 (Bob): Scanning, Encapsulation, and BEP 44 Publication
+1. QR Unpacking: extract $pk_A$ and $Seed_{init}$.
+2. Hybrid Secret Encapsulation:
    $$(SS_{init}, ct_B) \leftarrow \text{Hybrid-KEM.Encapsulate}(pk_A)$$
-   gdzie $SS_{init} \in \{0,1\}^{256}$, $ct_B \in \{0,1\}^{6400}$ ($800\text{ bajtów}$: 768 B ML-KEM + 32 B X25519 eph pk).
-3. Wygenerowanie 24-bajtowej soli kryptograficznej: $salt \leftarrow \text{CSPRNG}(24\text{ B})$.
-4. Związanie transkryptu (Transcript Binding):
-   $$Transcript = pk_A \parallel ct_B \parallel Seed_{init} \parallel salt \quad (1688\text{ bajtów})$$
-   $$TranscriptHash = \text{SHA-512}(Transcript) \quad (64\text{ bajty})$$
-5. Wyprowadzenie klucza głównego ($MasterKey$):
+   where $SS_{init} \in \{0,1\}^{256}$, $ct_B \in \{0,1\}^{6400}$ ($800\text{ bytes}$: 768 B ML-KEM + 32 B X25519 eph pk).
+3. 24-Byte Cryptographic Salt Generation: $salt \leftarrow \text{CSPRNG}(24\text{ B})$.
+4. Transcript Binding:
+   $$Transcript = pk_A \parallel ct_B \parallel Seed_{init} \parallel salt \quad (1688\text{ bytes})$$
+   $$TranscriptHash = \text{SHA-512}(Transcript) \quad (64\text{ bytes})$$
+5. Master Key Derivation ($MasterKey$):
    $$PRK = \text{HKDF-Extract}(salt, SS_{init})$$
    $$MasterKey = \text{HKDF-Expand}(PRK, \text{"PQChat\_MasterKey\_Transcript"} \parallel TranscriptHash, 64)$$
-6. Obliczenie taga potwierdzenia klucza (Key Confirmation Tag):
+6. Key Confirmation Tag Computation:
    $$ConfirmTag = \text{HKDF-Expand}(MasterKey, \text{"KeyConfirmationBob"}, 32)$$
-7. Wyprowadzenie kluczy transportowych ramki powitalnej:
+7. Greeting Frame Transport Key Derivation:
    $$k_{hs} = \text{HKDF-Derive}(null, Seed_{init}, \text{"hs\_enc"}, 32)$$
    $$EdSeed_{hs} = \text{HKDF-Derive}(null, Seed_{init}, \text{"hs\_ed25519"}, 32)$$
-8. Skonstruowanie ładunku wewnętrznego (Typ `0x01` — Handshake Finalize):
-   * Nagłówek (13 B): $MsgType = 0x01$, $SeqNum = 0$, $AckNum = 0$, $TimestampUTC$.
+8. Internal Payload Assembly (Type `0x01` — Handshake Finalize):
+   * Header (13 B): $MsgType = 0x01$, $SeqNum = 0$, $AckNum = 0$, $TimestampUTC$.
    * $ct_B$ (800 B).
    * $salt$ (24 B).
    * $ConfirmTag$ (32 B).
-   * Padding CSPRNG (3 B).
-   Szyfrowanie AEAD z kluczem $k_{hs}$ i $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
-9. Zapis w sieci DHT operacją `putMutable` pod $Target_0$ z użyciem podpisu z $EdSeed_{hs}$.
-10. Wyprowadzenie torów komunikacji i SAS:
+   * CSPRNG Padding (3 B).
+   AEAD encryption with key $k_{hs}$ and $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
+9. Publication to DHT via `putMutable` at $Target_0$ signed with $EdSeed_{hs}$.
+10. Unidirectional Chains and SAS Derivation:
     $$ChainKey_{A \to B} = \text{HKDF-Expand}(MasterKey, \text{"AliceToBob"}, 64)$$
     $$ChainKey_{B \to A} = \text{HKDF-Expand}(MasterKey, \text{"BobToAlice"}, 64)$$
     $$Commitment = \text{SHA-256}(\text{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)$$
     $$SAS = \text{computeSas}(MasterKey, Commitment)$$
 
-### 2.3. Krok 3 (Alice): Pobranie z DHT, Deszyfrowanie i Weryfikacja
-1. Alice cyklicznie odpytuje DHT pod adresem $Target_0$.
-2. Po odebraniu pakietu deszyfruje ramkę kluczem $k_{hs}$ z $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
-3. Dekapsuluje sekret hybrydowy:
+### 2.3. Step 3 (Alice): Retrieval from DHT, Decryption, and Verification
+1. Alice periodically polls DHT at target address $Target_0$.
+2. Upon receiving the packet, she decrypts the frame with key $k_{hs}$ and $\text{AAD} = Target_0 \parallel \text{"BobToAlice"}$.
+3. Decapsulates the hybrid secret:
    $$SS_{init} \leftarrow \text{Hybrid-KEM.Decapsulate}(sk_A, ct_B)$$
-4. Odtwarza $Transcript$, oblicza $TranscriptHash$, $PRK$ oraz $MasterKey$.
-5. Weryfikuje $ConfirmTag$ w czasie stałym (`MessageDigest.isEqual`):
-   * **Brak zgodności:** błąd autentyczności (np. nieprawidłowy kryptogram lub próba ataku). Alice **nie niszczy** $sk_A$, co pozwala jej nadal oczekiwać na poprawny pakiet Boba.
-   * **Zgodność potwierdzona:** Alice bezzwłocznie zeruje pamięć kluczy prywatnych $sk_A$ (ML-KEM oraz X25519), inicjalizuje tory $ChainKey_{A \to B}$, $ChainKey_{B \to A}$ i oblicza identyczny kod $SAS$.
+4. Reconstructs $Transcript$, computes $TranscriptHash$, $PRK$, and $MasterKey$.
+5. Verifies $ConfirmTag$ in constant time (`MessageDigest.isEqual`):
+   * **Mismatch:** authenticity failure (e.g. invalid ciphertext or attack attempt). Alice **does not destroy** $sk_A$, remaining able to await Bob's genuine frame.
+   * **Match Confirmed:** Alice immediately zeroes private key memory $sk_A$ (ML-KEM and X25519), initializes chains $ChainKey_{A \to B}$, $ChainKey_{B \to A}$, and computes an identical $SAS$ code.
 
 ---
 
-## 3. Wzmocniony SAS (Short Authentication String) z Zobowiązaniem Przeciw Mieleniu
+## 3. Hardened SAS (Short Authentication String) with Anti-Grinding Commitment
 
-### 3.1. Zagrożenie Mieleniem (Grinding Attack)
-W klasycznych kodach SAS o długości 6 cyfr ($10^6$ możliwości), aktywny atakujący podsłuchujący kod QR mógłby manipulować swoim wkładem (kryptogramem KEM lub solą $salt$), wykonując średnio $5 \cdot 10^5$ prób haszowania offline, aby doprowadzić do kolizji kodu SAS wyliczonego przez ofiary.
+### 3.1. Grinding Attack Threat
+In classical 6-digit SAS codes ($10^6$ combinations), an active attacker eavesdropping on the QR code could manipulate their own contribution (KEM ciphertext or $salt$), performing an average of $5 \cdot 10^5$ offline hashing trials to induce a collision in the SAS code verified by victims.
 
-### 3.2. Zobowiązanie Przeciw Mieleniu (Anti-Grinding Commitment)
-W PQChat.DHT wprowadzono kryptograficzne zobowiązanie oparte o pełny transkrypt oraz ziarno inicjatora:
+### 3.2. Anti-Grinding Commitment
+PQChat.DHT implements a cryptographic commitment bound to the complete transcript and initiator seed:
 $$Commitment = \text{SHA-256}(\text{"PQChat\_AntiGrind\_v2"} \parallel Seed_{init} \parallel Transcript)$$
 
-### 3.3. Derywacja 8-Cyfrowego Kodu SAS
-Kod SAS jest wyprowadzany z $MasterKey$ oraz $Commitment$ przy użyciu etykiety `PQChat_SAS_v2_AntiGrind`:
+### 3.3. 8-Digit SAS Code Derivation
+The SAS code is derived from $MasterKey$ and $Commitment$ using label `PQChat_SAS_v2_AntiGrind`:
 $$\text{Entropy}_{SAS} = \text{HKDF-Expand}(MasterKey, \text{"PQChat\_SAS\_v2\_AntiGrind"} \parallel Commitment, 8)$$
-Bity są dzielone na dwie 4-cyfrowe grupy modulo 10000:
+The entropy bits are divided into two 4-digit groups modulo 10000:
 $$Part_1 = (\text{Uint32BE}(\text{Entropy}_{SAS}[0..3]) \ \& \ \text{0x7FFFFFFF}) \pmod{10000}$$
 $$Part_2 = (\text{Uint32BE}(\text{Entropy}_{SAS}[4..7]) \ \& \ \text{0x7FFFFFFF}) \pmod{10000}$$
 $$SAS = \text{format}(\text{"\%04d-\%04d"}, Part_1, Part_2)$$
-* **Przestrzeń poszukiwań:** $10^8$ (100 milionów kombinacji, ~26.6 bita entropii).
-* **Zobowiązanie:** Jakakolwiek modyfikacja $pk_A$, $ct_B$, $Seed_{init}$ lub $salt$ zmienia zarówno $MasterKey$, jak i $Commitment$, dając zupełnie inny kod SAS.
-* **Weryfikacja w UI:** Użytkownicy widzą kod SAS w `HandshakeScreen` oraz `ChatScreen` i mogą jednym kliknięciem oznaczyć kontakt jako `isVerified = true`.
+* **Search Space:** $10^8$ (100 million combinations, ~26.6 bits of entropy).
+* **Commitment Property:** Any tampering with $pk_A$, $ct_B$, $Seed_{init}$, or $salt$ alters both $MasterKey$ and $Commitment$, producing a completely divergent SAS code.
+* **UI Verification:** Users view the SAS code in `HandshakeScreen` and `ChatScreen` and can mark the contact as `isVerified = true` with a single tap.
 
 ---
 
-## 4. Deterministyczne Rozdzielenie Torów (Dual Unidirectional Chains)
+## 4. Deterministic Track Separation (Dual Unidirectional Chains)
 
-Komunikacja między dwoma kontaktami opiera się na dwóch całkowicie rozłącznych, jednokierunkowych łańcuchach:
+Communication between two contacts is governed by two completely disjoint, unidirectional ratchet chains:
 
-1. **Tor $A \to B$ (Alice do Boba):**
-   * Stan początkowy: $ChainKey_{A \to B}$.
-   * Alice inkrementuje swój $Counter_{out}$.
-   * Bob inkrementuje swój $Counter_{in}$.
-2. **Tor $B \to A$ (Bob do Alice):**
-   * Stan początkowy: $ChainKey_{B \to A}$.
-   * Bob inkrementuje swój $Counter_{out}$.
-   * Alice inkrementuje swój $Counter_{in}$.
+1. **Track $A \to B$ (Alice to Bob):**
+   * Initial state: $ChainKey_{A \to B}$.
+   * Alice increments her $Counter_{out}$.
+   * Bob increments his $Counter_{in}$.
+2. **Track $B \to A$ (Bob to Alice):**
+   * Initial state: $ChainKey_{B \to A}$.
+   * Bob increments his $Counter_{out}$.
+   * Alice increments her $Counter_{in}$.
 
-Wysłanie wiadomości w jednym kierunku **nigdy** nie zużywa kluczy ani nie zmienia numeracji w torze przeciwnym. Zapobiega to zakleszczeniom (deadlockom) i desynchronizacjom w asynchronicznym środowisku DHT.
+Sending a message in one direction **never** consumes keys or alters sequence counters in the reverse track. This avoids deadlocks and state desynchronization in asynchronous DHT environments.
 
 ---
 
-## 5. Przeskakiwanie Adresów (Key Hopping)
+## 5. Ephemeral Address Hopping (Key Hopping)
 
-Dla każdej kolejnej wiadomości $i$ w danym torze:
+For each consecutive message $i$ in a given track:
 
-1. Wyprowadzenie 128 bajtów entropii:
+1. 128 bytes of entropy are expanded:
    $$Entropy_i = \text{HKDF-Expand}(ChainKey^i, \text{"step"} \parallel \text{Uint32BE}(i), 128)$$
-2. Podział entropii:
-   * **Bajty 0–31 (32 B):** $MsgKey_i$ — klucz symetryczny AES-256 do zaszyfrowania ładunku wiadomości.
-   * **Bajty 32–63 (32 B):** $EdSeed_i$ — jednorazowe ziarno efemerycznej pary kluczy Ed25519 $(pk_i^{Ed}, sk_i^{Ed})$ wymaganej przez BEP 44.
-   * **Bajty 64–127 (64 B):** $ChainKey^{i+1}$ — stan klucza łańcucha dla następnej wiadomości.
-3. Wyznaczenie adresu docelowego w DHT:
+2. Entropy Partitioning:
+   * **Bytes 0–31 (32 B):** $MsgKey_i$ — AES-256 symmetric key for message payload encryption.
+   * **Bytes 32–63 (32 B):** $EdSeed_i$ — one-time seed for the ephemeral Ed25519 keypair $(pk_i^{Ed}, sk_i^{Ed})$ required by BEP 44.
+   * **Bytes 64–127 (64 B):** $ChainKey^{i+1}$ — updated chain key state for the subsequent message.
+3. Target Address Derivation in DHT:
    $$Target_i = \text{SHA-1}(pk_i^{Ed})$$
-4. Bezpieczne niszczenie pamięci: Po zakończeniu kroku tablice z $Entropy_i$, $EdSeed_i$ oraz $MsgKey_i$ są natychmiast zerowane (`fill(0)`).
+4. Secure Memory Erasure: Upon completion, byte arrays containing $Entropy_i$, $EdSeed_i$, and $MsgKey_i$ are immediately cleared (`fill(0)`).
 
-Dzięki temu adres $Target_i$ jest pseudolosowy dla zewnętrznego obserwatora i znany wyłącznie nadawcy oraz odbiorcy posiadającemu $ChainKey^i$.
+Consequently, address $Target_i$ is pseudorandom to outside observers and known strictly to the sender and recipient possessing $ChainKey^i$.
 
 ---
 
-## 6. Rotacja Post-Kwantowa (Rekeying co 50 wiadomości)
+## 6. Post-Quantum Rotation (Rekeying every 50 messages)
 
-W celu zapewnienia właściwości **Post-Compromise Security (PCS)** (samoleczenia stanu po ewentualnym wycieku kluczy z pamięci RAM), protokół wymusza asymetryczną renegocjację klucza KEM co 50 wysłanych wiadomości.
+To guarantee **Post-Compromise Security (PCS)** (self-healing after potential RAM key compromise), the protocol enforces asymmetric KEM key renegotiation every 50 messages sent.
 
 ```
-       Nadawca (Counter_out == 50k)                       Odbiorca
+       Sender (Counter_out == 50k)                        Receiver
             |                                                 |
-  1. Generuje nową parę ML-KEM-512                            |
+  1. Generates fresh ML-KEM-512 pair                          |
      (pk_new, sk_new)                                         |
-     Zapisuje PendingOffer(epoch+1, sk_new)                   |
-     Wysyła pakiet Typu 0x03 (Rekey Offer: pk_new)            |
+     Stores PendingOffer(epoch+1, sk_new)                     |
+     Sends Type 0x03 packet (Rekey Offer: pk_new)             |
             | =================== DHT ======================> |
             |                                                 |
-            |                                         2. Odbiera Typ 0x03
+            |                                         2. Receives Type 0x03
             |                                            Encapsulate(pk_new) -> (SS_rekey, ct_rekey)
-            |                                            Wstrzykuje SS_rekey do swojego ChainKey_in:
+            |                                            Injects SS_rekey into input chain:
             |                                            ChainKey_in <- HKDF-Extract(ChainKey_in, SS_rekey)
-            |                                            Wysyła w torze powrotnym Typ 0x04 (ct_rekey)
+            |                                            Sends Type 0x04 packet (ct_rekey) in return track
             | <================== DHT ======================= |
             |
-  3. Odbiera Typ 0x04 w torze powrotnym
+  3. Receives Type 0x04 in return track
      Decapsulate(sk_new, ct_rekey) -> SS_rekey
      ChainKey_out <- HKDF-Extract(ChainKey_out, SS_rekey)
-     Wycofuje i zeruje sk_new
-     Zwiększa rekeyEpoch
+     Retires and zeroes sk_new
+     Increments rekeyEpoch
 ```
 
-### 6.1. Typ 0x03: PQC Rekey Offer
-Gdy $Counter_{out} > 0$ oraz $Counter_{out} \equiv 0 \pmod{50}$:
-* Nadawca generuje świeżą parę $(pk_{new}, sk_{new}) \leftarrow \text{Hybrid-KEM.KeyGen}()$.
-* Zapisuje bezpiecznie $sk_{new}$ w bazie (zaszyfrowany Android Keystore) jako `PendingRekeyOfferEntity`.
-* Nadaje pakiet Typu `0x03` zawierający $RekeyEpoch$ oraz $pk_{new}$ ($832\text{ B}$: 800 B ML-KEM-512 + 32 B X25519).
+### 6.1. Type 0x03: PQC Rekey Offer
+When $Counter_{out} > 0$ and $Counter_{out} \equiv 0 \pmod{50}$:
+* The sender generates a fresh keypair $(pk_{new}, sk_{new}) \leftarrow \text{Hybrid-KEM.KeyGen}()$.
+* Securely stores $sk_{new}$ in the database (encrypted with Android Keystore) as a `PendingRekeyOfferEntity`.
+* Transmits a Type `0x03` packet containing $RekeyEpoch$ and $pk_{new}$ ($832\text{ B}$: 800 B ML-KEM-512 + 32 B X25519).
 
-### 6.2. Typ 0x04: PQC Rekey Response
-* Odbiorca po odebraniu oferty wykonuje `Encapsulate(pk_new)`, uzyskując $(SS_{rekey}, ct_{rekey})$.
-* Natychmiast aplikuje nowy sekret do swojego łańcucha wejściowego:
+### 6.2. Type 0x04: PQC Rekey Response
+* Upon receiving the offer, the recipient executes `Encapsulate(pk_new)`, obtaining $(SS_{rekey}, ct_{rekey})$.
+* Immediately injects the new shared secret into their incoming chain:
   $$ChainKey_{in} \leftarrow \text{HKDF-Extract}(ChainKey_{in}, SS_{rekey})$$
-* W swoim kanale wyjściowym nadaje pakiet Typu `0x04` zawierający $RekeyEpoch$ oraz $ct_{rekey}$ ($800\text{ B}$: 768 B ML-KEM-512 + 32 B X25519 eph pk).
+* In their return channel, transmits a Type `0x04` packet containing $RekeyEpoch$ and $ct_{rekey}$ ($800\text{ B}$: 768 B ML-KEM-512 + 32 B X25519 eph pk).
 
-### 6.3. Konsumpcja Odpowiedzi przez Inicjatora
-* Inicjator odbiera pakiet Typu `0x04` i dekapsuluje sekret:
+### 6.3. Response Consumption by Initiator
+* The initiator receives the Type `0x04` packet and decapsulates the secret:
   $$SS_{rekey} \leftarrow \text{Hybrid-KEM.Decapsulate}(sk_{new}, ct_{rekey})$$
-* Wstrzykuje sekret do łańcucha wyjściowego:
+* Injects the secret into their outgoing chain:
   $$ChainKey_{out} \leftarrow \text{HKDF-Extract}(ChainKey_{out}, SS_{rekey})$$
-* Niszczy $sk_{new}$ (zerując pamięć klucza ML-KEM i X25519) i usuwa wpis z bazy danych.
+* Destroys $sk_{new}$ (zeroing ML-KEM and X25519 private key memory) and deletes the entity from the database.
 
-### 6.4. Unikalne Adresy Docelowe BEP 44 per Odbiorca w Czatach Grupowych
-W czatach grupowych zamiast jednego wspólnego adresu docelowego $`Target = \text{RatchetChain.deriveSlot}(myChainKeyOut, counterOut)`$ używanego dla wszystkich członków grupy, nadawca wyprowadza unikalny adres docelowy dla każdego członka:
-$`\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)`$
-a następnie za pomocą `RatchetChain.deriveGroupRecipientSlot` generuje dedykowane parametry slotu (`msgKey`, `edPrivateKeySeed`, `target`).
+### 6.4. Unique BEP 44 Target Addresses per Recipient in Group Chats
+In group chats, instead of using a single shared target address $Target = \text{RatchetChain.deriveSlot}(myChainKeyOut, counterOut)$ for all group members, the sender derives a unique target address for each member:
+$$\text{memberTarget} = \text{HKDF-Expand}(myChainKeyOut, \text{"group\_target:"} \parallel groupId \parallel counterOut \parallel memberId, 32)$$
+and then generates dedicated slot parameters (`msgKey`, `edPrivateKeySeed`, `target`) via `RatchetChain.deriveGroupRecipientSlot`.
 
-Nadawca wykonuje osobne operacje `putMutable` pod każdym unikalnym adresem docelowym ($`N`$ targetów dla $`N`$ członków). W `pollGroupIncoming` każdy członek odpytuje **wyłącznie swój unikalny target, a nie wspólny**.
+The sender executes distinct `putMutable` operations under each unique target address ($N$ targets for $N$ members). In `pollGroupIncoming`, each member polls **only their unique target, never a shared one**.
 
-**Uzasadnienie bezpieczeństwa:** Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe zapytania `GET` na ten sam slot, łamiąc tajność celu komunikacji grupowej (Group Follower Correlation). Rozdzielenie slotów na $`N`$ niezależnych pseudolosowych adresów gwarantuje brak możliwości powiązania odbiorców ani wykrycia faktu ich przynależności do tej samej grupy.
+**Security Rationale:** A same-target design for all members allows a DHT observer to correlate $N$ recipients through concurrent `GET` queries on the same slot, breaking group destination secrecy (Group Follower Correlation). Distributing slots across $N$ independent pseudorandom addresses guarantees that observers cannot correlate recipients or discover their co-membership in the group.
 
 ---
 
-## 7. Format Binarny Ramek DHT (BEP 44 Value)
+## 7. Binary Frame Format for DHT Records (BEP 44 Value)
 
-Każdy rekord binarny ('v') publikowany w DHT ma **sztywny, stały rozmiar dokładnie 900 bajtów** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES = 900`).
+Each binary record ('v') published in the DHT has a **strict, fixed size of exactly 900 bytes** (`BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES = 900`).
 
-### 7.1. Uzasadnienie Rozmiaru 900 B i Zgodność ze Specyfikacją BEP 44
-Zgodnie ze specyfikacją BitTorrent BEP 44, całkowity rozmiar pola wartości `'v'` po zakodowaniu formatem Bencode **nie może przekraczać 1000 bajtów**:
-* W formacie Bencode ciąg binarny kodowany jest z prefiksem długości: `<długość>:<dane>`.
-* Dla surowego ładunku 900 bajtów zakodowany ciąg wynosi `"900:"` (4 bajty) + 900 bajtów danych = **dokładnie 904 bajty**, co spełnia sztywny limit BEP 44 ($\le 1000$ B).
-* **Uwaga krytyczna:** Gdyby surowy ładunek miał 1000 bajtów, jego postać Bencode wynosiłaby `"1000:"` (5 bajtów) + 1000 bajtów danych = **1005 bajtów**, co **przekracza dopuszczalny limit BEP 44** i skutkuje odrzuceniem pakietu przez publiczne węzły sieci BitTorrent DHT!
+### 7.1. 900 B Payload Size Justification and BEP 44 Compliance
+According to BitTorrent BEP 44, the total size of the value field `'v'` after Bencode encoding **must not exceed 1000 bytes**:
+* In Bencode format, a byte string is encoded with a length prefix: `<length>:<data>`.
+* For a raw 900-byte payload, the encoded string is `"900:"` (4 bytes prefix) + 900 bytes of data = **exactly 904 bytes**, strictly complying with the BEP 44 limit ($\le 1000$ B).
+* **Critical Note:** If the raw payload were 1000 bytes, its Bencode representation would be `"1000:"` (5 bytes prefix) + 1000 bytes of data = **1005 bytes**, which **exceeds the BEP 44 limit** and triggers immediate packet rejection by public BitTorrent DHT nodes!
 
 ```
 +─────────────────────────────────────────────────────────────────────────────+
-|                   REKORD BEP 44 VALUE (SZTYWNE 900 BAJTÓW)                  |
+|                   BEP 44 VALUE RECORD (FIXED 900 BYTES)                     |
 +────────────┬─────────────┬──────────────────────────────────────────────────+
-| IV (Nonce) |  AEAD Tag   |              SZYFROWANY ŁADUNEK                  |
-|  12 bajtów |  16 bajtów  |                 872 bajty                        |
+| IV (Nonce) |  AEAD Tag   |              ENCRYPTED PAYLOAD                   |
+|  12 bytes  |  16 bytes   |                 872 bytes                        |
 +────────────┴─────────────┴─────────────────┬──────────────────┬─────────────+
-                           | Nagłówek (13 B) |   Dane Typu      | CSPRNG Szum |
+                           | Header (13 B)   |   Type Data      | CSPRNG Noise|
                            +─────────────────┴──────────────────┴─────────────+
 ```
 
-### 7.2. Uwierzytelnienie AEAD i AAD
-* **Szyfrowanie:** AES-256-GCM.
+### 7.2. AEAD and AAD Authentication
+* **Cipher:** AES-256-GCM.
 * **AAD (Additional Authenticated Data):**
-  $$\text{AAD} = Target \ (20\text{ B}) \parallel Direction \ (\text{"AliceToBob" lub "BobToAlice"})$$
-  Wiązanie AAD uniemożliwia ataki typu reflection oraz podmianę adresu docelowego w węzłach DHT.
+  $$\text{AAD} = Target \ (20\text{ B}) \parallel Direction \ (\text{"AliceToBob" or "BobToAlice"})$$
+  AAD binding prevents reflection attacks and destination target substitution in DHT nodes.
 
-### 7.3. Nagłówek Wewnętrzny Ładunku (13 bajtów Plaintextu)
-1. `MsgType` (1 B): identyfikator typu komunikatu.
+### 7.3. Internal Plaintext Payload Header (13 bytes)
+1. `MsgType` (1 B): Message type identifier.
    * `0x01` – Handshake Online Finalize
-   * `0x02` – Standardowa wiadomość tekstowa
-   * `0x03` – PQC Rekey Offer (Nowy klucz publiczny)
-   * `0x04` – PQC Rekey Response (Kryptogram potwierdzenia)
-   * `0x05` – Segment transferu blokowego (Chunk)
-   * `0x06` – Kontrola grupy (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
-   * `0x07` – Reakcja na wiadomość (`TYPE_REACTION`: emoji powiązane z `(targetSeqEpoch, targetSeqNum)`)
-   * `0x08` – Pinezka lokalizacji / Status bezpieczeństwa offline (`TYPE_LOCATION_PIN`: współrzędne i notatka)
-2. `SeqNum` (2 B, UInt16 BE): numer sekwencyjny nadawcy $`Counter_{out}`$.
-3. `AckNum` (2 B, UInt16 BE): ostatnio odebrany numer sekwencyjny rozmówcy.
-4. `TimestampUTC` (8 B, Int64 BE): uniksowy znacznik czasu w milisekundach.
+   * `0x02` – Standard Text Message
+   * `0x03` – PQC Rekey Offer (Fresh Public Key)
+   * `0x04` – PQC Rekey Response (Confirmation Ciphertext)
+   * `0x05` – Block Transfer Segment (Chunk)
+   * `0x06` – Group Control (`TYPE_GROUP_CONTROL`: Invite, Rekey, Leave)
+   * `0x07` – Message Reaction (`TYPE_REACTION`: emoji bound to `(targetSeqEpoch, targetSeqNum)`)
+   * `0x08` – Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`: coordinates and note)
+2. `SeqNum` (2 B, UInt16 BE): Sender sequence counter $Counter_{out}$.
+3. `AckNum` (2 B, UInt16 BE): Last acknowledged recipient sequence number.
+4. `TimestampUTC` (8 B, Int64 BE): Unix epoch timestamp in milliseconds.
 
-### 7.4. Typy Wiadomości i Struktury Ładunku (859 bajtów po odliczeniu nagłówka 872 - 13)
-* **Typ 0x01 (Handshake Finalize):**
+### 7.4. Message Types and Payload Structures (859 bytes after 13-byte header)
+* **Type 0x01 (Handshake Finalize):**
   * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519 eph pk)
   * `Salt`: 24 B
   * `Key Confirmation Tag`: 32 B
   * `CSPRNG Padding`: 3 B (859 - 856)
-* **Typ 0x02 (Wiadomość Tekstowa):**
-  * `TextLength` ($`L`$): 2 B (UInt16, wartość $`\le 857`$)
-  * `UTF-8 Payload`: $`L`$ bajtów (maksymalnie 857 B czystego tekstu)
-  * `CSPRNG Padding`: $`857 - L`$ bajtów
-* **Typ 0x03 (PQC Rekey Offer):**
+* **Type 0x02 (Text Message):**
+  * `TextLength` ($L$): 2 B (UInt16, value $\le 857$)
+  * `UTF-8 Payload`: $L$ bytes (up to 857 B of text)
+  * `CSPRNG Padding`: $857 - L$ bytes
+* **Type 0x03 (PQC Rekey Offer):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
   * `Combined PublicKey`: 832 B (800 B ML-KEM-512 + 32 B X25519)
   * `CSPRNG Padding`: 23 B (859 - 836)
-* **Typ 0x04 (PQC Rekey Response):**
+* **Type 0x04 (PQC Rekey Response):**
   * `RekeyEpoch`: 4 B (UInt32 BE)
   * `Hybrid Ciphertext`: 800 B (768 B ML-KEM-512 ct + 32 B X25519)
   * `CSPRNG Padding`: 55 B (859 - 804)
-* **Typ 0x05 (Segment Transferu Blokowego — Chunk):**
+* **Type 0x05 (Block Transfer Segment — Chunk):**
   * `TransferID`: 16 B (UUID)
   * `ChunkIndex`: 2 B (UInt16 BE)
   * `TotalChunks`: 2 B (UInt16 BE)
-  * `ChunkLength` ($`C`$): 2 B (UInt16, wartość $`\le 837`$)
-  * `BinaryData`: $`C`$ bajtów
-  * `CSPRNG Padding`: $`837 - C`$ bajtów
-* **Typ 0x06 (Kontrola Grupy — TYPE_GROUP_CONTROL):**
+  * `ChunkLength` ($C$): 2 B (UInt16, value $\le 837$)
+  * `BinaryData`: $C$ bytes
+  * `CSPRNG Padding`: $837 - C$ bytes
+* **Type 0x06 (Group Control — TYPE_GROUP_CONTROL):**
   * `ControlSubType`: 1 B (`0x01` – `GROUP_SUBTYPE_INVITE`, `0x02` – `GROUP_SUBTYPE_REKEY`, `0x03` – `GROUP_SUBTYPE_LEAVE`)
-  * `GroupID`: 16 B (UUID grupy)
+  * `GroupID`: 16 B (Group UUID)
   * `GroupEpoch`: 4 B (UInt32 BE)
-  * `SenderMemberID`: 16 B (UUID nadawcy w grupie)
-  * `SenderGroupChainKey`: 64 B (bieżący łańcuch nadawcy grupy)
+  * `SenderMemberID`: 16 B (Sender member UUID)
+  * `SenderGroupChainKey`: 64 B (Current sender group ratchet chain key)
   * `CurrentCounter`: 4 B (UInt32 BE)
-  * `GroupNameLength` ($`N`$): 2 B (UInt16, wartość $`\le 64`$)
-  * `GroupName`: $`N`$ bajtów UTF-8 (maksymalnie 64 bajty)
-  * `MemberCount` ($`M`$): 2 B (UInt16, liczba uczestników, wartość $`\le 64`$)
-  * `Members`: tablica $`M`$ wpisów: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (do 32 B UTF-8)
-  * `CSPRNG Padding`: $`859 - \text{długość}`$ bajtów
-* **Typ 0x07 (Reakcja Emoji — TYPE_REACTION):**
+  * `GroupNameLength` ($N$): 2 B (UInt16, value $\le 64$)
+  * `GroupName`: $N$ bytes UTF-8 (up to 64 bytes)
+  * `MemberCount` ($M$): 2 B (UInt16, number of members, value $\le 64$)
+  * `Members`: Array of $M$ entries: `MemberID` (16 B) + `NameLen` (1 B) + `MemberName` (up to 32 B UTF-8)
+  * `CSPRNG Padding`: $859 - \text{length}$ bytes
+* **Type 0x07 (Emoji Reaction — TYPE_REACTION):**
   * `TargetSeqEpoch`: 4 B (UInt32 BE)
   * `TargetSeqNum`: 2 B (UInt16 BE)
-  * `EmojiLength` ($`E`$): 1 B (UInt8, wartość $`\le 64`$)
-  * `Emoji`: $`E`$ bajtów UTF-8 (maksymalnie 64 bajty)
-  * `CSPRNG Padding`: $`852 - E`$ bajtów (wypełnienie do 859 B)
-* **Typ 0x08 (Pinezka Lokalizacji / Status Bezpieczeństwa Offline — TYPE_LOCATION_PIN):**
+  * `EmojiLength` ($E$): 1 B (UInt8, value $\le 64$)
+  * `Emoji`: $E$ bytes UTF-8 (up to 64 bytes)
+  * `CSPRNG Padding`: $852 - E$ bytes (padding to 859 B)
+* **Type 0x08 (Location Pin / Offline Safety Status — TYPE_LOCATION_PIN):**
   * `Latitude`: 8 B (Double IEEE 754 BE)
   * `Longitude`: 8 B (Double IEEE 754 BE)
   * `Altitude`: 8 B (Double IEEE 754 BE)
   * `Accuracy`: 4 B (Float IEEE 754 BE)
-  * `NoteLength` ($`P`$): 2 B (UInt16 BE, wartość $`\le 829`$, lub $`\le 817`$ dla wiadomości efemerycznych)
-  * `Note`: $`P`$ bajtów UTF-8 (maksymalnie 829 bajtów, lub $`\le 817`$)
-  * `Opcjonalny Nagłówek Efemeryczny`: `MAGIC_EPHEMERAL` (8 bajtów, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bajty, UInt32 Big-Endian) – obecny wyłącznie gdy $`TTL > 0`$
-  * `CSPRNG Padding`: wypełnienie do 859 B ($`829 - P`$ lub $`817 - P`$ bajtów)
+  * `NoteLength` ($P$): 2 B (UInt16 BE, value $\le 829$, or $\le 817$ for ephemeral messages)
+  * `Note`: $P$ bytes UTF-8 (up to 829 bytes, or $\le 817$)
+  * `Optional Ephemeral Header`: `MAGIC_EPHEMERAL` (8 bytes, `0x5051435F4550484DL`) + `EphemeralTtlSeconds` (4 bytes, UInt32 Big-Endian) – present only when $TTL > 0$
+  * `CSPRNG Padding`: Padding to 859 B ($829 - P$ or $817 - P$ bytes)
 
-### 7.5. Dodatkowe Typy Rekordów o Stałym Rozmiarze 900 B
-* **Cover-Traffic ACK:** Szyfrowany pakiet potwierdzenia ukryty w szumie pod adresem $`Target_{ACK}`$, sformatowany dokładnie do 900 bajtów (`CoverAckProtocol`).
-* **Cover Traffic Dummy:** Nieskoordynowany rekord 900 bajtów wypełniony czystym szumem CSPRNG (`DhtLeafNode.sendCoverTrafficDummy`).
-* **Bezpieczny Tombstone (Czyszczenie slotu po odebraniu):** Zastąpienie skonsumowanej wiadomości rekordem o sztywnym rozmiarze dokładnie 900 bajtów czystego szumu CSPRNG pod `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). Zastępuje to podatny wariant 0 B, który ujawniał węzłom i podsłuchiwaczom fakt oraz dokładny moment dostarczenia wiadomości. Dzięki zachowaniu stałego rozmiaru 900 B (904 B w Bencode) operacja tombstone jest całkowicie nierozróżnialna od normalnego zapisu lub ruchu maskującego.
+### 7.5. Additional Fixed-Size 900 B Record Types
+* **Cover-Traffic ACK:** Encrypted acknowledgement packet hidden in noise at target $Target_{ACK}$, formatted to exactly 900 bytes (`CoverAckProtocol`).
+* **Cover Traffic Dummy:** Uncoordinated 900-byte record filled with pure CSPRNG noise (`DhtLeafNode.sendCoverTrafficDummy`).
+* **Secure Tombstone (Slot Sanitization Upon Receipt):** Replaces consumed messages with a record of strict fixed size of exactly 900 bytes of pure CSPRNG noise under `seq = DEFAULT_MUTABLE_SEQ + 1` (`BinaryFrameCodec.createTombstonePayload`). This supersedes the vulnerable 0 B variant that revealed delivery timing to nodes and eavesdroppers. By maintaining a constant 900 B payload (904 B in Bencode), tombstone operations are indistinguishable from normal messages or cover traffic.
 
 ---
 
-## 8. Czaty Grupowe, Dystrybucja Kluczy i Tabele Bazy Danych
+## 8. Group Chats, Key Distribution, and Database Tables
 
-Architektura czatów grupowych w PQChat.DHT opiera się na zdecentralizowanym protokole **Sender Keys** transportowanym w całości przez bezpieczne kanały punkt-punkt (1-na-1) chronione hybrydowym KEM (ML-KEM-512 + X25519) i AES-256-GCM.
+PQChat.DHT group messaging architecture is based on a decentralized **Sender Keys** protocol transported entirely across point-to-point (1-to-1) secure channels protected by hybrid KEM (ML-KEM-512 + X25519) and AES-256-GCM.
 
-### 8.1. Dystrybucja Kluczy Grupowych (Ramka Typu 0x06)
-1. Każdy uczestnik generuje niezależny, własny 64-bajtowy stan łańcucha nadawczego $`myChainKeyOut`$.
-2. Klucz nadawcy ($`senderGroupChainKey`$) jest dystrybuowany do innych członków za pomocą ramki Typu `0x06` (`TYPE_GROUP_CONTROL`):
-   * `GROUP_SUBTYPE_INVITE` (`0x01`): zaproszenie do grupy, lista członków oraz początkowy klucz nadawcy.
-   * `GROUP_SUBTYPE_REKEY` (`0x02`): rotacja klucza nadawcy (nowa epoka $`groupEpoch + 1`$, licznik zresetowany do 0).
-   * `GROUP_SUBTYPE_LEAVE` (`0x03`): opuszczenie grupy przez członka.
-3. Ramki Typu `0x06` są przesyłane wyłącznie w torach 1-na-1 pomiędzy zweryfikowanymi kontaktami, co gwarantuje pełną poufność kluczy grupowych (udowodnione w lemacie 7.1 ProVerif).
+### 8.1. Group Key Distribution (Type 0x06 Frame)
+1. Each participant generates an independent, dedicated 64-byte outgoing ratchet chain state $myChainKeyOut$.
+2. The sender's key ($senderGroupChainKey$) is distributed to other members via Type `0x06` frames (`TYPE_GROUP_CONTROL`):
+   * `GROUP_SUBTYPE_INVITE` (`0x01`): Group invitation, member roster, and initial sender chain key.
+   * `GROUP_SUBTYPE_REKEY` (`0x02`): Sender key rotation (new epoch $groupEpoch + 1$, counter reset to 0).
+   * `GROUP_SUBTYPE_LEAVE` (`0x03`): Member departure notification.
+3. Type `0x06` frames are transmitted solely across 1-to-1 tracks between verified contacts, guaranteeing group key secrecy (proven in ProVerif Lemma 7.1).
 
-### 8.2. Adresowanie bez Śledzenia Grupy (Individual Recipient Slots)
-Aby wyeliminować korelację obserwatorów sieciowych DHT monitorujących zapytania (Group Follower Correlation), nadawca generuje **unikalny, niezależny adres docelowy DHT dla każdego odbiorcy wiadomości grupowej**:
-$`\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, RecipientMemberID)`$
-gdzie kontekst derywacji oparty jest na:
-$`\text{Info} = \text{"group\_target:"} \parallel GroupID \ (16\text{ B}) \parallel Counter \ (4\text{ B, BE}) \parallel RecipientMemberID \ (16\text{ B})`$
-$`\text{memberEntropy} = \text{HKDF-Expand}(myChainKeyOut, \text{Info}, 64)`$
-z którego wyznaczany jest klucz ładunku $`msgKey`$ (pierwsze 32 bajty) oraz ziarno klucza Ed25519 $`edSeed`$ (kolejne 32 bajty), dające unikalny adres $`\text{Target} = \text{SHA-1}(pk_{Ed25519})`$.
+### 8.2. Tracking-Free Addressing (Individual Recipient Slots)
+To eliminate network observer correlation (Group Follower Correlation), the sender generates an **independent, unique DHT target address for each group message recipient**:
+$$\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, RecipientMemberID)$$
+where the derivation context is:
+$$\text{Info} = \text{"group\_target:"} \parallel GroupID \ (16\text{ B}) \parallel Counter \ (4\text{ B, BE}) \parallel RecipientMemberID \ (16\text{ B})$$
+$$\text{memberEntropy} = \text{HKDF-Expand}(myChainKeyOut, \text{Info}, 64)$$
+from which payload key $msgKey$ (first 32 bytes) and Ed25519 seed $edSeed$ (subsequent 32 bytes) are derived, yielding unique address $\text{Target} = \text{SHA-1}(pk_{Ed25519})$.
 
-Dzięki temu operacja nadania wiadomości do $`N`$ odbiorców skutkuje $`N`$ odrębnymi operacjami `putMutable` pod pseudolosowe adresy, a żaden węzeł DHT nie jest w stanie powiązać ze sobą slotów ani ustalić składu grupy. W `pollGroupIncoming` każdy członek odpytuje wyłącznie swój unikalny target, a nie wspólny. Uzasadnienie: Same-target dla wszystkich członków umożliwia obserwatorowi DHT skorelowanie $`N`$ odbiorców przez równoległe GET-y na ten sam slot, łamiąc tajność celu komunikacji grupowej.
+Broadcasting a message to $N$ members results in $N$ separate `putMutable` operations to pseudorandom targets, preventing DHT nodes from linking slots or discovering group composition. In `pollGroupIncoming`, each member polls only their unique target, never a shared one. Rationale: A same-target design enables DHT observers to correlate $N$ recipients via concurrent GETs to the same slot, breaking group destination secrecy.
 
-### 8.3. Wiązanie Kontekstu AEAD (Group AAD Binding)
-Każda wiadomość grupowa (tekst Typu `0x02` lub chunk Typu `0x05`) szyfrowana jest algorytmem AES-256-GCM z dowiązaniem AAD o sztywnej strukturze:
-$`\text{AAD} = \text{Target} \ (20\text{ B}) \parallel GroupID \ (16\text{ B}) \parallel SenderMemberID \ (16\text{ B})`$
-Próba przekierowania rekordu do innej grupy lub podszycia się pod innego członka powoduje natychmiastowy błąd weryfikacji taga AEAD (`AEADBadTagException`).
+### 8.3. AEAD Context Binding (Group AAD Binding)
+Every group message (Type `0x02` text or Type `0x05` chunk) is encrypted with AES-256-GCM with strict AAD binding:
+$$\text{AAD} = \text{Target} \ (20\text{ B}) \parallel GroupID \ (16\text{ B}) \parallel SenderMemberID \ (16\text{ B})$$
+Attempting to redirect a record to another group or impersonate another member triggers an immediate AEAD tag verification error (`AEADBadTagException`).
 
-### 8.4. Rotacja Kluczy Grupowych: Forward Secrecy i Post-Compromise Security (PCS)
-1. **Automatyczna rotacja co 50 wiadomości:**
-   Gdy $`Counter_{out} > 0`$ oraz $`Counter_{out} \equiv 0 \pmod{50}`$ (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), nadawca generuje nowy klucz CSPRNG, zwiększa epokę $`groupEpoch + 1`$, zeruje licznik i rozsyła `GROUP_SUBTYPE_REKEY` do wszystkich aktywnych członków.
-2. **Wymuszona rotacja przy odejściu członka (`GROUP_SUBTYPE_LEAVE`):**
-   Gdy dowolny uczestnik opuszcza grupę i nadaje `GROUP_SUBTYPE_LEAVE`:
-   * Wszyscy pozostali członkowie natychmiast oznaczają go w bazie danych jako nieaktywnego (`isActive = false`).
-   * Każdy aktywny członek natychmiast rotuje swój $`myChainKeyOut`$ do nowej epoki $`groupEpoch + 1`$.
-   * Ramka `GROUP_SUBTYPE_REKEY` jest transmitowana **wyłącznie do pozostałych, aktywnych członków** (`if (!member.isActive || member.memberId == myMemberId) continue`).
-   * Zapewnia to **Post-Compromise Security / Post-Leave Secrecy**: wychodzący uczestnik nie ma dostępu do nowego stanu łańcucha i nie jest w stanie odszyfrować żadnej przyszłej wiadomości grupowej. Jednocześnie jednokierunkowość KDF chroni wiadomości przeszłe (**Forward Secrecy**).
+### 8.4. Group Key Rotation: Forward Secrecy and Post-Compromise Security (PCS)
+1. **Automatic Rotation Every 50 Messages:**
+   When $Counter_{out} > 0$ and $Counter_{out} \equiv 0 \pmod{50}$ (`GROUP_REKEY_MESSAGE_INTERVAL = 50`), the sender generates a fresh CSPRNG key, increments epoch $groupEpoch + 1$, zeroes the counter, and transmits `GROUP_SUBTYPE_REKEY` to all active members.
+2. **Mandatory Rotation on Member Departure (`GROUP_SUBTYPE_LEAVE`):**
+   When any member leaves the group and broadcasts `GROUP_SUBTYPE_LEAVE`:
+   * All remaining members immediately mark the departing member as inactive in the database (`isActive = false`).
+   * Each active member immediately ratchets their $myChainKeyOut$ into a new epoch $groupEpoch + 1$.
+   * A `GROUP_SUBTYPE_REKEY` frame is transmitted **exclusively to the remaining active members** (`if (!member.isActive || member.memberId == myMemberId) continue`).
+   * This provides **Post-Compromise Security / Post-Leave Secrecy**: the departing participant has no access to the new chain state and cannot decrypt future group messages. Concurrently, KDF one-wayness protects past messages (**Forward Secrecy**).
 
-### 8.5. Schemat Tabel Bazy Danych Room
+### 8.5. Room Database Table Schemas
 
-#### Tabela `groups`:
+#### Table `groups`:
 ```sql
 CREATE TABLE IF NOT EXISTS groups (
     groupId TEXT NOT NULL PRIMARY KEY,
@@ -392,10 +392,10 @@ CREATE TABLE IF NOT EXISTS groups (
     isActive INTEGER NOT NULL DEFAULT 1
 );
 ```
-* `myChainKeyOut`: 64-bajtowy stan łańcucha wyjściowego chroniony przez `EncryptedBlob` kluczem z Android Keystore powiązanym z wierszem `groups_${groupId}`.
-* `groupEpoch`: numer epoki klucza (inkrementowany przy każdym rekeyu lub odejściu członka).
+* `myChainKeyOut`: 64-byte outgoing ratchet state encrypted via `EncryptedBlob` with an Android Keystore key bound to `groups_${groupId}`.
+* `groupEpoch`: Key epoch counter (incremented upon rekey or member departure).
 
-#### Tabela `group_members`:
+#### Table `group_members`:
 ```sql
 CREATE TABLE IF NOT EXISTS group_members (
     groupId TEXT NOT NULL,
@@ -413,73 +413,72 @@ CREATE TABLE IF NOT EXISTS group_members (
 CREATE INDEX IF NOT EXISTS index_group_members_groupId ON group_members (groupId);
 CREATE INDEX IF NOT EXISTS index_group_members_contactId ON group_members (contactId);
 ```
-* `chainKeyIn`: 64-bajtowy stan łańcucha wejściowego danego członka chroniony przez `EncryptedBlob` powiązany z `group_members_${groupId}_${memberId}`.
-* `isActive`: flaga aktywności (`1` = aktywny, `0` = opuścił grupę / usunięty).
-* `receivedBitmap`: przesuwna mapa bitowa replay protection zapobiegająca duplikacji pakietów grupowych.
+* `chainKeyIn`: 64-byte incoming ratchet state for the member, encrypted via `EncryptedBlob` bound to `group_members_${groupId}_${memberId}`.
+* `isActive`: Membership status flag (`1` = active, `0` = departed / removed).
+* `receivedBitmap`: Sliding bitmap for anti-replay protection preventing duplicate group frames.
 
 ---
 
-## 9. Epoki Sekwencji i Okno Wyprzedzające (Lookahead Window)
+## 9. Sequence Epochs and Lookahead Window
 
-Z uwagi na asynchroniczny charakter sieci UDP i DHT, pakiety mogą docierać z opóźnieniem lub w zmienionej kolejności.
+Due to the asynchronous nature of UDP and DHT transport, packets may arrive with latency or out of order.
 
-1. **Okno Wyprzedzające (Lookahead Window $`n \dots n+4`$):**
-   * Odbiorca, którego bieżący licznik to $`Counter_{in} = n`$, oblicza klucze i odpytuje DHT o sloty $`Target_n, Target_{n+1}, \dots, Target_{n+4}`$.
-   * Jeśli nadejdzie wiadomość $`n+2`$, klucze dla slotów $`n`$ oraz $`n+1`$ są zapisywane w bezpiecznej tabeli `skipped_keys` (zaszyfrowane Keystore'em) na wypadek późniejszego dotarcia tych pakietów.
-2. **Mapa Bitowa Odebranych Wiadomości (Sliding Bitmap Window):**
-   * Do wykrywania i odrzucania duplikatów (Anti-Replay) służy 1024-bitowa przesuwna mapa bitowa w `ContactEntity` oraz `GroupMemberEntity`.
-   * Wiadomości o numerze $`SeqNum < Counter_{in} - 1024`$ są bezwzględnie odrzucane.
+1. **Lookahead Window ($n \dots n+4$):**
+   * A recipient with current counter $Counter_{in} = n$ derives keys and polls the DHT for slots $Target_n, Target_{n+1}, \dots, Target_{n+4}$.
+   * If message $n+2$ arrives out of order, keys for slots $n$ and $n+1$ are preserved in the secure `skipped_keys` table (encrypted via Keystore) in case those packets arrive later.
+2. **Sliding Bitmap Window (Anti-Replay):**
+   * A 1024-bit sliding bitmap in `ContactEntity` and `GroupMemberEntity` detects and rejects duplicates.
+   * Messages with sequence number $SeqNum < Counter_{in} - 1024$ are unconditionally rejected.
 
 ---
 
-## 10. Formalna Weryfikacja Bezpieczeństwa (docs/formal/)
+## 10. Formal Security Verification (docs/formal/)
 
-Wszystkie kluczowe własności protokołu zostały poddane rygorystycznemu symbolicznemu dowodowi w narzędziu **ProVerif 2.05** w katalogu `docs/formal/` (24 lematy w 7 modelach):
+All fundamental protocol security guarantees have been symbolically verified using **ProVerif 2.05** under `docs/formal/` (24 lemmas across 7 models):
 
-| Własność Bezpieczeństwa | Plik Modelu | Weryfikowane Gwarancje Kryptograficzne | Wynik ProVerif |
+| Security Property | Model File | Verified Cryptographic Guarantees | ProVerif Outcome |
 | :--- | :--- | :--- | :--- |
-| **Zunifikowany Protokół** | `pqchat_protocol.pv` | MasterKey, tory $`A \to B`$ i $`B \to A`$, ładunki AAD, transkrypt SAS i odporność na replay | `RESULT: True` (8/8) |
-| **Poufność i Potwierdzenie** | `pqchat_secrecy.pv` | Poufność ładunków i injektywne uwierzytelnienie w hybrydowym KEM (ML-KEM-512 + X25519) | `RESULT: True` (5/5) |
-| **Poufność Przeszła (FS)** | `pqchat_forward_secrecy.pv` | Ochrona dawnych wiadomości przy kompromitacji stanu łańcucha w pamięci RAM | `RESULT: True` (2/2) |
-| **Samoleczenie (PCS)** | `pqchat_post_compromise.pv` | Przywrócenie poufności po wycieku kluczy dzięki rotacji asymetrycznej KEM | `RESULT: True` (2/2) |
-| **Ochrona przed Replay** | `pqchat_replay.pv` | Injektywność akceptacji pakietów i unieważnianie slotów tombstone'ami | `RESULT: True` (2/2) |
-| **Anonimowość i Tombstone'y** | `pqchat_unlinkability.pv` | Równoważność obserwacyjna adresów docelowych i nierozróżnialność 900-bajtowych tombstone'ów | `RESULT: True` (1/1) |
-| **Protokół Grupowy i PCS/FS** | `pqchat_group_protocol.pv` | Dystrybucja kluczy nadawcy, wiązanie AAD i grupowe PCS/FS po odejściu członka | `RESULT: True` (4/4) |
+| **Unified Protocol** | `pqchat_protocol.pv` | MasterKey, tracks $A \to B$ and $B \to A$, AAD payloads, SAS transcript, and anti-replay | `RESULT: True` (8/8) |
+| **Secrecy and Confirmation** | `pqchat_secrecy.pv` | Payload confidentiality and injective authentication in Hybrid KEM (ML-KEM-512 + X25519) | `RESULT: True` (5/5) |
+| **Forward Secrecy (FS)** | `pqchat_forward_secrecy.pv` | Past message protection upon chain state compromise in RAM | `RESULT: True` (2/2) |
+| **Self-Healing (PCS)** | `pqchat_post_compromise.pv` | Secrecy restoration after key compromise via asymmetric KEM rotation | `RESULT: True` (2/2) |
+| **Anti-Replay Protection** | `pqchat_replay.pv` | Injective packet acceptance and monotonic slot invalidation via tombstones | `RESULT: True` (2/2) |
+| **Unlinkability & Tombstones** | `pqchat_unlinkability.pv` | Observational equivalence of target addresses and indistinguishability of 900-byte tombstones | `RESULT: True` (1/1) |
+| **Group Protocol and PCS/FS** | `pqchat_group_protocol.pv` | Sender key distribution, AAD binding, and group PCS/FS on member leave | `RESULT: True` (4/4) |
 
-### Szczegółowy opis dowiedzionych własności:
+### In-Depth Summary of Verified Lemmas:
 
-1. **Poufność (Secrecy):** Dowiedziono niemożliwości poznania klucza głównego $`MasterKey`$, stanów łańcucha $`ChainKey_{A \to B}, ChainKey_{B \to A}`$ oraz ładunków wiadomości tekstowych przez adwersarza Dolev-Yao podsłuchującego publiczne zapytania DHT oraz jawny kod QR (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
-2. **Uwierzytelnienie i Transkrypt Handshake'u (Authentication & SAS Binding):** Dowiedziono injektywnej zgodności (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), dowiązującej transkrypt, obronę dualną **Hybrid KEM (ML-KEM-512 + X25519)** oraz zobowiązanie SAS ($`Commitment`$).
-3. **Forward Secrecy (Poufność Przeszła):** Dowiedziono (`pqchat_forward_secrecy.pv`), że wyciek stanu łańcucha $`ChainKey_1`$ nie pozwala na odszyfrowanie wcześniejszych wiadomości ($`msg_0`$).
-4. **Post-Compromise Security (PCS / Samoleczenie):** Dowiedziono (`pqchat_post_compromise.pv`), że po wycieku kluczy łańcucha asymetryczna rotacja hybrydowa KEM przywraca pełną poufność kolejnych wiadomości.
-5. **Odporność na Replay (Anti-Replay):** Dowiedziono injektywnej akceptacji pakietów (`pqchat_replay.pv` i `pqchat_protocol.pv`), uniemożliwiającej adwersarzowi wstrzyknięcie zduplikowanych ramek w sieci DHT oraz dowiedziono bezpiecznego unieważniania slotu pod sekwencją monotoniczną.
-6. **Brak powiązania z tożsamością i Nierozróżnialność Tombstone'ów (Unlinkability & Tombstone Indistinguishability):** Dowiedziono równoważności obserwacyjnej (`diff-equivalence` w `pqchat_unlinkability.pv`) gwarantującej, że adresy $`\text{Target}_i = \text{SHA-1}(pk_i)`$ nie ujawniają tożsamości stron (Metadata-Free Rendezvous), a 900-bajtowe rekordy Tombstone (szum CSPRNG) są nierozróżnialne od normalnych ramek i ruchu maskującego.
-7. **Czaty Grupowe i Rotacja Kluczy (Group Protocol & PCS/FS):** Dowiedziono (`pqchat_group_protocol.pv`):
-   * poufności klucza łańcucha nadawcy grupy dystrybuowanego w ramce Typu `0x06` (`TYPE_GROUP_CONTROL`) przez hybrydowy kanał 1-na-1 (ML-KEM-512 + X25519),
-   * autentyczności wiadomości grupowych z wiązaniem AAD ($`\text{Target} \parallel GroupID \parallel SenderMemberID`$),
-   * Forward Secrecy dawnych wiadomości grupowych przed odejściem członka,
-   * Post-Compromise Security / Post-Leave Secrecy wiadomości w nowej epoce $`groupEpoch + 1`$ po odejściu członka (`GROUP_SUBTYPE_LEAVE`) i rotacji kluczy.
+1. **Secrecy:** Proves that $MasterKey$, ratchet states $ChainKey_{A \to B}, ChainKey_{B \to A}$, and message payloads cannot be recovered by a Dolev-Yao adversary monitoring DHT queries and the public QR code (`pqchat_protocol.pv`, `pqchat_secrecy.pv`).
+2. **Handshake Authentication & SAS Binding:** Proves injective correspondence (`inj-event(AliceFinished) ==> inj-event(BobFinished)`), binding the transcript, dual **Hybrid KEM (ML-KEM-512 + X25519)** protection, and SAS commitment ($Commitment$).
+3. **Forward Secrecy:** Proves (`pqchat_forward_secrecy.pv`) that compromising ratchet state $ChainKey_1$ does not reveal earlier messages ($msg_0$).
+4. **Post-Compromise Security (PCS):** Proves (`pqchat_post_compromise.pv`) that following a chain compromise, asymmetric hybrid KEM rotation completely restores secrecy for subsequent messages.
+5. **Anti-Replay:** Proves injective packet acceptance (`pqchat_replay.pv` and `pqchat_protocol.pv`), preventing replay injection across the DHT, and verifies safe monotonic slot invalidation.
+6. **Unlinkability & Tombstone Indistinguishability:** Proves observational equivalence (`diff-equivalence` in `pqchat_unlinkability.pv`) establishing that target addresses $\text{Target}_i = \text{SHA-1}(pk_i)$ reveal no identities (Metadata-Free Rendezvous), and 900-byte tombstones (CSPRNG noise) are indistinguishable from active messages or cover traffic.
+7. **Group Messaging & Key Rotation (Group Protocol & PCS/FS):** Proves (`pqchat_group_protocol.pv`):
+   * Secrecy of sender ratchet keys distributed in Type `0x06` frames (`TYPE_GROUP_CONTROL`) across 1-to-1 channels (ML-KEM-512 + X25519).
+   * Authenticity of group messages with AAD binding ($\text{Target} \parallel GroupID \parallel SenderMemberID$).
+   * Forward Secrecy of prior group messages prior to member departure.
+   * Post-Compromise Security / Post-Leave Secrecy of messages in new epoch $groupEpoch + 1$ following departure (`GROUP_SUBTYPE_LEAVE`) and key rotation.
 
-Uruchomienie weryfikacji formalnej:
+To run formal verification:
 ```bash
 bash docs/formal/run_verification.sh
 ```
 
 ---
 
-## 11. Strategia Testowania
+## 11. Testing Strategy
 
-Zgodnie z wytycznymi projektu testy podzielono na dwie kategorie:
+In accordance with project guidelines, tests are structured into two categories:
 
-1. **Szybkie testy jednostkowe co commit (Fast Unit Tests):**
-   * Uruchamiane poleceniem: `.\gradlew.bat testDebugUnitTest`
-   * Wykonują się w kilkadziesiąt sekund, automatycznie pomijając testy oznaczone adnotacją `@Tag("slow")`.
-2. **Czasochłonne testy integracyjne i statystyczne (Slow Tests):**
-   * Testy repozytorium (`org.pqchat.dht.data.repository.*`), testy statystyczne Monte Carlo (`TrafficThreatModelStatisticalTest`) oraz pomiary loopback (`LoopbackMeasurementHarnessTest`) są oznaczone `@Tag("slow")`.
-   * Wykonywane w dedykowanym zadaniu nocnym GitHub Actions (`.github/workflows/nightly.yml`) o 02:00 UTC lub lokalnie:
+1. **Fast Unit Tests (Per-Commit):**
+   * Executed via: `.\gradlew.bat testDebugUnitTest`
+   * Completes in under two minutes, automatically skipping tests annotated with `@Tag("slow")`.
+2. **Slow Integration & Statistical Tests (Nightly CI):**
+   * Repository tests (`org.pqchat.dht.data.repository.*`), Monte Carlo statistical tests (`TrafficThreatModelStatisticalTest`), and loopback measurements (`LoopbackMeasurementHarnessTest`) are tagged with `@Tag("slow")`.
+   * Executed in a dedicated GitHub Actions nightly workflow (`.github/workflows/nightly.yml`) at 02:00 UTC or on-demand locally:
      ```bash
      .\gradlew.bat testDebugUnitTest -DrunSlowTests=true
-     # lub
+     # or
      .\gradlew.bat slowTest
      ```
-

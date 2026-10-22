@@ -245,7 +245,7 @@ class MicroPayloadsTest {
         assertTrue(geoUri.contains("q=52.2297,21.0122(Schronienie%20Alpha)"))
 
         // Test non-geo text returns null
-        assertNull(LocationPinData.parse("Cześć, co słychać?"))
+        assertNull(LocationPinData.parse("Hello, how are you?"))
         assertNull(LocationPinData.parse(""))
         assertNull(LocationPinData.parse(null))
     }

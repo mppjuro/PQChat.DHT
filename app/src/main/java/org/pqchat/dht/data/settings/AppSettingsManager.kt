@@ -57,8 +57,8 @@ object DefaultRepublishConfig {
 }
 
 object DefaultImageCompression {
-    const val DEFAULT_MAX_EDGE = 1000 // Domyślna wartość najdłuższej krawędzi: 1000px
-    const val DEFAULT_COLOR_COUNT = 128 // Domyślna liczba kolorów PNG8
+    const val DEFAULT_MAX_EDGE = 1000 // Default max edge value: 1000px
+    const val DEFAULT_COLOR_COUNT = 128 // Default PNG8 color count
     const val MIN_COLORS = 8
     const val MAX_COLORS = 256
     const val MIN_MAX_EDGE = 400

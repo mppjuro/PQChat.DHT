@@ -192,7 +192,7 @@ fun ChatScreen(
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
                                         imageVector = Icons.Default.Edit,
-                                        contentDescription = "Zmień nazwę kontaktu",
+                                        contentDescription = "Rename contact",
                                         tint = appColors.textSecondary.copy(alpha = 0.6f),
                                         modifier = Modifier.size(14.dp)
                                     )
@@ -207,7 +207,7 @@ fun ChatScreen(
                                     ) {
                                         Icon(
                                             imageVector = if (contact.isVerified) Icons.Default.VerifiedUser else Icons.Default.GppMaybe,
-                                            contentDescription = if (contact.isVerified) "Zweryfikowany SAS" else "Niezweryfikowany SAS",
+                                            contentDescription = if (contact.isVerified) "Verified SAS" else "Unverified SAS",
                                             tint = if (contact.isVerified) ElectricGreen else AmberWarning,
                                             modifier = Modifier.size(18.dp)
                                         )
@@ -263,7 +263,7 @@ fun ChatScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Groups,
-                                contentDescription = "Członkowie grupy",
+                                contentDescription = "Group members",
                                 tint = CryptoPurple
                             )
                         }
@@ -276,7 +276,7 @@ fun ChatScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ExitToApp,
-                                contentDescription = "Opuść grupę",
+                                contentDescription = "Leave group",
                                 tint = Color(0xFFFF5252)
                             )
                         }
@@ -301,7 +301,7 @@ fun ChatScreen(
                             if (isSyncing) {
                                 Icon(
                                     imageVector = Icons.Default.Sync,
-                                    contentDescription = "Synchronizowanie…",
+                                    contentDescription = "Syncing…",
                                     tint = appColors.primary,
                                     modifier = Modifier
                                         .size(16.dp)
@@ -319,7 +319,7 @@ fun ChatScreen(
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Timer,
-                                    contentDescription = "Następny polling DHT",
+                                    contentDescription = "Next DHT poll",
                                     tint = appColors.primary,
                                     modifier = Modifier.size(15.dp)
                                 )
@@ -376,14 +376,14 @@ fun ChatScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Znikające wiadomości: znikną po $ttlLabel od przeczytania",
+                                        text = "Disappearing messages: disappear after $ttlLabel once read",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = AmberWarning,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
                                 Text(
-                                    text = "Wyłącz",
+                                    text = "Turn off",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = appColors.primary,
                                     fontWeight = FontWeight.Bold,
@@ -391,7 +391,7 @@ fun ChatScreen(
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable { viewModel.setEphemeralTtl(0L) }
                                         .padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
+                                 )
                             }
                         }
                     }
@@ -423,7 +423,7 @@ fun ChatScreen(
                             ) {
                                 Icon(
                                     imageVector = if (ephemeralTtlSeconds > 0) Icons.Default.HourglassTop else Icons.Default.HourglassEmpty,
-                                    contentDescription = "Czas życia wiadomości",
+                                    contentDescription = "Message expiration timer",
                                     tint = if (ephemeralTtlSeconds > 0) AmberWarning else appColors.textSecondary
                                 )
                             }
@@ -433,7 +433,7 @@ fun ChatScreen(
                                 onDismissRequest = { showEphemeralMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Znikające wiadomości: Wyłączone") },
+                                    text = { Text("Disappearing messages: Off") },
                                     onClick = {
                                         viewModel.setEphemeralTtl(0L)
                                         showEphemeralMenu = false
@@ -446,7 +446,7 @@ fun ChatScreen(
                                     modifier = Modifier.testTag("chat_ephemeral_ttl_item_0")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("1 minuta") },
+                                    text = { Text("1 minute") },
                                     onClick = {
                                         viewModel.setEphemeralTtl(60L)
                                         showEphemeralMenu = false
@@ -459,7 +459,7 @@ fun ChatScreen(
                                     modifier = Modifier.testTag("chat_ephemeral_ttl_item_60")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("15 minut") },
+                                    text = { Text("15 minutes") },
                                     onClick = {
                                         viewModel.setEphemeralTtl(900L)
                                         showEphemeralMenu = false
@@ -472,7 +472,7 @@ fun ChatScreen(
                                     modifier = Modifier.testTag("chat_ephemeral_ttl_item_900")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("1 godzina") },
+                                    text = { Text("1 hour") },
                                     onClick = {
                                         viewModel.setEphemeralTtl(3600L)
                                         showEphemeralMenu = false
@@ -485,7 +485,7 @@ fun ChatScreen(
                                     modifier = Modifier.testTag("chat_ephemeral_ttl_item_3600")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("24 godziny") },
+                                    text = { Text("24 hours") },
                                     onClick = {
                                         viewModel.setEphemeralTtl(86400L)
                                         showEphemeralMenu = false
@@ -509,7 +509,7 @@ fun ChatScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Place,
-                                contentDescription = "Pinezka lokalizacji",
+                                contentDescription = "Location Pin",
                                 tint = ElectricGreen
                             )
                         }
@@ -517,7 +517,7 @@ fun ChatScreen(
                         OutlinedTextField(
                             value = textInput,
                             onValueChange = { textInput = it },
-                            placeholder = { Text("Wiadomość (szyfrowana ramka DHT)...", color = appColors.textSecondary) },
+                            placeholder = { Text("Message (encrypted DHT frame)...", color = appColors.textSecondary) },
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(end = 8.dp)
@@ -611,13 +611,13 @@ fun ChatScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.CloudDownload,
-                                    contentDescription = "Pobieranie obrazu",
+                                    contentDescription = "Downloading image",
                                     tint = appColors.primary,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Pobieranie obrazu: ${progress.receivedChunks}/${progress.totalChunks} segmentów (${progress.progressPercent}%)",
+                                    text = "Downloading image: ${progress.receivedChunks}/${progress.totalChunks} chunks (${progress.progressPercent}%)",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold,
                                     color = appColors.textPrimary
@@ -668,7 +668,7 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Zmień nazwę kontaktu",
+                            text = "Rename contact",
                             style = MaterialTheme.typography.titleMedium,
                             color = appColors.textPrimary
                         )
@@ -677,7 +677,7 @@ fun ChatScreen(
                 text = {
                     Column {
                         Text(
-                            text = "Podaj nową nazwę dla kontaktu w PQChat:",
+                            text = "Enter new name for contact in PQChat:",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary
                         )
@@ -685,7 +685,7 @@ fun ChatScreen(
                         OutlinedTextField(
                             value = editedContactName,
                             onValueChange = { editedContactName = it },
-                            placeholder = { Text("Nazwa kontaktu", color = appColors.textSecondary) },
+                            placeholder = { Text("Contact name", color = appColors.textSecondary) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -711,12 +711,12 @@ fun ChatScreen(
                             contentColor = Color.Black
                         )
                     ) {
-                        Text("Zapisz", fontWeight = FontWeight.Bold)
+                        Text("Save", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showEditContactNameDialog = false }) {
-                        Text("Anuluj", color = appColors.textSecondary)
+                        Text("Cancel", color = appColors.textSecondary)
                     }
                 },
                 containerColor = appColors.surface
@@ -735,7 +735,7 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (contact.isVerified) "Kontakt zweryfikowany" else "Weryfikacja tożsamości (SAS)",
+                            text = if (contact.isVerified) "Contact verified" else "Identity verification (SAS)",
                             style = MaterialTheme.typography.titleMedium,
                             color = appColors.textPrimary
                         )
@@ -744,7 +744,7 @@ fun ChatScreen(
                 text = {
                     Column {
                         Text(
-                            text = "Kod SAS (Short Authentication String):",
+                            text = "SAS Code (Short Authentication String):",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary
                         )
@@ -759,7 +759,7 @@ fun ChatScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = contact.sas.ifEmpty { "Brak SAS" },
+                                    text = contact.sas.ifEmpty { "No SAS" },
                                     style = MaterialTheme.typography.headlineMedium,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
@@ -769,7 +769,7 @@ fun ChatScreen(
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Porównaj powyższy 8-cyfrowy kod z rozmówcą przez zaufany kanał (np. osobiście lub telefonicznie). Kod powstał w oparciu o kryptograficzne zobowiązanie (anti-grinding commitment) powiązane z transkryptem ML-KEM-512.",
+                            text = "Compare the 8-digit code above with your contact over a trusted channel (e.g. in person or by phone). The code was derived from an anti-grinding commitment bound to the ML-KEM-512 transcript.",
                             style = MaterialTheme.typography.bodySmall,
                             color = appColors.textSecondary
                         )
@@ -788,7 +788,7 @@ fun ChatScreen(
                         )
                     ) {
                         Text(
-                            text = if (contact.isVerified) "Cofnij weryfikację" else "Zatwierdź tożsamość (SAS zgodny)",
+                            text = if (contact.isVerified) "Revoke verification" else "Confirm identity (SAS match)",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -798,7 +798,7 @@ fun ChatScreen(
                         onClick = { showSasDialog = false },
                         modifier = Modifier.testTag("sas_dialog_close_button")
                     ) {
-                        Text("Zamknij", color = appColors.textSecondary)
+                        Text("Close", color = appColors.textSecondary)
                     }
                 },
                 containerColor = appColors.surface
@@ -833,14 +833,14 @@ fun ChatScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Epoka KEM: ${group.groupEpoch} • Mój licznik TX: ${group.myCounterOut}",
+                            text = "KEM Epoch: ${group.groupEpoch} • My TX Counter: ${group.myCounterOut}",
                             style = MaterialTheme.typography.bodySmall,
                             color = CryptoPurple,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Członkowie grupy (${groupMembers.size}):",
+                            text = "Group members (${groupMembers.size}):",
                             style = MaterialTheme.typography.labelMedium,
                             color = appColors.textPrimary,
                             fontWeight = FontWeight.Bold
@@ -848,7 +848,7 @@ fun ChatScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         if (groupMembers.isEmpty()) {
                             Text(
-                                text = "Brak zarejestrowanych członków.",
+                                text = "No registered members.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = appColors.textSecondary
                             )
@@ -924,14 +924,14 @@ fun ChatScreen(
                         ) {
                             Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Opuść grupę", color = Color(0xFFFF5252))
+                            Text("Leave group", color = Color(0xFFFF5252))
                         }
 
                         TextButton(
                             onClick = { showGroupMembersDialog = false },
                             modifier = Modifier.testTag("close_group_dialog_button")
                         ) {
-                            Text("Zamknij", color = appColors.primary)
+                            Text("Close", color = appColors.primary)
                         }
                     }
                 },
@@ -946,9 +946,9 @@ fun ChatScreen(
                 onSave = {
                     val saved = ImageGallerySaver.saveImageToGallery(context, bytes)
                     if (saved) {
-                        Toast.makeText(context, "Zapisano zdjęcie w galerii", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Image saved to gallery", Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, "Błąd podczas zapisywania zdjęcia", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Error saving image", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -1052,13 +1052,13 @@ fun MessageBubble(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Fullscreen,
-                                        contentDescription = "Powiększ zdjęcie",
+                                        contentDescription = "Enlarge image",
                                         tint = Color.White,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(3.dp))
                                     Text(
-                                        text = "Podgląd",
+                                        text = "Preview",
                                         color = Color.White,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium
@@ -1090,7 +1090,7 @@ fun MessageBubble(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "Pinezka lokalizacji / Status",
+                                    text = "Location Pin / Status",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = ElectricGreen
@@ -1111,7 +1111,7 @@ fun MessageBubble(
                             val latFormatted = String.format(Locale.US, "%.5f°", locationPin.latitude)
                             val lonFormatted = String.format(Locale.US, "%.5f°", locationPin.longitude)
                             Text(
-                                text = "Współrzędne: $latFormatted, $lonFormatted",
+                                text = "Coordinates: $latFormatted, $lonFormatted",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = appColors.textSecondary
@@ -1121,7 +1121,7 @@ fun MessageBubble(
                                 val altStr = if (locationPin.altitude != 0.0) "${locationPin.altitude.toInt()} m" else "-"
                                 val accStr = if (locationPin.accuracy > 0f) "±${locationPin.accuracy.toInt()} m" else "-"
                                 Text(
-                                    text = "Wysokość: $altStr • Dokładność: $accStr",
+                                    text = "Altitude: $altStr • Accuracy: $accStr",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = appColors.textSecondary,
                                     fontSize = 10.sp
@@ -1137,7 +1137,7 @@ fun MessageBubble(
                                     try {
                                         context.startActivity(intent)
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "Brak aplikacji mapy (np. OsmAnd, Organic Maps)", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "No map application found (e.g. OsmAnd, Organic Maps)", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier
@@ -1149,7 +1149,7 @@ fun MessageBubble(
                             ) {
                                 Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Otwórz w mapie offline", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Open in offline map", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1229,8 +1229,8 @@ fun MessageBubble(
                     val isExpired = message.status == "EXPIRED_OFFLINE" || message.status == "EXPIRED_DHT"
                     val isQueuedPoisson = message.status == "QUEUED_POISSON"
                     val statusText = when {
-                        isExpired -> "Wygasła w DHT"
-                        isQueuedPoisson -> "W kolejce maskującej Poissona"
+                        isExpired -> "Expired in DHT"
+                        isQueuedPoisson -> "Queued in Poisson shaper"
                         else -> message.status
                     }
                     val statusColor = when {
@@ -1253,7 +1253,7 @@ fun MessageBubble(
                             }
                             Icon(
                                 imageVector = Icons.Default.HourglassBottom,
-                                contentDescription = "Znikająca wiadomość ($ttlLabel)",
+                                contentDescription = "Disappearing message ($ttlLabel)",
                                 tint = AmberWarning,
                                 modifier = Modifier.size(11.dp)
                             )
@@ -1282,7 +1282,7 @@ fun MessageBubble(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.AddReaction,
-                                contentDescription = "Dodaj reakcję",
+                                contentDescription = "Add reaction",
                                 tint = appColors.textSecondary,
                                 modifier = Modifier.size(14.dp)
                             )
@@ -1300,13 +1300,13 @@ fun MessageBubble(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Ponów wysyłkę",
+                                        contentDescription = "Resend",
                                         tint = ElectricGreen,
                                         modifier = Modifier.size(10.dp)
                                     )
                                     Spacer(modifier = Modifier.width(2.dp))
                                     Text(
-                                        text = "Ponów",
+                                        text = "Resend",
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                         color = ElectricGreen,
                                         fontSize = 10.sp
@@ -1369,7 +1369,7 @@ fun FullscreenImageViewer(
                 ) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Zdjęcie na pełnym ekranie",
+                        contentDescription = "Full screen image",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
@@ -1387,7 +1387,7 @@ fun FullscreenImageViewer(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Nie można załadować zdjęcia",
+                        text = "Unable to load image",
                         color = Color.White,
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -1412,7 +1412,7 @@ fun FullscreenImageViewer(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Zamknij",
+                        contentDescription = "Close",
                         tint = Color.White
                     )
                 }
@@ -1428,13 +1428,13 @@ fun FullscreenImageViewer(
                 ) {
                     Icon(
                         imageVector = Icons.Default.SaveAlt,
-                        contentDescription = "Zapisz w galerii",
+                        contentDescription = "Save to gallery",
                         tint = Color.Black,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Zapisz w galerii",
+                        text = "Save to gallery",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
@@ -1454,7 +1454,7 @@ fun LocationPinDialog(
     var lonText by remember { mutableStateOf("21.0122") }
     var altText by remember { mutableStateOf("110.0") }
     var accText by remember { mutableStateOf("5.0") }
-    var noteText by remember { mutableStateOf("Status: Bezpieczny (Offline)") }
+    var noteText by remember { mutableStateOf("Status: Safe (Offline)") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1467,7 +1467,7 @@ fun LocationPinDialog(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Pinezka lokalizacji (900 B BEP 44)",
+                    text = "Location Pin (900 B BEP 44)",
                     style = MaterialTheme.typography.titleMedium,
                     color = appColors.textPrimary
                 )
@@ -1476,14 +1476,14 @@ fun LocationPinDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Przesyła współrzędne geograficzne i status bezpieczeństwa w pojedynczym jednoramkowym rekordzie 900 B bez podziału na segmenty (bez chunkingu).",
+                    text = "Transmits geographic coordinates and security status in a single 900 B frame record without chunking.",
                     style = MaterialTheme.typography.bodySmall,
                     color = appColors.textSecondary
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Szybkie statusy:",
+                    text = "Quick statuses:",
                     style = MaterialTheme.typography.labelSmall,
                     color = appColors.textSecondary,
                     fontWeight = FontWeight.Bold
@@ -1494,16 +1494,16 @@ fun LocationPinDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     SuggestionChip(
-                        onClick = { noteText = "Status: Bezpieczny (Offline)" },
-                        label = { Text("🟢 Bezpieczny", fontSize = 11.sp) }
+                        onClick = { noteText = "Status: Safe (Offline)" },
+                        label = { Text("🟢 Safe", fontSize = 11.sp) }
                     )
                     SuggestionChip(
-                        onClick = { noteText = "Punkt zborny Alpha" },
-                        label = { Text("🚩 Zbiórka", fontSize = 11.sp) }
+                        onClick = { noteText = "Rendezvous Point Alpha" },
+                        label = { Text("🚩 Assembly", fontSize = 11.sp) }
                     )
                     SuggestionChip(
-                        onClick = { noteText = "Status: W drodze do celu" },
-                        label = { Text("🚶 W drodze", fontSize = 11.sp) }
+                        onClick = { noteText = "Status: En route to destination" },
+                        label = { Text("🚶 En route", fontSize = 11.sp) }
                     )
                 }
 
@@ -1512,7 +1512,7 @@ fun LocationPinDialog(
                 OutlinedTextField(
                     value = noteText,
                     onValueChange = { noteText = it },
-                    label = { Text("Notatka / Status") },
+                    label = { Text("Note / Status") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1531,7 +1531,7 @@ fun LocationPinDialog(
                     OutlinedTextField(
                         value = latText,
                         onValueChange = { latText = it },
-                        label = { Text("Szerokość (Lat)") },
+                        label = { Text("Latitude (Lat)") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1544,7 +1544,7 @@ fun LocationPinDialog(
                     OutlinedTextField(
                         value = lonText,
                         onValueChange = { lonText = it },
-                        label = { Text("Długość (Lon)") },
+                        label = { Text("Longitude (Lon)") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1562,7 +1562,7 @@ fun LocationPinDialog(
                     OutlinedTextField(
                         value = altText,
                         onValueChange = { altText = it },
-                        label = { Text("Wysokość (m)") },
+                        label = { Text("Altitude (m)") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1575,7 +1575,7 @@ fun LocationPinDialog(
                     OutlinedTextField(
                         value = accText,
                         onValueChange = { accText = it },
-                        label = { Text("Dokładność (m)") },
+                        label = { Text("Accuracy (m)") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -1603,12 +1603,12 @@ fun LocationPinDialog(
                 ),
                 modifier = Modifier.testTag("send_location_pin_confirm_button")
             ) {
-                Text("Wyślij pinezkę", fontWeight = FontWeight.Bold)
+                Text("Send Location Pin", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Anuluj", color = appColors.textSecondary)
+                Text("Cancel", color = appColors.textSecondary)
             }
         },
         containerColor = appColors.surface

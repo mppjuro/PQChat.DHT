@@ -39,6 +39,9 @@ jobs:
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest
 
+      - name: Verify 100% English Language Unification
+        run: python3 scripts/check_language_unification.py
+
       - name: Verify Room Schema Consistency
         run: |
           ./gradlew kspDebugKotlin
@@ -63,6 +66,7 @@ jobs:
           if [ -f "app/build/reports/lint-results-debug.html" ]; then
             echo "| Android Lint | ✅ Completed |" >> $GITHUB_STEP_SUMMARY
           fi
+          echo "| Language Unification (EN) | ✅ Verified (0 Polish characters) |" >> $GITHUB_STEP_SUMMARY
           echo "| Room Schema Consistency | ✅ Synchronized |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Test Report

@@ -467,7 +467,7 @@ class MultiEmulatorOrchestrator:
         self.log_step("Alice QR Generated", "PASS", "Alice generated ML-KEM-512 QR code", qr_sc)
 
         # Trigger steganography export on Alice
-        self.alice.click_element(test_tag="handshake_share_stego_button", text="Ukryj w zdjęciu", fallback_ratio=(0.5, 0.58))
+        self.alice.click_element(test_tag="handshake_share_stego_button", text="Hide in image", fallback_ratio=(0.5, 0.58))
         self.sleep(1.5)
         stego_sc = self.alice.screencap("01b_alice_stego_preview")
         self.alice.back() # Dismiss share sheet
@@ -485,7 +485,7 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.0)
 
         # Bob opens handshake screen and switches to Bob tab
-        self.bob.click_element(test_tag="join_chat_fab", text="Dołącz", fallback_ratio=(0.85, 0.78))
+        self.bob.click_element(test_tag="join_chat_fab", text="Join", fallback_ratio=(0.85, 0.78))
         self.sleep(1.0)
         self.bob.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.12))
         self.sleep(1.0)
@@ -505,8 +505,8 @@ class MultiEmulatorOrchestrator:
 
         # Confirm SAS authentication codes on both devices
         self.sleep(2.0)
-        self.alice.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
-        self.bob.click_element(test_tag="handshake_confirm_verified_button", text="Potwierdź", fallback_ratio=(0.5, 0.75))
+        self.alice.click_element(test_tag="handshake_confirm_verified_button", text="Confirm", fallback_ratio=(0.5, 0.75))
+        self.bob.click_element(test_tag="handshake_confirm_verified_button", text="Confirm", fallback_ratio=(0.5, 0.75))
         self.sleep(1.5)
 
         sc_alice_done = self.alice.screencap("03_alice_bob_handshake_done")
@@ -518,7 +518,7 @@ class MultiEmulatorOrchestrator:
         self.alice.click_element(text="Bob", fallback_ratio=(0.5, 0.25))
         self.sleep(1.5)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.click_element(test_tag="chat_message_input", text="Message", fallback_ratio=(0.4, 0.95))
         self.alice.type_text("Hello_Bob_from_Alice_via_DHT")
         self.sleep(0.5)
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
@@ -531,7 +531,7 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.5)
         sc_bob_rcv = self.bob.screencap("04b_bob_msg_received")
 
-        self.bob.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.bob.click_element(test_tag="chat_message_input", text="Message", fallback_ratio=(0.4, 0.95))
         self.bob.type_text("Hello_Alice_received_loud_and_clear")
         self.sleep(0.5)
         self.bob.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
@@ -544,7 +544,7 @@ class MultiEmulatorOrchestrator:
         print("\n--- PHASE 3: MESSAGE REACTIONS & LOCATION PIN ---", flush=True)
 
         # Alice adds an emoji reaction to Bob's incoming message
-        self.alice.click_element(content_desc="Dodaj reakcję", fallback_ratio=(0.85, 0.45))
+        self.alice.click_element(content_desc="Add reaction", fallback_ratio=(0.85, 0.45))
         self.sleep(1.0)
         self.alice.click_element(text="❤️", fallback_ratio=(0.4, 0.5))
         self.sleep(1.5)
@@ -557,7 +557,7 @@ class MultiEmulatorOrchestrator:
         # Alice sends single-frame 900B Location Pin (TYPE_LOCATION_PIN)
         self.alice.click_element(test_tag="chat_location_pin_button", content_desc="Pinezka lokalizacji", fallback_ratio=(0.15, 0.95))
         self.sleep(1.5)
-        self.alice.click_element(test_tag="send_location_pin_confirm_button", text="Wyślij pinezkę", fallback_ratio=(0.75, 0.7))
+        self.alice.click_element(test_tag="send_location_pin_confirm_button", text="Send location pin", fallback_ratio=(0.75, 0.7))
         self.sleep(2.0)
 
         sc_alice_pin = self.alice.screencap("07_alice_location_pin_sent")
@@ -584,13 +584,13 @@ class MultiEmulatorOrchestrator:
             self.alice.click_element(text="Charlie", fallback_ratio=(0.3, 0.55))
         self.sleep(0.5)
 
-        self.alice.click_element(test_tag="create_group_confirm_button", text="Utwórz", fallback_ratio=(0.75, 0.7))
+        self.alice.click_element(test_tag="create_group_confirm_button", text="Create", fallback_ratio=(0.75, 0.7))
         self.sleep(2.5)
 
         sc_group_created = self.alice.screencap("08_alice_group_created")
         self.log_step("Group Created", "PASS", "Alice formed 'PQC_DHT_Group' with participants", sc_group_created)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.click_element(test_tag="chat_message_input", text="Message", fallback_ratio=(0.4, 0.95))
         self.alice.type_text("Welcome_to_PQC_Group_via_DHT")
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.5)
@@ -603,13 +603,13 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.5)
         self.bob.click_element(test_tag="chat_group_members_button", fallback_ratio=(0.95, 0.08))
         self.sleep(1.5)
-        self.bob.click_element(test_tag="leave_group_button", text="Opuść grupę", fallback_ratio=(0.3, 0.85))
+        self.bob.click_element(test_tag="leave_group_button", text="Leave group", fallback_ratio=(0.3, 0.85))
         self.sleep(2.0)
 
         sc_bob_left = self.bob.screencap("10_bob_left_group")
         self.log_step("Member Left Group", "PASS", "Bob emitted GROUP_SUBTYPE_LEAVE frame", sc_bob_left)
 
-        self.alice.click_element(test_tag="chat_message_input", text="Wiadomość", fallback_ratio=(0.4, 0.95))
+        self.alice.click_element(test_tag="chat_message_input", text="Message", fallback_ratio=(0.4, 0.95))
         self.alice.type_text("Post_leave_confidential_epoch_rotation")
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(2.0)
@@ -626,7 +626,7 @@ class MultiEmulatorOrchestrator:
         self.alice.click_element(test_tag="contact_list_diagnostics_button", content_desc="Diagnostyka", fallback_ratio=(0.7, 0.08))
         self.sleep(2.0)
         sc_diag = self.alice.screencap("12_diagnostics_screen")
-        self.alice.click_element(test_tag="diagnostics_back_button", content_desc="Wróć", fallback_ratio=(0.08, 0.08))
+        self.alice.click_element(test_tag="diagnostics_back_button", content_desc="Back", fallback_ratio=(0.08, 0.08))
         self.sleep(1.0)
         self.log_step("Diagnostics Screen Verified", "PASS", "DHT metrics, routing table, and storage inspected", sc_diag)
 
@@ -637,7 +637,7 @@ class MultiEmulatorOrchestrator:
         self.alice.click_element(test_tag="theme_dark_card", text="Ciemny", fallback_ratio=(0.5, 0.25))
         self.sleep(1.0)
         sc_settings = self.alice.screencap("13_settings_screen")
-        self.alice.click_element(test_tag="settings_back_button", content_desc="Wróć", fallback_ratio=(0.08, 0.08))
+        self.alice.click_element(test_tag="settings_back_button", content_desc="Back", fallback_ratio=(0.08, 0.08))
         self.sleep(1.0)
         self.log_step("Phase 5: Settings Screen Verified", "PASS", "Dark/Light themes and configuration options toggled", sc_settings)
 

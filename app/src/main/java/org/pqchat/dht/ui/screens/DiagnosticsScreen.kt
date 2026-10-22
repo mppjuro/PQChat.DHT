@@ -331,14 +331,14 @@ fun DiagnosticsScreen(
                         onClick = {
                             val intent = viewModel.getShareZipIntent(context)
                             if (intent != null) {
-                                context.startActivity(android.content.Intent.createChooser(intent, "Udostępnij paczkę badawczą .ZIP"))
+                                context.startActivity(android.content.Intent.createChooser(intent, "Share research ZIP bundle"))
                             } else {
-                                Toast.makeText(context, "Brak danych badawczych do eksportu", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "No research data to export", Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                     ) {
-                        Text("Eksportuj paczkę badawczą (.ZIP)", fontSize = 12.sp)
+                        Text("Export research package (.ZIP)", fontSize = 12.sp)
                     }
 
                     if (lastExportStatus != null) {

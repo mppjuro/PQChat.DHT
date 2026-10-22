@@ -323,7 +323,7 @@ class DhtLeafNode(
             val wasBlocked = torTransportMode == TorTransportMode.BLOCKED_ERROR
             if (config.socksPort <= 0) {
                 torTransportMode = TorTransportMode.BLOCKED_ERROR
-                torDiagnosticMessage = "Tor jest włączony w ustawieniach, oczekiwanie na zestawienie tunelu SOCKS5 (port ${config.socksPort}). Fail-Closed aktywny."
+                torDiagnosticMessage = "Tor is enabled in settings, waiting for SOCKS5 tunnel establishment (port ${config.socksPort}). Fail-Closed active."
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
                 return
             }
@@ -346,12 +346,12 @@ class DhtLeafNode(
                 torUdpAssociation = null
                 torTcpTunnelClient = TorTcpTunnelClient(client)
                 torTransportMode = TorTransportMode.SOCKS5_TCP
-                torDiagnosticMessage = "Standardowy demon Tor: UDP ASSOCIATE nieobsługiwane (kod 0x%02X). Aktywny tunel TCP SOCKS5 (length-prefixed KRPC).".format(e.replyCode)
+                torDiagnosticMessage = "Standard Tor daemon: UDP ASSOCIATE not supported (code 0x%02X). Active TCP SOCKS5 tunnel (length-prefixed KRPC).".format(e.replyCode)
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             } catch (e: Exception) {
                 torUdpAssociation = null
                 torTransportMode = TorTransportMode.BLOCKED_ERROR
-                torDiagnosticMessage = "Błąd połączenia z proxy Tor SOCKS5 (${config.socksHost}:${config.socksPort}): ${e.message}. Fail-Closed aktywny."
+                torDiagnosticMessage = "Error connecting to Tor SOCKS5 proxy (${config.socksHost}:${config.socksPort}): ${e.message}. Fail-Closed active."
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             }
 

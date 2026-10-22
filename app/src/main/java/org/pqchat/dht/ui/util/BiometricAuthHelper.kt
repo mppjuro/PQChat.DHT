@@ -28,7 +28,7 @@ object BiometricAuthHelper {
     fun authenticate(
         activity: FragmentActivity,
         title: String = "PQChat DHT",
-        subtitle: String = "Potwierdź tożsamość, aby odblokować aplikację",
+        subtitle: String = "Confirm your identity to unlock application",
         onSuccess: () -> Unit,
         onError: (errorCode: Int, errString: CharSequence) -> Unit = { _, _ -> }
     ) {
