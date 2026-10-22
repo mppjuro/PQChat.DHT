@@ -295,6 +295,9 @@ class PqChatUiAutomatorTest {
 
         // Verify Bob tab is initially active
         composeTestRule.onNodeWithTag("handshake_bob_name_input").assertIsDisplayed()
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_gallery_button").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_gallery_button").assertIsDisplayed()
 
         // Physically switch tab to Alice

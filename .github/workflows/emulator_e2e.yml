@@ -120,10 +120,7 @@ jobs:
             echo "ℹ️ Report file build/e2e-screenshots/report.md was not generated." >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 JUnit Instrumented Test Results" >> $GITHUB_STEP_SUMMARY
-          if [ -d "app/build/reports/androidTests/connected" ]; then
-            echo "- ✅ Connected AndroidTest HTML reports successfully generated." >> $GITHUB_STEP_SUMMARY
-          fi
+          python3 scripts/summarize_test_results.py >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload E2E Screenshots & Trace
         if: always()

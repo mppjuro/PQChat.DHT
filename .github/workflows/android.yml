@@ -150,11 +150,7 @@ jobs:
         run: |
           echo "## 📱 Instrumented AVD Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -d "app/build/reports/androidTests/connected" ]; then
-            echo "✅ Connected AndroidTest executed on Android API 34 with hardware KVM acceleration." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Connected AndroidTest reports missing." >> $GITHUB_STEP_SUMMARY
-          fi
+          python3 scripts/summarize_test_results.py >> $GITHUB_STEP_SUMMARY || true
 
       - name: Upload Instrumented Test Report
         if: always()
