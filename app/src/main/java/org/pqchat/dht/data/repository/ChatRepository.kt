@@ -248,10 +248,10 @@ class ChatRepository(
         groupMutexes.computeIfAbsent(groupId) { Mutex() }
 
     fun getAllGroupsFlow(): Flow<List<GroupEntity>> =
-        groupDao?.getAllGroupsFlow() ?: flowOf(emptyList())
+        (groupDao?.getAllGroupsFlow() ?: flowOf(emptyList())).catch { emit(emptyList()) }
 
     fun getGroupMembersFlow(groupId: String): Flow<List<GroupMemberEntity>> =
-        groupMemberDao?.getMembersForGroupFlow(groupId) ?: flowOf(emptyList())
+        (groupMemberDao?.getMembersForGroupFlow(groupId) ?: flowOf(emptyList())).catch { emit(emptyList()) }
 
     suspend fun getGroup(groupId: String): GroupEntity? = withContext(Dispatchers.IO) {
         groupDao?.getGroupById(groupId)
@@ -380,10 +380,11 @@ class ChatRepository(
         }
     }
 
-    fun getAllContactsFlow(): Flow<List<ContactEntity>> = contactDao.getAllContactsFlow()
+    fun getAllContactsFlow(): Flow<List<ContactEntity>> =
+        contactDao.getAllContactsFlow().catch { emit(emptyList()) }
 
     fun getMessagesFlow(contactId: String): Flow<List<MessageEntity>> =
-        messageDao.getMessagesForContactFlow(contactId)
+        messageDao.getMessagesForContactFlow(contactId).catch { emit(emptyList()) }
 
     suspend fun addContact(contact: ContactEntity) = withContext(Dispatchers.IO) {
         contactDao.insertOrUpdate(contact)

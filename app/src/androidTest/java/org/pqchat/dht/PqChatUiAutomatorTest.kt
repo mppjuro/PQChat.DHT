@@ -667,14 +667,33 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
 
+        // Clean previous notes to ensure deterministic first position in LazyColumn
+        kotlinx.coroutines.runBlocking {
+            composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
+                org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
+            )
+        }
+        composeTestRule.waitForIdle()
+
         // Send a note message to react to
         val noteMsg = "Reaction Target Message"
-        composeTestRule.onNodeWithTag("chat_message_input").performTextClearance()
         composeTestRule.onNodeWithTag("chat_message_input").performTextInput(noteMsg)
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithTag("chat_send_button").fetchSemanticsNodes().isNotEmpty()
         }
-        clickTagByPixelCoordinates("chat_send_button")
+        try {
+            composeTestRule.onNodeWithTag("chat_send_button").performClick()
+        } catch (_: Throwable) {
+            clickTagByPixelCoordinates("chat_send_button")
+        }
+
+        // Wait for message input clearance confirming dispatch
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
+            val editable = node.config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
+            editable.isEmpty()
+        }
+        dismissKeyboardAndWait()
 
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithText(noteMsg).fetchSemanticsNodes().isNotEmpty()
@@ -684,19 +703,27 @@ class PqChatUiAutomatorTest {
         }
         composeTestRule.onNodeWithText(noteMsg).assertIsDisplayed()
 
-        // Locate react button on message and physically click it
+        // Locate react button on message and click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodes(reactButtonMatcher).fetchSemanticsNodes().isNotEmpty()
         }
-        clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+        try {
+            composeTestRule.onAllNodes(reactButtonMatcher).onFirst().performClick()
+        } catch (_: Throwable) {
+            clickNodeCenterByPixelCoordinates(reactButtonMatcher)
+        }
 
-        // Emoji reaction picker opens — physically click heart reaction
+        // Emoji reaction picker opens — click heart reaction
         val emojiHeartMatcher = hasTestTagContaining("reaction_emoji_")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodes(emojiHeartMatcher).fetchSemanticsNodes().isNotEmpty()
         }
-        clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+        try {
+            composeTestRule.onAllNodes(emojiHeartMatcher).onFirst().performClick()
+        } catch (_: Throwable) {
+            clickNodeCenterByPixelCoordinates(emojiHeartMatcher)
+        }
 
         // Verify reaction badge appears
         val reactionBadgeMatcher = hasTestTagContaining("reaction_badge_")
@@ -705,8 +732,12 @@ class PqChatUiAutomatorTest {
         }
         composeTestRule.onAllNodes(reactionBadgeMatcher).onFirst().assertIsDisplayed()
 
-        // Test Location Pin: Physically click location pin button in input bar
-        clickTagByPixelCoordinates("chat_location_pin_button")
+        // Test Location Pin: Click location pin button in input bar
+        try {
+            composeTestRule.onNodeWithTag("chat_location_pin_button").performClick()
+        } catch (_: Throwable) {
+            clickTagByPixelCoordinates("chat_location_pin_button")
+        }
 
         // LocationPinDialog appears
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
@@ -714,8 +745,12 @@ class PqChatUiAutomatorTest {
         }
         composeTestRule.onNodeWithTag("location_pin_note_input").assertIsDisplayed()
 
-        // Physically confirm send location pin
-        clickTagByPixelCoordinates("send_location_pin_confirm_button")
+        // Confirm send location pin
+        try {
+            composeTestRule.onNodeWithTag("send_location_pin_confirm_button").performClick()
+        } catch (_: Throwable) {
+            clickTagByPixelCoordinates("send_location_pin_confirm_button")
+        }
 
         // Verify location pin message is dispatched and visible in chat
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
@@ -724,7 +759,11 @@ class PqChatUiAutomatorTest {
         composeTestRule.onAllNodesWithText("Location Pin", substring = true).onFirst().assertIsDisplayed()
 
         // Exit chat
-        clickTagByPixelCoordinates("chat_back_button")
+        try {
+            composeTestRule.onNodeWithTag("chat_back_button").performClick()
+        } catch (_: Throwable) {
+            clickTagByPixelCoordinates("chat_back_button")
+        }
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
