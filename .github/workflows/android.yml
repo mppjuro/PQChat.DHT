@@ -135,13 +135,14 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace
+          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --info
 
       - name: Dump Test Failure Reports
         if: failure()
         run: |
           echo "❌ CONNECTED ANDROID TEST FAILED! Dumping test failure reports:"
           find app/build/reports/androidTests/connected -type f \( -name "*.html" -o -name "*.xml" \) || true
+          find app/build/reports/androidTests -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
           find app/build/outputs/androidTest-results -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
 
       - name: Generate Instrumented Test Job Summary

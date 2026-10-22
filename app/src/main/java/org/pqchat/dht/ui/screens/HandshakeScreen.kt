@@ -264,7 +264,7 @@ fun HandshakeScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Statyczny QR",
+                                text = "Static QR",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (!isAnimatedQr) NeonCyan else TextSecondary,
                                 fontWeight = if (!isAnimatedQr) FontWeight.Bold else FontWeight.Normal
@@ -282,7 +282,7 @@ fun HandshakeScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Animowany QR",
+                                text = "Animated QR",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (isAnimatedQr) NeonCyan else TextSecondary,
                                 fontWeight = if (isAnimatedQr) FontWeight.Bold else FontWeight.Normal
