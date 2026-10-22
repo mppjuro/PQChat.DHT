@@ -91,7 +91,11 @@ fun CameraQrScanner(
                 val cameraExecutor = Executors.newSingleThreadExecutor()
 
                 cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
+                    val cameraProvider = try {
+                        cameraProviderFuture.get()
+                    } catch (_: Throwable) {
+                        return@addListener
+                    }
 
                     val preview = Preview.Builder().build().also {
                         it.surfaceProvider = previewView.surfaceProvider

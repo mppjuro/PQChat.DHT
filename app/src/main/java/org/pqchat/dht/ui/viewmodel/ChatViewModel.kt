@@ -391,10 +391,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openSelfNotes() {
+        _selectedContactId.value = ChatRepository.SELF_CONTACT_ID
+        pollingManager.onChatOpened(ChatRepository.SELF_CONTACT_ID)
         viewModelScope.launch {
             repository.ensureSelfNotesContactExists()
-            _selectedContactId.value = ChatRepository.SELF_CONTACT_ID
-            pollingManager.onChatOpened(ChatRepository.SELF_CONTACT_ID)
         }
     }
 
@@ -441,8 +441,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         pollingManager.triggerImmediatePoll()
     }
 
-    fun sendMessage(text: String) {
-        val contactId = _selectedContactId.value ?: return
+    fun sendMessage(text: String, targetContactId: String? = null) {
+        val contactId = targetContactId ?: _selectedContactId.value ?: return
+        if (_selectedContactId.value == null) {
+            _selectedContactId.value = contactId
+        }
         if (text.isBlank()) return
 
         val ttl = _ephemeralTtlSeconds.value
@@ -456,8 +459,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendReaction(targetMessage: MessageEntity, emoji: String) {
-        val contactId = _selectedContactId.value ?: return
+    fun sendReaction(targetMessage: MessageEntity, emoji: String, targetContactId: String? = null) {
+        val contactId = targetContactId ?: _selectedContactId.value ?: return
+        if (_selectedContactId.value == null) {
+            _selectedContactId.value = contactId
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val group = repository.getGroup(contactId)
             val success = if (group != null) {
@@ -476,9 +482,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         longitude: Double,
         altitude: Double = 0.0,
         accuracy: Float = 0.0f,
-        note: String = ""
+        note: String = "",
+        targetContactId: String? = null
     ) {
-        val contactId = _selectedContactId.value ?: return
+        val contactId = targetContactId ?: _selectedContactId.value ?: return
+        if (_selectedContactId.value == null) {
+            _selectedContactId.value = contactId
+        }
         val ttl = _ephemeralTtlSeconds.value
         viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Sending location pin via DHT..."

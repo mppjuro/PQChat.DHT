@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -723,7 +724,7 @@ fun ChatScreen(
                                 IconButton(
                                     onClick = {
                                         if (textInput.isNotBlank()) {
-                                            viewModel.sendMessage(textInput)
+                                            viewModel.sendMessage(textInput, targetContactId = contactId)
                                             textInput = ""
                                         }
                                     },
@@ -826,7 +827,15 @@ fun ChatScreen(
                 }
             }
 
+            val listState = rememberLazyListState()
+            LaunchedEffect(messages.size) {
+                if (messages.isNotEmpty()) {
+                    listState.animateScrollToItem(messages.size - 1)
+                }
+            }
+
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 12.dp, vertical = 4.dp),
@@ -839,7 +848,7 @@ fun ChatScreen(
                         isGroup = isGroup,
                         onImageClick = { bytes -> fullscreenImageBytes = bytes },
                         onResend = { viewModel.resendMessage(msg.id) },
-                        onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji) },
+                        onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji, targetContactId = contactId) },
                         onPlayVoice = { vmsg -> vmsg.rawVoiceBytes?.let { viewModel.playVoiceNote(vmsg.id, it) } },
                         isPlayingVoice = (playingMessageId == msg.id),
                         voiceProgress = if (playingMessageId == msg.id) playbackProgress else 0f
@@ -1151,7 +1160,7 @@ fun ChatScreen(
             LocationPinDialog(
                 onDismiss = { showLocationPinDialog = false },
                 onSend = { lat, lon, alt, acc, note ->
-                    viewModel.sendLocationPin(lat, lon, alt, acc, note)
+                    viewModel.sendLocationPin(lat, lon, alt, acc, note, targetContactId = contactId)
                     showLocationPinDialog = false
                 }
             )

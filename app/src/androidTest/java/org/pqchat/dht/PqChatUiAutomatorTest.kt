@@ -76,6 +76,13 @@ class PqChatUiAutomatorTest {
                 composeTestRule.activity.viewModel.setAnonymousStatsEnabled(false)
             }
         } catch (_: Throwable) {}
+        try {
+            kotlinx.coroutines.runBlocking {
+                composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
+                    org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
+                )
+            }
+        } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
@@ -85,6 +92,13 @@ class PqChatUiAutomatorTest {
     @After
     fun tearDown() {
         org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        try {
+            kotlinx.coroutines.runBlocking {
+                composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
+                    org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID
+                )
+            }
+        } catch (_: Throwable) {}
         try {
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
@@ -366,11 +380,11 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("chat_message_input").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("chat_send_button").assertIsDisplayed()
 
         // Send a test note in Self Notes chat
         composeTestRule.onNodeWithTag("chat_message_input")
             .performTextInput("Test Self Note from Automated UI")
+        composeTestRule.onNodeWithTag("chat_send_button").assertIsDisplayed()
         clickTagByPixelCoordinates("chat_send_button")
 
         // Wait for input clearance (EditableText becomes empty)
@@ -439,11 +453,11 @@ class PqChatUiAutomatorTest {
         // Verify we navigated to ChatScreen for the newly created group
         composeTestRule.onNodeWithText("Automated E2E Test Group").assertIsDisplayed()
         composeTestRule.onNodeWithTag("chat_message_input").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("chat_send_button").assertIsDisplayed()
 
         // Send a group message
         composeTestRule.onNodeWithTag("chat_message_input")
             .performTextInput("Hello Post-Quantum Group!")
+        composeTestRule.onNodeWithTag("chat_send_button").assertIsDisplayed()
         clickTagByPixelCoordinates("chat_send_button")
 
         // Wait for message input clearance (EditableText becomes empty)
@@ -643,12 +657,17 @@ class PqChatUiAutomatorTest {
 
         // Send a note message to react to
         val noteMsg = "Reaction Target Message"
+        composeTestRule.onNodeWithTag("chat_message_input").performTextClearance()
         composeTestRule.onNodeWithTag("chat_message_input").performTextInput(noteMsg)
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithTag("chat_send_button").fetchSemanticsNodes().isNotEmpty()
+        }
         clickTagByPixelCoordinates("chat_send_button")
 
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithText(noteMsg).fetchSemanticsNodes().isNotEmpty()
         }
+        composeTestRule.onNodeWithText(noteMsg).performScrollTo().assertIsDisplayed()
 
         // Locate react button on message and physically click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")

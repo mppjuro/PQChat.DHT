@@ -154,7 +154,7 @@ class AdbDevice:
         self.keyevent(4)
 
     def close_keyboard(self):
-        self.keyevent(111) // KEYCODE_ESCAPE
+        self.keyevent(111)  # KEYCODE_ESCAPE
         self.sleep(0.3)
 
     def screencap(self, filename: str) -> Optional[Path]:
