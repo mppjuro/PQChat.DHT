@@ -248,7 +248,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-boot-timeout: 600
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
           script: |
             ./gradlew testDebugUnitTest -DrunRealDhtTests=true -DmeasuredIterations=500 -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m" --tests "org.pqchat.dht.dht.integration.RealBep44RemoteIntegrationTest.testRealBep44RemoteFullPercentilesAndDeliverySuccessAcrossProfiles" --info
             python tools/dht_harness/dht_loopback_harness.py

@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.uiautomator.UiDevice
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -63,6 +64,33 @@ class PqChatUiAutomatorTest {
     fun setUp() {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        try {
+            composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.unselectContact()
+                composeTestRule.activity.viewModel.resetHandshakeState()
+                composeTestRule.activity.viewModel.clearDuressActive()
+                composeTestRule.activity.viewModel.setAppLockPin(null)
+                composeTestRule.activity.viewModel.setDuressPin(null)
+                composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
+            }
+        } catch (_: Throwable) {}
+        composeTestRule.waitForIdle()
+    }
+
+    @After
+    fun tearDown() {
+        org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
+        try {
+            composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.unselectContact()
+                composeTestRule.activity.viewModel.resetHandshakeState()
+                composeTestRule.activity.viewModel.clearDuressActive()
+                composeTestRule.activity.viewModel.setAppLockPin(null)
+                composeTestRule.activity.viewModel.setDuressPin(null)
+                composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
+            }
+        } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
     }
 
@@ -85,7 +113,7 @@ class PqChatUiAutomatorTest {
      */
     private fun clickNodeCenterByPixelCoordinates(matcher: SemanticsMatcher): Rect {
         dismissKeyboardAndWait()
-        val nodeInteraction = composeTestRule.onNode(matcher, useUnmergedTree = true)
+        val nodeInteraction = composeTestRule.onAllNodes(matcher, useUnmergedTree = true).onFirst()
         try {
             nodeInteraction.performScrollTo()
             dismissKeyboardAndWait()
@@ -468,10 +496,13 @@ class PqChatUiAutomatorTest {
             )
         } finally {
             // Clean up state so subsequent tests can run cleanly
+            org.pqchat.dht.crypto.KeystoreCrypto.resetForTesting()
             composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.unselectContact()
                 composeTestRule.activity.viewModel.clearDuressActive()
                 composeTestRule.activity.viewModel.setAppLockPin(null)
                 composeTestRule.activity.viewModel.setDuressPin(null)
+                composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
             }
             composeTestRule.waitForIdle()
         }
