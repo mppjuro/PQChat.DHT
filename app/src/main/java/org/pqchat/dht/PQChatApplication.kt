@@ -79,7 +79,8 @@ class PQChatApplication : Application() {
             dhtLeafNode = dhtLeafNode,
             pendingAckQueue = pendingAckQueue,
             outboundPoissonQueue = outboundPoissonQueue,
-            strictPoissonShapingEnabledProvider = { settingsManager.isStrictPoissonShapingEnabled.value }
+            strictPoissonShapingEnabledProvider = { settingsManager.isStrictPoissonShapingEnabled.value },
+            settingsManager = settingsManager
         )
         trafficGenerator = PoissonTrafficGenerator(
             dhtLeafNode = dhtLeafNode,
@@ -87,6 +88,7 @@ class PQChatApplication : Application() {
             blindRepublishPool = repository.blindRepublishPool,
             outboundPoissonQueue = outboundPoissonQueue,
             crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value },
+            safetyCanaryProvider = { repository.pollPendingSafetyCanary() },
             researchTelemetryProvider = { if (::researchTelemetryManager.isInitialized) researchTelemetryManager else null }
         ).apply { start() }
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }

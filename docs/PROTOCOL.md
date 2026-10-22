@@ -271,12 +271,12 @@ According to BitTorrent BEP 44, the total size of the value field `'v'` after Be
 |                                                               |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
-1. `MsgType` (1 B, UInt8): Message type identifier (`0x01`–`0x09`).
+1. `MsgType` (1 B, UInt8): Message type identifier (`0x01`–`0x0B`).
 2. `SeqNum` (2 B, UInt16 Big-Endian): Sender monotonic sequence counter $Counter_{out}$.
 3. `AckNum` (2 B, UInt16 Big-Endian): Last acknowledged recipient sequence number.
 4. `TimestampUTC` (8 B, Int64 Big-Endian): Unix epoch transmission timestamp in milliseconds.
 
-### 7.4. Complete Bit and Byte Specification for Types 0x01 to 0x09
+### 7.4. Complete Bit and Byte Specification for Types 0x01 to 0x0B
 
 Total available space after the 13-byte header is $872 - 13 = 859\text{ bytes}$.
 
@@ -415,6 +415,57 @@ Total available space after the 13-byte header is $872 - 13 = 859\text{ bytes}$.
 * `VoiceDataLength` ($V$, 2 B, UInt16 Big-Endian): Number of compressed parametric voice bytes in this segment ($V \le 840$).
 * `Voice Bytes` ($V$ B): Raw stream of 4-byte parametric vocoder frames (up to 840 bytes = 210 frames = ~5.25 seconds per BEP 44 frame). Across 3 segments, allows up to 2520 bytes = 630 frames = ~15.75 seconds of speech.
 * `CSPRNG Noise Padding` ($840 - V$ B): Cryptographically secure random padding ensuring rigid 859-byte inner payload size.
+
+#### Type 0x0A: Single-Frame Cryptographic Group Poll (`TYPE_GROUP_POLL`)
+Encrypted using AEAD with Group AAD ($\text{AAD} = \text{Target} \parallel GroupID \parallel SenderMemberID$) to cryptographically tie each vote/creation to the verified sender within the group.
+
+##### Subtype 0x01: Poll Create (`POLL_SUBTYPE_CREATE`)
+```
++─────────┬──────────┬──────────────┬────────┬──────────────┬──────────────┬─────────────┬─────────────┬──────────────+
+| SubType |  PollId  | ExpirationTs | Flags  | QuestionLen  |   Question   | OptionCount | Options ... | CSPRNG Noise |
+| 1 byte  | 16 bytes |  8 bytes BE  | 1 byte |  2 bytes BE  |   Q bytes    |   1 byte    | O * (1B+Text|   Padding    |
++─────────┴──────────┴──────────────┴────────┴──────────────┴──────────────┴─────────────┴─────────────┴──────────────+
+```
+* `PollSubType` (1 B, UInt8): `0x01` (`POLL_SUBTYPE_CREATE`).
+* `PollID` (16 B): Unique poll UUID.
+* `ExpirationTimestamp` (8 B, Int64 Big-Endian): UTC timestamp when poll closes (0 = indefinite).
+* `Flags` (1 B, UInt8): Bitmask of poll configuration options (bit 0 = `POLL_FLAG_MULTI_CHOICE` = `0x01`).
+* `QuestionLength` ($Q$, 2 B, UInt16 Big-Endian): Length of poll question UTF-8 string ($Q \le 200$).
+* `Question` ($Q$ B): Question text in UTF-8.
+* `OptionCount` ($O$, 1 B, UInt8): Number of options ($2 \le O \le 8$).
+* `Options`: Serialized entries: `OptionLen` (1 B) + `OptionText` ($K$ bytes UTF-8, $K \le 64$).
+* `CSPRNG Noise Padding`: Padding to 859 bytes.
+
+##### Subtype 0x02: Poll Vote (`POLL_SUBTYPE_VOTE`)
+```
++─────────┬──────────┬────────────────────────┬───────────────┬──────────────────────────────+
+| SubType |  PollId  | SelectedOptionsBitmask | VoteTimestamp |     CSPRNG Noise Padding     |
+| 1 byte  | 16 bytes |         1 byte         |  8 bytes BE   |          833 bytes           |
++─────────┴──────────┴────────────────────────┴───────────────┴──────────────────────────────+
+```
+* `PollSubType` (1 B, UInt8): `0x02` (`POLL_SUBTYPE_VOTE`).
+* `PollID` (16 B): UUID of target poll.
+* `SelectedOptionsBitmask` (1 B, UInt8): Bitmask of voter's selected options ($0..7$).
+* `VoteTimestamp` (8 B, Int64 Big-Endian): UTC timestamp of vote cast.
+* `CSPRNG Noise Padding` (833 B): Cryptographically secure random padding ensuring rigid 859-byte inner payload size.
+
+#### Type 0x0B: Safety Canary / Dead Man's Switch (`TYPE_SAFETY_CANARY`)
+Covert emergency alert packet dispatched strictly within normal background `PoissonTrafficGenerator` intervals by substituting a dummy CSPRNG cover traffic frame (`emitDummyCover`). Produces zero additional UDP packets and zero traffic analysis signature.
+
+```
++──────────────┬──────────────────┬──────────────────┬─────────────────┬─────────────────────+
+| CanaryReason | TriggerTimestamp | EmergencyNoteLen | Emergency Note  | CSPRNG Noise Padding|
+|    1 byte    |    8 bytes BE    |    2 bytes BE    |     N bytes     |    848 - N bytes    |
++──────────────┴──────────────────┴──────────────────┴─────────────────┴─────────────────────+
+```
+* `CanaryReason` (1 B, UInt8):
+  * `0x01` = `DEAD_MAN_TIMEOUT`: Dead Man's Switch expired without user activity / check-in.
+  * `0x02` = `DURESS_PIN`: Hardware Keystore panic wipe was triggered via Duress PIN.
+  * `0x03` = `MANUAL_SOS`: Explicit user-triggered emergency broadcast.
+* `TriggerTimestamp` (8 B, Int64 Big-Endian): UTC timestamp when emergency canary was triggered.
+* `EmergencyNoteLength` ($N$, 2 B, UInt16 Big-Endian): Length of user's custom emergency note in UTF-8 ($N \le 848$).
+* `Emergency Note` ($N$ B): Custom emergency note or status description.
+* `CSPRNG Noise Padding` ($848 - N$ B): Cryptographically secure random padding ensuring rigid 859-byte inner payload size.
 
 ---
 

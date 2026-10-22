@@ -34,6 +34,7 @@ class PollingScheduler(
 
     val pollingManager: AdaptivePollingManager = AdaptivePollingManager(
         onPollRequested = { contactId ->
+            repository.checkAndTriggerDeadManSwitch()
             repository.pollConstantBatch(
                 focusContactId = contactId,
                 batchSize = pollingManager.pollBatchSize

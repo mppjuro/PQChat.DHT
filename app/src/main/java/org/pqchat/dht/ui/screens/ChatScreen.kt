@@ -18,7 +18,9 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -94,6 +96,7 @@ fun ChatScreen(
     val ephemeralTtlSeconds by viewModel.ephemeralTtlSeconds.collectAsState()
     var showEphemeralMenu by remember { mutableStateOf(false) }
     var showLocationPinDialog by remember { mutableStateOf(false) }
+    var showCreatePollDialog by remember { mutableStateOf(false) }
 
     val isRecordingVoice by viewModel.isRecordingVoice.collectAsState()
     val recordingAmplitude by viewModel.recordingAmplitude.collectAsState()
@@ -183,7 +186,7 @@ fun ChatScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = "PQ Sender Keys • Epoka ${group.groupEpoch} • TX: ${group.myCounterOut}",
+                                    text = "PQ Sender Keys • Epoch ${group.groupEpoch} • TX: ${group.myCounterOut}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = CryptoPurple,
                                     fontWeight = FontWeight.SemiBold,
@@ -279,6 +282,16 @@ fun ChatScreen(
                 },
                 actions = {
                     if (isGroup) {
+                        IconButton(
+                            onClick = { showCreatePollDialog = true },
+                            modifier = Modifier.testTag("chat_create_poll_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Poll,
+                                contentDescription = "Create Group Poll",
+                                tint = CryptoPurple
+                            )
+                        }
                         IconButton(
                             onClick = { showGroupMembersDialog = true },
                             modifier = Modifier.testTag("chat_group_members_button")
@@ -822,6 +835,8 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { msg ->
                     MessageBubble(
                         message = msg,
+                        viewModel = viewModel,
+                        isGroup = isGroup,
                         onImageClick = { bytes -> fullscreenImageBytes = bytes },
                         onResend = { viewModel.resendMessage(msg.id) },
                         onReactionClick = { emoji -> viewModel.sendReaction(msg, emoji) },
@@ -1141,12 +1156,25 @@ fun ChatScreen(
                 }
             )
         }
+
+        if (showCreatePollDialog) {
+            CreatePollDialog(
+                groupId = contactId,
+                onDismiss = { showCreatePollDialog = false },
+                onCreate = { question, options, isMultiChoice, durationHours ->
+                    viewModel.createGroupPoll(contactId, question, options, isMultiChoice, durationHours)
+                    showCreatePollDialog = false
+                }
+            )
+        }
     }
 }
 
 @Composable
 fun MessageBubble(
     message: MessageEntity,
+    viewModel: ChatViewModel? = null,
+    isGroup: Boolean = false,
     onImageClick: ((ByteArray) -> Unit)? = null,
     onResend: (() -> Unit)? = null,
     onReactionClick: ((String) -> Unit)? = null,
@@ -1354,8 +1382,49 @@ fun MessageBubble(
                     }
                 }
 
-                // Location Pin Micro-Payload or Standard Text Content
-                if (locationPin != null) {
+                // Safety Canary Alarm, Group Poll Card, Location Pin or Standard Text Content
+                if (message.rawTextContent?.startsWith("[SAFETY CANARY ALERT]") == true) {
+                    Surface(
+                        color = CrimsonDanger.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.5.dp, CrimsonDanger),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("safety_canary_alert_card_${message.id}")
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Safety Alert",
+                                    tint = CrimsonDanger,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "EMERGENCY SAFETY CANARY",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CrimsonDanger
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = message.rawTextContent ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                } else if (!message.pollId.isNullOrBlank() && viewModel != null) {
+                    GroupPollCard(
+                        pollId = message.pollId,
+                        viewModel = viewModel,
+                        isGroup = isGroup
+                    )
+                } else if (locationPin != null) {
                     Surface(
                         color = appColors.surfaceVariant.copy(alpha = 0.6f),
                         shape = RoundedCornerShape(10.dp),
@@ -1898,4 +1967,410 @@ fun LocationPinDialog(
         containerColor = appColors.surface
     )
 }
+
+@Composable
+fun GroupPollCard(
+    pollId: String,
+    viewModel: ChatViewModel,
+    isGroup: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val poll by viewModel.getPollFlow(pollId).collectAsState(initial = null)
+    val votes by viewModel.getPollVotesFlow(pollId).collectAsState(initial = emptyList())
+    val appColors = LocalAppColors.current
+
+    if (poll == null) {
+        Surface(
+            color = appColors.surfaceVariant.copy(alpha = 0.5f),
+            shape = RoundedCornerShape(12.dp),
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        ) {
+            Text(
+                text = "Loading cryptographic poll...",
+                style = MaterialTheme.typography.bodySmall,
+                color = appColors.textSecondary,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+        return
+    }
+
+    val currentPoll = poll!!
+    val options = currentPoll.optionsList
+    val now = System.currentTimeMillis()
+    val isExpired = currentPoll.isClosed || now > currentPoll.expirationTimestamp
+    val totalVoters = votes.size
+
+    var selectedBitmask by remember { mutableStateOf(0) }
+    var hasVotedLocally by remember { mutableStateOf(false) }
+
+    Surface(
+        color = appColors.surfaceVariant,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, CryptoPurple.copy(alpha = 0.5f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .testTag("group_poll_card_${pollId}")
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header: Poll badge + expiration
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = CryptoPurple.copy(alpha = 0.2f),
+                    border = BorderStroke(1.dp, CryptoPurple.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Poll,
+                            contentDescription = null,
+                            tint = CryptoPurple,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (currentPoll.isMultiChoice) "Multiple Choice" else "Single Choice",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CryptoPurple,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (isExpired) CrimsonDanger.copy(alpha = 0.2f) else ElectricGreen.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = if (isExpired) "Closed" else "Active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isExpired) CrimsonDanger else ElectricGreen,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Question
+            Text(
+                text = currentPoll.question,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = appColors.textPrimary
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Options with votes and progress bar
+            options.forEachIndexed { index, optionText ->
+                val mask = 1 shl index
+                val optionVotes = votes.count { (it.selectedBitmask and mask) != 0 }
+                val percentage = if (totalVoters > 0) (optionVotes * 100) / totalVoters else 0
+                val isSelected = (selectedBitmask and mask) != 0
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(enabled = !isExpired) {
+                            if (currentPoll.isMultiChoice) {
+                                selectedBitmask = selectedBitmask xor mask
+                            } else {
+                                selectedBitmask = mask
+                            }
+                        }
+                        .background(
+                            if (isSelected) CryptoPurple.copy(alpha = 0.12f)
+                            else appColors.surface.copy(alpha = 0.5f)
+                        )
+                        .border(
+                            1.dp,
+                            if (isSelected) CryptoPurple else appColors.primary.copy(alpha = 0.15f),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (currentPoll.isMultiChoice) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { checked ->
+                                    if (!isExpired) {
+                                        selectedBitmask = if (checked) {
+                                            selectedBitmask or mask
+                                        } else {
+                                            selectedBitmask and mask.inv()
+                                        }
+                                    }
+                                },
+                                enabled = !isExpired,
+                                colors = CheckboxDefaults.colors(checkedColor = CryptoPurple),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = {
+                                    if (!isExpired) {
+                                        selectedBitmask = mask
+                                    }
+                                },
+                                enabled = !isExpired,
+                                colors = RadioButtonDefaults.colors(selectedColor = CryptoPurple),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Text(
+                            text = optionText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = appColors.textPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        Text(
+                            text = "$optionVotes ($percentage%)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = appColors.textSecondary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    LinearProgressIndicator(
+                        progress = { if (totalVoters > 0) optionVotes.toFloat() / totalVoters.toFloat() else 0f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = CryptoPurple,
+                        trackColor = appColors.surfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Footer row: Vote button and total voters count
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Total votes: $totalVoters",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = appColors.textSecondary
+                )
+
+                if (!isExpired) {
+                    Button(
+                        onClick = {
+                            if (selectedBitmask > 0) {
+                                viewModel.voteGroupPoll(currentPoll.groupId, currentPoll.pollId, selectedBitmask)
+                                hasVotedLocally = true
+                            }
+                        },
+                        enabled = selectedBitmask > 0,
+                        colors = ButtonDefaults.buttonColors(containerColor = CryptoPurple),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("submit_vote_button_${pollId}")
+                    ) {
+                        Text(
+                            text = if (hasVotedLocally) "Vote again" else "Submit Vote",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CreatePollDialog(
+    groupId: String,
+    onDismiss: () -> Unit,
+    onCreate: (question: String, options: List<String>, isMultiChoice: Boolean, durationHours: Int) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    var question by remember { mutableStateOf("") }
+    var options by remember { mutableStateOf(listOf("", "")) }
+    var isMultiChoice by remember { mutableStateOf(false) }
+    var durationHours by remember { mutableStateOf(24) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Poll,
+                    contentDescription = null,
+                    tint = CryptoPurple
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Create Group Poll",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = appColors.textPrimary
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                OutlinedTextField(
+                    value = question,
+                    onValueChange = { if (it.length <= 200) question = it },
+                    label = { Text("Poll Question") },
+                    placeholder = { Text("Ask something...") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("poll_question_input"),
+                    singleLine = false,
+                    maxLines = 3
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Options (2 to 8):",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = appColors.textPrimary
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                options.forEachIndexed { index, option ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = option,
+                            onValueChange = { newText ->
+                                if (newText.length <= 64) {
+                                    val updated = options.toMutableList()
+                                    updated[index] = newText
+                                    options = updated
+                                }
+                            },
+                            label = { Text("Option ${index + 1}") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("poll_option_input_${index}"),
+                            singleLine = true
+                        )
+
+                        if (options.size > 2) {
+                            IconButton(
+                                onClick = {
+                                    val updated = options.toMutableList()
+                                    updated.removeAt(index)
+                                    options = updated
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove option",
+                                    tint = CrimsonDanger
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (options.size < 8) {
+                    TextButton(
+                        onClick = { options = options + "" },
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .testTag("poll_add_option_button")
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add Option", color = CryptoPurple)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Switch(
+                        checked = isMultiChoice,
+                        onCheckedChange = { isMultiChoice = it },
+                        modifier = Modifier.testTag("poll_multichoice_switch")
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Allow Multiple Choices",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = appColors.textPrimary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Duration: $durationHours hours",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = appColors.textSecondary
+                )
+            }
+        },
+        confirmButton = {
+            val valid = question.isNotBlank() && options.count { it.isNotBlank() } >= 2
+            Button(
+                onClick = {
+                    val cleanOptions = options.map { it.trim() }.filter { it.isNotBlank() }
+                    onCreate(question.trim(), cleanOptions, isMultiChoice, durationHours)
+                },
+                enabled = valid,
+                colors = ButtonDefaults.buttonColors(containerColor = CryptoPurple),
+                modifier = Modifier.testTag("poll_create_confirm_button")
+            ) {
+                Text("Create Poll")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("poll_create_dismiss_button")
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 

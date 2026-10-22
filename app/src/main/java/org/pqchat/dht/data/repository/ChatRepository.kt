@@ -40,13 +40,21 @@ class ChatRepository(
         }
     },
     val groupDao: GroupDao? = null,
-    val groupMemberDao: GroupMemberDao? = null
+    val groupMemberDao: GroupMemberDao? = null,
+    val pollDao: PollDao? = null,
+    var settingsManager: org.pqchat.dht.data.settings.AppSettingsManager? = null
 ) {
     val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
         get() = researchTelemetryProvider?.invoke()
 
     fun isStrictPoissonShaping(): Boolean =
         strictPoissonShapingEnabledProvider?.invoke() ?: isStrictPoissonShapingEnabled
+
+    val canaryQueue = java.util.concurrent.ConcurrentLinkedQueue<org.pqchat.dht.traffic.OutboundPoissonFrame>()
+
+    fun pollPendingSafetyCanary(): org.pqchat.dht.traffic.OutboundPoissonFrame? {
+        return canaryQueue.poll()
+    }
 
     constructor(
         contactDao: ContactDao,
@@ -79,7 +87,8 @@ class ChatRepository(
         blindRepublishPool: org.pqchat.dht.traffic.BlindRepublishPool = org.pqchat.dht.traffic.BlindRepublishPool.defaultInstance,
         outboundPoissonQueue: org.pqchat.dht.traffic.OutboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue(),
         isStrictPoissonShapingEnabled: Boolean = false,
-        strictPoissonShapingEnabledProvider: (() -> Boolean)? = null
+        strictPoissonShapingEnabledProvider: (() -> Boolean)? = null,
+        settingsManager: org.pqchat.dht.data.settings.AppSettingsManager? = null
     ) : this(
         database.contactDao(),
         database.messageDao(),
@@ -94,7 +103,9 @@ class ChatRepository(
         isStrictPoissonShapingEnabled,
         strictPoissonShapingEnabledProvider,
         groupDao = database.groupDao(),
-        groupMemberDao = database.groupMemberDao()
+        groupMemberDao = database.groupMemberDao(),
+        pollDao = database.pollDao(),
+        settingsManager = settingsManager
     )
 
     /**
@@ -244,6 +255,107 @@ class ChatRepository(
 
     suspend fun getGroup(groupId: String): GroupEntity? = withContext(Dispatchers.IO) {
         groupDao?.getGroupById(groupId)
+    }
+
+    fun getPollFlow(pollId: String): Flow<PollEntity?> =
+        pollDao?.getPollFlow(pollId) ?: flowOf(null)
+
+    fun getPollVotesFlow(pollId: String): Flow<List<PollVoteEntity>> =
+        pollDao?.getVotesForPollFlow(pollId) ?: flowOf(emptyList())
+
+    fun getPollsForGroupFlow(groupId: String): Flow<List<PollEntity>> =
+        pollDao?.getPollsForGroupFlow(groupId) ?: flowOf(emptyList())
+
+    suspend fun getPoll(pollId: String): PollEntity? = withContext(Dispatchers.IO) {
+        pollDao?.getPoll(pollId)
+    }
+
+    suspend fun getVotesForPoll(pollId: String): List<PollVoteEntity> = withContext(Dispatchers.IO) {
+        pollDao?.getVotesForPoll(pollId) ?: emptyList()
+    }
+
+    suspend fun triggerSafetyCanary(
+        triggerReason: Byte,
+        latitude: Double = 0.0,
+        longitude: Double = 0.0,
+        customNote: String? = null
+    ): Int = withContext(Dispatchers.IO) {
+        val sm = settingsManager
+        val configuredIds = sm?.deadManTrustedContactIds?.value ?: emptySet()
+        val trustedIds = if (configuredIds.isNotEmpty()) {
+            configuredIds
+        } else if (triggerReason == BinaryFrameCodec.CANARY_REASON_DURESS_PIN || triggerReason == BinaryFrameCodec.CANARY_REASON_MANUAL_SOS) {
+            contactDao.getAllContactsFlow().first().map { it.id }.toSet()
+        } else {
+            emptySet()
+        }
+        if (trustedIds.isEmpty()) return@withContext 0
+
+        val note = customNote ?: sm?.deadManEmergencyNote?.value ?: "Safety canary emergency alarm"
+        var queuedCount = 0
+
+        for (contactId in trustedIds) {
+            getContactMutex(contactId).withLock {
+                val contact = contactDao.getContactById(contactId) ?: return@withLock
+                val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+                val canaryUuid = UUID.randomUUID()
+                val canaryIdBytes = uuidStringToBytes(canaryUuid.toString())
+                val now = System.currentTimeMillis()
+
+                val plaintext = BinaryFrameCodec.encodeSafetyCanary(
+                    seqNum = contact.counterOut and 0xFFFF,
+                    ackNum = contact.counterIn and 0xFFFF,
+                    timestampUTC = now,
+                    triggerReason = triggerReason,
+                    canaryId = canaryIdBytes,
+                    triggerTimestamp = now,
+                    latitude = latitude,
+                    longitude = longitude,
+                    note = note
+                )
+
+                val ciphertext = BinaryFrameCodec.packAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    direction = "A_TO_B"
+                )
+
+                val frame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = slot.target,
+                    payload = ciphertext,
+                    seq = org.pqchat.dht.dht.leaf.DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false,
+                    seqNum = contact.counterOut,
+                    contactId = contactId,
+                    timestamp = now,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL
+                )
+
+                contactDao.updateOutgoingState(
+                    id = contact.id,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+
+                canaryQueue.add(frame)
+                queuedCount++
+            }
+        }
+        queuedCount
+    }
+
+    suspend fun checkAndTriggerDeadManSwitch(): Boolean = withContext(Dispatchers.IO) {
+        val sm = settingsManager ?: return@withContext false
+        if (sm.isDeadManSwitchExpired()) {
+            sm.setCanaryTriggered(true)
+            val queued = triggerSafetyCanary(BinaryFrameCodec.CANARY_REASON_DEAD_MAN_TIMEOUT)
+            queued > 0
+        } else {
+            false
+        }
     }
 
     private fun uuidStringToBytes(uuidStr: String): ByteArray {
@@ -1871,6 +1983,62 @@ class ChatRepository(
                         }
                         anyProcessed = true
                     }
+                    BinaryFrameCodec.TYPE_SAFETY_CANARY -> {
+                        val canaryPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.SafetyCanary
+                        val seqEpoch = sk.slotIndex / 65536
+                        if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, sk.slotIndex, false)) {
+                            val reasonStr = when (canaryPayload.triggerReason) {
+                                BinaryFrameCodec.CANARY_REASON_DEAD_MAN_TIMEOUT -> "Dead Man's Switch timeout"
+                                BinaryFrameCodec.CANARY_REASON_DURESS_PIN -> "Duress PIN emergency"
+                                BinaryFrameCodec.CANARY_REASON_MANUAL_SOS -> "Manual SOS trigger"
+                                else -> "Emergency trigger"
+                            }
+                            val locPart = if (canaryPayload.latitude != 0.0 || canaryPayload.longitude != 0.0) {
+                                " Location: %.5f, %.5f.".format(java.util.Locale.US, canaryPayload.latitude, canaryPayload.longitude)
+                            } else ""
+                            val alertText = "[SAFETY CANARY ALERT] Reason: $reasonStr.$locPart Note: ${canaryPayload.note}"
+                            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(sk.rawMsgKey, "${sk.slotIndex}")
+                            messageDao.insertMessage(
+                                MessageEntity(
+                                    contactId = contactId,
+                                    isOutgoing = false,
+                                    seqEpoch = seqEpoch,
+                                    seqNum = sk.slotIndex,
+                                    ackNum = frameMsg.ackNum,
+                                    timestamp = frameMsg.timestampUTC,
+                                    textContent = alertText,
+                                    status = "DELIVERED",
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = sk.rawMsgKey,
+                                    slotTarget = sk.target,
+                                    slotEdSeed = sk.rawEdPrivateKeySeed
+                                )
+                            )
+                            onIncomingMessageDelivered?.invoke(contactId, alertText, true)
+                        }
+                        bitmap.markReceived(sk.slotIndex)
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = contact.counterIn,
+                            chainKeyIn = contact.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        val rawRatchetKey = sk.rawMsgKey.copyOf()
+                        sk.destroy()
+                        skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        if (!isSelf) {
+                            pendingAckQueue.enqueue(
+                                org.pqchat.dht.traffic.PendingAck(
+                                    contactId = contactId,
+                                    messageId = "${sk.slotIndex}",
+                                    ratchetKey = rawRatchetKey,
+                                    seqNum = sk.slotIndex
+                                )
+                            )
+                        }
+                        anyProcessed = true
+                    }
                     else -> {}
                 }
             } catch (_: Exception) {
@@ -2481,6 +2649,61 @@ class ChatRepository(
                             )
                             onIncomingMessageDelivered?.invoke(contactId, "Voice Note (${assembled.totalDurationMs / 1000}s)", false)
                         }
+                    }
+                    contactDao.updateIncomingStateWithBitmap(
+                        id = contactId,
+                        counterIn = slot.counter + 1,
+                        chainKeyIn = slot.nextChainKey,
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
+                    preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                    if (!isSelf) {
+                        pendingAckQueue.enqueue(
+                            org.pqchat.dht.traffic.PendingAck(
+                                contactId = contactId,
+                                messageId = "${slot.counter}",
+                                ratchetKey = slot.msgKey,
+                                seqNum = slot.counter
+                            )
+                        )
+                    }
+                    true
+                }
+                BinaryFrameCodec.TYPE_SAFETY_CANARY -> {
+                    val canaryPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.SafetyCanary
+                    bitmap.markReceived(slot.counter)
+                    val seqEpoch = slot.counter / 65536
+                    val alreadyExists = messageDao.existsMessageWithEpoch(contactId, seqEpoch, slot.counter, false)
+                    if (!alreadyExists) {
+                        val reasonStr = when (canaryPayload.triggerReason) {
+                            BinaryFrameCodec.CANARY_REASON_DEAD_MAN_TIMEOUT -> "Dead Man's Switch timeout"
+                            BinaryFrameCodec.CANARY_REASON_DURESS_PIN -> "Duress PIN emergency"
+                            BinaryFrameCodec.CANARY_REASON_MANUAL_SOS -> "Manual SOS trigger"
+                            else -> "Emergency trigger"
+                        }
+                        val locPart = if (canaryPayload.latitude != 0.0 || canaryPayload.longitude != 0.0) {
+                            " Location: %.5f, %.5f.".format(java.util.Locale.US, canaryPayload.latitude, canaryPayload.longitude)
+                        } else ""
+                        val alertText = "[SAFETY CANARY ALERT] Reason: $reasonStr.$locPart Note: ${canaryPayload.note}"
+                        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${slot.counter}")
+                        messageDao.insertMessage(
+                            MessageEntity(
+                                contactId = contactId,
+                                isOutgoing = false,
+                                seqEpoch = seqEpoch,
+                                seqNum = slot.counter,
+                                ackNum = frameMsg.ackNum,
+                                timestamp = frameMsg.timestampUTC,
+                                textContent = alertText,
+                                status = "DELIVERED",
+                                ackTarget = targetAck,
+                                ackRatchetKey = slot.msgKey,
+                                slotTarget = slot.target,
+                                slotEdSeed = slot.edPrivateKeySeed
+                            )
+                        )
+                        onIncomingMessageDelivered?.invoke(contactId, alertText, true)
                     }
                     contactDao.updateIncomingStateWithBitmap(
                         id = contactId,
@@ -5363,6 +5586,263 @@ class ChatRepository(
         }
     }
 
+    suspend fun createGroupPoll(
+        groupId: String,
+        question: String,
+        options: List<String>,
+        isMultiChoice: Boolean,
+        durationHours: Int = 24
+    ): String? = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock null
+            if (!group.isActive) return@withLock null
+
+            if (group.myCounterOut > 0 && group.myCounterOut % BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL == 0) {
+                rotateGroupSenderKeyInternal(group)
+            }
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
+
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+
+            val pollUuid = UUID.randomUUID()
+            val pollIdBytes = uuidStringToBytes(pollUuid.toString())
+            val pollIdStr = pollUuid.toString()
+            val expirationTimestamp = System.currentTimeMillis() + durationHours * 3600_000L
+            val flags = if (isMultiChoice) BinaryFrameCodec.POLL_FLAG_MULTI_CHOICE else 0.toByte()
+
+            val plaintext = BinaryFrameCodec.encodeGroupPollCreate(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                pollId = pollIdBytes,
+                expirationTimestamp = expirationTimestamp,
+                flags = flags,
+                question = question,
+                options = options
+            )
+
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            val shuffledMembers = if (activeMembers.size > 1) {
+                activeMembers.shuffled(CryptoUtils.secureRandom)
+            } else {
+                activeMembers
+            }
+
+            val targetSlots = if (shuffledMembers.isNotEmpty()) {
+                shuffledMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
+
+            val optionsJson = org.json.JSONArray(options).toString()
+            val pollEntity = PollEntity(
+                pollId = pollIdStr,
+                groupId = groupId,
+                creatorMemberId = currentGroup.myMemberId,
+                creatorName = "Me",
+                question = question,
+                optionsJson = optionsJson,
+                isMultiChoice = isMultiChoice,
+                expirationTimestamp = expirationTimestamp,
+                createdAt = System.currentTimeMillis()
+            )
+            pollDao?.insertOrUpdatePoll(pollEntity)
+
+            messageDao.insertMessage(
+                MessageEntity(
+                    contactId = groupId,
+                    isOutgoing = true,
+                    seqEpoch = currentGroup.myCounterOut / 65536,
+                    seqNum = currentGroup.myCounterOut,
+                    ackNum = 0,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = "[Poll] $question",
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
+                    senderMemberId = currentGroup.myMemberId,
+                    senderName = "Me",
+                    pollId = pollIdStr
+                )
+            )
+
+            groupDao.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
+                lastActive = System.currentTimeMillis()
+            )
+
+            val outboundFrames = targetSlots.map { slot ->
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = slot.target,
+                    payload = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false,
+                    seqNum = currentGroup.myCounterOut,
+                    contactId = groupId,
+                    timestamp = System.currentTimeMillis(),
+                    packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE
+                )
+            }
+
+            if (isStrictPoissonShaping()) {
+                outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
+            } else {
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                    outboundFrames.forEach { frame ->
+                        dhtLeafNode.putMutable(
+                            target = frame.target,
+                            v = frame.payload,
+                            seq = frame.seq,
+                            salt = frame.salt,
+                            sk = frame.sk
+                        )
+                    }
+                }
+            }
+
+            pollIdStr
+        }
+    }
+
+    suspend fun voteGroupPoll(
+        groupId: String,
+        pollId: String,
+        selectedBitmask: Int
+    ): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            val poll = pollDao?.getPoll(pollId) ?: return@withLock false
+            if (poll.isClosed || System.currentTimeMillis() > poll.expirationTimestamp) return@withLock false
+
+            if (group.myCounterOut > 0 && group.myCounterOut % BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL == 0) {
+                rotateGroupSenderKeyInternal(group)
+            }
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
+
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+            val pollIdBytes = uuidStringToBytes(pollId)
+            val voteTs = System.currentTimeMillis()
+
+            val plaintext = BinaryFrameCodec.encodeGroupPollVote(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = voteTs,
+                pollId = pollIdBytes,
+                selectedOptionsBitmask = selectedBitmask,
+                voteTimestamp = voteTs
+            )
+
+            pollDao.insertOrUpdateVote(
+                PollVoteEntity(
+                    pollId = pollId,
+                    memberId = currentGroup.myMemberId,
+                    memberName = "Me",
+                    selectedBitmask = selectedBitmask,
+                    voteTimestamp = voteTs
+                )
+            )
+
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            val shuffledMembers = if (activeMembers.size > 1) {
+                activeMembers.shuffled(CryptoUtils.secureRandom)
+            } else {
+                activeMembers
+            }
+
+            val targetSlots = if (shuffledMembers.isNotEmpty()) {
+                shuffledMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
+
+            groupDao.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
+                lastActive = System.currentTimeMillis()
+            )
+
+            val outboundFrames = targetSlots.map { slot ->
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = slot.target,
+                    payload = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false,
+                    seqNum = currentGroup.myCounterOut,
+                    contactId = groupId,
+                    timestamp = voteTs,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE
+                )
+            }
+
+            if (isStrictPoissonShaping()) {
+                outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
+            } else {
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                    outboundFrames.forEach { frame ->
+                        dhtLeafNode.putMutable(
+                            target = frame.target,
+                            v = frame.payload,
+                            seq = frame.seq,
+                            salt = frame.salt,
+                            sk = frame.sk
+                        )
+                    }
+                }
+            }
+
+            true
+        }
+    }
+
     suspend fun rotateGroupSenderKey(groupId: String): Boolean = withContext(Dispatchers.IO) {
         getGroupMutex(groupId).withLock {
             val group = groupDao?.getGroupById(groupId) ?: return@withLock false
@@ -5592,6 +6072,65 @@ class ChatRepository(
                                             )
                                             onIncomingMessageDelivered?.invoke(groupId, "Voice Note (${assembled.totalDurationMs / 1000}s)", false)
                                         }
+                                    }
+                                }
+                                BinaryFrameCodec.TYPE_GROUP_POLL -> {
+                                    when (val pollPayload = frameMsg.payload) {
+                                        is BinaryFrameCodec.DecodedPayload.GroupPollCreate -> {
+                                            val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                            val seqEpoch = activeSlot.counter / 65536
+                                            val optionsJson = org.json.JSONArray(pollPayload.options).toString()
+                                            pollDao?.insertOrUpdatePoll(
+                                                PollEntity(
+                                                    pollId = pollIdStr,
+                                                    groupId = groupId,
+                                                    creatorMemberId = curMember.memberId,
+                                                    creatorName = curMember.rawMemberName,
+                                                    question = pollPayload.question,
+                                                    optionsJson = optionsJson,
+                                                    isMultiChoice = pollPayload.isMultiChoice,
+                                                    expirationTimestamp = pollPayload.expirationTimestamp,
+                                                    createdAt = frameMsg.timestampUTC
+                                                )
+                                            )
+                                            val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                            if (!alreadyExists) {
+                                                messageDao.insertMessage(
+                                                    MessageEntity(
+                                                        contactId = groupId,
+                                                        isOutgoing = false,
+                                                        seqEpoch = seqEpoch,
+                                                        seqNum = activeSlot.counter,
+                                                        ackNum = frameMsg.ackNum,
+                                                        timestamp = frameMsg.timestampUTC,
+                                                        textContent = "[Poll] ${pollPayload.question}",
+                                                        status = "DELIVERED",
+                                                        slotTarget = activeSlot.target,
+                                                        slotEdSeed = activeSlot.edPrivateKeySeed,
+                                                        senderMemberId = curMember.memberId,
+                                                        senderName = curMember.rawMemberName,
+                                                        pollId = pollIdStr
+                                                    )
+                                                )
+                                                onIncomingMessageDelivered?.invoke(groupId, "[Poll] ${pollPayload.question}", false)
+                                            }
+                                        }
+                                        is BinaryFrameCodec.DecodedPayload.GroupPollVote -> {
+                                            val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                            val poll = pollDao?.getPoll(pollIdStr)
+                                            if (poll != null && !poll.isClosed && System.currentTimeMillis() <= poll.expirationTimestamp) {
+                                                pollDao.insertOrUpdateVote(
+                                                    PollVoteEntity(
+                                                        pollId = pollIdStr,
+                                                        memberId = curMember.memberId,
+                                                        memberName = curMember.rawMemberName,
+                                                        selectedBitmask = pollPayload.selectedOptionsBitmask,
+                                                        voteTimestamp = pollPayload.voteTimestamp
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        else -> {}
                                     }
                                 }
                                 else -> {}

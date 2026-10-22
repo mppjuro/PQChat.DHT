@@ -23,9 +23,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pqchat.dht.data.settings.*
 import org.pqchat.dht.network.tor.TorState
-import org.pqchat.dht.ui.theme.ElectricGreen
-import org.pqchat.dht.ui.theme.LocalAppColors
-import org.pqchat.dht.ui.theme.NeonCyan
+import org.pqchat.dht.ui.theme.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.text.font.FontFamily
+import java.text.SimpleDateFormat
+import java.util.*
+import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.util.BatteryOptimizationHelper
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +61,13 @@ fun SettingsScreen(
     val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsState()
     val isAppLockPinSet by viewModel.isAppLockPinSet.collectAsState()
     val isDuressPinSet by viewModel.isDuressPinSet.collectAsState()
+    val isDeadManSwitchEnabled by viewModel.isDeadManSwitchEnabled.collectAsState()
+    val deadManSwitchTimeoutHours by viewModel.deadManSwitchTimeoutHours.collectAsState()
+    val deadManTrustedContactIds by viewModel.deadManTrustedContactIds.collectAsState()
+    val deadManEmergencyNote by viewModel.deadManEmergencyNote.collectAsState()
+    val lastUserActivityTimestamp by viewModel.lastUserActivityTimestamp.collectAsState()
+    val isCanaryTriggered by viewModel.isCanaryTriggered.collectAsState()
+    val contacts by viewModel.contacts.collectAsState()
 
     var showPinDialog by remember { mutableStateOf(false) }
     var showDuressPinDialog by remember { mutableStateOf(false) }
@@ -945,8 +955,296 @@ fun SettingsScreen(
                         }
                     }
 
-                    // Status Tor w czasie rzeczywistym
+                    // Real-time Tor status
                     TorStatusCard(isTorEnabled = isTorEnabled, torState = torState)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ==================== SECTION: SAFETY CANARY & DEAD MAN'S SWITCH ====================
+            SettingsSectionHeader(
+                title = "Dead Man's Switch & Safety Canary",
+                icon = Icons.Default.Shield
+            )
+
+            Surface(
+                color = appColors.surface,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, appColors.border, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Automated Dead Man's Switch",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = appColors.textPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "If no user activity or check-in is detected within the configured timeout period, the app automatically dispatches an encrypted 900 B emergency canary alarm frame to your designated trusted contacts within normal background Poisson cover traffic (zero traffic analysis signature).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // Master Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Dead Man's Switch",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isDeadManSwitchEnabled) "Active • Monitoring check-in timer" else "Disabled",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isDeadManSwitchEnabled) ElectricGreen else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isDeadManSwitchEnabled,
+                            onCheckedChange = { viewModel.setDeadManSwitchEnabled(it) },
+                            modifier = Modifier.testTag("settings_dead_man_switch_toggle")
+                        )
+                    }
+
+                    if (isDeadManSwitchEnabled) {
+                        HorizontalDivider(
+                            color = appColors.border,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        // Inactivity Timeout Selector
+                        Text(
+                            text = "Inactivity Timeout",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = appColors.textPrimary
+                        )
+                        Text(
+                            text = "Time without check-in before canary alarm triggers:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(12, 24, 48, 72, 168).forEach { hours ->
+                                val label = if (hours == 168) "7d" else "${hours}h"
+                                val isSelected = deadManSwitchTimeoutHours == hours
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { viewModel.setDeadManSwitchTimeoutHours(hours) },
+                                    label = { Text(label, fontSize = 12.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CryptoPurple,
+                                        selectedLabelColor = Color.White
+                                    ),
+                                    modifier = Modifier.testTag("settings_dead_man_timeout_$hours")
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(
+                            color = appColors.border,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        // Emergency Note
+                        Text(
+                            text = "Emergency Custom Note",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = appColors.textPrimary
+                        )
+                        Text(
+                            text = "Embedded into the encrypted 900 B canary frame upon dispatch:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+                        )
+                        OutlinedTextField(
+                            value = deadManEmergencyNote,
+                            onValueChange = { if (it.length <= 150) viewModel.setDeadManEmergencyNote(it) },
+                            placeholder = { Text("Emergency SOS note...") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_dead_man_note_input"),
+                            singleLine = false,
+                            maxLines = 3
+                        )
+
+                        HorizontalDivider(
+                            color = appColors.border,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        // Designated Trusted Contacts
+                        Text(
+                            text = "Designated Trusted Contacts",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = appColors.textPrimary
+                        )
+                        Text(
+                            text = "Select who receives the canary alarm (if none selected, all contacts are alerted on duress):",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.textSecondary,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+                        )
+
+                        if (contacts.isEmpty()) {
+                            Text(
+                                text = "No contacts added yet.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                contacts.filter { it.id != ChatRepository.SELF_CONTACT_ID }.forEach { contact ->
+                                    val isTrusted = deadManTrustedContactIds.contains(contact.id)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { viewModel.toggleDeadManTrustedContact(contact.id) }
+                                            .padding(vertical = 4.dp, horizontal = 4.dp)
+                                            .testTag("settings_dead_man_contact_${contact.id}")
+                                    ) {
+                                        Checkbox(
+                                            checked = isTrusted,
+                                            onCheckedChange = { viewModel.toggleDeadManTrustedContact(contact.id) },
+                                            colors = CheckboxDefaults.colors(checkedColor = CryptoPurple)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = contact.rawName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = appColors.textPrimary,
+                                            fontWeight = if (isTrusted) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(
+                            color = appColors.border,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
+                        // Check-in status & "I'm OK" button
+                        val lastCheckInStr = remember(lastUserActivityTimestamp) {
+                            if (lastUserActivityTimestamp > 0L) {
+                                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(lastUserActivityTimestamp))
+                            } else {
+                                "Never"
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    text = "Last Check-in",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = appColors.textPrimary
+                                )
+                                Text(
+                                    text = lastCheckInStr,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = appColors.textSecondary
+                                )
+                            }
+                            Button(
+                                onClick = { viewModel.recordUserActivity() },
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("settings_dead_man_checkin_button")
+                            ) {
+                                Text("I'm OK / Check-In", color = Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (isCanaryTriggered) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = CrimsonDanger.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, CrimsonDanger),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "⚠️ Canary frame was triggered and queued!",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = CrimsonDanger,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.resetCanaryTriggered() }
+                                    ) {
+                                        Text("Reset", color = CrimsonDanger, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Manual Emergency SOS Trigger
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = "Manual Emergency SOS",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = CrimsonDanger
+                            )
+                            Text(
+                                text = "Immediately queues a Safety Canary alarm frame into background cover traffic for all contacts.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = appColors.textSecondary
+                            )
+                        }
+                        Button(
+                            onClick = { viewModel.triggerManualSos() },
+                            colors = ButtonDefaults.buttonColors(containerColor = CrimsonDanger),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("settings_emergency_sos_button")
+                        ) {
+                            Text("SOS", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 

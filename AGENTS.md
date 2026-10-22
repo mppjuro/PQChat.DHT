@@ -97,6 +97,8 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
    * `0x07` – Message Reaction (`TYPE_REACTION`: emoji linked to target message)
    * `0x08` – Location Pin / Offline Safety Status (`TYPE_LOCATION_PIN`)
    * `0x09` – Push-To-Talk Micro-Voice Note (`TYPE_VOICE_NOTE`)
+   * `0x0A` – Single-Frame Cryptographic Group Poll (`TYPE_GROUP_POLL`: Poll Create and AAD-bound Vote)
+   * `0x0B` – Safety Canary / Dead Man's Switch (`TYPE_SAFETY_CANARY`: covert emergency alarm inside Poisson cover traffic)
 2. `SeqNum` (2 bytes, UInt16 Big-Endian): Sender's $Counter_{out}$.
 3. `AckNum` (2 bytes, UInt16 Big-Endian): Highest received sequence number from partner.
 4. `TimestampUTC` (8 bytes, Int64 Big-Endian): Unix timestamp of transmission in milliseconds.
@@ -164,8 +166,33 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
   * `CompressedVoiceBytesLength` ($V$): 2 bytes (UInt16 Big-Endian, value $\le 840$)
   * `Compressed Voice Stream`: $V$ bytes (up to 840 bytes, ~5.25s per frame, maximum 2520 bytes across 3 frames = ~15.75s)
   * `CSPRNG Padding`: padding to 859 B ($840 - V$ bytes)
+* **Type 0x0A (Single-Frame Cryptographic Group Poll):**
+  * **Subtype 0x01 (`POLL_SUBTYPE_CREATE`):**
+    * `PollSubType`: 1 byte (`0x01`)
+    * `PollID`: 16 bytes (UUID)
+    * `ExpirationTimestamp`: 8 bytes (Int64 Big-Endian)
+    * `Flags`: 1 byte (bit 0 = `POLL_FLAG_MULTI_CHOICE`)
+    * `QuestionLength` ($Q$): 2 bytes (UInt16 Big-Endian, value $\le 200$)
+    * `Question`: $Q$ bytes UTF-8 (maximum 200 bytes)
+    * `OptionCount` ($O$): 1 byte (UInt8, count of options, $2 \le O \le 8$)
+    * `Options`: array of $O$ entries: `OptionLen` (1 B) + `OptionText` (up to 64 B UTF-8)
+    * `CSPRNG Padding`: padding to 859 bytes.
+  * **Subtype 0x02 (`POLL_SUBTYPE_VOTE`):**
+    * `PollSubType`: 1 byte (`0x02`)
+    * `PollID`: 16 bytes (UUID)
+    * `SelectedOptionsBitmask`: 1 byte (bitmask of chosen options $0..7$)
+    * `VoteTimestamp`: 8 bytes (Int64 Big-Endian)
+    * `CSPRNG Padding`: 833 bytes CSPRNG noise (padding to 859 bytes).
+    *Note: Votes are AEAD encrypted with Group AAD ($\text{Target} \parallel GroupID \parallel SenderMemberID$) to prevent vote forgery or replay across group members.*
+* **Type 0x0B (Safety Canary / Dead Man's Switch):**
+  * `CanaryReason`: 1 byte (`0x01` – `DEAD_MAN_TIMEOUT`, `0x02` – `DURESS_PIN`, `0x03` – `MANUAL_SOS`)
+  * `TriggerTimestamp`: 8 bytes (Int64 Big-Endian)
+  * `EmergencyNoteLength` ($N$): 2 bytes (UInt16 Big-Endian, value $\le 848$)
+  * `EmergencyNote`: $N$ bytes UTF-8 (maximum 848 bytes)
+  * `CSPRNG Padding`: $848 - N$ bytes CSPRNG noise (padding to 859 bytes).
+  *Note: Safety Canary packets are strictly dispatched by replacing dummy CSPRNG cover traffic frames in `PoissonTrafficGenerator.emitDummyCover`, producing zero additional UDP packets and zero traffic analysis signature.*
 
-### Group Chats and Database Tables (`groups` and `group_members`):
+### Group Chats and Database Tables (`groups`, `group_members`, `polls`, `poll_votes`):
 * **Distribution and Addressing Model:** Each participant maintains their own outbound chain ($myChainKeyOut$). Group messages are transmitted to individual recipient slots:
   $$\text{Target}_{slot} = \text{RatchetChain.deriveGroupRecipientSlot}(ChainKey, Counter, GroupID, SenderMemberID, RecipientMemberID)$$
   which completely eliminates observer correlation (Group Follower Correlation).
@@ -184,6 +211,13 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
   * `chainKeyIn` (BLOB, `EncryptedBlob` bound to row in Keystore), `counterIn` (INTEGER)
   * `joinedAt` (INTEGER), `isActive` (INTEGER, BOOLEAN)
   * `receivedBitmapBase` (INTEGER), `receivedBitmap` (BLOB — sliding bitmap for replay protection)
+* **`polls` Table:**
+  * `pollId` (TEXT, PRIMARY KEY, UUID), `groupId` (TEXT), `creatorMemberId` (TEXT)
+  * `question` (TEXT), `optionsJson` (TEXT), `isMultiChoice` (INTEGER, BOOLEAN)
+  * `expirationTimestamp` (INTEGER), `createdAt` (INTEGER), `isClosed` (INTEGER, BOOLEAN)
+* **`poll_votes` Table:**
+  * `pollId` (TEXT), `voterMemberId` (TEXT), PRIMARY KEY (`pollId`, `voterMemberId`)
+  * `selectedOptionsBitmask` (INTEGER), `voteTimestamp` (INTEGER)
 
 ### Additional Fixed 900 B Record Types:
 * **Cover-Traffic ACK:** Symmetrically encrypted acknowledgment packet concealed in noise at $\text{Target}_{ACK}$, with rigid 900-byte size (`CoverAckProtocol`).

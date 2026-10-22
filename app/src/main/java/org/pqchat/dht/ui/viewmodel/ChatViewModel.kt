@@ -29,9 +29,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as? org.pqchat.dht.PQChatApplication
     private val database = app?.database ?: AppDatabase.getInstance(application)
     val dhtLeafNode = app?.dhtLeafNode ?: DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
-    val repository = app?.repository ?: ChatRepository(database, dhtLeafNode)
-
     val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(application)
+    val repository = app?.repository ?: ChatRepository(database, dhtLeafNode, settingsManager = settingsManager)
     val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(
         dhtLeafNode,
         blindRepublishPool = repository.blindRepublishPool,
@@ -185,6 +184,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun triggerDuressMode() {
+        runCatching {
+            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                kotlinx.coroutines.withTimeoutOrNull(2000L) {
+                    repository.triggerSafetyCanary(org.pqchat.dht.crypto.BinaryFrameCodec.CANARY_REASON_DURESS_PIN)
+                }
+            }
+        }
         org.pqchat.dht.crypto.KeystoreCrypto.deleteMasterKey()
         settingsManager.setDuressActive(true)
     }
@@ -195,6 +201,60 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setStrictPoissonShapingEnabled(enabled: Boolean) {
         settingsManager.setStrictPoissonShapingEnabled(enabled)
+    }
+
+    // Safety Canary / Dead Man's Switch
+    val isDeadManSwitchEnabled: StateFlow<Boolean> = settingsManager.isDeadManSwitchEnabled
+    val deadManSwitchTimeoutHours: StateFlow<Int> = settingsManager.deadManSwitchTimeoutHours
+    val deadManTrustedContactIds: StateFlow<Set<String>> = settingsManager.deadManTrustedContactIds
+    val deadManEmergencyNote: StateFlow<String> = settingsManager.deadManEmergencyNote
+    val lastUserActivityTimestamp: StateFlow<Long> = settingsManager.lastUserActivityTimestamp
+    val isCanaryTriggered: StateFlow<Boolean> = settingsManager.isCanaryTriggered
+
+    fun setDeadManSwitchEnabled(enabled: Boolean) {
+        settingsManager.setDeadManSwitchEnabled(enabled)
+    }
+
+    fun setDeadManSwitchTimeoutHours(hours: Int) {
+        settingsManager.setDeadManSwitchTimeoutHours(hours)
+    }
+
+    fun toggleDeadManTrustedContact(contactId: String) {
+        val current = settingsManager.deadManTrustedContactIds.value
+        if (current.contains(contactId)) {
+            settingsManager.removeDeadManTrustedContactId(contactId)
+        } else {
+            settingsManager.addDeadManTrustedContactId(contactId)
+        }
+    }
+
+    fun setDeadManEmergencyNote(note: String) {
+        settingsManager.setDeadManEmergencyNote(note)
+    }
+
+    fun recordUserActivity() {
+        settingsManager.recordUserActivity()
+    }
+
+    fun resetCanaryTriggered() {
+        settingsManager.setCanaryTriggered(false)
+    }
+
+    fun triggerManualSos(latitude: Double = 0.0, longitude: Double = 0.0, note: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val queued = repository.triggerSafetyCanary(
+                triggerReason = org.pqchat.dht.crypto.BinaryFrameCodec.CANARY_REASON_MANUAL_SOS,
+                latitude = latitude,
+                longitude = longitude,
+                customNote = note
+            )
+            settingsManager.setCanaryTriggered(true)
+            if (queued > 0) {
+                _statusNotification.value = "Emergency SOS canary queued ($queued contacts)"
+            } else {
+                _statusNotification.value = "No contacts available for SOS"
+            }
+        }
     }
 
     // Master's Thesis Research Telemetry & Firebase Sync
@@ -235,6 +295,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        repository.settingsManager = settingsManager
+        trafficGenerator.safetyCanaryProvider = { repository.pollPendingSafetyCanary() }
         if (app == null) {
             dhtLeafNode.start()
             trafficGenerator.start()
@@ -442,6 +504,59 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _statusNotification.value = "Message sent successfully"
             } else {
                 _statusNotification.value = "Failed to send message to DHT"
+            }
+        }
+    }
+
+    fun getPollFlow(pollId: String): Flow<org.pqchat.dht.data.db.PollEntity?> =
+        repository.getPollFlow(pollId)
+
+    fun getPollVotesFlow(pollId: String): Flow<List<org.pqchat.dht.data.db.PollVoteEntity>> =
+        repository.getPollVotesFlow(pollId)
+
+    fun getPollsForGroupFlow(groupId: String): Flow<List<org.pqchat.dht.data.db.PollEntity>> =
+        repository.getPollsForGroupFlow(groupId)
+
+    fun createGroupPoll(
+        groupId: String,
+        question: String,
+        options: List<String>,
+        isMultiChoice: Boolean,
+        durationHours: Int = 24
+    ) {
+        if (question.isBlank() || options.size < 2) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val pollId = repository.createGroupPoll(
+                groupId = groupId,
+                question = question.trim(),
+                options = options.map { it.trim() },
+                isMultiChoice = isMultiChoice,
+                durationHours = durationHours
+            )
+            if (pollId != null) {
+                _statusNotification.value = "Group poll created"
+            } else {
+                _statusNotification.value = "Failed to create group poll"
+            }
+        }
+    }
+
+    fun voteGroupPoll(
+        groupId: String,
+        pollId: String,
+        selectedBitmask: Int
+    ) {
+        if (selectedBitmask <= 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val success = repository.voteGroupPoll(
+                groupId = groupId,
+                pollId = pollId,
+                selectedBitmask = selectedBitmask
+            )
+            if (success) {
+                _statusNotification.value = "Vote submitted"
+            } else {
+                _statusNotification.value = "Failed to submit vote"
             }
         }
     }

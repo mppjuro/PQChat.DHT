@@ -13,18 +13,19 @@ import java.util.concurrent.ConcurrentLinkedDeque
  * 5: Cover ACK / Blind Republish / Decoy (weight 1)
  */
 enum class PacketClass(val priority: Int, val weight: Int) {
-    URGENT_CONTROL(1, 8),          // 1: pilne Rekey/Handshake
+    URGENT_CONTROL(1, 8),          // 1: urgent Rekey/Handshake/Canary
     DIRECT_MESSAGE(2, 4),          // 2: 1-on-1 messages and reactions
-    GROUP_MESSAGE(3, 2),           // 3: group messages
+    GROUP_MESSAGE(3, 2),           // 3: group messages and polls
     IMAGE_CHUNK(4, 1),             // 4: PNG8 image chunks
     BACKGROUND_COVER(5, 1);        // 5: Cover ACK / Blind Republish / Decoy
 
     companion object {
         fun fromType(msgType: Byte, isGroup: Boolean = false): PacketClass {
             return when (msgType) {
-                0x01.toByte(), 0x03.toByte(), 0x04.toByte(), 0x06.toByte() -> URGENT_CONTROL
+                0x01.toByte(), 0x03.toByte(), 0x04.toByte(), 0x06.toByte(), 0x0B.toByte() -> URGENT_CONTROL
                 0x05.toByte() -> IMAGE_CHUNK
-                0x02.toByte(), 0x07.toByte(), 0x08.toByte() -> if (isGroup) GROUP_MESSAGE else DIRECT_MESSAGE
+                0x0A.toByte() -> GROUP_MESSAGE
+                0x02.toByte(), 0x07.toByte(), 0x08.toByte(), 0x09.toByte() -> if (isGroup) GROUP_MESSAGE else DIRECT_MESSAGE
                 else -> DIRECT_MESSAGE
             }
         }

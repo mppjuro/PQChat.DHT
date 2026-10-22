@@ -170,7 +170,8 @@ data class MessageEntity(
     val expiresAtTimestamp: EncryptedLong? = null,
     val reaction: EncryptedText? = null,
     val voiceBytes: EncryptedBlob? = null,
-    val voiceDurationMs: Int = 0
+    val voiceDurationMs: Int = 0,
+    val pollId: String? = null
 ) {
     companion object {
         fun computeMessageRowId(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): String =
@@ -204,7 +205,8 @@ data class MessageEntity(
         expiresAtTimestamp: Long? = null,
         reaction: String? = null,
         voiceBytes: ByteArray? = null,
-        voiceDurationMs: Int = 0
+        voiceDurationMs: Int = 0,
+        pollId: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -246,7 +248,8 @@ data class MessageEntity(
         voiceBytes = voiceBytes?.let {
             EncryptedBlob(it, "messages", computeMessageRowId(contactId, seqEpoch, seqNum, isOutgoing), "voiceBytes")
         },
-        voiceDurationMs = voiceDurationMs
+        voiceDurationMs = voiceDurationMs,
+        pollId = pollId
     )
 
     @Ignore
@@ -270,7 +273,8 @@ data class MessageEntity(
         senderName: String? = null,
         ephemeralTtlSeconds: Long = 0L,
         expiresAtTimestamp: Long? = null,
-        reaction: String? = null
+        reaction: String? = null,
+        pollId: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -294,7 +298,8 @@ data class MessageEntity(
         expiresAtTimestamp = expiresAtTimestamp,
         reaction = reaction,
         voiceBytes = null,
-        voiceDurationMs = 0
+        voiceDurationMs = 0,
+        pollId = pollId
     )
 
     @Ignore
@@ -319,7 +324,8 @@ data class MessageEntity(
         senderName: String? = null,
         ephemeralTtlSeconds: Long = 0L,
         expiresAtTimestamp: Long? = null,
-        reaction: String? = null
+        reaction: String? = null,
+        pollId: String? = null
     ) : this(
         id = id,
         contactId = contactId,
@@ -343,7 +349,8 @@ data class MessageEntity(
         expiresAtTimestamp = expiresAtTimestamp,
         reaction = reaction,
         voiceBytes = voiceBytes,
-        voiceDurationMs = voiceDurationMs
+        voiceDurationMs = voiceDurationMs,
+        pollId = pollId
     )
 
     init {
@@ -1390,5 +1397,79 @@ interface GroupMemberDao {
 
     @Query("DELETE FROM group_members WHERE groupId = :groupId")
     suspend fun deleteMembersForGroup(groupId: String)
+}
+
+@Entity(
+    tableName = "polls",
+    indices = [
+        Index(value = ["groupId"])
+    ]
+)
+data class PollEntity(
+    @PrimaryKey
+    val pollId: String,
+    val groupId: String,
+    val creatorMemberId: String,
+    val creatorName: String,
+    val question: String,
+    val optionsJson: String,
+    val isMultiChoice: Boolean,
+    val expirationTimestamp: Long,
+    val createdAt: Long = System.currentTimeMillis(),
+    val isClosed: Boolean = false
+) {
+    val optionsList: List<String>
+        get() = try {
+            val array = org.json.JSONArray(optionsJson)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                list.add(array.getString(i))
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+}
+
+@Entity(
+    tableName = "poll_votes",
+    primaryKeys = ["pollId", "memberId"],
+    indices = [
+        Index(value = ["pollId"])
+    ]
+)
+data class PollVoteEntity(
+    val pollId: String,
+    val memberId: String,
+    val memberName: String,
+    val selectedBitmask: Int,
+    val voteTimestamp: Long
+)
+
+@Dao
+interface PollDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdatePoll(poll: PollEntity)
+
+    @Query("SELECT * FROM polls WHERE pollId = :pollId LIMIT 1")
+    suspend fun getPoll(pollId: String): PollEntity?
+
+    @Query("SELECT * FROM polls WHERE pollId = :pollId LIMIT 1")
+    fun getPollFlow(pollId: String): Flow<PollEntity?>
+
+    @Query("SELECT * FROM polls WHERE groupId = :groupId ORDER BY createdAt DESC")
+    fun getPollsForGroupFlow(groupId: String): Flow<List<PollEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateVote(vote: PollVoteEntity)
+
+    @Query("SELECT * FROM poll_votes WHERE pollId = :pollId")
+    suspend fun getVotesForPoll(pollId: String): List<PollVoteEntity>
+
+    @Query("SELECT * FROM poll_votes WHERE pollId = :pollId")
+    fun getVotesForPollFlow(pollId: String): Flow<List<PollVoteEntity>>
+
+    @Query("UPDATE polls SET isClosed = 1 WHERE pollId = :pollId")
+    suspend fun closePoll(pollId: String)
 }
 

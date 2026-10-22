@@ -31,11 +31,27 @@ object BinaryFrameCodec {
     const val TYPE_REACTION: Byte = 0x07
     const val TYPE_LOCATION_PIN: Byte = 0x08
     const val TYPE_VOICE_NOTE: Byte = 0x09
+    const val TYPE_GROUP_POLL: Byte = 0x0A
+    const val TYPE_SAFETY_CANARY: Byte = 0x0B
 
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
     const val GROUP_SUBTYPE_LEAVE: Byte = 0x03
     const val GROUP_REKEY_MESSAGE_INTERVAL = 50
+
+    const val POLL_SUBTYPE_CREATE: Byte = 0x01
+    const val POLL_SUBTYPE_VOTE: Byte = 0x02
+
+    const val POLL_FLAG_MULTI_CHOICE: Byte = 0x01
+    const val POLL_MAX_QUESTION_SIZE = 200
+    const val POLL_MAX_OPTIONS = 8
+    const val POLL_MIN_OPTIONS = 2
+    const val POLL_MAX_OPTION_SIZE = 64
+
+    const val CANARY_REASON_DEAD_MAN_TIMEOUT: Byte = 0x01
+    const val CANARY_REASON_DURESS_PIN: Byte = 0x02
+    const val CANARY_REASON_MANUAL_SOS: Byte = 0x03
+    const val CANARY_MAX_NOTE_SIZE = 300
 
     const val T7_MAX_EMOJI_SIZE = 64
     const val T8_MAX_NOTE_SIZE = 829 // 859 - 30 (lat:8, lon:8, alt:8, acc:4, len:2)
@@ -248,6 +264,94 @@ object BinaryFrameCodec {
                 result = 31 * result + codecMode.toInt()
                 result = 31 * result + voiceData.contentHashCode()
                 result = 31 * result + ephemeralTtlSeconds.hashCode()
+                return result
+            }
+        }
+
+        data class GroupPollCreate(
+            val pollId: ByteArray, // 16 bytes UUID
+            val expirationTimestamp: Long,
+            val flags: Byte,
+            val question: String,
+            val options: List<String>
+        ) : DecodedPayload() {
+            val pollSubType: Byte get() = POLL_SUBTYPE_CREATE
+            val isMultiChoice: Boolean get() = (flags.toInt() and POLL_FLAG_MULTI_CHOICE.toInt()) != 0
+
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupPollCreate) return false
+                return pollId.contentEquals(other.pollId) &&
+                        expirationTimestamp == other.expirationTimestamp &&
+                        flags == other.flags &&
+                        question == other.question &&
+                        options == other.options
+            }
+
+            override fun hashCode(): Int {
+                var result = pollId.contentHashCode()
+                result = 31 * result + expirationTimestamp.hashCode()
+                result = 31 * result + flags.toInt()
+                result = 31 * result + question.hashCode()
+                result = 31 * result + options.hashCode()
+                return result
+            }
+        }
+
+        data class GroupPollVote(
+            val pollId: ByteArray, // 16 bytes UUID
+            val selectedOptionsBitmask: Int, // 1 byte unsigned 0..255
+            val voteTimestamp: Long
+        ) : DecodedPayload() {
+            val pollSubType: Byte get() = POLL_SUBTYPE_VOTE
+
+            fun isOptionSelected(index: Int): Boolean {
+                if (index !in 0..7) return false
+                return (selectedOptionsBitmask and (1 shl index)) != 0
+            }
+
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupPollVote) return false
+                return pollId.contentEquals(other.pollId) &&
+                        selectedOptionsBitmask == other.selectedOptionsBitmask &&
+                        voteTimestamp == other.voteTimestamp
+            }
+
+            override fun hashCode(): Int {
+                var result = pollId.contentHashCode()
+                result = 31 * result + selectedOptionsBitmask
+                result = 31 * result + voteTimestamp.hashCode()
+                return result
+            }
+        }
+
+        data class SafetyCanary(
+            val triggerReason: Byte,
+            val canaryId: ByteArray, // 16 bytes UUID
+            val triggerTimestamp: Long,
+            val latitude: Double,
+            val longitude: Double,
+            val note: String
+        ) : DecodedPayload() {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is SafetyCanary) return false
+                return triggerReason == other.triggerReason &&
+                        canaryId.contentEquals(other.canaryId) &&
+                        triggerTimestamp == other.triggerTimestamp &&
+                        latitude == other.latitude &&
+                        longitude == other.longitude &&
+                        note == other.note
+            }
+
+            override fun hashCode(): Int {
+                var result = triggerReason.toInt()
+                result = 31 * result + canaryId.contentHashCode()
+                result = 31 * result + triggerTimestamp.hashCode()
+                result = 31 * result + latitude.hashCode()
+                result = 31 * result + longitude.hashCode()
+                result = 31 * result + note.hashCode()
                 return result
             }
         }
@@ -643,6 +747,109 @@ object BinaryFrameCodec {
         return packPlaintext(TYPE_VOICE_NOTE, seqNum, ackNum, timestampUTC, buffer.array())
     }
 
+    fun encodeGroupPollCreate(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        pollId: ByteArray,
+        expirationTimestamp: Long,
+        flags: Byte,
+        question: String,
+        options: List<String>
+    ): ByteArray {
+        require(pollId.size == 16) { "PollId must be exactly 16 bytes (UUID)" }
+        require(options.size in POLL_MIN_OPTIONS..POLL_MAX_OPTIONS) {
+            "Poll options count must be between $POLL_MIN_OPTIONS and $POLL_MAX_OPTIONS, got ${options.size}"
+        }
+        val qBytes = question.toByteArray(Charsets.UTF_8)
+        require(qBytes.size <= POLL_MAX_QUESTION_SIZE) {
+            "Question byte length ${qBytes.size} exceeds maximum $POLL_MAX_QUESTION_SIZE"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(POLL_SUBTYPE_CREATE)
+        buffer.put(pollId)
+        buffer.putLong(expirationTimestamp)
+        buffer.put(flags)
+        buffer.putShort(qBytes.size.toShort())
+        buffer.put(qBytes)
+        buffer.put(options.size.toByte())
+        for (opt in options) {
+            val optBytes = opt.toByteArray(Charsets.UTF_8)
+            require(optBytes.size <= POLL_MAX_OPTION_SIZE) {
+                "Option '$opt' length ${optBytes.size} exceeds maximum $POLL_MAX_OPTION_SIZE bytes"
+            }
+            buffer.put(optBytes.size.toByte())
+            buffer.put(optBytes)
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
+    fun encodeGroupPollVote(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        pollId: ByteArray,
+        selectedOptionsBitmask: Int,
+        voteTimestamp: Long
+    ): ByteArray {
+        require(pollId.size == 16) { "PollId must be exactly 16 bytes (UUID)" }
+        require(selectedOptionsBitmask in 0..0xFF) { "Selected options bitmask must fit in 1 byte (0..255)" }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(POLL_SUBTYPE_VOTE)
+        buffer.put(pollId)
+        buffer.put(selectedOptionsBitmask.toByte())
+        buffer.putLong(voteTimestamp)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
+    fun encodeSafetyCanary(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        triggerReason: Byte,
+        canaryId: ByteArray,
+        triggerTimestamp: Long,
+        latitude: Double = 0.0,
+        longitude: Double = 0.0,
+        note: String = ""
+    ): ByteArray {
+        require(canaryId.size == 16) { "CanaryId must be exactly 16 bytes (UUID)" }
+        val noteBytes = note.toByteArray(Charsets.UTF_8)
+        require(noteBytes.size <= CANARY_MAX_NOTE_SIZE) {
+            "Safety canary note length ${noteBytes.size} exceeds maximum $CANARY_MAX_NOTE_SIZE bytes"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(triggerReason)
+        buffer.put(canaryId)
+        buffer.putLong(triggerTimestamp)
+        buffer.putDouble(latitude)
+        buffer.putDouble(longitude)
+        buffer.putShort(noteBytes.size.toShort())
+        buffer.put(noteBytes)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_SAFETY_CANARY, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
     private fun packPlaintext(
         msgType: Byte,
         seqNum: Int,
@@ -890,6 +1097,93 @@ object BinaryFrameCodec {
                         codecMode = mode,
                         voiceData = voiceBytes,
                         ephemeralTtlSeconds = ttl
+                    )
+                }
+                TYPE_GROUP_POLL -> {
+                    require(buffer.remaining() >= 1) { "Malformed group poll payload: missing subtype" }
+                    val subType = buffer.get()
+                    when (subType) {
+                        POLL_SUBTYPE_CREATE -> {
+                            require(buffer.remaining() >= 16 + 8 + 1 + 2 + 1) {
+                                "Malformed poll create payload: expected header bytes"
+                            }
+                            val pId = ByteArray(16)
+                            buffer.get(pId)
+                            val expiration = buffer.long
+                            val flags = buffer.get()
+                            val qLen = buffer.short.toInt() and 0xFFFF
+                            require(qLen in 0..POLL_MAX_QUESTION_SIZE && qLen <= buffer.remaining()) {
+                                "Invalid poll question length: $qLen"
+                            }
+                            val qBytes = ByteArray(qLen)
+                            buffer.get(qBytes)
+                            val questionStr = String(qBytes, Charsets.UTF_8)
+                            require(buffer.remaining() >= 1) { "Malformed poll create: missing option count" }
+                            val optCount = buffer.get().toInt() and 0xFF
+                            require(optCount in POLL_MIN_OPTIONS..POLL_MAX_OPTIONS) {
+                                "Invalid poll option count: $optCount"
+                            }
+                            val optionsList = mutableListOf<String>()
+                            for (i in 0 until optCount) {
+                                require(buffer.remaining() >= 1) { "Malformed poll option $i header" }
+                                val optLen = buffer.get().toInt() and 0xFF
+                                require(optLen in 0..POLL_MAX_OPTION_SIZE && optLen <= buffer.remaining()) {
+                                    "Invalid poll option $i length: $optLen"
+                                }
+                                val optBytes = ByteArray(optLen)
+                                buffer.get(optBytes)
+                                optionsList.add(String(optBytes, Charsets.UTF_8))
+                            }
+                            DecodedPayload.GroupPollCreate(
+                                pollId = pId,
+                                expirationTimestamp = expiration,
+                                flags = flags,
+                                question = questionStr,
+                                options = optionsList
+                            )
+                        }
+                        POLL_SUBTYPE_VOTE -> {
+                            require(buffer.remaining() >= 16 + 1 + 8) {
+                                "Malformed poll vote payload: expected at least 25 bytes"
+                            }
+                            val pId = ByteArray(16)
+                            buffer.get(pId)
+                            val bitmask = buffer.get().toInt() and 0xFF
+                            val voteTs = buffer.long
+                            DecodedPayload.GroupPollVote(
+                                pollId = pId,
+                                selectedOptionsBitmask = bitmask,
+                                voteTimestamp = voteTs
+                            )
+                        }
+                        else -> throw IllegalArgumentException("Unknown group poll subtype: 0x%02X".format(subType))
+                    }
+                }
+                TYPE_SAFETY_CANARY -> {
+                    val minSize = 1 + 16 + 8 + 8 + 8 + 2
+                    require(buffer.remaining() >= minSize) {
+                        "Malformed safety canary payload: expected at least $minSize bytes"
+                    }
+                    val reason = buffer.get()
+                    val cId = ByteArray(16)
+                    buffer.get(cId)
+                    val trigTs = buffer.long
+                    val lat = buffer.double
+                    val lon = buffer.double
+                    val nLen = buffer.short.toInt() and 0xFFFF
+                    require(nLen in 0..CANARY_MAX_NOTE_SIZE && nLen <= buffer.remaining()) {
+                        "Invalid canary note length: $nLen"
+                    }
+                    val nBytes = ByteArray(nLen)
+                    buffer.get(nBytes)
+                    val noteStr = String(nBytes, Charsets.UTF_8)
+                    DecodedPayload.SafetyCanary(
+                        triggerReason = reason,
+                        canaryId = cId,
+                        triggerTimestamp = trigTs,
+                        latitude = lat,
+                        longitude = lon,
+                        note = noteStr
                     )
                 }
                 else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))

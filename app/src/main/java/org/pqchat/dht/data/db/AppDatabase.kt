@@ -18,9 +18,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingRekeyOfferEntity::class,
         SkippedKeyEntity::class,
         GroupEntity::class,
-        GroupMemberEntity::class
+        GroupMemberEntity::class,
+        PollEntity::class,
+        PollVoteEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -33,6 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun skippedKeyDao(): SkippedKeyDao
     abstract fun groupDao(): GroupDao
     abstract fun groupMemberDao(): GroupMemberDao
+    abstract fun pollDao(): PollDao
 
     companion object {
         @Volatile
@@ -643,6 +646,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN pollId TEXT")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS polls (
+                        pollId TEXT NOT NULL PRIMARY KEY,
+                        groupId TEXT NOT NULL,
+                        creatorMemberId TEXT NOT NULL,
+                        creatorName TEXT NOT NULL,
+                        question TEXT NOT NULL,
+                        optionsJson TEXT NOT NULL,
+                        isMultiChoice INTEGER NOT NULL,
+                        expirationTimestamp INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        isClosed INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_polls_groupId ON polls (groupId)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS poll_votes (
+                        pollId TEXT NOT NULL,
+                        memberId TEXT NOT NULL,
+                        memberName TEXT NOT NULL,
+                        selectedBitmask INTEGER NOT NULL,
+                        voteTimestamp INTEGER NOT NULL,
+                        PRIMARY KEY (pollId, memberId)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_poll_votes_pollId ON poll_votes (pollId)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -650,7 +685,12 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pqchat_dht.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                        MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
+                    )
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                 INSTANCE = instance

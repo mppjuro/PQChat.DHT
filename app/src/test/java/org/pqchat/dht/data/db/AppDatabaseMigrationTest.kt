@@ -824,5 +824,32 @@ class AppDatabaseMigrationTest {
         assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN voiceBytes BLOB") })
         assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN voiceDurationMs INTEGER NOT NULL DEFAULT 0") })
     }
+
+    @Test
+    fun testMigration15To16AddsPollTablesAndColumn() {
+        val executedSql = mutableListOf<String>()
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                when (method.name) {
+                    "execSQL" -> {
+                        val sql = args[0] as String
+                        executedSql.add(sql)
+                        null
+                    }
+                    else -> null
+                }
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_15_16.migrate(dbProxy)
+
+        assertTrue(executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN pollId TEXT") })
+        assertTrue(executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS polls") })
+        assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_polls_groupId ON polls (groupId)") })
+        assertTrue(executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS poll_votes") })
+        assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_poll_votes_pollId ON poll_votes (pollId)") })
+    }
 }
 

@@ -413,6 +413,32 @@ object MessageDebugLogger {
                 "ephemeralTtlSeconds" to p.ephemeralTtlSeconds,
                 "description" to "Ultra-low-bitrate PTT micro-voice note over BEP 44"
             )
+            is BinaryFrameCodec.DecodedPayload.GroupPollCreate -> linkedMapOf<String, Any?>(
+                "type" to "GroupPollCreate (0x0A:0x01)",
+                "pollId" to p.pollId.joinToString("") { "%02x".format(it) },
+                "question" to p.question,
+                "optionCount" to p.options.size,
+                "isMultiChoice" to p.isMultiChoice,
+                "expirationTimestamp" to p.expirationTimestamp,
+                "description" to "Single-frame cryptographic group poll creation"
+            )
+            is BinaryFrameCodec.DecodedPayload.GroupPollVote -> linkedMapOf<String, Any?>(
+                "type" to "GroupPollVote (0x0A:0x02)",
+                "pollId" to p.pollId.joinToString("") { "%02x".format(it) },
+                "selectedOptionsBitmask" to p.selectedOptionsBitmask,
+                "voteTimestamp" to p.voteTimestamp,
+                "description" to "Single-frame cryptographic group poll vote sealed with Group AAD"
+            )
+            is BinaryFrameCodec.DecodedPayload.SafetyCanary -> linkedMapOf<String, Any?>(
+                "type" to "SafetyCanary (0x0B)",
+                "triggerReason" to p.triggerReason,
+                "canaryId" to p.canaryId.joinToString("") { "%02x".format(it) },
+                "triggerTimestamp" to p.triggerTimestamp,
+                "latitude" to p.latitude,
+                "longitude" to p.longitude,
+                "note" to p.note,
+                "description" to "Dead Man's Switch / Duress safety canary alarm frame"
+            )
         }
 
         val pqcAnalysis = when (frameMsg.msgType) {

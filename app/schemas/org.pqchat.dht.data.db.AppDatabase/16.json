@@ -1,0 +1,902 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 16,
+    "identityHash": "b0923361899a4ad27fceeeae39013db1",
+    "entities": [
+      {
+        "tableName": "contacts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `chainKeyOut` BLOB NOT NULL, `chainKeyIn` BLOB NOT NULL, `counterOut` INTEGER NOT NULL, `counterIn` INTEGER NOT NULL, `rekeyEpoch` INTEGER NOT NULL, `receivedBitmapBase` INTEGER NOT NULL, `receivedBitmap` BLOB NOT NULL, `lastActive` INTEGER NOT NULL, `isInitiator` INTEGER NOT NULL, `sas` TEXT NOT NULL, `fingerprint` TEXT NOT NULL, `isVerified` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chainKeyOut",
+            "columnName": "chainKeyOut",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chainKeyIn",
+            "columnName": "chainKeyIn",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "counterOut",
+            "columnName": "counterOut",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "counterIn",
+            "columnName": "counterIn",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rekeyEpoch",
+            "columnName": "rekeyEpoch",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedBitmapBase",
+            "columnName": "receivedBitmapBase",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedBitmap",
+            "columnName": "receivedBitmap",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastActive",
+            "columnName": "lastActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isInitiator",
+            "columnName": "isInitiator",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sas",
+            "columnName": "sas",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fingerprint",
+            "columnName": "fingerprint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isVerified",
+            "columnName": "isVerified",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `contactId` TEXT NOT NULL, `isOutgoing` INTEGER NOT NULL, `seqEpoch` INTEGER NOT NULL, `seqNum` INTEGER NOT NULL, `ackNum` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `textContent` TEXT, `imageBytes` BLOB, `status` TEXT NOT NULL, `retryCount` INTEGER NOT NULL, `lastAttemptTimestamp` INTEGER NOT NULL, `ackTarget` BLOB, `ackRatchetKey` BLOB, `slotTarget` BLOB, `slotEdSeed` BLOB, `senderMemberId` TEXT, `senderName` TEXT, `ephemeralTtlSeconds` TEXT NOT NULL, `expiresAtTimestamp` TEXT, `reaction` TEXT, `voiceBytes` BLOB, `voiceDurationMs` INTEGER NOT NULL, `pollId` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contactId",
+            "columnName": "contactId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isOutgoing",
+            "columnName": "isOutgoing",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seqEpoch",
+            "columnName": "seqEpoch",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seqNum",
+            "columnName": "seqNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ackNum",
+            "columnName": "ackNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "textContent",
+            "columnName": "textContent",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "imageBytes",
+            "columnName": "imageBytes",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "retryCount",
+            "columnName": "retryCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAttemptTimestamp",
+            "columnName": "lastAttemptTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ackTarget",
+            "columnName": "ackTarget",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "ackRatchetKey",
+            "columnName": "ackRatchetKey",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "slotTarget",
+            "columnName": "slotTarget",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "slotEdSeed",
+            "columnName": "slotEdSeed",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "senderMemberId",
+            "columnName": "senderMemberId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "senderName",
+            "columnName": "senderName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ephemeralTtlSeconds",
+            "columnName": "ephemeralTtlSeconds",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAtTimestamp",
+            "columnName": "expiresAtTimestamp",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reaction",
+            "columnName": "reaction",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "voiceBytes",
+            "columnName": "voiceBytes",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "voiceDurationMs",
+            "columnName": "voiceDurationMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_messages_contactId_seqEpoch_seqNum",
+            "unique": false,
+            "columnNames": [
+              "contactId",
+              "seqEpoch",
+              "seqNum"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_contactId_seqEpoch_seqNum` ON `${TABLE_NAME}` (`contactId`, `seqEpoch`, `seqNum`)"
+          },
+          {
+            "name": "index_messages_timestamp",
+            "unique": false,
+            "columnNames": [
+              "timestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_timestamp` ON `${TABLE_NAME}` (`timestamp`)"
+          },
+          {
+            "name": "index_messages_expiresAtTimestamp",
+            "unique": false,
+            "columnNames": [
+              "expiresAtTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_expiresAtTimestamp` ON `${TABLE_NAME}` (`expiresAtTimestamp`)"
+          }
+        ]
+      },
+      {
+        "tableName": "chunks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`transferId` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, `totalChunks` INTEGER NOT NULL, `data` BLOB NOT NULL, PRIMARY KEY(`transferId`, `chunkIndex`))",
+        "fields": [
+          {
+            "fieldPath": "transferId",
+            "columnName": "transferId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chunkIndex",
+            "columnName": "chunkIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalChunks",
+            "columnName": "totalChunks",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "data",
+            "columnName": "data",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "transferId",
+            "chunkIndex"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_chunk_transfers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`transferId` TEXT NOT NULL, `contactId` TEXT NOT NULL, `seqNum` INTEGER NOT NULL, `totalChunks` INTEGER NOT NULL, `missingIndices` TEXT NOT NULL, `baseEdSeed` BLOB NOT NULL, `baseMsgKey` BLOB NOT NULL, `direction` TEXT NOT NULL, `isSelf` INTEGER NOT NULL, `ackNum` INTEGER NOT NULL, `timestampUTC` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `expiresAt` INTEGER NOT NULL, PRIMARY KEY(`transferId`))",
+        "fields": [
+          {
+            "fieldPath": "transferId",
+            "columnName": "transferId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contactId",
+            "columnName": "contactId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seqNum",
+            "columnName": "seqNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalChunks",
+            "columnName": "totalChunks",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "missingIndices",
+            "columnName": "missingIndices",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseEdSeed",
+            "columnName": "baseEdSeed",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseMsgKey",
+            "columnName": "baseMsgKey",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "direction",
+            "columnName": "direction",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isSelf",
+            "columnName": "isSelf",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ackNum",
+            "columnName": "ackNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestampUTC",
+            "columnName": "timestampUTC",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expiresAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "transferId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pending_chunk_transfers_contactId",
+            "unique": false,
+            "columnNames": [
+              "contactId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pending_chunk_transfers_contactId` ON `${TABLE_NAME}` (`contactId`)"
+          },
+          {
+            "name": "index_pending_chunk_transfers_expiresAt",
+            "unique": false,
+            "columnNames": [
+              "expiresAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pending_chunk_transfers_expiresAt` ON `${TABLE_NAME}` (`expiresAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "dht_node_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`ip` TEXT NOT NULL, `port` INTEGER NOT NULL, `lastSeen` INTEGER NOT NULL, `rttMs` INTEGER NOT NULL, `nodeIdHex` TEXT, PRIMARY KEY(`ip`, `port`))",
+        "fields": [
+          {
+            "fieldPath": "ip",
+            "columnName": "ip",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "port",
+            "columnName": "port",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSeen",
+            "columnName": "lastSeen",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rttMs",
+            "columnName": "rttMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodeIdHex",
+            "columnName": "nodeIdHex",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "ip",
+            "port"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_dht_node_cache_rttMs",
+            "unique": false,
+            "columnNames": [
+              "rttMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_dht_node_cache_rttMs` ON `${TABLE_NAME}` (`rttMs`)"
+          },
+          {
+            "name": "index_dht_node_cache_lastSeen",
+            "unique": false,
+            "columnNames": [
+              "lastSeen"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_dht_node_cache_lastSeen` ON `${TABLE_NAME}` (`lastSeen`)"
+          }
+        ]
+      },
+      {
+        "tableName": "pending_rekey_offers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`contactId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `skNew` BLOB NOT NULL, `pkNew` BLOB NOT NULL, `offerSeqNum` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`contactId`))",
+        "fields": [
+          {
+            "fieldPath": "contactId",
+            "columnName": "contactId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epoch",
+            "columnName": "epoch",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "skNew",
+            "columnName": "skNew",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pkNew",
+            "columnName": "pkNew",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "offerSeqNum",
+            "columnName": "offerSeqNum",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "contactId"
+          ]
+        }
+      },
+      {
+        "tableName": "skipped_keys",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`contactId` TEXT NOT NULL, `slotIndex` INTEGER NOT NULL, `msgKey` BLOB NOT NULL, `target` BLOB NOT NULL, `edPrivateKeySeed` BLOB NOT NULL, `createdAt` INTEGER NOT NULL, `expiresAt` INTEGER NOT NULL, PRIMARY KEY(`contactId`, `slotIndex`))",
+        "fields": [
+          {
+            "fieldPath": "contactId",
+            "columnName": "contactId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slotIndex",
+            "columnName": "slotIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "msgKey",
+            "columnName": "msgKey",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "target",
+            "columnName": "target",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "edPrivateKeySeed",
+            "columnName": "edPrivateKeySeed",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expiresAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "contactId",
+            "slotIndex"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_skipped_keys_expiresAt",
+            "unique": false,
+            "columnNames": [
+              "expiresAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_skipped_keys_expiresAt` ON `${TABLE_NAME}` (`expiresAt`)"
+          }
+        ]
+      },
+      {
+        "tableName": "groups",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`groupId` TEXT NOT NULL, `groupName` TEXT NOT NULL, `myMemberId` TEXT NOT NULL, `myChainKeyOut` BLOB NOT NULL, `myCounterOut` INTEGER NOT NULL, `groupEpoch` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `lastActive` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, PRIMARY KEY(`groupId`))",
+        "fields": [
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupName",
+            "columnName": "groupName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myMemberId",
+            "columnName": "myMemberId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myChainKeyOut",
+            "columnName": "myChainKeyOut",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myCounterOut",
+            "columnName": "myCounterOut",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupEpoch",
+            "columnName": "groupEpoch",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastActive",
+            "columnName": "lastActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "groupId"
+          ]
+        }
+      },
+      {
+        "tableName": "group_members",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`groupId` TEXT NOT NULL, `memberId` TEXT NOT NULL, `contactId` TEXT, `memberName` TEXT NOT NULL, `chainKeyIn` BLOB NOT NULL, `counterIn` INTEGER NOT NULL, `receivedBitmapBase` INTEGER NOT NULL, `receivedBitmap` BLOB NOT NULL, `joinedAt` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, PRIMARY KEY(`groupId`, `memberId`))",
+        "fields": [
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberId",
+            "columnName": "memberId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contactId",
+            "columnName": "contactId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "memberName",
+            "columnName": "memberName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chainKeyIn",
+            "columnName": "chainKeyIn",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "counterIn",
+            "columnName": "counterIn",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedBitmapBase",
+            "columnName": "receivedBitmapBase",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedBitmap",
+            "columnName": "receivedBitmap",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "joinedAt",
+            "columnName": "joinedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "groupId",
+            "memberId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_group_members_groupId",
+            "unique": false,
+            "columnNames": [
+              "groupId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_group_members_groupId` ON `${TABLE_NAME}` (`groupId`)"
+          },
+          {
+            "name": "index_group_members_contactId",
+            "unique": false,
+            "columnNames": [
+              "contactId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_group_members_contactId` ON `${TABLE_NAME}` (`contactId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "polls",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pollId` TEXT NOT NULL, `groupId` TEXT NOT NULL, `creatorMemberId` TEXT NOT NULL, `creatorName` TEXT NOT NULL, `question` TEXT NOT NULL, `optionsJson` TEXT NOT NULL, `isMultiChoice` INTEGER NOT NULL, `expirationTimestamp` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `isClosed` INTEGER NOT NULL, PRIMARY KEY(`pollId`))",
+        "fields": [
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupId",
+            "columnName": "groupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creatorMemberId",
+            "columnName": "creatorMemberId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creatorName",
+            "columnName": "creatorName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "question",
+            "columnName": "question",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "optionsJson",
+            "columnName": "optionsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isMultiChoice",
+            "columnName": "isMultiChoice",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expirationTimestamp",
+            "columnName": "expirationTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isClosed",
+            "columnName": "isClosed",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pollId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_polls_groupId",
+            "unique": false,
+            "columnNames": [
+              "groupId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_polls_groupId` ON `${TABLE_NAME}` (`groupId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "poll_votes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pollId` TEXT NOT NULL, `memberId` TEXT NOT NULL, `memberName` TEXT NOT NULL, `selectedBitmask` INTEGER NOT NULL, `voteTimestamp` INTEGER NOT NULL, PRIMARY KEY(`pollId`, `memberId`))",
+        "fields": [
+          {
+            "fieldPath": "pollId",
+            "columnName": "pollId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberId",
+            "columnName": "memberId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "memberName",
+            "columnName": "memberName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectedBitmask",
+            "columnName": "selectedBitmask",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "voteTimestamp",
+            "columnName": "voteTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pollId",
+            "memberId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_poll_votes_pollId",
+            "unique": false,
+            "columnNames": [
+              "pollId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_poll_votes_pollId` ON `${TABLE_NAME}` (`pollId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b0923361899a4ad27fceeeae39013db1')"
+    ]
+  }
+}

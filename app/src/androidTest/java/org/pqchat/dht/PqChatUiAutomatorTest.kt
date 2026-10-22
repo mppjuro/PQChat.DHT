@@ -188,7 +188,7 @@ class PqChatUiAutomatorTest {
         // Verify rendezvous text
         composeTestRule.onNodeWithText("Rendezvous Target_0 (SHA-1):").assertIsDisplayed()
 
-        // Physically click 'Nowy kod QR' button to regenerate
+        // Physically click 'New QR Code' button to regenerate
         clickTagByPixelCoordinates("handshake_new_qr_button")
         composeTestRule.onNodeWithTag("handshake_qr_code_card").assertIsDisplayed()
 
@@ -282,7 +282,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("contact_list_settings_button")
 
         // Verify Settings title
-        composeTestRule.onNodeWithText("Ustawienia").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
         // Verify and physically click theme cards
         clickTagByPixelCoordinates("theme_dark_card")
@@ -352,7 +352,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("new_group_fab")
 
         // Verify Dialog
-        composeTestRule.onNodeWithText("Nowy czat grupowy").assertIsDisplayed()
+        composeTestRule.onNodeWithText("New Group Chat").assertIsDisplayed()
         composeTestRule.onNodeWithTag("create_group_name_input").assertIsDisplayed()
 
         // Input group name
@@ -416,7 +416,7 @@ class PqChatUiAutomatorTest {
         try {
             // Open Settings via physical click
             clickTagByPixelCoordinates("contact_list_settings_button")
-            composeTestRule.onNodeWithText("Ustawienia").assertIsDisplayed()
+            composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
             // 1. Configure Primary PIN
             clickTagByPixelCoordinates("settings_pin_setup_button")
@@ -597,9 +597,9 @@ class PqChatUiAutomatorTest {
 
         // Verify location pin message is dispatched and visible in chat
         composeTestRule.waitUntil(timeoutMillis = 5_000) {
-            composeTestRule.onAllNodesWithText("Pinezka lokalizacji", substring = true).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("Location Pin", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onAllNodesWithText("Pinezka lokalizacji", substring = true).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Location Pin", substring = true).onFirst().assertIsDisplayed()
 
         // Exit chat
         clickTagByPixelCoordinates("chat_back_button")
@@ -635,7 +635,7 @@ class PqChatUiAutomatorTest {
 
         // 2. Test Research Telemetry Informed Consent in Settings
         clickTagByPixelCoordinates("contact_list_settings_button")
-        composeTestRule.onNodeWithText("Ustawienia").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
         // Toggle research telemetry switch
         clickTagByPixelCoordinates("settings_research_telemetry_switch")
@@ -645,7 +645,7 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Informed Research Consent", substring = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("GWARANCJA ZEROWEGO WYCIEKU", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("ZERO LEAK GUARANTEE", substring = true).assertIsDisplayed()
 
         // Physically confirm informed consent
         clickTagByPixelCoordinates("research_consent_confirm_button")

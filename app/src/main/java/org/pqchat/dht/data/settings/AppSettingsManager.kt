@@ -226,6 +226,38 @@ class AppSettingsManager(
     )
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = _isStrictPoissonShapingEnabled.asStateFlow()
 
+    // Dead Man's Switch / Safety Canary configuration
+    private val _isDeadManSwitchEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_DEAD_MAN_SWITCH_ENABLED, false) ?: false
+    )
+    val isDeadManSwitchEnabled: StateFlow<Boolean> = _isDeadManSwitchEnabled.asStateFlow()
+
+    private val _deadManSwitchTimeoutHours = MutableStateFlow(
+        prefs?.getInt(KEY_DEAD_MAN_TIMEOUT_HOURS, 24) ?: 24
+    )
+    val deadManSwitchTimeoutHours: StateFlow<Int> = _deadManSwitchTimeoutHours.asStateFlow()
+
+    private val _deadManTrustedContactIds = MutableStateFlow<Set<String>>(
+        prefs?.getStringSet(KEY_DEAD_MAN_TRUSTED_CONTACTS, emptySet()) ?: emptySet()
+    )
+    val deadManTrustedContactIds: StateFlow<Set<String>> = _deadManTrustedContactIds.asStateFlow()
+
+    private val _deadManEmergencyNote = MutableStateFlow(
+        prefs?.getString(KEY_DEAD_MAN_EMERGENCY_NOTE, "Safety canary alert: User inactivity threshold reached or emergency SOS triggered.")
+            ?: "Safety canary alert: User inactivity threshold reached or emergency SOS triggered."
+    )
+    val deadManEmergencyNote: StateFlow<String> = _deadManEmergencyNote.asStateFlow()
+
+    private val _lastUserActivityTimestamp = MutableStateFlow(
+        prefs?.getLong(KEY_DEAD_MAN_LAST_ACTIVITY, System.currentTimeMillis()) ?: System.currentTimeMillis()
+    )
+    val lastUserActivityTimestamp: StateFlow<Long> = _lastUserActivityTimestamp.asStateFlow()
+
+    private val _isCanaryTriggered = MutableStateFlow(
+        prefs?.getBoolean(KEY_CANARY_TRIGGERED, false) ?: false
+    )
+    val isCanaryTriggered: StateFlow<Boolean> = _isCanaryTriggered.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs?.edit()?.putString(KEY_THEME_MODE, mode.name)?.apply()
         _themeMode.value = mode
@@ -423,6 +455,59 @@ class AppSettingsManager(
         _isStrictPoissonShapingEnabled.value = enabled
     }
 
+    fun setDeadManSwitchEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_DEAD_MAN_SWITCH_ENABLED, enabled)?.apply()
+        _isDeadManSwitchEnabled.value = enabled
+        if (enabled) {
+            recordUserActivity()
+        }
+    }
+
+    fun setDeadManSwitchTimeoutHours(hours: Int) {
+        val clamped = hours.coerceIn(1, 720)
+        prefs?.edit()?.putInt(KEY_DEAD_MAN_TIMEOUT_HOURS, clamped)?.apply()
+        _deadManSwitchTimeoutHours.value = clamped
+    }
+
+    fun setDeadManTrustedContactIds(ids: Set<String>) {
+        prefs?.edit()?.putStringSet(KEY_DEAD_MAN_TRUSTED_CONTACTS, ids)?.apply()
+        _deadManTrustedContactIds.value = ids
+    }
+
+    fun addDeadManTrustedContactId(contactId: String) {
+        val current = _deadManTrustedContactIds.value.toMutableSet()
+        current.add(contactId)
+        setDeadManTrustedContactIds(current)
+    }
+
+    fun removeDeadManTrustedContactId(contactId: String) {
+        val current = _deadManTrustedContactIds.value.toMutableSet()
+        current.remove(contactId)
+        setDeadManTrustedContactIds(current)
+    }
+
+    fun setDeadManEmergencyNote(note: String) {
+        prefs?.edit()?.putString(KEY_DEAD_MAN_EMERGENCY_NOTE, note)?.apply()
+        _deadManEmergencyNote.value = note
+    }
+
+    fun recordUserActivity(timestamp: Long = System.currentTimeMillis()) {
+        prefs?.edit()?.putLong(KEY_DEAD_MAN_LAST_ACTIVITY, timestamp)?.apply()
+        _lastUserActivityTimestamp.value = timestamp
+    }
+
+    fun setCanaryTriggered(triggered: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_CANARY_TRIGGERED, triggered)?.apply()
+        _isCanaryTriggered.value = triggered
+    }
+
+    fun isDeadManSwitchExpired(): Boolean {
+        if (!_isDeadManSwitchEnabled.value || _isCanaryTriggered.value) return false
+        val timeoutMs = _deadManSwitchTimeoutHours.value * 3600_000L
+        val elapsed = System.currentTimeMillis() - _lastUserActivityTimestamp.value
+        return elapsed > timeoutMs
+    }
+
     fun getRepublishPolicy(): org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(
         tier1IntervalMs = _intervalRepublishTier1.value,
         tier1ThresholdMs = DefaultRepublishConfig.TIER1_THRESHOLD,
@@ -456,5 +541,24 @@ class AppSettingsManager(
         private const val KEY_ANONYMOUS_STATS = "anonymous_stats_enabled"
         private const val KEY_STATS_PROBE_INTERVAL = "stats_probe_interval"
         private const val KEY_STRICT_POISSON_SHAPING = "strict_poisson_shaping_enabled"
+        private const val KEY_DEAD_MAN_SWITCH_ENABLED = "dead_man_switch_enabled"
+        private const val KEY_DEAD_MAN_TIMEOUT_HOURS = "dead_man_timeout_hours"
+        private const val KEY_DEAD_MAN_TRUSTED_CONTACTS = "dead_man_trusted_contacts"
+        private const val KEY_DEAD_MAN_EMERGENCY_NOTE = "dead_man_emergency_note"
+        private const val KEY_DEAD_MAN_LAST_ACTIVITY = "dead_man_last_activity"
+        private const val KEY_CANARY_TRIGGERED = "canary_triggered"
     }
 }
+
+data class DeadManTimeoutOption(
+    val label: String,
+    val hours: Int
+)
+
+val DEAD_MAN_TIMEOUT_OPTIONS = listOf(
+    DeadManTimeoutOption("12 hours", 12),
+    DeadManTimeoutOption("24 hours (1 day)", 24),
+    DeadManTimeoutOption("48 hours (2 days)", 48),
+    DeadManTimeoutOption("72 hours (3 days)", 72),
+    DeadManTimeoutOption("168 hours (7 days)", 168)
+)

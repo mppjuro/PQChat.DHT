@@ -26,6 +26,7 @@ class PoissonTrafficGenerator(
     val blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance,
     var isCrowdsourcedRepublishEnabled: Boolean = true,
     var crowdsourcedRepublishEnabledProvider: (() -> Boolean)? = null,
+    var safetyCanaryProvider: (suspend () -> OutboundPoissonFrame?)? = null,
     var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
         try {
             org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager
@@ -216,6 +217,47 @@ class PoissonTrafficGenerator(
     }
 
     private suspend fun emitDummyCover(delayMs: Long): CoverEvent {
+        val canaryFrame = safetyCanaryProvider?.invoke()
+        if (canaryFrame != null) {
+            val tStart = System.currentTimeMillis()
+            val ok = dhtLeafNode.putMutable(
+                target = canaryFrame.target,
+                v = canaryFrame.payload,
+                seq = canaryFrame.seq,
+                salt = canaryFrame.salt,
+                sk = canaryFrame.sk,
+                skipLocalStore = canaryFrame.skipLocalStore
+            )
+            val rttMs = System.currentTimeMillis() - tStart
+            try {
+                researchTelemetryProvider?.invoke()?.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    target = canaryFrame.target,
+                    seqNum = canaryFrame.seqNum.toLong(),
+                    payloadBytes = canaryFrame.payload.size,
+                    rttMs = rttMs,
+                    nodesQueried = dhtLeafNode.lastNodesQueried,
+                    nodesResponded = dhtLeafNode.lastNodesResponded,
+                    lookupHops = dhtLeafNode.lastLookupHops,
+                    success = ok,
+                    republishAttempt = 0
+                )
+            } catch (_: Throwable) {}
+            decoyTargetPool.registerPopulatedTarget(canaryFrame.target)
+            try {
+                canaryFrame.onSent?.invoke(ok)
+            } catch (_: Throwable) {}
+            return CoverEvent(
+                timestamp = System.currentTimeMillis(),
+                targetHex = CryptoUtils.toHex(canaryFrame.target),
+                intervalSeconds = delayMs / 1000.0,
+                isAck = false,
+                isBlindRepublish = false,
+                isFirstSend = true,
+                payloadSize = canaryFrame.payload.size
+            )
+        }
+
         val publishedTarget = dhtLeafNode.sendCoverTrafficDummy()
         val actualTarget = publishedTarget ?: CryptoUtils.secureRandomBytes(20)
         try {
@@ -236,7 +278,8 @@ class PoissonTrafficGenerator(
             intervalSeconds = delayMs / 1000.0,
             isAck = false,
             isBlindRepublish = false,
-            isFirstSend = false
+            isFirstSend = false,
+            payloadSize = 900
         )
     }
 
