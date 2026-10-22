@@ -521,7 +521,7 @@ class ChatRepository(
         } catch (_: Throwable) {
             null
         }
-        if (existing == null || existing.chainKeyOut.size != 64 || (existing.counterIn == 0 && existing.counterOut > 0)) {
+        if (existing == null || existing.chainKeyOut.size != 64) {
             val symmetricSeed = CryptoUtils.secureRandomBytes(64)
             try {
                 messageDao.deleteMessagesForContact(SELF_CONTACT_ID)
@@ -564,8 +564,42 @@ class ChatRepository(
         ephemeralTtlSeconds: Long = 0L
     ): Boolean = withContext(Dispatchers.IO) {
         getContactMutex(contactId).withLock {
-            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val isSelf = contactId == SELF_CONTACT_ID
             val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+
+            if (isSelf) {
+                val currentContact = contactDao.getContactById(contactId)
+                val seqNum = currentContact?.counterOut ?: 0
+                val seqEpoch = seqNum / 65536
+                messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = true,
+                        seqEpoch = seqEpoch,
+                        seqNum = seqNum,
+                        ackNum = 0,
+                        timestamp = System.currentTimeMillis(),
+                        textContent = text,
+                        status = "SENT_DHT",
+                        ackTarget = null,
+                        ackRatchetKey = null,
+                        slotTarget = null,
+                        slotEdSeed = null,
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
+                    )
+                )
+                if (currentContact != null) {
+                    contactDao.updateOutgoingState(
+                        id = contactId,
+                        counterOut = seqNum + 1,
+                        chainKeyOut = currentContact.chainKeyOut
+                    )
+                }
+                return@withLock true
+            }
+
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
 
             // 1. Drain existing outbox if any messages are queued
             val queued = messageDao.getQueuedMessagesForContact(contactId)
@@ -660,8 +694,6 @@ class ChatRepository(
             )
 
             val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
-
-            val isSelf = contactId == SELF_CONTACT_ID
 
             if (isStrictPoissonShaping()) {
                 val msgId = messageDao.insertMessage(

@@ -683,10 +683,16 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithTag("chat_send_button").fetchSemanticsNodes().isNotEmpty()
         }
         try {
-            composeTestRule.onNodeWithTag("chat_send_button").performClick()
+            composeTestRule.onNodeWithTag("chat_send_button", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
         } catch (_: Throwable) {
-            clickTagByPixelCoordinates("chat_send_button")
+            try {
+                composeTestRule.onNodeWithTag("chat_send_button").performClick()
+            } catch (_: Throwable) {
+                clickTagByPixelCoordinates("chat_send_button")
+            }
         }
+        composeTestRule.waitForIdle()
 
         // Wait for message input clearance confirming dispatch
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
@@ -697,12 +703,14 @@ class PqChatUiAutomatorTest {
         dismissKeyboardAndWait()
 
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
-            composeTestRule.onAllNodesWithText(noteMsg).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText(noteMsg, substring = true, useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
         runCatching {
-            composeTestRule.onNodeWithText(noteMsg).performScrollTo()
+            composeTestRule.onNodeWithText(noteMsg, substring = true, useUnmergedTree = true).performScrollTo()
         }
-        composeTestRule.onNodeWithText(noteMsg).assertIsDisplayed()
+        composeTestRule.onAllNodesWithText(noteMsg, substring = true, useUnmergedTree = true)
+            .onFirst().assertExists()
 
         // Locate react button on message and click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")

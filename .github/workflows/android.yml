@@ -135,7 +135,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
-          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --warning-mode all
+          script: ./gradlew connectedDebugAndroidTest --continue --stacktrace --warning-mode summary
 
       - name: Dump Test Failure Reports
         if: failure()
