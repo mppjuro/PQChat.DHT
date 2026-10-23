@@ -199,6 +199,7 @@ sealed class KrpcMessage {
             seq: Long,
             salt: ByteArray? = null,
             cas: Long? = null,
+            readOnly: Boolean = false,
             txId: ByteArray = CryptoUtils.secureRandomBytes(2)
         ): Query {
             val args = LinkedHashMap<String, Any>()
@@ -214,8 +215,10 @@ sealed class KrpcMessage {
             if (cas != null) {
                 args["cas"] = cas
             }
-            // Enforce ro=1 (BEP 43) for all leaf node queries, including put
-            return Query(txId, "put", args, readOnly = true)
+            // ro=1 in get, find_node, and ping remains unchanged (leaf node BEP 43),
+            // but BEP 44 put queries with ro=1 may be rejected by some Mainline DHT nodes.
+            // Therefore, readOnly is configurable and defaults to false for put queries.
+            return Query(txId, "put", args, readOnly = readOnly)
         }
     }
 }

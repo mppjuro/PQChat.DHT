@@ -1470,7 +1470,8 @@ class DhtLeafNode(
                                 k = pk,
                                 sig = sig,
                                 seq = seq,
-                                salt = salt
+                                salt = salt,
+                                readOnly = false
                             )
                             val resp = sendQuery(address, putQuery, timeoutMs = 2500L)
                             if (resp != null) {

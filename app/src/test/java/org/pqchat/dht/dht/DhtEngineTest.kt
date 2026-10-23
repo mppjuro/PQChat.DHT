@@ -131,21 +131,36 @@ class DhtEngineTest {
         val getParsed = KrpcMessage.parse(getQ.toBencoded()) as KrpcMessage.Query
         assertTrue("get parsed must have readOnly=true", getParsed.readOnly)
 
-        // 3. BEP 44 PUT
-        val putQ = KrpcMessage.createBep44PutQuery(
+        // 3. BEP 44 PUT - configurable readOnly flag (default false)
+        val putQDefault = KrpcMessage.createBep44PutQuery(
             myNodeId = nodeId,
             token = byteArrayOf(1, 2, 3),
             v = ByteArray(900),
             k = ByteArray(32),
             sig = ByteArray(64),
-            seq = 1L
+            seq = 1L,
+            readOnly = false
         )
-        assertTrue("put must have readOnly=true per BEP 43 leaf node policy", putQ.readOnly)
-        val putParsed = KrpcMessage.parse(putQ.toBencoded()) as KrpcMessage.Query
-        assertTrue("put parsed must have readOnly=true (ro=1)", putParsed.readOnly)
+        assertFalse("put with readOnly=false must have readOnly=false", putQDefault.readOnly)
+        val putDefaultParsed = KrpcMessage.parse(putQDefault.toBencoded()) as KrpcMessage.Query
+        assertFalse("put default parsed must not have readOnly=true", putDefaultParsed.readOnly)
+        val decodedDefaultMap = Bencode.decode(putQDefault.toBencoded()) as Map<*, *>
+        assertFalse("Bencoded dictionary must NOT contain ro key when readOnly=false", decodedDefaultMap.containsKey("ro"))
 
-        val decodedMap = Bencode.decode(putQ.toBencoded()) as Map<*, *>
-        assertEquals("Bencoded dictionary must contain ro=1L", 1L, decodedMap["ro"])
+        val putQReadOnly = KrpcMessage.createBep44PutQuery(
+            myNodeId = nodeId,
+            token = byteArrayOf(1, 2, 3),
+            v = ByteArray(900),
+            k = ByteArray(32),
+            sig = ByteArray(64),
+            seq = 1L,
+            readOnly = true
+        )
+        assertTrue("put with readOnly=true must have readOnly=true", putQReadOnly.readOnly)
+        val putReadOnlyParsed = KrpcMessage.parse(putQReadOnly.toBencoded()) as KrpcMessage.Query
+        assertTrue("put readOnly parsed must have readOnly=true (ro=1)", putReadOnlyParsed.readOnly)
+        val decodedReadOnlyMap = Bencode.decode(putQReadOnly.toBencoded()) as Map<*, *>
+        assertEquals("Bencoded dictionary must contain ro=1L when readOnly=true", 1L, decodedReadOnlyMap["ro"])
 
         // 4. Ping
         val pingQ = KrpcMessage.createPingQuery(nodeId)
