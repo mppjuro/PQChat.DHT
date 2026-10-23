@@ -75,6 +75,9 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`023a97e`](https://github.com/mppjuro/PQChat.DHT/commit/023a97ea4af271c868f3b7388e467430794f903a) (2026-10-23) — **test**: debug notes and comments corrected
+- [`7cabe8b`](https://github.com/mppjuro/PQChat.DHT/commit/7cabe8bd0ebe49c3b3c3f522785c21ea15d813ba) (2026-10-23) — **dht**: optimize pre-warmed route direct hit and prevent DNS bootstrap on local put
+- [`40158a9`](https://github.com/mppjuro/PQChat.DHT/commit/40158a920c4bac8c672e65a8a520f1c8697e9fdd) (2026-10-23) — **dht,handshake**: harden Bob handshake idempotency, BEP 44 token acquisition, and default settings
 - [`e5e128c`](https://github.com/mppjuro/PQChat.DHT/commit/e5e128c3a46e74950f46c5e298d64dcec34fd92f) (2026-10-23) — **krpc**: make ro flag optional in BEP 44 put query
 - [`d545594`](https://github.com/mppjuro/PQChat.DHT/commit/d545594c40b4b3218747f7c29742c487e871b0b2) (2026-10-23) — **dht**: prevent premature fast-termination on live DHT and evict unconfirmed TargetRouteCache
 - [`97888a4`](https://github.com/mppjuro/PQChat.DHT/commit/97888a44ecbbc8de36842e6b7feacdd9af64552f) (2026-10-22) — **test**: repair nightly CI test suites for repository, statistical threat models, and adversarial simulation
