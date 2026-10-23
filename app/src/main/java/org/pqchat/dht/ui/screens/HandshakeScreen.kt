@@ -43,6 +43,7 @@ import org.pqchat.dht.ui.components.CameraQrScanner
 import org.pqchat.dht.ui.theme.*
 import org.pqchat.dht.ui.util.QrCodeUtil
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
+import org.pqchat.dht.ui.viewmodel.BobHandshakeStatus
 
 import org.pqchat.dht.ui.util.SecureScreenEffect
 
@@ -80,6 +81,7 @@ fun HandshakeScreen(
 
     val aliceInitState by viewModel.aliceHandshakeState.collectAsState()
     val isHandshaking by viewModel.isHandshaking.collectAsState()
+    val bobHandshakeStatus by viewModel.bobHandshakeStatus.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
     val handshakeCompleted by viewModel.handshakeCompleted.collectAsState()
 
@@ -630,6 +632,73 @@ fun HandshakeScreen(
                             Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Encapsulate & Put to DHT", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (bobHandshakeStatus != BobHandshakeStatus.IDLE) {
+                        val (statusText, statusColor) = when (bobHandshakeStatus) {
+                            BobHandshakeStatus.IDLE -> "" to Color.Transparent
+                            BobHandshakeStatus.SCANNING_QR -> "Walidacja kodu QR..." to TextSecondary
+                            BobHandshakeStatus.ENCAPSULATING -> "Enkapsulacja ML-KEM-512 + X25519..." to NeonCyan
+                            BobHandshakeStatus.SENDING_DHT -> "Publikacja w DHT (putMutable)..." to NeonCyan
+                            BobHandshakeStatus.PUT_FAILED_RETRYING -> "PUT nieudany - ponawiam (retry loop)..." to AmberWarning
+                            BobHandshakeStatus.DHT_SENT_UNVERIFIED -> "Pakiet wyslany, weryfikuje w sieci..." to NeonCyan
+                            BobHandshakeStatus.VERIFYING_DHT -> "Weryfikacja obecnosci w DHT (GET)..." to NeonCyan
+                            BobHandshakeStatus.PLACED_IN_DHT -> "Rekord potwierdzony w DHT \u2713" to ElectricGreen
+                            BobHandshakeStatus.AWAITING_ALICE -> "Czekam, az Alice odczyta pakiet..." to ElectricGreen
+                            BobHandshakeStatus.TIMEOUT -> "Przekroczono czas - sprobuj ponownie" to CrimsonDanger
+                            BobHandshakeStatus.FAILED -> "Blad handshake - sprobuj ponownie" to CrimsonDanger
+                        }
+
+                        if (statusText.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Surface(
+                                color = statusColor.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("bob_handshake_status")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (bobHandshakeStatus == BobHandshakeStatus.ENCAPSULATING ||
+                                        bobHandshakeStatus == BobHandshakeStatus.SENDING_DHT ||
+                                        bobHandshakeStatus == BobHandshakeStatus.DHT_SENT_UNVERIFIED ||
+                                        bobHandshakeStatus == BobHandshakeStatus.VERIFYING_DHT ||
+                                        bobHandshakeStatus == BobHandshakeStatus.PUT_FAILED_RETRYING
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = statusColor,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                    } else {
+                                        Icon(
+                                            imageVector = when (bobHandshakeStatus) {
+                                                BobHandshakeStatus.PLACED_IN_DHT,
+                                                BobHandshakeStatus.AWAITING_ALICE -> Icons.Default.CheckCircle
+                                                BobHandshakeStatus.TIMEOUT,
+                                                BobHandshakeStatus.FAILED -> Icons.Default.Warning
+                                                else -> Icons.Default.Info
+                                            },
+                                            contentDescription = null,
+                                            tint = statusColor,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                    }
+                                    Text(
+                                        text = statusText,
+                                        color = statusColor,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         }
                     }
 
