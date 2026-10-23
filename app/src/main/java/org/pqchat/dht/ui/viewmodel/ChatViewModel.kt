@@ -24,13 +24,17 @@ import org.pqchat.dht.traffic.AdaptivePollingManager
 import org.pqchat.dht.traffic.PoissonTrafficGenerator
 import java.util.UUID
 
-class ChatViewModel(application: Application) : AndroidViewModel(application) {
+class ChatViewModel @JvmOverloads constructor(
+    application: Application,
+    customDhtLeafNode: DhtLeafNode? = null,
+    customRepository: ChatRepository? = null
+) : AndroidViewModel(application) {
 
     private val app = application as? org.pqchat.dht.PQChatApplication
     private val database = app?.database ?: AppDatabase.getInstance(application)
-    val dhtLeafNode = app?.dhtLeafNode ?: DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
+    val dhtLeafNode = customDhtLeafNode ?: app?.dhtLeafNode ?: DhtLeafNode(nodeCacheDao = database.dhtNodeCacheDao())
     val settingsManager = app?.settingsManager ?: org.pqchat.dht.data.settings.AppSettingsManager(application)
-    val repository = app?.repository ?: ChatRepository(database, dhtLeafNode, settingsManager = settingsManager)
+    val repository = customRepository ?: app?.repository ?: ChatRepository(database, dhtLeafNode, settingsManager = settingsManager)
     val trafficGenerator = app?.trafficGenerator ?: PoissonTrafficGenerator(
         dhtLeafNode,
         blindRepublishPool = repository.blindRepublishPool,
@@ -135,6 +139,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _bobHandshakeStatus = MutableStateFlow(BobHandshakeStatus.IDLE)
     val bobHandshakeStatus: StateFlow<BobHandshakeStatus> = _bobHandshakeStatus.asStateFlow()
+
+    @androidx.annotation.VisibleForTesting
+    var onBobStatusChangedForTesting: ((BobHandshakeStatus) -> Unit)? = null
+
+    internal fun setBobHandshakeStatus(status: BobHandshakeStatus) {
+        _bobHandshakeStatus.value = status
+        onBobStatusChangedForTesting?.invoke(status)
+    }
 
     private val _isHandshaking = MutableStateFlow(false)
     val isHandshaking: StateFlow<Boolean> = _isHandshaking.asStateFlow()
@@ -300,7 +312,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     init {
         repository.settingsManager = settingsManager
         trafficGenerator.safetyCanaryProvider = { repository.pollPendingSafetyCanary() }
-        if (app == null) {
+        if (app == null && customDhtLeafNode == null) {
             dhtLeafNode.start()
             trafficGenerator.start()
         }
@@ -708,10 +720,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _isHandshaking.value = true
             _statusNotification.value = "Encapsulating Post-Quantum secret and sending to DHT..."
-            _bobHandshakeStatus.value = BobHandshakeStatus.SCANNING_QR
+            setBobHandshakeStatus(BobHandshakeStatus.SCANNING_QR)
 
             if (qrBytes.size != HandshakeManager.QR_DATA_SIZE) {
-                _bobHandshakeStatus.value = BobHandshakeStatus.FAILED
+                setBobHandshakeStatus(BobHandshakeStatus.FAILED)
                 _isHandshaking.value = false
                 _statusNotification.value = "Invalid QR code data size: ${qrBytes.size}, expected ${HandshakeManager.QR_DATA_SIZE}"
                 return@launch
@@ -720,7 +732,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val completed = kotlinx.coroutines.withTimeoutOrNull(10 * 60_000L) {
                 var bobResult: HandshakeManager.BobHandshakeResult? = null
                 try {
-                    _bobHandshakeStatus.value = BobHandshakeStatus.ENCAPSULATING
+                    setBobHandshakeStatus(BobHandshakeStatus.ENCAPSULATING)
                     bobResult = HandshakeManager.bobProcessQr(qrBytes)
 
                     try {
@@ -738,7 +750,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         frame = bobResult.frame
                     )
 
-                    _bobHandshakeStatus.value = BobHandshakeStatus.SENDING_DHT
+                    setBobHandshakeStatus(BobHandshakeStatus.SENDING_DHT)
                     val tStart = System.currentTimeMillis()
                     val success = dhtLeafNode.putMutable(
                         target = bobResult.target0,
@@ -764,15 +776,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (!success) {
-                        _bobHandshakeStatus.value = BobHandshakeStatus.PUT_FAILED_RETRYING
+                        setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Initial DHT publish failed, retrying in background..."
                         _isHandshaking.value = false
                         startBobRepublishLoop(bobResult, contactName, intervalMs)
                         return@withTimeoutOrNull true
                     }
 
-                    _bobHandshakeStatus.value = BobHandshakeStatus.DHT_SENT_UNVERIFIED
-                    _bobHandshakeStatus.value = BobHandshakeStatus.VERIFYING_DHT
+                    setBobHandshakeStatus(BobHandshakeStatus.DHT_SENT_UNVERIFIED)
+                    setBobHandshakeStatus(BobHandshakeStatus.VERIFYING_DHT)
 
                     val verified = dhtLeafNode.getMutable(
                         target = bobResult.target0,
@@ -782,14 +794,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                     if (verified == null) {
-                        _bobHandshakeStatus.value = BobHandshakeStatus.PUT_FAILED_RETRYING
+                        setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Record not yet found in DHT, retrying in background..."
                         _isHandshaking.value = false
                         startBobRepublishLoop(bobResult, contactName, intervalMs)
                         return@withTimeoutOrNull true
                     }
 
-                    _bobHandshakeStatus.value = BobHandshakeStatus.PLACED_IN_DHT
+                    setBobHandshakeStatus(BobHandshakeStatus.PLACED_IN_DHT)
                     android.util.Log.i("BobHandshake", "GET verified in DHT target=${CryptoUtils.toHex(bobResult.target0)} size=${verified.v.size}")
 
                     val newContactId = UUID.randomUUID().toString()
@@ -812,7 +824,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         contactName = contactName,
                         sas = bobResult.sas
                     )
-                    _bobHandshakeStatus.value = BobHandshakeStatus.AWAITING_ALICE
+                    setBobHandshakeStatus(BobHandshakeStatus.AWAITING_ALICE)
                     _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
                     bobResult.destroySensitiveKeys()
                     true
@@ -821,7 +833,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     android.util.Log.e("BobHandshake", "Bob handshake failed: ${e.message}")
                     _statusNotification.value = "Failed to process QR: ${e.message}"
-                    _bobHandshakeStatus.value = BobHandshakeStatus.FAILED
+                    setBobHandshakeStatus(BobHandshakeStatus.FAILED)
                     _isHandshaking.value = false
                     bobResult?.destroySensitiveKeys()
                     true
@@ -829,7 +841,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             if (completed == null) {
-                _bobHandshakeStatus.value = BobHandshakeStatus.TIMEOUT
+                setBobHandshakeStatus(BobHandshakeStatus.TIMEOUT)
                 _isHandshaking.value = false
             }
         }
@@ -880,7 +892,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("BobHandshake", "attempt=$republishCount put=$repOk visibleInNetwork=${visible != null}")
 
                     if (visible != null) {
-                        _bobHandshakeStatus.value = BobHandshakeStatus.PLACED_IN_DHT
+                        setBobHandshakeStatus(BobHandshakeStatus.PLACED_IN_DHT)
                         val newContactId = UUID.randomUUID().toString()
                         val newContact = ContactEntity(
                             id = newContactId,
@@ -900,13 +912,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             contactName = contactName,
                             sas = bobResult.sas
                         )
-                        _bobHandshakeStatus.value = BobHandshakeStatus.AWAITING_ALICE
+                        setBobHandshakeStatus(BobHandshakeStatus.AWAITING_ALICE)
                         _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
                         break
                     }
                 }
                 if (isActive && _bobHandshakeStatus.value != BobHandshakeStatus.AWAITING_ALICE && _bobHandshakeStatus.value != BobHandshakeStatus.PLACED_IN_DHT) {
-                    _bobHandshakeStatus.value = BobHandshakeStatus.TIMEOUT
+                    setBobHandshakeStatus(BobHandshakeStatus.TIMEOUT)
                     _statusNotification.value = "Handshake timed out (republish limit reached). Try again."
                 }
             } finally {
@@ -954,7 +966,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun resetHandshakeState() {
         bobRepublishJob?.cancel()
         bobRepublishJob = null
-        _bobHandshakeStatus.value = BobHandshakeStatus.IDLE
+        setBobHandshakeStatus(BobHandshakeStatus.IDLE)
         _aliceHandshakeState.value?.destroySensitiveKeys()
         _aliceHandshakeState.value = null
         _isHandshaking.value = false

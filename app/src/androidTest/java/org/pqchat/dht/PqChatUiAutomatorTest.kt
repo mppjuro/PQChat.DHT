@@ -337,15 +337,15 @@ class PqChatUiAutomatorTest {
             .performScrollTo()
             .assertIsNotEnabled()
 
-        // Now input a dummy valid-length payload (864 bytes in Base64 = 1152 chars)
-        val dummy864Bytes = ByteArray(864) { 0x42.toByte() }
-        val dummyBase64 = java.util.Base64.getEncoder().encodeToString(dummy864Bytes)
+        // Now input a valid hybrid handshake payload from Alice
+        val aliceInit = org.pqchat.dht.protocol.HandshakeManager.aliceCreateHandshake()
+        val validBase64 = java.util.Base64.getEncoder().encodeToString(aliceInit.qrBytes)
 
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
             .performScrollTo()
             .performTextClearance()
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
-            .performTextInput(dummyBase64)
+            .performTextInput(validBase64)
 
         // Verify validation succeeds
         composeTestRule.onNodeWithText("Valid Hybrid Handshake Key (864 bytes verified)")
@@ -354,6 +354,17 @@ class PqChatUiAutomatorTest {
         composeTestRule.onNodeWithTag("handshake_encapsulate_button")
             .performScrollTo()
             .assertIsEnabled()
+
+        // Click encapsulate & put button
+        clickTagByPixelCoordinates("handshake_encapsulate_button")
+
+        // Wait until bob_handshake_status indicator appears and displays progress
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("bob_handshake_status").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("bob_handshake_status")
+            .performScrollTo()
+            .assertIsDisplayed()
 
         // Click back button to exit
         clickTagByPixelCoordinates("handshake_back_button")

@@ -29,7 +29,7 @@ typealias PeerContact = DhtLeafNode.DhtPeer
  * - Does NOT hoard third-party data in RAM.
  * - Stores & retrieves 1000-byte encrypted messages via BEP 44 mutable items.
  */
-class DhtLeafNode(
+open class DhtLeafNode(
     override val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
     private val port: Int = 0, // 0 means ephemeral port
     private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null,
@@ -303,11 +303,11 @@ class DhtLeafNode(
     private var torTcpTunnelClient: TorTcpTunnelClient? = null
 
     @Volatile
-    override var torTransportMode: TorTransportMode = TorTransportMode.DIRECT_UDP
+    final override var torTransportMode: TorTransportMode = TorTransportMode.DIRECT_UDP
         private set
 
     @Volatile
-    override var torDiagnosticMessage: String? = null
+    final override var torDiagnosticMessage: String? = null
         private set
 
     private var torListenerJob: Job? = null
