@@ -7,6 +7,10 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🚀 Features
 
+- [`5f6f247`](https://github.com/mppjuro/PQChat.DHT/commit/5f6f247f1cee538b45516e7d1e53125844ac87bb) (2026-10-23) — **ui**: visible Bob handshake status indicator on HandshakeScreen
+- [`4b8c98e`](https://github.com/mppjuro/PQChat.DHT/commit/4b8c98e6787ab5e1f1bf8ed9c9e04a3838543148) (2026-10-23) — **viewmodel**: network-verified Bob republish loop
+- [`d893021`](https://github.com/mppjuro/PQChat.DHT/commit/d893021ea5e920b9da61d9648769a0557954176c) (2026-10-23) — **viewmodel**: BobHandshakeStatus state machine + network verification in processBobHandshake
+- [`e552a1d`](https://github.com/mppjuro/PQChat.DHT/commit/e552a1dafbcf2d3979c164248b556077c9f0e743) (2026-10-23) — **dht**: iterative find_node in putMutable + diagnostic logs
 - [`31eb15c`](https://github.com/mppjuro/PQChat.DHT/commit/31eb15c046308af9b818ba3488c3484b722e9c14) (2026-10-22) — **poll-canary**: implement cryptographic group polls (0x0A) and dead man safety canary (0x0B) with 900B BEP 44 frames
 - [`78edf1c`](https://github.com/mppjuro/PQChat.DHT/commit/78edf1c9c9e0dca32b23b3fe879989e12242ab9c) (2026-10-22) — **voice**: implement ultra-low-bitrate PTT micro-voice notes (0x09) with 900B BEP 44 frames
 - [`7f0e982`](https://github.com/mppjuro/PQChat.DHT/commit/7f0e9828295d7d31e8e966122612580cb904010a) (2026-10-22) — **security**: implement Byzantine and adversarial DHT attack simulation framework with /24 subnet bucketing and highest-seq rollback defenses
@@ -71,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`e5e128c`](https://github.com/mppjuro/PQChat.DHT/commit/e5e128c3a46e74950f46c5e298d64dcec34fd92f) (2026-10-23) — **krpc**: make ro flag optional in BEP 44 put query
 - [`d545594`](https://github.com/mppjuro/PQChat.DHT/commit/d545594c40b4b3218747f7c29742c487e871b0b2) (2026-10-23) — **dht**: prevent premature fast-termination on live DHT and evict unconfirmed TargetRouteCache
 - [`97888a4`](https://github.com/mppjuro/PQChat.DHT/commit/97888a44ecbbc8de36842e6b7feacdd9af64552f) (2026-10-22) — **test**: repair nightly CI test suites for repository, statistical threat models, and adversarial simulation
 - [`beb57a0`](https://github.com/mppjuro/PQChat.DHT/commit/beb57a0da9f7b085daaac3ee4f6daaa05b26b6a6) (2026-10-22) — **test**: PqChatUiAutomatorTest clicked "sent" immediately after pasting text, corrected race condition
@@ -177,6 +182,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`2b19b50`](https://github.com/mppjuro/PQChat.DHT/commit/2b19b50a5e7f25134a5d1e3f0f3c878d29f461c6) (2026-10-23) — **dht,viewmodel**: cover put iterative lookup and BobHandshakeStatus transitions
 - [`af04901`](https://github.com/mppjuro/PQChat.DHT/commit/af049014b59f2a1d18c0cc4f3f8ebbb5dcb8334f) (2026-10-22) — **e2e**: expand physical pixel UI Automator tests and full GitHub Workflows automation
 - [`4d1d93a`](https://github.com/mppjuro/PQChat.DHT/commit/4d1d93a2b2be5ea9add09e715cf30f55b8111a01) (2026-10-20) — **e2e**: implement multi-emulator orchestration and instrumented physical UI tests
 - [`04b6293`](https://github.com/mppjuro/PQChat.DHT/commit/04b62930a9f063e82c1f20cf14098190f9c8415c) (2026-10-08) — fix recovery round budget and initiator roles in testRandomizedLossAndReorderingProperty
