@@ -793,7 +793,7 @@ class ChatViewModel @JvmOverloads constructor(
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
                         val tor = settingsManager.isTorEnabled.value
-                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba 1) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Initial DHT publish failed, retrying in background..."
                         _isHandshaking.value = false
@@ -816,7 +816,7 @@ class ChatViewModel @JvmOverloads constructor(
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
                         val tor = settingsManager.isTorEnabled.value
-                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba 1) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Record not yet found in DHT, retrying in background..."
                         _isHandshaking.value = false
@@ -950,7 +950,7 @@ class ChatViewModel @JvmOverloads constructor(
                         val h = dhtLeafNode.lastLookupHops
                         val tor = settingsManager.isTorEnabled.value
                         val attempt = republishCount + 1
-                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba $attempt) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt $attempt) [Q:$q R:$r H:$h Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                     }
                 }

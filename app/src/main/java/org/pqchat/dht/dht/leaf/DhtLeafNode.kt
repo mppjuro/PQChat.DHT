@@ -1475,9 +1475,6 @@ open class DhtLeafNode(
             queryTokensForTarget(closestPeers, target, tokenMap)
         }
 
-        // Wymuszony re-bootstrap przy braku odpowiedzi/tokenów:
-        // Jeśli podczas putMutable lista węzłów z ważnym tokenem zapisu jest pusta (lub żaden węzeł z cache'u nie odpowiedział),
-        // wyczyść martwe wpisy w nodeCacheDao, wymuś natychmiastowy bootstrap z serwerów DNS i ponów lookup przed zwróceniem wyniku.
         if (tokenMap.isEmpty()) {
             logInfo(TAG, "[PQChat] PUT target=$targetHex tokenMap is empty (candidates=${closestPeers.size}). Clearing dead cache and forcing DNS re-bootstrap...")
             try {
@@ -1583,7 +1580,6 @@ open class DhtLeafNode(
         val putOkCount = successfulPuts.get()
         logInfo(TAG, "[PQChat] PUT stored on $putOkCount/${closestPeers.size} peers")
 
-        // Próg sukcesu putMutable: Zwróć true, gdy co najmniej 1 węzeł DHT potwierdzi zapis poprawną odpowiedzią KRPC ("y": "r").
         val putSuccess = if (skipLocalStore) {
             putOkCount >= 1
         } else {
