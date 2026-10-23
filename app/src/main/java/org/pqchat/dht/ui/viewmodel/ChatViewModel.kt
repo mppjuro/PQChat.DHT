@@ -133,6 +133,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _handshakeCompleted = MutableStateFlow<HandshakeCompletedState?>(null)
     val handshakeCompleted: StateFlow<HandshakeCompletedState?> = _handshakeCompleted.asStateFlow()
 
+    private val _bobHandshakeStatus = MutableStateFlow(BobHandshakeStatus.IDLE)
+    val bobHandshakeStatus: StateFlow<BobHandshakeStatus> = _bobHandshakeStatus.asStateFlow()
+
     private val _isHandshaking = MutableStateFlow(false)
     val isHandshaking: StateFlow<Boolean> = _isHandshaking.asStateFlow()
 
@@ -692,104 +695,185 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Scans QR bytes, encapsulates ML-KEM-512 secret, checks putMutable result,
      * and sets up periodic republish to DHT at Target_0.
      */
-    fun processBobHandshake(qrBytes: ByteArray, contactName: String = "Alice") {
+    /**
+     * Bob joins Handshake:
+     * Scans QR bytes, encapsulates ML-KEM-512 secret, checks putMutable result,
+     * verifies presence in DHT, and sets up periodic republish to DHT at Target_0.
+     */
+    fun processBobHandshake(
+        qrBytes: ByteArray,
+        contactName: String = "Alice",
+        intervalMs: Long = 15_000L
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             _isHandshaking.value = true
             _statusNotification.value = "Encapsulating Post-Quantum secret and sending to DHT..."
+            _bobHandshakeStatus.value = BobHandshakeStatus.SCANNING_QR
 
-            try {
-                val bobResult = HandshakeManager.bobProcessQr(qrBytes)
-                dhtLeafNode.preWarmTarget(bobResult.target0)
+            if (qrBytes.size != HandshakeManager.QR_DATA_SIZE) {
+                _bobHandshakeStatus.value = BobHandshakeStatus.FAILED
+                _isHandshaking.value = false
+                _statusNotification.value = "Invalid QR code data size: ${qrBytes.size}, expected ${HandshakeManager.QR_DATA_SIZE}"
+                return@launch
+            }
 
-                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
-                    target = bobResult.target0,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    frame = bobResult.frame
-                )
+            val completed = kotlinx.coroutines.withTimeoutOrNull(10 * 60_000L) {
+                var bobResult: HandshakeManager.BobHandshakeResult? = null
+                try {
+                    _bobHandshakeStatus.value = BobHandshakeStatus.ENCAPSULATING
+                    bobResult = HandshakeManager.bobProcessQr(qrBytes)
 
-                // 1. Bob verifies the result of putMutable
-                val tStart = System.currentTimeMillis()
-                val success = dhtLeafNode.putMutable(
-                    target = bobResult.target0,
-                    v = bobResult.frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = bobResult.edPrivateKeySeed
-                )
-                val rttMs = System.currentTimeMillis() - tStart
-                researchTelemetry?.recordPacketEvent(
-                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
-                    target = bobResult.target0,
-                    seqNum = 0L,
-                    payloadBytes = bobResult.frame.size,
-                    rttMs = rttMs,
-                    nodesQueried = dhtLeafNode.lastNodesQueried,
-                    nodesResponded = dhtLeafNode.lastNodesResponded,
-                    lookupHops = dhtLeafNode.lastLookupHops,
-                    success = success,
-                    republishAttempt = 0
-                )
+                    try {
+                        val cm = app?.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                        val isMobile = cm?.getNetworkCapabilities(cm.activeNetwork)
+                            ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
+                        dhtLeafNode.setAdaptiveK(isMobile)
+                    } catch (_: Throwable) {}
 
-                if (!success) {
-                    _statusNotification.value = "Initial DHT publish failed, retrying in background..."
-                }
+                    dhtLeafNode.preWarmTarget(bobResult.target0)
 
-                // 2. Launch republish loop: periodically republish to Target_0
-                bobRepublishJob?.cancel()
-                bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
-                    var republishCount = 0
-                    // Republish every 15s for up to 10 minutes (40 iterations)
-                    while (isActive && republishCount < 40) {
-                        delay(15_000L)
-                        republishCount++
-                        val tRepubStart = System.currentTimeMillis()
-                        val repOk = dhtLeafNode.putMutable(
-                            target = bobResult.target0,
-                            v = bobResult.frame,
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                            salt = null,
-                            sk = bobResult.edPrivateKeySeed
-                        )
-                        val repRtt = System.currentTimeMillis() - tRepubStart
-                        researchTelemetry?.recordPacketEvent(
-                            role = org.pqchat.dht.research.PacketRole.OWN_REPUBLISH,
-                            target = bobResult.target0,
-                            seqNum = 0L,
-                            payloadBytes = bobResult.frame.size,
-                            rttMs = repRtt,
-                            nodesQueried = dhtLeafNode.lastNodesQueried,
-                            nodesResponded = dhtLeafNode.lastNodesResponded,
-                            lookupHops = dhtLeafNode.lastLookupHops,
-                            success = repOk,
-                            republishAttempt = republishCount
-                        )
+                    org.pqchat.dht.debug.MessageDebugLogger.logOutgoingBobHandshake(
+                        target = bobResult.target0,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        frame = bobResult.frame
+                    )
+
+                    _bobHandshakeStatus.value = BobHandshakeStatus.SENDING_DHT
+                    val tStart = System.currentTimeMillis()
+                    val success = dhtLeafNode.putMutable(
+                        target = bobResult.target0,
+                        v = bobResult.frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = bobResult.edPrivateKeySeed,
+                        skipLocalStore = true
+                    )
+                    val rttMs = System.currentTimeMillis() - tStart
+                    android.util.Log.i("BobHandshake", "PUT target=${CryptoUtils.toHex(bobResult.target0)} success=$success rtt=${rttMs}ms")
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                        target = bobResult.target0,
+                        seqNum = 0L,
+                        payloadBytes = bobResult.frame.size,
+                        rttMs = rttMs,
+                        nodesQueried = dhtLeafNode.lastNodesQueried,
+                        nodesResponded = dhtLeafNode.lastNodesResponded,
+                        lookupHops = dhtLeafNode.lastLookupHops,
+                        success = success,
+                        republishAttempt = 0
+                    )
+
+                    if (!success) {
+                        _bobHandshakeStatus.value = BobHandshakeStatus.PUT_FAILED_RETRYING
+                        _statusNotification.value = "Initial DHT publish failed, retrying in background..."
+                        _isHandshaking.value = false
+                        startBobRepublishLoop(bobResult, contactName, intervalMs)
+                        return@withTimeoutOrNull true
                     }
+
+                    _bobHandshakeStatus.value = BobHandshakeStatus.DHT_SENT_UNVERIFIED
+                    _bobHandshakeStatus.value = BobHandshakeStatus.VERIFYING_DHT
+
+                    val verified = dhtLeafNode.getMutable(
+                        target = bobResult.target0,
+                        salt = null,
+                        skipLocalStore = true,
+                        timeoutMs = 8_000L
+                    )
+
+                    if (verified == null) {
+                        _bobHandshakeStatus.value = BobHandshakeStatus.PUT_FAILED_RETRYING
+                        _statusNotification.value = "Record not yet found in DHT, retrying in background..."
+                        _isHandshaking.value = false
+                        startBobRepublishLoop(bobResult, contactName, intervalMs)
+                        return@withTimeoutOrNull true
+                    }
+
+                    _bobHandshakeStatus.value = BobHandshakeStatus.PLACED_IN_DHT
+                    android.util.Log.i("BobHandshake", "GET verified in DHT target=${CryptoUtils.toHex(bobResult.target0)} size=${verified.v.size}")
+
+                    val newContactId = UUID.randomUUID().toString()
+                    val newContact = ContactEntity(
+                        id = newContactId,
+                        name = contactName,
+                        chainKeyOut = bobResult.chainKeyBtoA,
+                        chainKeyIn = bobResult.chainKeyAtoB,
+                        counterOut = 0,
+                        counterIn = 0,
+                        isInitiator = false,
+                        sas = bobResult.sas,
+                        fingerprint = bobResult.fingerprint
+                    )
+
+                    repository.addContact(newContact)
+                    _isHandshaking.value = false
+                    _handshakeCompleted.value = HandshakeCompletedState(
+                        contactId = newContactId,
+                        contactName = contactName,
+                        sas = bobResult.sas
+                    )
+                    _bobHandshakeStatus.value = BobHandshakeStatus.AWAITING_ALICE
+                    _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
+                    bobResult.destroySensitiveKeys()
+                    true
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.e("BobHandshake", "Bob handshake failed: ${e.message}")
+                    _statusNotification.value = "Failed to process QR: ${e.message}"
+                    _bobHandshakeStatus.value = BobHandshakeStatus.FAILED
+                    _isHandshaking.value = false
+                    bobResult?.destroySensitiveKeys()
+                    true
                 }
+            }
 
-                val newContactId = UUID.randomUUID().toString()
-                val newContact = ContactEntity(
-                    id = newContactId,
-                    name = contactName,
-                    chainKeyOut = bobResult.chainKeyBtoA,
-                    chainKeyIn = bobResult.chainKeyAtoB,
-                    counterOut = 0,
-                    counterIn = 0,
-                    isInitiator = false,
-                    sas = bobResult.sas,
-                    fingerprint = bobResult.fingerprint
-                )
+            if (completed == null) {
+                _bobHandshakeStatus.value = BobHandshakeStatus.TIMEOUT
+                _isHandshaking.value = false
+            }
+        }
+    }
 
-                repository.addContact(newContact)
-                _isHandshaking.value = false
-                _handshakeCompleted.value = HandshakeCompletedState(
-                    contactId = newContactId,
-                    contactName = contactName,
-                    sas = bobResult.sas
-                )
-                _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
-            } catch (e: Exception) {
-                _statusNotification.value = "Failed to process QR: ${e.message}"
-                _isHandshaking.value = false
+    private fun startBobRepublishLoop(
+        bobResult: HandshakeManager.BobHandshakeResult,
+        contactName: String = "Alice",
+        intervalMs: Long = 15_000L
+    ) {
+        bobRepublishJob?.cancel()
+        bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var republishCount = 0
+                while (isActive && republishCount < 40) {
+                    delay(intervalMs)
+                    if (!isActive) break
+                    republishCount++
+                    val tRepubStart = System.currentTimeMillis()
+                    val repOk = dhtLeafNode.putMutable(
+                        target = bobResult.target0,
+                        v = bobResult.frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = bobResult.edPrivateKeySeed,
+                        skipLocalStore = true
+                    )
+                    val repRtt = System.currentTimeMillis() - tRepubStart
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.OWN_REPUBLISH,
+                        target = bobResult.target0,
+                        seqNum = 0L,
+                        payloadBytes = bobResult.frame.size,
+                        rttMs = repRtt,
+                        nodesQueried = dhtLeafNode.lastNodesQueried,
+                        nodesResponded = dhtLeafNode.lastNodesResponded,
+                        lookupHops = dhtLeafNode.lastLookupHops,
+                        success = repOk,
+                        republishAttempt = republishCount
+                    )
+                }
+            } finally {
+                bobResult.destroySensitiveKeys()
+                bobRepublishJob = null
             }
         }
     }
@@ -830,6 +914,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetHandshakeState() {
+        bobRepublishJob?.cancel()
+        bobRepublishJob = null
+        _bobHandshakeStatus.value = BobHandshakeStatus.IDLE
         _aliceHandshakeState.value?.destroySensitiveKeys()
         _aliceHandshakeState.value = null
         _isHandshaking.value = false

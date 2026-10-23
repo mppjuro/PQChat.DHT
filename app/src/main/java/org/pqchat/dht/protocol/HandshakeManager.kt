@@ -36,6 +36,12 @@ object HandshakeManager {
     ) {
         @Deprecated("Use frame instead", ReplaceWith("frame"))
         val frame1000: ByteArray get() = frame
+
+        fun destroySensitiveKeys() {
+            Arrays.fill(edPrivateKeySeed, 0.toByte())
+            Arrays.fill(chainKeyAtoB, 0.toByte())
+            Arrays.fill(chainKeyBtoA, 0.toByte())
+        }
     }
 
     data class EstablishedSession(
