@@ -870,6 +870,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         success = repOk,
                         republishAttempt = republishCount
                     )
+
+                    val visible = dhtLeafNode.getMutable(
+                        target = bobResult.target0,
+                        salt = null,
+                        skipLocalStore = true,
+                        timeoutMs = 5_000L
+                    )
+                    android.util.Log.i("BobHandshake", "attempt=$republishCount put=$repOk visibleInNetwork=${visible != null}")
+
+                    if (visible != null) {
+                        _bobHandshakeStatus.value = BobHandshakeStatus.PLACED_IN_DHT
+                        val newContactId = UUID.randomUUID().toString()
+                        val newContact = ContactEntity(
+                            id = newContactId,
+                            name = contactName,
+                            chainKeyOut = bobResult.chainKeyBtoA,
+                            chainKeyIn = bobResult.chainKeyAtoB,
+                            counterOut = 0,
+                            counterIn = 0,
+                            isInitiator = false,
+                            sas = bobResult.sas,
+                            fingerprint = bobResult.fingerprint
+                        )
+                        repository.addContact(newContact)
+                        _isHandshaking.value = false
+                        _handshakeCompleted.value = HandshakeCompletedState(
+                            contactId = newContactId,
+                            contactName = contactName,
+                            sas = bobResult.sas
+                        )
+                        _bobHandshakeStatus.value = BobHandshakeStatus.AWAITING_ALICE
+                        _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
+                        break
+                    }
+                }
+                if (isActive && _bobHandshakeStatus.value != BobHandshakeStatus.AWAITING_ALICE && _bobHandshakeStatus.value != BobHandshakeStatus.PLACED_IN_DHT) {
+                    _bobHandshakeStatus.value = BobHandshakeStatus.TIMEOUT
+                    _statusNotification.value = "Handshake timed out (republish limit reached). Try again."
                 }
             } finally {
                 bobResult.destroySensitiveKeys()
