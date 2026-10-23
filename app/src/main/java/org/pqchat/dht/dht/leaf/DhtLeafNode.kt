@@ -1144,14 +1144,26 @@ open class DhtLeafNode(
         val localPeers = getLocalPeers()
         val cachedFastest = getCachedFastestNodes()
 
-        val remoteCandidates = (prewarmed + closestCandidates + cachedFastest)
-            .distinctBy { it.address }
-            .filter { !isBootstrapRouter(it.address) }
-            .sortedWith { a, b ->
-                val distA = xorDistance(a.nodeId, target)
-                val distB = xorDistance(b.nodeId, target)
-                compareBytes(distA, distB)
-            }
+        val remoteCandidates = if (wasPrewarmed && prewarmed.isNotEmpty()) {
+            val prewarmedAddrs = prewarmed.map { it.address }.toSet()
+            val remaining = (closestCandidates + cachedFastest)
+                .filter { it.address !in prewarmedAddrs && !isBootstrapRouter(it.address) }
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
+            prewarmed + remaining
+        } else {
+            (prewarmed + closestCandidates + cachedFastest)
+                .distinctBy { it.address }
+                .filter { !isBootstrapRouter(it.address) }
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
+        }
 
         val allCandidates = (storedPeers + remoteCandidates).distinctBy { it.address }
         val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
@@ -1241,7 +1253,8 @@ open class DhtLeafNode(
                                     val currBest = foundItem.get()
                                     val currSeq = currBest?.seq ?: 0L
                                     val minQuorum = minOf(3, currentHopNodes.size)
-                                    val canTerminate = (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, currentHopNodes.size)) ||
+                                    val canTerminate = wasPrewarmed ||
+                                            (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, currentHopNodes.size)) ||
                                             (verifiedResponses.get() >= minQuorum && verifiedSubnets.size >= minOf(2, minQuorum)) ||
                                             (verifiedResponses.get() >= minOf(5, currentHopNodes.size))
                                     if (canTerminate) {
@@ -1448,6 +1461,14 @@ open class DhtLeafNode(
 
         var closestPeers = iterativeFindClosestNodes(target, k = replicationK)
         logInfo(TAG, "[PQChat] PUT iter find_node: target=$targetHex closest=${closestPeers.size}")
+
+        // If storing locally and no remote peers are present, return immediately without DNS re-bootstrap
+        if (closestPeers.isEmpty() && !skipLocalStore) {
+            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
+            val rttMs = System.currentTimeMillis() - tStart
+            logInfo(TAG, "[PQChat] PUT target=$targetHex stored locally (skipLocalStore=false, no remote peers) rtt=${rttMs}ms")
+            return@withContext true
+        }
 
         val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
         if (closestPeers.isNotEmpty()) {
