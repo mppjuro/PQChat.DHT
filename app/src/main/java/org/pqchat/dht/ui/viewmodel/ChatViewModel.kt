@@ -137,6 +137,11 @@ class ChatViewModel @JvmOverloads constructor(
     private val _handshakeCompleted = MutableStateFlow<HandshakeCompletedState?>(null)
     val handshakeCompleted: StateFlow<HandshakeCompletedState?> = _handshakeCompleted.asStateFlow()
 
+    private val isBobHandshakeProcessing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private val _bobHandshakeDetail = MutableStateFlow<String?>(null)
+    val bobHandshakeDetail: StateFlow<String?> = _bobHandshakeDetail.asStateFlow()
+
     private val _bobHandshakeStatus = MutableStateFlow(BobHandshakeStatus.IDLE)
     val bobHandshakeStatus: StateFlow<BobHandshakeStatus> = _bobHandshakeStatus.asStateFlow()
 
@@ -145,6 +150,9 @@ class ChatViewModel @JvmOverloads constructor(
 
     internal fun setBobHandshakeStatus(status: BobHandshakeStatus) {
         _bobHandshakeStatus.value = status
+        if (status != BobHandshakeStatus.PUT_FAILED_RETRYING) {
+            _bobHandshakeDetail.value = null
+        }
         onBobStatusChangedForTesting?.invoke(status)
     }
 
@@ -717,6 +725,10 @@ class ChatViewModel @JvmOverloads constructor(
         contactName: String = "Alice",
         intervalMs: Long = 15_000L
     ) {
+        if (!isBobHandshakeProcessing.compareAndSet(false, true)) {
+            android.util.Log.w("BobHandshake", "Bob handshake is already running, ignoring duplicate invocation")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             _isHandshaking.value = true
             _statusNotification.value = "Encapsulating Post-Quantum secret and sending to DHT..."
@@ -725,6 +737,7 @@ class ChatViewModel @JvmOverloads constructor(
             if (qrBytes.size != HandshakeManager.QR_DATA_SIZE) {
                 setBobHandshakeStatus(BobHandshakeStatus.FAILED)
                 _isHandshaking.value = false
+                isBobHandshakeProcessing.set(false)
                 _statusNotification.value = "Invalid QR code data size: ${qrBytes.size}, expected ${HandshakeManager.QR_DATA_SIZE}"
                 return@launch
             }
@@ -776,6 +789,11 @@ class ChatViewModel @JvmOverloads constructor(
                     )
 
                     if (!success) {
+                        val q = dhtLeafNode.lastNodesQueried
+                        val r = dhtLeafNode.lastNodesResponded
+                        val h = dhtLeafNode.lastLookupHops
+                        val tor = settingsManager.isTorEnabled.value
+                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba 1) [Q:$q R:$r H:$h Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Initial DHT publish failed, retrying in background..."
                         _isHandshaking.value = false
@@ -794,6 +812,11 @@ class ChatViewModel @JvmOverloads constructor(
                     )
 
                     if (verified == null) {
+                        val q = dhtLeafNode.lastNodesQueried
+                        val r = dhtLeafNode.lastNodesResponded
+                        val h = dhtLeafNode.lastLookupHops
+                        val tor = settingsManager.isTorEnabled.value
+                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba 1) [Q:$q R:$r H:$h Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Record not yet found in DHT, retrying in background..."
                         _isHandshaking.value = false
@@ -801,6 +824,7 @@ class ChatViewModel @JvmOverloads constructor(
                         return@withTimeoutOrNull true
                     }
 
+                    _bobHandshakeDetail.value = null
                     setBobHandshakeStatus(BobHandshakeStatus.PLACED_IN_DHT)
                     android.util.Log.i("BobHandshake", "GET verified in DHT target=${CryptoUtils.toHex(bobResult.target0)} size=${verified.v.size}")
 
@@ -827,14 +851,17 @@ class ChatViewModel @JvmOverloads constructor(
                     setBobHandshakeStatus(BobHandshakeStatus.AWAITING_ALICE)
                     _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
                     bobResult.destroySensitiveKeys()
+                    isBobHandshakeProcessing.set(false)
                     true
                 } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    isBobHandshakeProcessing.set(false)
                     throw e
                 } catch (e: Exception) {
                     android.util.Log.e("BobHandshake", "Bob handshake failed: ${e.message}")
                     _statusNotification.value = "Failed to process QR: ${e.message}"
                     setBobHandshakeStatus(BobHandshakeStatus.FAILED)
                     _isHandshaking.value = false
+                    isBobHandshakeProcessing.set(false)
                     bobResult?.destroySensitiveKeys()
                     true
                 }
@@ -843,6 +870,7 @@ class ChatViewModel @JvmOverloads constructor(
             if (completed == null) {
                 setBobHandshakeStatus(BobHandshakeStatus.TIMEOUT)
                 _isHandshaking.value = false
+                isBobHandshakeProcessing.set(false)
             }
         }
     }
@@ -892,6 +920,7 @@ class ChatViewModel @JvmOverloads constructor(
                     android.util.Log.i("BobHandshake", "attempt=$republishCount put=$repOk visibleInNetwork=${visible != null}")
 
                     if (visible != null) {
+                        _bobHandshakeDetail.value = null
                         setBobHandshakeStatus(BobHandshakeStatus.PLACED_IN_DHT)
                         val newContactId = UUID.randomUUID().toString()
                         val newContact = ContactEntity(
@@ -915,6 +944,14 @@ class ChatViewModel @JvmOverloads constructor(
                         setBobHandshakeStatus(BobHandshakeStatus.AWAITING_ALICE)
                         _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
                         break
+                    } else {
+                        val q = dhtLeafNode.lastNodesQueried
+                        val r = dhtLeafNode.lastNodesResponded
+                        val h = dhtLeafNode.lastLookupHops
+                        val tor = settingsManager.isTorEnabled.value
+                        val attempt = republishCount + 1
+                        _bobHandshakeDetail.value = "Put nieudany - ponawiam (próba $attempt) [Q:$q R:$r H:$h Tor:$tor]"
+                        setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                     }
                 }
                 if (isActive && _bobHandshakeStatus.value != BobHandshakeStatus.AWAITING_ALICE && _bobHandshakeStatus.value != BobHandshakeStatus.PLACED_IN_DHT) {
@@ -924,6 +961,7 @@ class ChatViewModel @JvmOverloads constructor(
             } finally {
                 bobResult.destroySensitiveKeys()
                 bobRepublishJob = null
+                isBobHandshakeProcessing.set(false)
             }
         }
     }
@@ -966,6 +1004,8 @@ class ChatViewModel @JvmOverloads constructor(
     fun resetHandshakeState() {
         bobRepublishJob?.cancel()
         bobRepublishJob = null
+        isBobHandshakeProcessing.set(false)
+        _bobHandshakeDetail.value = null
         setBobHandshakeStatus(BobHandshakeStatus.IDLE)
         _aliceHandshakeState.value?.destroySensitiveKeys()
         _aliceHandshakeState.value = null

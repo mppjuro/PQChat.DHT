@@ -1068,10 +1068,10 @@ data class DhtNodeCacheEntity(
 
 @Dao
 interface DhtNodeCacheDao {
-    @Query("SELECT * FROM dht_node_cache ORDER BY rttMs ASC LIMIT :limit")
+    @Query("SELECT * FROM dht_node_cache ORDER BY CASE WHEN rttMs <= 0 THEN 999999 ELSE rttMs END ASC, lastSeen DESC LIMIT :limit")
     suspend fun getFastestNodes(limit: Int = 40): List<DhtNodeCacheEntity>
 
-    @Query("SELECT * FROM dht_node_cache ORDER BY rttMs ASC")
+    @Query("SELECT * FROM dht_node_cache ORDER BY CASE WHEN rttMs <= 0 THEN 999999 ELSE rttMs END ASC, lastSeen DESC")
     suspend fun getAllNodes(): List<DhtNodeCacheEntity>
 
     @Query("SELECT * FROM dht_node_cache WHERE ip = :ip AND port = :port LIMIT 1")

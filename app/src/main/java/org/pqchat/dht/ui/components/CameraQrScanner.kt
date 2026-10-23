@@ -103,6 +103,7 @@ fun CameraQrScanner(
     var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
     var isTorchOn by remember { mutableStateOf(false) }
     var hasScanned by remember { mutableStateOf(false) }
+    val isScannedAtomic = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val assembler = remember { org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler() }
     var progressState by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
@@ -160,17 +161,19 @@ fun CameraQrScanner(
                             .build()
 
                         imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            if (!hasScanned) {
+                            if (!isScannedAtomic.get()) {
                                 val decodedText = decodeQrFromImage(imageProxy)
                                 if (decodedText != null && decodedText.isNotBlank()) {
                                     val result = assembler.processScan(decodedText)
                                     when (result) {
                                         is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.SingleStatic -> {
-                                            hasScanned = true
-                                            previewView.post {
-                                                progressState = null
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                onQrScanned(decodedText)
+                                            if (isScannedAtomic.compareAndSet(false, true)) {
+                                                hasScanned = true
+                                                previewView.post {
+                                                    progressState = null
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    onQrScanned(decodedText)
+                                                }
                                             }
                                         }
                                         is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Progress -> {
@@ -180,11 +183,13 @@ fun CameraQrScanner(
                                             }
                                         }
                                         is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Complete -> {
-                                            hasScanned = true
-                                            previewView.post {
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                progressState = Pair(result.scannedCount, result.totalCount)
-                                                onQrScanned(result.rawBase64)
+                                            if (isScannedAtomic.compareAndSet(false, true)) {
+                                                hasScanned = true
+                                                previewView.post {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    progressState = Pair(result.scannedCount, result.totalCount)
+                                                    onQrScanned(result.rawBase64)
+                                                }
                                             }
                                         }
                                         is org.pqchat.dht.ui.util.QrCodeUtil.MultipartQrAssembler.AssembleResult.Error -> {

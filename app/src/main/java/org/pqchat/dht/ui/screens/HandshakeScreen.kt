@@ -82,6 +82,7 @@ fun HandshakeScreen(
     val aliceInitState by viewModel.aliceHandshakeState.collectAsState()
     val isHandshaking by viewModel.isHandshaking.collectAsState()
     val bobHandshakeStatus by viewModel.bobHandshakeStatus.collectAsState()
+    val bobHandshakeDetail by viewModel.bobHandshakeDetail.collectAsState()
     val notification by viewModel.statusNotification.collectAsState()
     val handshakeCompleted by viewModel.handshakeCompleted.collectAsState()
 
@@ -617,7 +618,7 @@ fun HandshakeScreen(
                                 viewModel.processBobHandshake(bytes, contactName)
                             } catch (_: Exception) {}
                         },
-                        enabled = isPayloadValid && !isHandshaking,
+                        enabled = isPayloadValid && !isHandshaking && (bobHandshakeStatus == BobHandshakeStatus.IDLE || bobHandshakeStatus == BobHandshakeStatus.FAILED || bobHandshakeStatus == BobHandshakeStatus.TIMEOUT),
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen, contentColor = Color.Black),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -641,7 +642,7 @@ fun HandshakeScreen(
                             BobHandshakeStatus.SCANNING_QR -> "Walidacja kodu QR..." to TextSecondary
                             BobHandshakeStatus.ENCAPSULATING -> "Enkapsulacja ML-KEM-512 + X25519..." to NeonCyan
                             BobHandshakeStatus.SENDING_DHT -> "Publikacja w DHT (putMutable)..." to NeonCyan
-                            BobHandshakeStatus.PUT_FAILED_RETRYING -> "PUT nieudany - ponawiam (retry loop)..." to AmberWarning
+                            BobHandshakeStatus.PUT_FAILED_RETRYING -> (bobHandshakeDetail ?: "PUT nieudany - ponawiam (retry loop)...") to AmberWarning
                             BobHandshakeStatus.DHT_SENT_UNVERIFIED -> "Pakiet wyslany, weryfikuje w sieci..." to NeonCyan
                             BobHandshakeStatus.VERIFYING_DHT -> "Weryfikacja obecnosci w DHT (GET)..." to NeonCyan
                             BobHandshakeStatus.PLACED_IN_DHT -> "Rekord potwierdzony w DHT \u2713" to ElectricGreen

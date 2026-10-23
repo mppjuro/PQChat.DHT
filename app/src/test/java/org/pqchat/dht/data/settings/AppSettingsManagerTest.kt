@@ -24,6 +24,11 @@ class AppSettingsManagerTest {
     }
 
     @Test
+    fun `default value of isStrictPoissonShapingEnabled is false`() {
+        assertFalse(settingsManager.isStrictPoissonShapingEnabled.value)
+    }
+
+    @Test
     fun `setTorEnabled updates state and persists to SharedPreferences`() = runBlocking {
         settingsManager.setTorEnabled(true)
 

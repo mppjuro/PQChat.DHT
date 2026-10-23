@@ -220,9 +220,9 @@ class AppSettingsManager(
     )
     val statsProbeIntervalMs: StateFlow<Long> = _statsProbeIntervalMs.asStateFlow()
 
-    // Strict Poisson Traffic Shaping (default TRUE, proactive privacy defense against traffic analysis)
+    // Strict Poisson Traffic Shaping (default FALSE, proactive privacy defense against traffic analysis)
     private val _isStrictPoissonShapingEnabled = MutableStateFlow(
-        prefs?.getBoolean(KEY_STRICT_POISSON_SHAPING, true) ?: true
+        prefs?.getBoolean(KEY_STRICT_POISSON_SHAPING, false) ?: false
     )
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = _isStrictPoissonShapingEnabled.asStateFlow()
 

@@ -109,11 +109,17 @@ class DhtNodeCacheTest {
 
         val fakeDao = object : DhtNodeCacheDao {
             override suspend fun getFastestNodes(limit: Int): List<DhtNodeCacheEntity> {
-                return store.values.sortedBy { it.rttMs }.take(limit)
+                return store.values.sortedWith(
+                    compareBy<DhtNodeCacheEntity> { if (it.rttMs <= 0) 999999L else it.rttMs }
+                        .thenByDescending { it.lastSeen }
+                ).take(limit)
             }
 
             override suspend fun getAllNodes(): List<DhtNodeCacheEntity> {
-                return store.values.sortedBy { it.rttMs }
+                return store.values.sortedWith(
+                    compareBy<DhtNodeCacheEntity> { if (it.rttMs <= 0) 999999L else it.rttMs }
+                        .thenByDescending { it.lastSeen }
+                )
             }
 
             override suspend fun getNode(ip: String, port: Int): DhtNodeCacheEntity? {
