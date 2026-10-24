@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`2a87adb`](https://github.com/mppjuro/PQChat.DHT/commit/2a87adbfc33b2f155ab52e304c2a91e21896121b) (2026-10-24) — **tor**: parallelize bootstrap DNS resolution with timeout and isolate TorFailClosedTest
+- [`976930a`](https://github.com/mppjuro/PQChat.DHT/commit/976930a14a77840079da2e1c96be33beba395846) (2026-10-24) — **dht**: align BEP 44 mutable put/get protocol, target derivation, and test suite execution
 - [`023a97e`](https://github.com/mppjuro/PQChat.DHT/commit/023a97ea4af271c868f3b7388e467430794f903a) (2026-10-23) — **test**: debug notes and comments corrected
 - [`7cabe8b`](https://github.com/mppjuro/PQChat.DHT/commit/7cabe8bd0ebe49c3b3c3f522785c21ea15d813ba) (2026-10-23) — **dht**: optimize pre-warmed route direct hit and prevent DNS bootstrap on local put
 - [`40158a9`](https://github.com/mppjuro/PQChat.DHT/commit/40158a920c4bac8c672e65a8a520f1c8697e9fdd) (2026-10-23) — **dht,handshake**: harden Bob handshake idempotency, BEP 44 token acquisition, and default settings
