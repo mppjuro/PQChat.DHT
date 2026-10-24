@@ -152,11 +152,15 @@ object HandshakeManager {
     }
 
     /**
-     * Compute Target_0 = SHA-1(HMAC-SHA512(Seed_init, "handshake_rendezvous"))
+     * Compute Target_0 = SHA-1(pk_Bob_ed25519) derived deterministically from Seed_init.
+     * Under BEP 44, mutable items are strictly addressed by Target = SHA-1(k) (or SHA-1(k + salt)).
+     * Deriving Bob's ephemeral Ed25519 keypair from Seed_init ensures Alice and Bob compute
+     * the exact identical Target_0 which matches the BEP 44 storage hash on Mainline DHT nodes.
      */
     fun computeTarget0(seedInit: ByteArray): ByteArray {
-        val hmac = CryptoUtils.hmacSha512(seedInit, RENDEZVOUS_INFO)
-        return CryptoUtils.sha1(hmac)
+        val edSeed = HkdfSha512.derive(null, seedInit, HS_ED_INFO, 32)
+        val edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
+        return Ed25519Engine.computeTarget(edKeyPair.publicKey)
     }
 
     /**

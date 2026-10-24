@@ -792,8 +792,12 @@ class ChatViewModel @JvmOverloads constructor(
                         val q = dhtLeafNode.lastNodesQueried
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
+                        val tokens = dhtLeafNode.lastTokensReceived
+                        val putSent = dhtLeafNode.lastPutNodesAttempted
+                        val putAck = dhtLeafNode.lastPutNodesSucceeded
+                        val lastErr = dhtLeafNode.lastDhtError
                         val tor = settingsManager.isTorEnabled.value
-                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Initial DHT publish failed, retrying in background..."
                         _isHandshaking.value = false
@@ -815,8 +819,12 @@ class ChatViewModel @JvmOverloads constructor(
                         val q = dhtLeafNode.lastNodesQueried
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
+                        val tokens = dhtLeafNode.lastTokensReceived
+                        val putSent = dhtLeafNode.lastPutNodesAttempted
+                        val putAck = dhtLeafNode.lastPutNodesSucceeded
+                        val lastErr = dhtLeafNode.lastDhtError
                         val tor = settingsManager.isTorEnabled.value
-                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                         _statusNotification.value = "Record not yet found in DHT, retrying in background..."
                         _isHandshaking.value = false
@@ -850,6 +858,32 @@ class ChatViewModel @JvmOverloads constructor(
                     )
                     setBobHandshakeStatus(BobHandshakeStatus.AWAITING_ALICE)
                     _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
+
+                    // Copy sensitive material for 3x 10s background republishes before wiping bobResult
+                    val target0Copy = bobResult.target0.copyOf()
+                    val frameCopy = bobResult.frame.copyOf()
+                    val edPrivateKeySeedCopy = bobResult.edPrivateKeySeed.copyOf()
+                    viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            for (extraAttempt in 1..3) {
+                                delay(10_000L)
+                                val extraSeq = DhtClient.DEFAULT_MUTABLE_SEQ + extraAttempt.toLong()
+                                dhtLeafNode.putMutable(
+                                    target = target0Copy,
+                                    v = frameCopy,
+                                    seq = extraSeq,
+                                    salt = null,
+                                    sk = edPrivateKeySeedCopy,
+                                    skipLocalStore = true
+                                )
+                                android.util.Log.i("BobHandshake", "Background extra republish #$extraAttempt sent")
+                            }
+                        } catch (_: Exception) {
+                        } finally {
+                            java.util.Arrays.fill(edPrivateKeySeedCopy, 0.toByte())
+                        }
+                    }
+
                     bobResult.destroySensitiveKeys()
                     isBobHandshakeProcessing.set(false)
                     true
@@ -889,10 +923,11 @@ class ChatViewModel @JvmOverloads constructor(
                     if (!isActive) break
                     republishCount++
                     val tRepubStart = System.currentTimeMillis()
+                    val repSeq = DhtClient.DEFAULT_MUTABLE_SEQ + republishCount.toLong()
                     val repOk = dhtLeafNode.putMutable(
                         target = bobResult.target0,
                         v = bobResult.frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        seq = repSeq,
                         salt = null,
                         sk = bobResult.edPrivateKeySeed,
                         skipLocalStore = true
@@ -948,9 +983,13 @@ class ChatViewModel @JvmOverloads constructor(
                         val q = dhtLeafNode.lastNodesQueried
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
+                        val tokens = dhtLeafNode.lastTokensReceived
+                        val putSent = dhtLeafNode.lastPutNodesAttempted
+                        val putAck = dhtLeafNode.lastPutNodesSucceeded
+                        val lastErr = dhtLeafNode.lastDhtError
                         val tor = settingsManager.isTorEnabled.value
                         val attempt = republishCount + 1
-                        _bobHandshakeDetail.value = "Put failed - retrying (attempt $attempt) [Q:$q R:$r H:$h Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put failed - retrying (attempt $attempt) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
                     }
                 }

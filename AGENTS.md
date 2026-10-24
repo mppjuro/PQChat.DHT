@@ -231,7 +231,7 @@ Under the BitTorrent BEP 44 specification, the total size of the value field `'v
 ### A. Handshake (QR Scan / PNG8 Stego + Online Finalize):
 1. **Alice (QR/Stego):** Generates hybrid X25519 + ML-KEM-512 keypair $(pk_A, sk_A)$ and random $Seed_{init}$ (32 B). Displays QR code encoding $pk_A \parallel Seed_{init}$ (total 864 bytes) or exports a PNG8 image with steganographic embedding (`STEG_MAGIC = "PQST"`).
 2. **Bob (Scan & Put):** Scans code / extracts PNG8 payload, executes $\text{Encapsulate}(pk_A) \to (SS_{init}, ct_B)$ (where $ct_B$ is 800 B: 768 B ML-KEM-512 ct + 32 B X25519 eph pk). Derives rendezvous target:
-   $$\text{Target}_0 = \text{SHA-1}(\text{HMAC-SHA512}(Seed_{init}, \text{"handshake\_rendezvous"}))$$
+   $$\text{Target}_0 = \text{SHA-1}(pk_B), \quad \text{where } pk_B \text{ is Bob's ephemeral Ed25519 public key derived from } Seed_{init}$$
    Sends Type `0x01` packet to $\text{Target}_0$ via an ephemeral BEP 44 record (900 B).
 3. **Alice (Get & Derive):** Polls DHT for $\text{Target}_0$. Upon retrieval, decrypts packet, executes $\text{Decapsulate}(sk_A, ct_B)$ to recover $SS_{init}$.
 4. **State Derivation:** Both parties derive:

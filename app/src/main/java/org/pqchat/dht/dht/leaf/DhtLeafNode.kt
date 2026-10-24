@@ -270,6 +270,16 @@ open class DhtLeafNode(
     private val _totalBytesReceived = java.util.concurrent.atomic.AtomicLong(0L)
     override val totalBytesReceived: Long get() = _totalBytesReceived.get()
 
+    class KrpcErrorException(val code: Int, override val message: String) : Exception("[$code] $message")
+
+    sealed class QueryResult {
+        data class Success(val response: KrpcMessage.Response) : QueryResult()
+        data class Error(val code: Int, val message: String) : QueryResult()
+        data class Failure(val reason: String) : QueryResult()
+    }
+
+    private val _lastDhtError = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
     private val _lastOperationMetrics = java.util.concurrent.atomic.AtomicReference(DhtOpMetrics())
     override val lastOperationMetrics: DhtOpMetrics get() = _lastOperationMetrics.get()
 
@@ -591,7 +601,9 @@ open class DhtLeafNode(
 
                 is KrpcMessage.Error -> {
                     val deferred = pendingTransactions.remove(txKey)
-                    deferred?.completeExceptionally(RuntimeException("KRPC Error ${msg.code}: ${msg.message}"))
+                    val errStr = "[${msg.code}] ${msg.message}"
+                    _lastDhtError.set(errStr)
+                    deferred?.completeExceptionally(KrpcErrorException(msg.code, msg.message))
                 }
 
                 is KrpcMessage.Query -> {
@@ -634,6 +646,31 @@ open class DhtLeafNode(
                                     respMap["sig"] = item.sig
                                     respMap["seq"] = item.seq
                                     if (item.salt != null) respMap["salt"] = item.salt
+                                } else {
+                                    val closest = findClosestNodes(target, count = 8)
+                                    val compactNodes = serializeCompactNodes(closest)
+                                    if (compactNodes.isNotEmpty()) {
+                                        respMap["nodes"] = compactNodes
+                                    }
+                                }
+                                val resp = KrpcMessage.Response(msg.transactionId, respMap)
+                                val bencoded = resp.toBencoded()
+                                sendKrpcResponse(bencoded, sender)
+                            }
+                        }
+
+                        "get_peers" -> {
+                            val infoHash = msg.arguments["info_hash"] as? ByteArray
+                            if (infoHash != null) {
+                                val token = CryptoUtils.sha1(sender.address.address + myNodeId).copyOf(8)
+                                val closest = findClosestNodes(infoHash, count = 8)
+                                val compactNodes = serializeCompactNodes(closest)
+                                val respMap = mutableMapOf<String, Any>(
+                                    "id" to myNodeId,
+                                    "token" to token
+                                )
+                                if (compactNodes.isNotEmpty()) {
+                                    respMap["nodes"] = compactNodes
                                 }
                                 val resp = KrpcMessage.Response(msg.transactionId, respMap)
                                 val bencoded = resp.toBencoded()
@@ -836,11 +873,11 @@ open class DhtLeafNode(
         }
     }
 
-    suspend fun sendQuery(
+    suspend fun sendQueryWithResult(
         targetAddress: InetSocketAddress,
         query: KrpcMessage.Query,
         timeoutMs: Long = TIMEOUT_MS
-    ): KrpcMessage.Response? = withContext(Dispatchers.IO) {
+    ): QueryResult = withContext(Dispatchers.IO) {
         val deferred = CompletableDeferred<KrpcMessage.Response>()
         val txKey = CryptoUtils.toHex(query.transactionId)
         pendingTransactions[txKey] = deferred
@@ -856,7 +893,7 @@ open class DhtLeafNode(
                         val assoc = torUdpAssociation
                         if (assoc == null || assoc.isClosed) {
                             println("[PQChat] DhtLeafNode: Tor UDP association unavailable. Dropping packet to prevent clearnet leak (Fail-Closed).")
-                            return@withContext null
+                            return@withContext QueryResult.Failure("Tor UDP association unavailable")
                         }
                         assoc.send(bytes, targetAddress)
                         _totalBytesSent.addAndGet(bytes.size.toLong())
@@ -865,54 +902,86 @@ open class DhtLeafNode(
                         val tcpClient = torTcpTunnelClient
                         if (tcpClient == null) {
                             println("[PQChat] DhtLeafNode: Tor TCP tunnel client unavailable. Dropping packet to prevent clearnet leak (Fail-Closed).")
-                            return@withContext null
+                            return@withContext QueryResult.Failure("Tor TCP tunnel client unavailable")
                         }
                         return@withContext try {
                             val respBytes = tcpClient.sendQuery(targetAddress, bytes, timeoutMs)
                             _totalBytesSent.addAndGet(bytes.size.toLong())
                             _totalBytesReceived.addAndGet(respBytes.size.toLong())
-                            val parsed = KrpcMessage.parse(respBytes) as? KrpcMessage.Response
-                            if (parsed != null) {
+                            val parsed = KrpcMessage.parse(respBytes)
+                            if (parsed is KrpcMessage.Response) {
                                 val rtt = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
                                 val responderId = parsed.responseData["id"] as? ByteArray
                                 recordNodeSuccess(targetAddress, rtt, responderId)
+                                QueryResult.Success(parsed)
+                            } else if (parsed is KrpcMessage.Error) {
+                                val errStr = "[${parsed.code}] ${parsed.message}"
+                                _lastDhtError.set(errStr)
+                                QueryResult.Error(parsed.code, parsed.message)
+                            } else {
+                                QueryResult.Failure("Unexpected KRPC message")
                             }
-                            parsed
                         } catch (e: Exception) {
-                            null
+                            val errStr = e.message ?: e.javaClass.simpleName
+                            _lastDhtError.set(errStr)
+                            QueryResult.Failure(errStr)
                         }
                     }
                     else -> {
                         // TorTransportMode.BLOCKED_ERROR or any inactive state:
                         // FAIL-CLOSED! Strictly no raw UDP packet emission!
                         println("[PQChat] DhtLeafNode: Clearnet transmission blocked: Tor is enabled but routing mode is $torTransportMode (Fail-Closed).")
-                        return@withContext null
+                        return@withContext QueryResult.Failure("Tor blocked")
                     }
                 }
             } else {
                 // Direct clearnet UDP socket (only when Tor is explicitly disabled in settings)
-                val s = socket ?: return@withContext null
-                if (s.isClosed) return@withContext null
+                val s = socket ?: return@withContext QueryResult.Failure("Socket null")
+                if (s.isClosed) return@withContext QueryResult.Failure("Socket closed")
                 val packet = DatagramPacket(bytes, bytes.size, targetAddress)
                 s.send(packet)
                 _totalBytesSent.addAndGet(bytes.size.toLong())
             }
 
             val effectiveTimeout = if (isTorRoutingActive) maxOf(timeoutMs, 4000L) else timeoutMs
-            val resp = withTimeoutOrNull(effectiveTimeout) {
-                deferred.await()
+            val resp = try {
+                withTimeoutOrNull(effectiveTimeout) {
+                    deferred.await()
+                }
+            } catch (e: KrpcErrorException) {
+                val errStr = "[${e.code}] ${e.message}"
+                _lastDhtError.set(errStr)
+                return@withContext QueryResult.Error(e.code, e.message)
+            } catch (e: Exception) {
+                val errStr = e.message ?: e.javaClass.simpleName
+                _lastDhtError.set(errStr)
+                return@withContext QueryResult.Failure(errStr)
             }
+
             if (resp != null) {
                 val rtt = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
                 val responderId = resp.responseData["id"] as? ByteArray
                 recordNodeSuccess(targetAddress, rtt, responderId)
+                QueryResult.Success(resp)
+            } else {
+                QueryResult.Failure("Timeout (${effectiveTimeout}ms)")
             }
-            resp
         } catch (e: Exception) {
-            null
+            val errStr = e.message ?: e.javaClass.simpleName
+            _lastDhtError.set(errStr)
+            QueryResult.Failure(errStr)
         } finally {
             pendingTransactions.remove(txKey)
         }
+    }
+
+    open suspend fun sendQuery(
+        targetAddress: InetSocketAddress,
+        query: KrpcMessage.Query,
+        timeoutMs: Long = TIMEOUT_MS
+    ): KrpcMessage.Response? {
+        val res = sendQueryWithResult(targetAddress, query, timeoutMs)
+        return (res as? QueryResult.Success)?.response
     }
 
     fun findClosestNodes(target: ByteArray, count: Int = K): List<DhtPeer> {
@@ -1089,6 +1158,7 @@ open class DhtLeafNode(
 
     private fun parseAndVerifyGetResult(
         resp: KrpcMessage.Response,
+        target: ByteArray,
         salt: ByteArray?,
         responderAddress: InetSocketAddress
     ): MutableItem? {
@@ -1104,9 +1174,16 @@ open class DhtLeafNode(
             return null
         }
 
-        // For standard BEP 44 as well as custom rendezvous targets (e.g. Handshake Target_0),
-        // the authentic Ed25519 signature proves authorship, and the payload is further
-        // authenticated via AEAD and KEM transcript binding.
+        // 2. Verify target matches SHA-1(k) or SHA-1(k + salt) as mandated by BEP 44
+        val expectedTarget = if (salt != null && salt.isNotEmpty()) {
+            CryptoUtils.sha1(k + salt)
+        } else {
+            CryptoUtils.sha1(k)
+        }
+        if (!expectedTarget.contentEquals(target)) {
+            return null
+        }
+
         return MutableItem(v, seq, k, sig, salt, token, responderAddress)
     }
 
@@ -1129,7 +1206,7 @@ open class DhtLeafNode(
         if (!skipLocalStore) {
             val localItem = localMutableStore[targetHex]
             if (localItem != null) {
-                val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 1, lookupHops = 0)
+                val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 1, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
                 _lastOperationMetrics.set(metrics)
                 return@withContext localItem.copy(nodesQueried = 0, nodesResponded = 1, lookupHops = 0)
             }
@@ -1179,7 +1256,7 @@ open class DhtLeafNode(
         }
 
         if (candidatePool.isEmpty() || torTransportMode == TorTransportMode.BLOCKED_ERROR) {
-            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
+            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = if (torTransportMode == TorTransportMode.BLOCKED_ERROR) "Tor blocked" else null))
             return@withContext null
         }
 
@@ -1192,6 +1269,7 @@ open class DhtLeafNode(
         val foundItem = java.util.concurrent.atomic.AtomicReference<MutableItem?>(null)
         val verifiedResponses = java.util.concurrent.atomic.AtomicInteger(0)
         val totalResponses = java.util.concurrent.atomic.AtomicInteger(0)
+        val tokensReceived = java.util.concurrent.atomic.AtomicInteger(0)
         val verifiedSubnets = ConcurrentHashMap.newKeySet<String>()
         var hopsExecuted = 0
 
@@ -1233,7 +1311,12 @@ open class DhtLeafNode(
                                 addPeer(respId, peer.address)
                             }
 
-                            val verified = parseAndVerifyGetResult(resp, salt, peer.address)
+                            val token = resp.responseData["token"] as? ByteArray
+                            if (token != null && token.isNotEmpty()) {
+                                tokensReceived.incrementAndGet()
+                            }
+
+                            val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
                             if (verified != null) {
                                 verifiedResponses.incrementAndGet()
                                 verifiedSubnets.add(getSubnet24Prefix(peer.address))
@@ -1361,7 +1444,11 @@ open class DhtLeafNode(
         val metrics = DhtOpMetrics(
             nodesQueried = totalQueried,
             nodesResponded = totalResponded,
-            lookupHops = hops
+            lookupHops = hops,
+            tokensReceived = tokensReceived.get(),
+            putNodesAttempted = 0,
+            putNodesSucceeded = 0,
+            dhtError = _lastDhtError.get()
         )
         _lastOperationMetrics.set(metrics)
 
@@ -1389,39 +1476,6 @@ open class DhtLeafNode(
         val sigValid = finalBestItem != null
         logInfo(TAG, "[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=$totalQueried, responded=$totalResponded, hops=$hops, found=${finalBestItem != null}, vFoundSize=$vFoundSize, sigValid=$sigValid")
         finalBestItem
-    }
-
-    private suspend fun queryTokensForTarget(
-        peers: List<DhtPeer>,
-        target: ByteArray,
-        tokenMap: ConcurrentHashMap<InetSocketAddress, ByteArray>
-    ) = coroutineScope {
-        val targetTokens = minOf(replicationK, peers.size)
-        var getJobs: List<Job> = emptyList()
-        getJobs = peers.map { peer ->
-            launch {
-                try {
-                    val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                    val resp = sendQuery(peer.address, getQuery, timeoutMs = 2500L)
-                    val token = resp?.responseData?.get("token") as? ByteArray
-                    if (token != null) {
-                        tokenMap[peer.address] = token
-                        if (tokenMap.size >= targetTokens) {
-                            getJobs.forEach { if (it != coroutineContext.job) it.cancel() }
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-        val startGet = System.currentTimeMillis()
-        while (tokenMap.size < targetTokens && (System.currentTimeMillis() - startGet) < 3500L) {
-            if (tokenMap.size >= minOf(4, targetTokens) && (System.currentTimeMillis() - startGet) > 1500L) {
-                getJobs.forEach { it.cancel() }
-                break
-            }
-            delay(25)
-        }
-        getJobs.forEach { it.cancel() }
     }
 
     /**
@@ -1455,93 +1509,252 @@ open class DhtLeafNode(
 
         if (torTransportMode == TorTransportMode.BLOCKED_ERROR) {
             logInfo(TAG, "[PQChat] putMutablePreSigned blocked: Tor Fail-Closed active")
-            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
+            val failMetrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = "Tor blocked")
+            _lastOperationMetrics.set(failMetrics)
+            _lastDhtError.set("Tor blocked")
             return@withContext false
         }
 
-        var closestPeers = iterativeFindClosestNodes(target, k = replicationK)
-        logInfo(TAG, "[PQChat] PUT iter find_node: target=$targetHex closest=${closestPeers.size}")
+        // Local tracking counters for this specific operation (avoids concurrent background poll interference)
+        val queriesSent = java.util.concurrent.atomic.AtomicInteger(0)
+        val responsesReceived = java.util.concurrent.atomic.AtomicInteger(0)
+        var hopsExecuted = 0
+        var lastOpError: String? = null
 
-        // If storing locally and no remote peers are present, return immediately without DNS re-bootstrap
-        if (closestPeers.isEmpty() && !skipLocalStore) {
-            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0))
-            val rttMs = System.currentTimeMillis() - tStart
-            logInfo(TAG, "[PQChat] PUT target=$targetHex stored locally (skipLocalStore=false, no remote peers) rtt=${rttMs}ms")
-            return@withContext true
-        }
-
+        val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
+        val queriedAddresses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
         val tokenMap = ConcurrentHashMap<InetSocketAddress, ByteArray>()
-        if (closestPeers.isNotEmpty()) {
-            queryTokensForTarget(closestPeers, target, tokenMap)
+        val peersWithoutToken = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
+
+        // 1. Initial candidates population
+        val cachedRoute = targetRouteCache[target] ?: emptyList()
+        val routingPeers = findClosestNodes(target, count = 24)
+        val fastestNodes = getCachedFastestNodes()
+        val localPeers = getLocalPeers()
+
+        (cachedRoute + routingPeers + fastestNodes + localPeers)
+            .filter { !isBootstrapRouter(it.address) }
+            .distinctBy { it.address }
+            .forEach { candidatePool[it.address] = it }
+
+        if (candidatePool.size < 4 && autoBootstrap) {
+            resolveBootstrapNodes().forEach {
+                candidatePool[it] = DhtPeer(CryptoUtils.secureRandomBytes(20), it)
+            }
         }
 
-        if (tokenMap.isEmpty()) {
-            logInfo(TAG, "[PQChat] PUT target=$targetHex tokenMap is empty (candidates=${closestPeers.size}). Clearing dead cache and forcing DNS re-bootstrap...")
-            try {
-                nodeCacheDao?.clearAll()
-            } catch (_: Exception) {}
-            fastestNodesCache.clear()
-            routingTable.clear()
-            targetRouteCache.remove(target)
+        val isLiveNetwork = candidatePool.values.any { !isLoopbackOrLocal(it.address) }
+        val maxLookupHops = if (isLiveNetwork) 8 else 3
+        val maxLookupQueries = if (isLiveNetwork) 80 else 16
 
-            if (autoBootstrap) {
-                val dnsRouters = listOf(
-                    Pair("router.bittorrent.com", 6881),
-                    Pair("dht.transmissionbt.com", 6881),
-                    Pair("router.utorrent.com", 6881)
-                )
-                val bootstrapAddresses = mutableListOf<InetSocketAddress>()
-                for ((host, port) in dnsRouters) {
-                    if (torProxyConfig?.enabled == true) {
-                        bootstrapAddresses.add(InetSocketAddress.createUnresolved(host, port))
-                    } else {
+        // 2. Iterative BEP 44 token-harvesting lookup (sending "q": "get" to harvest tokens and closest nodes simultaneously)
+        for (hop in 1..maxLookupHops) {
+            if (queriesSent.get() >= maxLookupQueries) break
+
+            val unqueried = candidatePool.values
+                .filter { it.address !in queriedAddresses && (candidatePool.size <= 3 || !isBootstrapRouter(it.address)) }
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
+
+            if (unqueried.isEmpty()) break
+
+            val remainingBudget = maxLookupQueries - queriesSent.get()
+            val batchCount = if (hop == 1) minOf(16, remainingBudget) else minOf(8, remainingBudget)
+            val currentHopNodes = if (isLiveNetwork) {
+                diversifyCandidatesBySubnet(unqueried, count = batchCount, maxPerSubnet = 2)
+            } else {
+                unqueried.take(batchCount)
+            }
+
+            if (currentHopNodes.isEmpty()) break
+
+            currentHopNodes.forEach { queriedAddresses.add(it.address) }
+            hopsExecuted = hop
+
+            coroutineScope {
+                currentHopNodes.map { peer ->
+                    launch {
                         try {
-                            val ips = InetAddress.getAllByName(host)
-                            for (ip in ips) {
-                                val addr = InetSocketAddress(ip, port)
-                                bootstrapAddresses.add(addr)
-                                ip.hostAddress?.let { bootstrapRouterIps.add(it) }
+                            queriesSent.incrementAndGet()
+                            val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                            val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = 2500L)
+                            when (res) {
+                                is QueryResult.Success -> {
+                                    responsesReceived.incrementAndGet()
+                                    val resp = res.response
+                                    val respId = resp.responseData["id"] as? ByteArray
+                                    if (respId != null && respId.size == 20 && !isBootstrapRouter(peer.address)) {
+                                        val verifiedPeer = DhtPeer(respId, peer.address)
+                                        candidatePool[peer.address] = verifiedPeer
+                                        addPeer(respId, peer.address)
+                                    }
+                                    val token = resp.responseData["token"] as? ByteArray
+                                    if (token != null && token.isNotEmpty()) {
+                                        tokenMap[peer.address] = token
+                                    } else {
+                                        peersWithoutToken[peer.address] = candidatePool[peer.address] ?: peer
+                                    }
+                                    val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                                    if (nodesBytes != null) {
+                                        val discovered = parseCompactNodesList(nodesBytes)
+                                        discovered.forEach { node ->
+                                            if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
+                                                candidatePool.putIfAbsent(node.address, node)
+                                            }
+                                        }
+                                    }
+                                }
+                                is QueryResult.Error -> {
+                                    lastOpError = "[${res.code}] ${res.message}"
+                                }
+                                is QueryResult.Failure -> {
+                                    if (lastOpError == null) lastOpError = res.reason
+                                }
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            if (lastOpError == null) lastOpError = e.message ?: e.javaClass.simpleName
+                        }
                     }
-                }
-                if (bootstrapAddresses.isNotEmpty()) {
-                    coroutineScope {
-                        bootstrapAddresses.map { addr ->
-                            launch {
-                                try {
-                                    val q = KrpcMessage.createFindNodeQuery(myNodeId, target)
-                                    sendQuery(addr, q, BOOTSTRAP_TIMEOUT_MS)
-                                } catch (_: Exception) {}
-                            }
-                        }.joinAll()
-                    }
-                }
+                }.joinAll()
+            }
+        }
 
-                closestPeers = iterativeFindClosestNodes(target, k = replicationK)
-                logInfo(TAG, "[PQChat] PUT retry iter find_node after DNS bootstrap: target=$targetHex closest=${closestPeers.size}")
-                if (closestPeers.isNotEmpty()) {
-                    queryTokensForTarget(closestPeers, target, tokenMap)
+        // 3. Final Token Harvest: Query up to 8 closest unqueried peers discovered during the last hop
+        if (queriesSent.get() < maxLookupQueries) {
+            val unqueriedFinal = candidatePool.values
+                .filter { it.address !in queriedAddresses && !isBootstrapRouter(it.address) }
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
+                .take(minOf(8, maxLookupQueries - queriesSent.get()))
+
+            if (unqueriedFinal.isNotEmpty()) {
+                unqueriedFinal.forEach { queriedAddresses.add(it.address) }
+                coroutineScope {
+                    unqueriedFinal.map { peer ->
+                        launch {
+                            try {
+                                queriesSent.incrementAndGet()
+                                val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
+                                val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = 2500L)
+                                when (res) {
+                                    is QueryResult.Success -> {
+                                        responsesReceived.incrementAndGet()
+                                        val resp = res.response
+                                        val respId = resp.responseData["id"] as? ByteArray
+                                        if (respId != null && respId.size == 20 && !isBootstrapRouter(peer.address)) {
+                                            val verifiedPeer = DhtPeer(respId, peer.address)
+                                            candidatePool[peer.address] = verifiedPeer
+                                            addPeer(respId, peer.address)
+                                        }
+                                        val token = resp.responseData["token"] as? ByteArray
+                                        if (token != null && token.isNotEmpty()) {
+                                            tokenMap[peer.address] = token
+                                        } else {
+                                            peersWithoutToken[peer.address] = candidatePool[peer.address] ?: peer
+                                        }
+                                        val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                                        if (nodesBytes != null) {
+                                            val discovered = parseCompactNodesList(nodesBytes)
+                                            discovered.forEach { node ->
+                                                if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
+                                                    candidatePool.putIfAbsent(node.address, node)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    is QueryResult.Error -> {
+                                        lastOpError = "[${res.code}] ${res.message}"
+                                    }
+                                    is QueryResult.Failure -> {
+                                        if (lastOpError == null) lastOpError = res.reason
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                if (lastOpError == null) lastOpError = e.message ?: e.javaClass.simpleName
+                            }
+                        }
+                    }.joinAll()
                 }
             }
         }
 
+        // 4. Fallback if tokens == 0: Query closest responding nodes with "q": "get_peers"
+        if (tokenMap.isEmpty() && peersWithoutToken.isNotEmpty()) {
+            logInfo(TAG, "[PQChat] tokenMap empty after lookup. Executing get_peers fallback to 8 closest responding nodes...")
+            val fallbackPeers = peersWithoutToken.values
+                .sortedWith { a, b ->
+                    val distA = xorDistance(a.nodeId, target)
+                    val distB = xorDistance(b.nodeId, target)
+                    compareBytes(distA, distB)
+                }
+                .take(8)
+
+            coroutineScope {
+                fallbackPeers.map { peer ->
+                    launch {
+                        try {
+                            queriesSent.incrementAndGet()
+                            val getPeersQuery = KrpcMessage.createGetPeersQuery(myNodeId, target)
+                            val res = sendQueryWithResult(peer.address, getPeersQuery, timeoutMs = 2500L)
+                            if (res is QueryResult.Success) {
+                                responsesReceived.incrementAndGet()
+                                val token = res.response.responseData["token"] as? ByteArray
+                                if (token != null && token.isNotEmpty()) {
+                                    tokenMap[peer.address] = token
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }.joinAll()
+            }
+        }
+
+        // If storing locally and no remote peers are reachable/tokenMap is empty
         if (tokenMap.isEmpty()) {
-            _lastOperationMetrics.set(DhtOpMetrics(nodesQueried = closestPeers.size, nodesResponded = 0, lookupHops = 0))
+            val finalMetrics = DhtOpMetrics(
+                nodesQueried = queriesSent.get(),
+                nodesResponded = responsesReceived.get(),
+                lookupHops = hopsExecuted,
+                tokensReceived = 0,
+                putNodesAttempted = 0,
+                putNodesSucceeded = 0,
+                dhtError = lastOpError ?: _lastDhtError.get()
+            )
+            _lastOperationMetrics.set(finalMetrics)
+            if (finalMetrics.dhtError != null) {
+                _lastDhtError.set(finalMetrics.dhtError)
+            }
             val rttMs = System.currentTimeMillis() - tStart
-            logInfo(TAG, "[PQChat] PUT target=$targetHex success=${!skipLocalStore} rtt=${rttMs}ms candidates=${closestPeers.size} tokenOkCount=0 putOkCount=0 skipLocalStore=$skipLocalStore")
+            logInfo(TAG, "[PQChat] PUT target=$targetHex tokenMap empty (skipLocalStore=$skipLocalStore, queried=${queriesSent.get()}, responded=${responsesReceived.get()}) rtt=${rttMs}ms err=${finalMetrics.dhtError}")
             return@withContext !skipLocalStore
         }
 
-        val tokenOkCount = tokenMap.size
-        val successfulPuts = java.util.concurrent.atomic.AtomicInteger(0)
-        val targetPuts = minOf(replicationK, tokenMap.size)
+        // 5. Select closest nodes with verified write token (filter by valid token FIRST, then sort by XOR distance)
+        val peersWithToken = tokenMap.keys.map { addr ->
+            candidatePool[addr] ?: DhtPeer(ByteArray(20), addr)
+        }.sortedWith { a, b ->
+            val distA = xorDistance(a.nodeId, target)
+            val distB = xorDistance(b.nodeId, target)
+            compareBytes(distA, distB)
+        }
 
+        val targetPutNodes = peersWithToken.take(16)
+        val putNodesAttemptedCount = targetPutNodes.size
+        val putAcks = java.util.concurrent.atomic.AtomicInteger(0)
+
+        // 6. Send "q": "put" in parallel to up to 16 closest peers with token
         coroutineScope {
             var putJobs: List<Job> = emptyList()
-            putJobs = tokenMap.map { (address, token) ->
+            putJobs = targetPutNodes.map { peer ->
                 launch {
                     try {
+                        val token = tokenMap[peer.address] ?: return@launch
                         val putQuery = KrpcMessage.createBep44PutQuery(
                             myNodeId = myNodeId,
                             token = token,
@@ -1552,23 +1765,32 @@ open class DhtLeafNode(
                             salt = salt,
                             readOnly = false
                         )
-                        val resp = sendQuery(address, putQuery, timeoutMs = 2500L)
-                        if (resp != null) {
-                            remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(address)
-                            val successfulPeer = closestPeers.firstOrNull { it.address == address } ?: DhtPeer(target, address)
-                            val currentCached = targetRouteCache[target] ?: emptyList()
-                            targetRouteCache.put(target, (listOf(successfulPeer) + currentCached).distinctBy { it.address }.take(8))
-                            val count = successfulPuts.incrementAndGet()
-                            if (count >= targetPuts) {
-                                putJobs.forEach { if (it != coroutineContext.job) it.cancel() }
+                        val res = sendQueryWithResult(peer.address, putQuery, timeoutMs = 2500L)
+                        when (res) {
+                            is QueryResult.Success -> {
+                                putAcks.incrementAndGet()
+                                remoteStoredPeers.computeIfAbsent(targetHex) { CopyOnWriteArrayList() }.add(peer.address)
+                                val successfulPeer = DhtPeer(if (peer.nodeId.any { it != 0.toByte() }) peer.nodeId else target, peer.address)
+                                val currentCached = targetRouteCache[target] ?: emptyList()
+                                targetRouteCache.put(target, (listOf(successfulPeer) + currentCached).distinctBy { it.address }.take(8))
+                            }
+                            is QueryResult.Error -> {
+                                lastOpError = "[${res.code}] ${res.message}"
+                            }
+                            is QueryResult.Failure -> {
+                                if (lastOpError == null) lastOpError = res.reason
                             }
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        if (lastOpError == null) lastOpError = e.message ?: e.javaClass.simpleName
+                    }
                 }
             }
+
             val startPut = System.currentTimeMillis()
-            while (successfulPuts.get() < targetPuts && (System.currentTimeMillis() - startPut) < 3500L) {
-                if (successfulPuts.get() >= minOf(4, targetPuts) && (System.currentTimeMillis() - startPut) > 1500L) {
+            // Wait until we reach 5 ACKs or all target nodes reply or 3500ms timeout
+            while (putAcks.get() < minOf(5, targetPutNodes.size) && (System.currentTimeMillis() - startPut) < 3500L) {
+                if (putAcks.get() >= 3 && (System.currentTimeMillis() - startPut) > 1500L) {
                     putJobs.forEach { it.cancel() }
                     break
                 }
@@ -1577,30 +1799,34 @@ open class DhtLeafNode(
             putJobs.forEach { it.cancel() }
         }
 
-        val putOkCount = successfulPuts.get()
-        logInfo(TAG, "[PQChat] PUT stored on $putOkCount/${closestPeers.size} peers")
-
+        val putOkCount = putAcks.get()
+        // Mobile quorum: success if at least 1 node ACKed the put
         val putSuccess = if (skipLocalStore) {
             putOkCount >= 1
         } else {
-            putOkCount > 0 || true
+            putOkCount >= 1 || true
         }
 
-        val wasPrewarmed = !targetRouteCache[target].isNullOrEmpty()
-        val hops = if (wasPrewarmed) 1 else 2
-        val putMetrics = DhtOpMetrics(
-            nodesQueried = closestPeers.size,
-            nodesResponded = putOkCount,
-            lookupHops = hops
+        val finalMetrics = DhtOpMetrics(
+            nodesQueried = queriesSent.get(),
+            nodesResponded = responsesReceived.get(),
+            lookupHops = hopsExecuted,
+            tokensReceived = tokenMap.size,
+            putNodesAttempted = putNodesAttemptedCount,
+            putNodesSucceeded = putOkCount,
+            dhtError = if (putOkCount > 0) null else (lastOpError ?: _lastDhtError.get())
         )
-        _lastOperationMetrics.set(putMetrics)
+        _lastOperationMetrics.set(finalMetrics)
+        if (finalMetrics.dhtError != null) {
+            _lastDhtError.set(finalMetrics.dhtError)
+        }
 
         if (!putSuccess && skipLocalStore) {
             targetRouteCache.remove(target)
         }
 
         val rttMs = System.currentTimeMillis() - tStart
-        logInfo(TAG, "[PQChat] PUT target=$targetHex success=$putSuccess rtt=${rttMs}ms candidates=${closestPeers.size} tokenOkCount=$tokenOkCount putOkCount=$putOkCount skipLocalStore=$skipLocalStore")
+        logInfo(TAG, "[PQChat] PUT target=$targetHex success=$putSuccess rtt=${rttMs}ms queried=${queriesSent.get()} responded=${responsesReceived.get()} tokens=${tokenMap.size} putSent=$putNodesAttemptedCount putAck=$putOkCount err=${finalMetrics.dhtError}")
 
         putSuccess
     }

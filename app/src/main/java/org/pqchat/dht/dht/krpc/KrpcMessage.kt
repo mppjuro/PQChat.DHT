@@ -166,7 +166,7 @@ sealed class KrpcMessage {
         fun createFindNodeQuery(
             myNodeId: ByteArray,
             targetId: ByteArray,
-            txId: ByteArray = CryptoUtils.secureRandomBytes(2)
+            txId: ByteArray = CryptoUtils.secureRandomBytes(4)
         ): Query {
             val args = mapOf(
                 "id" to myNodeId,
@@ -175,10 +175,21 @@ sealed class KrpcMessage {
             return Query(txId, "find_node", args)
         }
 
+        fun createGetPeersQuery(
+            myNodeId: ByteArray,
+            infoHash: ByteArray,
+            txId: ByteArray = CryptoUtils.secureRandomBytes(4)
+        ): Query {
+            val args = LinkedHashMap<String, Any>()
+            args["id"] = myNodeId
+            args["info_hash"] = infoHash
+            return Query(txId, "get_peers", args)
+        }
+
         fun createBep44GetQuery(
             myNodeId: ByteArray,
             targetSha1: ByteArray,
-            txId: ByteArray = CryptoUtils.secureRandomBytes(2),
+            txId: ByteArray = CryptoUtils.secureRandomBytes(4),
             seq: Long? = null
         ): Query {
             val args = LinkedHashMap<String, Any>()
@@ -200,21 +211,21 @@ sealed class KrpcMessage {
             salt: ByteArray? = null,
             cas: Long? = null,
             readOnly: Boolean = false,
-            txId: ByteArray = CryptoUtils.secureRandomBytes(2)
+            txId: ByteArray = CryptoUtils.secureRandomBytes(4)
         ): Query {
             val args = LinkedHashMap<String, Any>()
-            args["id"] = myNodeId
-            args["token"] = token
-            args["v"] = v
-            args["k"] = k
-            args["sig"] = sig
-            args["seq"] = seq
-            if (salt != null && salt.isNotEmpty()) {
-                args["salt"] = salt
-            }
             if (cas != null) {
                 args["cas"] = cas
             }
+            args["id"] = myNodeId
+            args["k"] = k
+            if (salt != null && salt.isNotEmpty()) {
+                args["salt"] = salt
+            }
+            args["seq"] = seq
+            args["sig"] = sig
+            args["token"] = token
+            args["v"] = v
             // ro=1 in get, find_node, and ping remains unchanged (leaf node BEP 43),
             // but BEP 44 put queries with ro=1 may be rejected by some Mainline DHT nodes.
             // Therefore, readOnly is configurable and defaults to false for put queries.

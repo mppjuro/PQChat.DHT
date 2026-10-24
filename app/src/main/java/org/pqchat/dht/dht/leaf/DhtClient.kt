@@ -25,12 +25,16 @@ enum class TorTransportMode {
 
 /**
  * Operational telemetry metrics captured during the most recent BEP 44 DHT operation.
- * Used for empirical academic analysis (nodes queried, responding replicas, Kademlia routing hops).
+ * Used for empirical academic analysis (nodes queried, responding replicas, Kademlia routing hops, write tokens, put sent/ack, errors).
  */
 data class DhtOpMetrics(
     val nodesQueried: Int = 0,
     val nodesResponded: Int = 0,
-    val lookupHops: Int = 0
+    val lookupHops: Int = 0,
+    val tokensReceived: Int = 0,
+    val putNodesAttempted: Int = 0,
+    val putNodesSucceeded: Int = 0,
+    val dhtError: String? = null
 )
 
 /**
@@ -64,13 +68,17 @@ interface DhtClient {
     val torDiagnosticMessage: String? get() = null
 
     /**
-     * Operational telemetry: metrics (queried, responded, hops) from the most recent DHT operation.
+     * Operational telemetry: metrics (queried, responded, hops, tokens, put sent/ack, errors) from the most recent DHT operation.
      */
     val lastOperationMetrics: DhtOpMetrics get() = DhtOpMetrics()
 
     val lastNodesQueried: Int get() = lastOperationMetrics.nodesQueried
     val lastNodesResponded: Int get() = lastOperationMetrics.nodesResponded
     val lastLookupHops: Int get() = lastOperationMetrics.lookupHops
+    val lastTokensReceived: Int get() = lastOperationMetrics.tokensReceived
+    val lastPutNodesAttempted: Int get() = lastOperationMetrics.putNodesAttempted
+    val lastPutNodesSucceeded: Int get() = lastOperationMetrics.putNodesSucceeded
+    val lastDhtError: String? get() = lastOperationMetrics.dhtError
 
     /**
      * Empirical telemetry: cumulative count of BEP 44 GET queries executed.

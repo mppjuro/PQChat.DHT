@@ -104,6 +104,36 @@ fun DiagnosticsScreen(
             }
 
             item {
+                SectionCard(title = "BEP 44 Operation Telemetry (Most Recent Put/Get)") {
+                    val m = viewModel.dhtLeafNode.lastOperationMetrics
+                    val tor = viewModel.settingsManager.isTorEnabled.collectAsState().value
+                    Text(
+                        text = "[Q:${m.nodesQueried} R:${m.nodesResponded} H:${m.lookupHops} T:${m.tokensReceived} P:${m.putNodesAttempted} A:${m.putNodesSucceeded} Err:${m.dhtError ?: "none"} Tor:$tor]",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = appColors.primary,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Tokens: ${m.tokensReceived} | Put Sent: ${m.putNodesAttempted} | Put ACK: ${m.putNodesSucceeded}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (m.putNodesSucceeded > 0) ElectricGreen else AmberWarning,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (m.dhtError != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Last KRPC Error: ${m.dhtError}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CrimsonDanger,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+
+            item {
                 SectionCard(title = "Adaptive Polling Profile (Android Lifecycle)") {
                     Text(
                         text = "Current State: ${pollingState.label}",
