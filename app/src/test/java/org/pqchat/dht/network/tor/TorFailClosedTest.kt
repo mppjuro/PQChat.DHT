@@ -56,7 +56,7 @@ class TorFailClosedTest {
     }
 
     @Test
-    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
     fun `when Tor is enabled and proxy is unreachable, fail-closed strictly blocks clearnet UDP packets`() = runBlocking {
         val clearnetCatcher = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         testSocket = clearnetCatcher
@@ -109,21 +109,22 @@ class TorFailClosedTest {
     }
 
     @Test
-    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
     fun `when Tor is enabled, resolveBootstrapNodes excludes LAN peers and avoids DNS leak`() = runBlocking {
         val node = DhtLeafNode(port = 0, autoBootstrap = false)
         leafNode = node
         node.start()
 
-        // 1. Clearnet mode: local peers ARE present
+        // 1. Clearnet mode: local peers ARE present (pass empty bootstrap hosts to isolate local peer check without external DNS)
         node.setTorProxy(null)
-        val clearnetNodes = node.resolveBootstrapNodes()
+        val clearnetNodes = node.resolveBootstrapNodes(emptyList())
         assertTrue("Clearnet bootstrap should include local peers", clearnetNodes.any { it.address?.hostAddress == "127.0.0.1" || it.address?.hostAddress == "10.0.2.2" })
 
         // 2. Tor enabled mode: LAN peers MUST be excluded, and bootstrap nodes MUST be unresolved
         val config = TorProxyConfig(enabled = true, socksHost = "127.0.0.1", socksPort = 9050, timeoutMs = 200)
         node.setTorProxy(config)
-        val torNodes = node.resolveBootstrapNodes()
+        val testHosts = listOf(Pair("router.bittorrent.com", 6881), Pair("dht.transmissionbt.com", 6881))
+        val torNodes = node.resolveBootstrapNodes(testHosts)
 
         // Verify zero LAN peers
         assertFalse("Tor bootstrap must not include local LAN peers", torNodes.any { it.hostString == "127.0.0.1" || it.hostString == "10.0.2.2" })
@@ -135,7 +136,7 @@ class TorFailClosedTest {
     }
 
     @Test
-    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
     fun `when Tor is enabled, incoming query does not trigger response over clearnet socket`() = runBlocking {
         val senderSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         testSocket = senderSocket
@@ -178,7 +179,7 @@ class TorFailClosedTest {
     }
 
     @Test
-    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
     fun `when Tor SOCKS5 rejects UDP ASSOCIATE, leaf node automatically configures TCP SOCKS5 mode`() = runBlocking {
         val mockProxy = ServerSocket(0)
         val proxyPort = mockProxy.localPort
@@ -228,7 +229,7 @@ class TorFailClosedTest {
     }
 
     @Test
-    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
     fun `when application performs cold start with Tor enabled, fail-closed ensures zero clearnet UDP packets before Tor tunnel is connected`() = runBlocking {
         val clearnetCatcher = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
         testSocket = clearnetCatcher

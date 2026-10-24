@@ -779,28 +779,35 @@ open class DhtLeafNode(
         }
     }
 
-    suspend fun resolveBootstrapNodes(): List<InetSocketAddress> = withContext(Dispatchers.IO) {
+    suspend fun resolveBootstrapNodes(hosts: List<Pair<String, Int>> = BOOTSTRAP_HOSTS): List<InetSocketAddress> = withContext(Dispatchers.IO) {
         val list = mutableListOf<InetSocketAddress>()
         if (torProxyConfig?.enabled != true) {
             for (peer in getLocalPeers()) {
                 list.add(peer.address)
             }
         }
-        for ((host, port) in BOOTSTRAP_HOSTS) {
-            if (torProxyConfig?.enabled == true) {
+        if (torProxyConfig?.enabled == true) {
+            for ((host, port) in hosts) {
                 // Prevent DNS leaks: pass unresolved domain to be resolved by Tor exit node
                 list.add(InetSocketAddress.createUnresolved(host, port))
-            } else {
-                try {
-                    val ips = InetAddress.getAllByName(host)
-                    for (ip in ips) {
-                        val addr = InetSocketAddress(ip, port)
-                        list.add(addr)
-                        ip.hostAddress?.let { bootstrapRouterIps.add(it) }
+            }
+        } else {
+            val deferreds = hosts.map { (host, port) ->
+                async {
+                    try {
+                        withTimeoutOrNull(2000L) {
+                            val ips = InetAddress.getAllByName(host)
+                            ips.map { ip ->
+                                ip.hostAddress?.let { bootstrapRouterIps.add(it) }
+                                InetSocketAddress(ip, port)
+                            }
+                        } ?: emptyList()
+                    } catch (_: Exception) {
+                        emptyList()
                     }
-                } catch (_: Exception) {
                 }
             }
+            list.addAll(deferreds.awaitAll().flatten())
         }
         list
     }
