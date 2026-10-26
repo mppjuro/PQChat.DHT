@@ -208,7 +208,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.1")
 
     // Firebase (Master's Thesis Anonymous Research Telemetry - Firestore & Auth only)
-    implementation(platform("com.google.firebase:firebase-bom:35.0.2"))
+    implementation(platform("com.google.firebase:firebase-bom:35.1.0"))
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-auth")
 
