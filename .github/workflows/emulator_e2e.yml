@@ -60,7 +60,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm || true
+          sudo usermod -aG kvm $USER || true
           ls -la /dev/kvm || true
+
+      - name: Allocate 10GB Swap Space
+        run: |
+          echo "=== Configuring 10GB swap file for multi-emulator stability ==="
+          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Cache AVD snapshots
         uses: actions/cache@v6
@@ -136,7 +147,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm || true
+          sudo usermod -aG kvm $USER || true
           ls -la /dev/kvm || true
+
+      - name: Allocate 10GB Swap Space
+        run: |
+          echo "=== Configuring 10GB swap file for multi-emulator stability ==="
+          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Configure Android SDK Environment and PATH
         run: |
@@ -233,8 +255,8 @@ jobs:
               sed -i '/hw.ramSize/d' "$avd_dir/config.ini" || true
               sed -i '/vm.heapSize/d' "$avd_dir/config.ini" || true
               echo "hw.keyboard = yes" >> "$avd_dir/config.ini"
-              echo "hw.ramSize = 2048" >> "$avd_dir/config.ini"
-              echo "vm.heapSize = 512" >> "$avd_dir/config.ini"
+              echo "hw.ramSize = 1536" >> "$avd_dir/config.ini"
+              echo "vm.heapSize = 256" >> "$avd_dir/config.ini"
             fi
           done
 
@@ -249,26 +271,32 @@ jobs:
           export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
           EMULATOR_BIN="$(command -v emulator || echo "$ANDROID_HOME/emulator/emulator")"
 
-          EMU_OPTS="-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 2048"
+          EMU_OPTS="-no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 1536 -cores 1"
           NODES="${{ matrix.nodes }}"
 
+          mkdir -p /tmp/emu_logs
+
           echo "Starting Alice (emulator-5554)..."
-          $EMULATOR_BIN -avd alice_avd -port 5554 $EMU_OPTS &
+          nohup $EMULATOR_BIN -avd alice_avd -port 5554 $EMU_OPTS > /tmp/emu_5554.log 2>&1 &
+          sleep 5
 
           echo "Starting Bob (emulator-5556)..."
-          $EMULATOR_BIN -avd bob_avd -port 5556 $EMU_OPTS &
+          nohup $EMULATOR_BIN -avd bob_avd -port 5556 $EMU_OPTS > /tmp/emu_5556.log 2>&1 &
+          sleep 5
 
           if [ "$NODES" -ge 3 ]; then
             echo "Starting Charlie (emulator-5558)..."
-            $EMULATOR_BIN -avd charlie_avd -port 5558 $EMU_OPTS &
+            nohup $EMULATOR_BIN -avd charlie_avd -port 5558 $EMU_OPTS > /tmp/emu_5558.log 2>&1 &
+            sleep 5
           fi
 
           if [ "$NODES" -ge 4 ]; then
             echo "Starting Dave (emulator-5560)..."
-            $EMULATOR_BIN -avd dave_avd -port 5560 $EMU_OPTS &
+            nohup $EMULATOR_BIN -avd dave_avd -port 5560 $EMU_OPTS > /tmp/emu_5560.log 2>&1 &
+            sleep 5
           fi
 
-          echo "All requested emulator instances spawned in background."
+          echo "All requested emulator instances spawned in background with nohup."
           sleep 5
           adb devices -l || true
 
@@ -311,6 +339,13 @@ jobs:
                   time.sleep(3)
               else:
                   print(f"ERROR: {dev} failed to boot within {timeout_seconds} seconds!", file=sys.stderr)
+                  port = dev.replace("emulator-", "")
+                  log_file = f"/tmp/emu_{port}.log"
+                  if os.path.exists(log_file):
+                      print(f"\n=== EMULATOR LOG DUMP ({log_file}) ===", file=sys.stderr)
+                      with open(log_file, "r", errors="replace") as f:
+                          lines = f.readlines()
+                          print("".join(lines[-100:]), file=sys.stderr)
                   sys.exit(1)
 
           print(f"All {len(devices)} emulators successfully booted!", flush=True)
@@ -364,7 +399,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: e2e-trace-${{ matrix.nodes }}nodes
-          path: build/e2e-screenshots-${{ matrix.nodes }}nodes/
+          path: |
+            build/e2e-screenshots-${{ matrix.nodes }}nodes/
+            /tmp/emu_*.log
 
       - name: Stop Emulators
         if: always()
