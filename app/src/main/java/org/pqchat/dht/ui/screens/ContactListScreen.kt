@@ -650,6 +650,7 @@ fun GroupItem(
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .testTag("group_item_${group.rawGroupName}")
             .border(1.dp, CryptoPurple.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
     ) {
@@ -790,6 +791,7 @@ fun CreateGroupDialog(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .testTag("group_participant_${contact.rawName}")
                                     .clickable {
                                         if (isSelected) {
                                             selectedContactIds.remove(contact.id)

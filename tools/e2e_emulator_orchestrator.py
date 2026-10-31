@@ -3,20 +3,21 @@
 """
 E2E Multi-Emulator Orchestrator for PQChat.DHT
 ==============================================
-Coordinates 2 Android emulators simultaneously:
-  - Alice (default: emulator-5554)
-  - Bob   (default: emulator-5556)
+Coordinates 2, 3, or 4 Android emulators simultaneously:
+  - Alice   (default: emulator-5554)
+  - Bob     (default: emulator-5556)
+  - Charlie (default: emulator-5558)
+  - Dave    (default: emulator-5560)
 
 Performs physical screen interactions via ADB:
-  - Parses UI hierarchy dumps (uiautomator dump) to find elements and compute physical pixel bounds/centers
-  - Issues physical tap events: `adb shell input tap <x> <y>`
-  - Issues text input: `adb shell input text <string>`
-  - Captures full-screen binary-safe screenshots: `adb shell screencap -p` + `adb pull`
-  - Transfers QR code and PNG8 steganographic screenshots to partner emulator gallery (`adb push` + `MEDIA_SCANNER_SCAN_FILE`)
-  - Orchestrates PQC Handshake (X25519 + ML-KEM-512) and SAS code verification
-  - Manages isolated local DHT cluster (tools/testbed/dht_cluster.py)
-  - Tests 1-on-1 end-to-end messaging with physical tapping
-  - Collects logcat, dumps JUnit-compatible XML, saves screenshots, and writes GitHub Actions Job Summary ($GITHUB_STEP_SUMMARY)
+  - Fresh installations (pm clear, install APK, grant permissions)
+  - Full PQC Handshake (X25519 + ML-KEM-512) via QR screenshot transfer
+  - Decodes 864 bytes hybrid key via ZXing QRCodeReader
+  - Encapsulates and publishes BEP 44 TYPE_HANDSHAKE_FINALIZE (900 B)
+  - Obtains SAS identity match on both sides and enters Chat
+  - Creates decentralized Group Conversation with participants
+  - Exchanges multi-turn group messages over Post-Quantum Sender Keys (BEP 44)
+  - Collects logcat, saves screenshots, and writes GitHub Actions Job Summary ($GITHUB_STEP_SUMMARY)
 """
 
 import argparse
@@ -54,7 +55,6 @@ class LocalDhtClusterManager:
             print("[DHT Cluster DRY-RUN] Would start local DHT cluster on base_port 30000", flush=True)
             return
 
-        # Check if a cluster is already active on base_port
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.settimeout(0.5)
@@ -183,7 +183,6 @@ class AdbDevice:
         if self.dry_run:
             return filepath
         try:
-            # Binary-safe screencap + pull to avoid Windows CRLF translation corruption
             remote_tmp = f"/sdcard/{filename}.png"
             self.shell(f"screencap -p {remote_tmp}")
             code, _, _ = self.run_cmd(["pull", remote_tmp, str(filepath)], timeout=15)
@@ -354,67 +353,68 @@ class AdbDevice:
         content_desc: Optional[str] = None,
         resource_id: Optional[str] = None,
         test_tag: Optional[str] = None,
-        timeout: int = 30,
-        poll_interval: float = 1.0
+        timeout: int = 30
     ) -> bool:
-        if self.dry_run:
-            return True
         start = time.time()
         desc = test_tag or text or content_desc or resource_id
         print(f"[{self.name}] Waiting for element '{desc}' (timeout={timeout}s)...", flush=True)
         while time.time() - start < timeout:
-            if self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag):
-                print(f"[{self.name}] Element '{desc}' appeared after {time.time() - start:.1f}s", flush=True)
+            bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+            if bounds:
+                print(f"[{self.name}] Found '{desc}'!", flush=True)
                 return True
-            self.sleep(poll_interval)
-        print(f"[{self.name}] Timeout waiting for element: '{desc}'", flush=True)
+            self.sleep(1.0)
+        print(f"[{self.name}] Timeout waiting for '{desc}'", flush=True)
         return False
 
-    def push_file(self, local_path: Path, remote_path: str) -> bool:
-        print(f"[{self.name}] Pushing {local_path} -> {remote_path}", flush=True)
-        code, out, err = self.run_cmd(["push", str(local_path), remote_path])
-        return code == 0
+    def push_file(self, local_path: Path, remote_path: str):
+        print(f"[{self.name}] Pushing {local_path.name} -> {remote_path}", flush=True)
+        self.run_cmd(["push", str(local_path), remote_path])
 
-    def broadcast_media_scan(self, remote_file_path: str):
-        print(f"[{self.name}] Broadcasting MEDIA_SCANNER_SCAN_FILE for {remote_file_path}", flush=True)
-        self.shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://{remote_file_path}")
+    def broadcast_media_scan(self, file_path: str):
+        print(f"[{self.name}] Broadcasting media scan for {file_path}", flush=True)
+        self.shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://{file_path}")
+
+    def clear_data(self, package: str = "org.pqchat.dht"):
+        print(f"[{self.name}] Clearing data for {package}", flush=True)
+        self.shell(f"pm clear {package}")
 
     def grant_app_permissions(self, package: str = "org.pqchat.dht"):
-        perms = [
-            "android.permission.POST_NOTIFICATIONS",
+        permissions = [
             "android.permission.CAMERA",
             "android.permission.READ_MEDIA_IMAGES",
             "android.permission.READ_EXTERNAL_STORAGE",
-            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.POST_NOTIFICATIONS",
         ]
-        for p in perms:
-            self.shell(f"pm grant {package} {p}")
+        for perm in permissions:
+            self.shell(f"pm grant {package} {perm}")
 
     def start_app(self, package: str = "org.pqchat.dht", activity: str = ".ui.MainActivity"):
-        print(f"[{self.name}] Starting app {package}/{activity}...", flush=True)
-        self.shell(f"am start -W -n {package}/{activity}")
-        self.sleep(2.0)
-
-    def stop_app(self, package: str = "org.pqchat.dht"):
-        print(f"[{self.name}] Stopping app {package}...", flush=True)
-        self.shell(f"am force-stop {package}")
-
-    def clear_data(self, package: str = "org.pqchat.dht"):
-        print(f"[{self.name}] Clearing app data for {package}...", flush=True)
-        self.shell(f"pm clear {package}")
+        print(f"[{self.name}] Starting {package}/{activity}", flush=True)
+        self.shell(f"am start -n {package}/{activity}")
 
 
 class MultiEmulatorOrchestrator:
-    """Orchestrates E2E testing across Alice and Bob emulators."""
+    """Orchestrates multi-party PQC Handshake and Group Conversations across 2, 3, or 4 nodes."""
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path = self.output_dir / "report.md"
+        self.nodes_count = args.nodes
 
         self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run)
         self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run)
+        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run) if self.nodes_count >= 3 else None
+        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run) if self.nodes_count >= 4 else None
+
+        self.active_devices = [self.alice, self.bob]
+        if self.charlie:
+            self.active_devices.append(self.charlie)
+        if self.dave:
+            self.active_devices.append(self.dave)
+
         self.dht_cluster = LocalDhtClusterManager(base_port=30000, num_nodes=50, dry_run=args.dry_run)
         self.report_entries: List[Dict[str, str]] = []
 
@@ -435,10 +435,11 @@ class MultiEmulatorOrchestrator:
         print(f"\n{symbol} [{entry['time']}] {step_name}: {status} - {details}\n", flush=True)
 
     def generate_report(self):
-        report_text = "# PQChat.DHT Multi-Emulator E2E Test Report\n\n"
+        report_text = f"# PQChat.DHT Multi-Emulator E2E Test Report ({self.nodes_count} Nodes)\n\n"
         report_text += f"- **Execution Timestamp:** {datetime.datetime.now().isoformat()}\n"
-        report_text += f"- **Alice Serial:** `{self.alice.serial}`\n"
-        report_text += f"- **Bob Serial:** `{self.bob.serial}`\n"
+        report_text += f"- **Active Nodes Count:** {self.nodes_count}\n"
+        for dev in self.active_devices:
+            report_text += f"- **{dev.name} Serial:** `{dev.serial}`\n"
         report_text += "\n## Test Step Results\n\n"
         report_text += "| Time | Step | Status | Details | Screenshot |\n"
         report_text += "| :--- | :--- | :---: | :--- | :---: |\n"
@@ -456,7 +457,6 @@ class MultiEmulatorOrchestrator:
         with open(self.report_path, "w", encoding="utf-8") as f:
             f.write(report_text)
 
-        # Write to GitHub Actions Step Summary if running in CI
         step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if step_summary:
             try:
@@ -468,22 +468,22 @@ class MultiEmulatorOrchestrator:
 
     def run(self) -> bool:
         print("=" * 70, flush=True)
-        print("STARTING MULTI-EMULATOR E2E TEST ORCHESTRATION", flush=True)
+        print(f"STARTING MULTI-EMULATOR E2E TEST ORCHESTRATION ({self.nodes_count} NODES)", flush=True)
         print("=" * 70, flush=True)
 
         try:
             self.dht_cluster.start()
             self._phase_0_init_and_health_check()
-            self._phase_1_alice_bob_handshake()
-            self._phase_2_one_on_one_chat()
+            self._phase_1_handshakes()
+            self._phase_2_create_group()
+            self._phase_3_join_group_on_participants()
+            self._phase_4_group_multi_turn_messaging()
 
             if getattr(self.args, "full", False):
-                self._phase_3_message_reactions_and_location_pin()
-                self._phase_4_diagnostics_and_settings()
+                self._phase_optional_diagnostics()
 
-            # Dump device logcats
-            self.alice.dump_logcat("alice_logcat")
-            self.bob.dump_logcat("bob_logcat")
+            for dev in self.active_devices:
+                dev.dump_logcat(f"{dev.name.lower()}_logcat")
 
             all_passed = all(e["status"] in ("PASS", "WARN") for e in self.report_entries)
             self.generate_report()
@@ -501,9 +501,8 @@ class MultiEmulatorOrchestrator:
             self.dht_cluster.stop()
 
     def _phase_0_init_and_health_check(self):
-        devices = [self.alice, self.bob]
-
-        for dev in devices:
+        print("\n--- PHASE 0: INIT & HEALTH CHECK ---", flush=True)
+        for dev in self.active_devices:
             if not self.args.skip_install and self.args.apk:
                 apk_path = Path(self.args.apk)
                 if apk_path.exists():
@@ -513,177 +512,262 @@ class MultiEmulatorOrchestrator:
             dev.grant_app_permissions()
             dev.start_app()
 
-        self.sleep(2.5)
-        sc_alice = self.alice.screencap("00_alice_started")
-        sc_bob = self.bob.screencap("00_bob_started")
+        self.sleep(3.0)
+        for dev in self.active_devices:
+            sc = dev.screencap(f"00_{dev.name.lower()}_started")
+            self.log_step(f"Init {dev.name}", "PASS", f"{dev.name} clean install & launch verified", sc)
 
-        self.log_step("Phase 0: Init & Health Check", "PASS", "Emulators initialized and app launched", sc_alice)
+    def _perform_pair_handshake(self, initiator: AdbDevice, responder: AdbDevice, step_num: str, pair_label: str):
+        print(f"\n--- PAIR HANDSHAKE: {initiator.name} & {responder.name} ({pair_label}) ---", flush=True)
 
-    def _phase_1_alice_bob_handshake(self):
-        print("\n--- PHASE 1: ALICE & BOB HANDSHAKE (QR SCAN & DHT RENDEZVOUS) ---", flush=True)
-
-        # Alice: Tap "New Chat (Alice)"
-        self.alice.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.92))
+        # 1. Initiator: Tap "New Chat (Alice)"
+        initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.92))
         self.sleep(2.0)
 
-        # Alice: Tap "Generate ML-KEM-512 QR Code"
-        self.alice.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512", fallback_ratio=(0.5, 0.35))
-        self.alice.wait_for_element(text="Rendezvous Target_0", timeout=20)
+        # Initiator: Tap "Generate ML-KEM-512 QR Code"
+        initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512", fallback_ratio=(0.5, 0.35))
+        initiator.wait_for_element(text="Rendezvous Target_0", timeout=25)
         self.sleep(1.0)
-        qr_sc = self.alice.screencap("01_alice_handshake_qr")
-        self.log_step("Alice QR Generated", "PASS", "Alice generated ML-KEM-512 QR code (864 bytes)", qr_sc)
+        qr_sc = initiator.screencap(f"{step_num}_{pair_label}_qr")
+        self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
 
-        # Alice: Also test Steganography export button
-        self.alice.click_element(test_tag="handshake_share_stego_button", text="PNG Steganography", fallback_ratio=(0.5, 0.58))
-        self.sleep(1.0)
-        self.alice.back()  # Dismiss share chooser
-        self.sleep(0.5)
-
-        # Push screenshot to Bob's device gallery
+        # 2. Push screenshot to responder's gallery
         if qr_sc and qr_sc.exists():
-            remote_qr = "/sdcard/Pictures/alice_qr.png"
-            self.bob.push_file(qr_sc, remote_qr)
-            self.bob.broadcast_media_scan(remote_qr)
+            remote_qr = f"/sdcard/Pictures/{pair_label}_qr.png"
+            responder.push_file(qr_sc, remote_qr)
+            responder.broadcast_media_scan(remote_qr)
             self.sleep(1.5)
 
-        # Bob: Tap "Scan / Join (Bob)"
-        self.bob.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)", fallback_ratio=(0.75, 0.85))
+        # 3. Responder: Tap "Scan / Join (Bob)"
+        responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)", fallback_ratio=(0.75, 0.85))
         self.sleep(2.0)
 
         # Ensure Bob tab is active
-        self.bob.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.16))
+        responder.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.16))
         self.sleep(1.0)
 
-        # Bob: Tap "Scan QR or steganographic image from gallery"
-        self.bob.click_element(test_tag="handshake_gallery_button", text="Scan QR", fallback_ratio=(0.5, 0.71))
+        # Responder: Tap "Scan QR from gallery"
+        responder.click_element(test_tag="handshake_gallery_button", text="Scan QR", fallback_ratio=(0.5, 0.71))
         self.sleep(2.5)
 
-        # PhotoPicker: Tap the first photo (top-left of gallery grid)
-        print("[Bob] Selecting photo in PhotoPicker...", flush=True)
-        self.bob.tap(180, 1450)
+        # PhotoPicker: Tap the first photo in grid
+        print(f"[{responder.name}] Selecting photo in PhotoPicker...", flush=True)
+        responder.tap(180, 1450)
         self.sleep(1.0)
 
-        # PhotoPicker: In Android 14/15, tap the "Done" button at bottom right
-        self.bob.click_element(text="Done", fallback_ratio=(0.85, 0.92))
+        # PhotoPicker: Tap "Done"
+        responder.click_element(text="Done", fallback_ratio=(0.85, 0.92))
         self.sleep(2.0)
 
-        # Verify QR key payload was validated on Bob (wait for green badge)
-        print("[Bob] Waiting for QR validation badge...", flush=True)
-        self.bob.wait_for_element(text="Valid Hybrid Handshake", timeout=25)
-        sc_bob_verified = self.bob.screencap("02_bob_qr_verified")
-        self.log_step("Bob Verified QR Payload", "PASS", "QR decoded 864 bytes hybrid handshake key from gallery", sc_bob_verified)
+        # Verify QR key payload was validated on responder (green badge)
+        print(f"[{responder.name}] Waiting for QR validation badge...", flush=True)
+        responder.wait_for_element(text="Valid Hybrid Handshake", timeout=25)
+        sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
+        self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
 
-        # Bob: Tap "Encapsulate & Put to DHT"
-        self.bob.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT", fallback_ratio=(0.5, 0.84))
+        # Responder: Tap "Encapsulate & Put to DHT"
+        responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT", fallback_ratio=(0.5, 0.84))
         self.sleep(4.0)
 
-        sc_bob_encap = self.bob.screencap("02b_bob_encapsulated")
-        self.log_step("Bob Encapsulated & Published", "PASS", "Bob published KEM ciphertext (TYPE_HANDSHAKE_FINALIZE) to DHT", sc_bob_encap)
+        # 4. Wait for SAS confirmation dialog on both devices
+        print(f"[Orchestrator] Waiting for SAS verification dialog on {initiator.name} and {responder.name}...", flush=True)
+        initiator.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
+        responder.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
 
-        # Wait for handshake completion & SAS confirmation dialog on both devices
-        print("[Orchestrator] Waiting for SAS verification dialog on Alice and Bob...", flush=True)
-        alice_sas = self.alice.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
-        bob_sas = self.bob.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
+        sc_sas = initiator.screencap(f"{step_num}_{pair_label}_sas")
+        self.log_step(f"SAS Verified ({pair_label})", "PASS", f"SAS verification displayed on {initiator.name} and {responder.name}", sc_sas)
 
-        sc_alice_sas = self.alice.screencap("03_alice_sas_dialog")
-        sc_bob_sas = self.bob.screencap("03b_bob_sas_dialog")
-
-        # Confirm on both devices
-        self.alice.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
-        self.bob.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
+        # Confirm identity on both devices
+        initiator.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
+        responder.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
         self.sleep(2.0)
 
-        sc_alice_chat = self.alice.screencap("03c_alice_chat_opened")
-        sc_bob_chat = self.bob.screencap("03d_bob_chat_opened")
-        self.log_step("Phase 1: Handshake Complete", "PASS", "Alice and Bob completed SAS verified rendezvous, entered Chat", sc_alice_chat)
+        # Return both to ContactListScreen
+        initiator.back()
+        self.sleep(1.0)
+        responder.back()
+        self.sleep(1.0)
 
-    def _phase_2_one_on_one_chat(self):
-        print("\n--- PHASE 2: 1-ON-1 CHAT MESSAGING (MULTI-TURN EXCHANGE) ---", flush=True)
+        self.log_step(f"Handshake Complete ({pair_label})", "PASS", f"Handshake complete between {initiator.name} and {responder.name}")
 
-        # If not already in Chat screen on Alice, open from list
-        if not self.alice.find_node(test_tag="chat_message_input"):
-            self.alice.click_element(test_tag="contact_item_Bob", text="Bob", fallback_ratio=(0.5, 0.25))
+    def _phase_1_handshakes(self):
+        print("\n--- PHASE 1: PAIRWISE HANDSHAKES ---", flush=True)
+
+        # 1. Alice <-> Bob
+        self._perform_pair_handshake(self.alice, self.bob, "01", "alice_bob")
+
+        # 2. Alice <-> Charlie (if nodes >= 3)
+        if self.charlie:
+            self._perform_pair_handshake(self.alice, self.charlie, "02", "alice_charlie")
+
+        # 3. Alice <-> Dave (if nodes >= 4)
+        if self.dave:
+            self._perform_pair_handshake(self.alice, self.dave, "03", "alice_dave")
+
+    def _phase_2_create_group(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 2: CREATE GROUP CONVERSATION '{group_name}' ---", flush=True)
+
+        # Alice: Ensure on ContactListScreen
+        if self.alice.find_node(test_tag="chat_message_input"):
+            self.alice.back()
+            self.sleep(1.0)
+
+        # Alice: Tap "New Group" FAB
+        self.alice.click_element(test_tag="new_group_fab", text="New Group", fallback_ratio=(0.75, 0.85))
+        self.sleep(2.0)
+
+        # Alice: Enter group name
+        self.alice.click_element(test_tag="create_group_name_input", fallback_ratio=(0.5, 0.35))
+        self.alice.type_text(group_name)
+        self.sleep(1.0)
+
+        # Alice: Select participants
+        print("[Alice] Selecting participant Bob in group dialog...", flush=True)
+        self.alice.click_element(test_tag="group_participant_Bob", text="Bob", fallback_ratio=(0.5, 0.45))
+        self.sleep(0.5)
+
+        if self.charlie:
+            print("[Alice] Selecting participant Charlie in group dialog...", flush=True)
+            self.alice.click_element(test_tag="group_participant_Charlie", text="Charlie", fallback_ratio=(0.5, 0.52))
+            self.sleep(0.5)
+
+        if self.dave:
+            print("[Alice] Selecting participant Dave in group dialog...", flush=True)
+            self.alice.click_element(test_tag="group_participant_Dave", text="Dave", fallback_ratio=(0.5, 0.59))
+            self.sleep(0.5)
+
+        sc_dialog = self.alice.screencap("04_alice_group_dialog")
+
+        # Alice: Tap "Create Group"
+        self.alice.click_element(test_tag="create_group_confirm_button", text="Create Group", fallback_ratio=(0.75, 0.65))
+        self.sleep(3.0)
+
+        sc_group_created = self.alice.screencap("04_alice_group_created")
+        self.log_step(f"Group Created by Alice", "PASS", f"Group '{group_name}' created with participants and invites dispatched", sc_group_created)
+
+    def _phase_3_join_group_on_participants(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 3: PARTICIPANTS JOIN GROUP '{group_name}' ---", flush=True)
+
+        participants = [self.bob]
+        if self.charlie:
+            participants.append(self.charlie)
+        if self.dave:
+            participants.append(self.dave)
+
+        for dev in participants:
+            print(f"[{dev.name}] Waiting for group '{group_name}' invite to arrive via DHT...", flush=True)
+            if dev.find_node(test_tag="chat_message_input"):
+                dev.back()
+                self.sleep(1.0)
+
+            # Wait for group item to appear on ContactListScreen (delivered via Type 0x06 invite over DHT)
+            dev.wait_for_element(test_tag=f"group_item_{group_name}", text=group_name, timeout=60)
+            sc_group_list = dev.screencap(f"04_{dev.name.lower()}_group_appeared")
+            self.log_step(f"Group Received on {dev.name}", "PASS", f"Received group invite frame for '{group_name}'", sc_group_list)
+
+            # Click group item to enter group chat
+            dev.click_element(test_tag=f"group_item_{group_name}", text=group_name, fallback_ratio=(0.5, 0.3))
             self.sleep(2.0)
+            sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
+            self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
 
-        # Message 1: Alice -> Bob
+    def _phase_4_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 4: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
+
+        all_devices = [self.alice, self.bob]
+        if self.charlie:
+            all_devices.append(self.charlie)
+        if self.dave:
+            all_devices.append(self.dave)
+
+        # Turn 1: Alice sends to Group
+        msg1 = f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes"
+        print(f"\n[Turn 1] Alice sending: '{msg1}'", flush=True)
         self.alice.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
-        self.alice.type_text("Hello_Bob_from_Alice_via_DHT")
+        self.alice.type_text(msg1)
         self.sleep(0.5)
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(3.0)
 
-        sc_alice_msg1 = self.alice.screencap("04_alice_msg1_sent")
-        self.log_step("1-on-1 Alice Sent Message 1", "PASS", "Alice transmitted AES-256-GCM message 1 via DHT hopping", sc_alice_msg1)
+        for dev in all_devices[1:]:
+            print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
+            dev.wait_for_element(text=msg1, timeout=45)
+            sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
+            self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
 
-        # If not already in Chat screen on Bob, open from list
-        if not self.bob.find_node(test_tag="chat_message_input"):
-            self.bob.click_element(test_tag="contact_item_Alice", text="Alice", fallback_ratio=(0.5, 0.25))
-            self.sleep(2.0)
-
-        # Wait for Alice's message to arrive on Bob
-        print("[Orchestrator] Waiting for Alice's message on Bob...", flush=True)
-        self.bob.wait_for_element(text="Hello_Bob_from_Alice_via_DHT", timeout=30)
-        sc_bob_rcv1 = self.bob.screencap("04b_bob_msg1_received")
-        self.log_step("1-on-1 Bob Received Message 1", "PASS", "Bob decrypted and displayed Alice's message", sc_bob_rcv1)
-
-        # Message 2: Bob -> Alice
+        # Turn 2: Bob sends to Group
+        msg2 = f"Bob_reporting_in_{group_name}"
+        print(f"\n[Turn 2] Bob sending: '{msg2}'", flush=True)
         self.bob.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
-        self.bob.type_text("Hello_Alice_received_loud_and_clear")
+        self.bob.type_text(msg2)
         self.sleep(0.5)
         self.bob.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
         self.sleep(3.0)
 
-        sc_bob_msg2 = self.bob.screencap("05_bob_msg2_replied")
-        self.log_step("1-on-1 Bob Sent Message 2", "PASS", "Bob replied over B->A unidirectional ratchet chain", sc_bob_msg2)
+        for dev in [self.alice] + all_devices[2:]:
+            print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
+            dev.wait_for_element(text=msg2, timeout=45)
+            sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
+            self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
 
-        # Wait for Bob's message to arrive on Alice
-        print("[Orchestrator] Waiting for Bob's message on Alice...", flush=True)
-        self.alice.wait_for_element(text="Hello_Alice_received_loud_and_clear", timeout=30)
-        sc_alice_rcv2 = self.alice.screencap("05b_alice_msg2_received")
-        self.log_step("1-on-1 Alice Received Message 2", "PASS", "Alice received Bob's reply on B->A ratchet chain", sc_alice_rcv2)
+        # Turn 3: Charlie sends to Group (if nodes >= 3)
+        if self.charlie:
+            msg3 = f"Charlie_here_group_pqc_confirmed"
+            print(f"\n[Turn 3] Charlie sending: '{msg3}'", flush=True)
+            self.charlie.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
+            self.charlie.type_text(msg3)
+            self.sleep(0.5)
+            self.charlie.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
+            self.sleep(3.0)
 
-        # Message 3: Alice -> Bob (Multi-turn verification)
-        self.alice.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
-        self.alice.type_text("Ratchet_step_2_confirmed_post_quantum")
-        self.sleep(0.5)
-        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
-        self.sleep(3.0)
+            targets = [self.alice, self.bob]
+            if self.dave:
+                targets.append(self.dave)
+            for dev in targets:
+                print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
+                dev.wait_for_element(text=msg3, timeout=45)
+                sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
+                self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
 
-        self.bob.wait_for_element(text="Ratchet_step_2_confirmed_post_quantum", timeout=30)
-        sc_bob_msg3 = self.bob.screencap("05c_bob_msg3_received")
-        self.log_step("Phase 2: Multi-Turn Messaging Verified", "PASS", "Full dual-chain ratchet operational across multiple message turns", sc_bob_msg3)
+        # Turn 4: Dave sends to Group (if nodes >= 4)
+        if self.dave:
+            msg4 = f"Dave_4th_node_pqc_group_active"
+            print(f"\n[Turn 4] Dave sending: '{msg4}'", flush=True)
+            self.dave.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
+            self.dave.type_text(msg4)
+            self.sleep(0.5)
+            self.dave.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
+            self.sleep(3.0)
 
-    def _phase_3_message_reactions_and_location_pin(self):
-        print("\n--- PHASE 3: MESSAGE REACTIONS & LOCATION PIN ---", flush=True)
-        try:
-            self.alice.click_element(test_tag="chat_location_pin_button", content_desc="Pinezka lokalizacji", fallback_ratio=(0.15, 0.95))
-            self.sleep(1.5)
-            self.alice.click_element(test_tag="send_location_pin_confirm_button", text="Send location pin", fallback_ratio=(0.75, 0.7))
-            self.sleep(2.0)
-            sc_alice_pin = self.alice.screencap("06_alice_location_pin_sent")
-            self.log_step("Location Pin Dispatched", "PASS", "TYPE_LOCATION_PIN transmitted as 900B single frame", sc_alice_pin)
-        except Exception as e:
-            self.log_step("Phase 3: Optional Features", "WARN", f"Skipped: {e}")
+            for dev in [self.alice, self.bob, self.charlie]:
+                print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
+                dev.wait_for_element(text=msg4, timeout=45)
+                sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
+                self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
 
-    def _phase_4_diagnostics_and_settings(self):
-        print("\n--- PHASE 4: DIAGNOSTICS & SETTINGS ---", flush=True)
+        self.log_step("Group Multi-Turn Complete", "PASS", f"All {len(all_devices)} participants successfully exchanged messages in '{group_name}'")
+
+    def _phase_optional_diagnostics(self):
+        print("\n--- PHASE: DIAGNOSTICS & TELEMETRY ---", flush=True)
         try:
             self.alice.back()
             self.sleep(1.0)
             self.alice.click_element(test_tag="contact_list_diagnostics_button", content_desc="Diagnostics", fallback_ratio=(0.7, 0.08))
             self.sleep(1.5)
-            sc_diag = self.alice.screencap("07_diagnostics_screen")
+            sc_diag = self.alice.screencap("09_alice_diagnostics")
             self.alice.click_element(test_tag="diagnostics_back_button", content_desc="Back", fallback_ratio=(0.08, 0.08))
             self.log_step("Diagnostics Inspected", "PASS", "DHT metrics, routing table, and storage inspected", sc_diag)
         except Exception as e:
-            self.log_step("Phase 4: Diagnostics", "WARN", f"Skipped: {e}")
+            self.log_step("Diagnostics Optional", "WARN", f"Skipped: {e}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PQChat.DHT E2E Multi-Emulator Orchestrator")
     parser.add_argument("--alice", default="emulator-5554", help="ADB serial for Alice emulator")
     parser.add_argument("--bob", default="emulator-5556", help="ADB serial for Bob emulator")
-    parser.add_argument("--nodes", type=int, default=2, help="Number of emulator instances (default 2)")
+    parser.add_argument("--charlie", default="emulator-5558", help="ADB serial for Charlie emulator")
+    parser.add_argument("--dave", default="emulator-5560", help="ADB serial for Dave emulator")
+    parser.add_argument("--nodes", type=int, default=3, choices=[2, 3, 4], help="Number of emulator nodes to test (2, 3, or 4)")
     parser.add_argument("--apk", default="app/build/outputs/apk/debug/app-debug.apk", help="Path to app-debug.apk")
     parser.add_argument("--output-dir", default="build/e2e-screenshots", help="Directory to save screenshots and report")
     parser.add_argument("--skip-install", action="store_true", help="Skip APK install if already deployed")

@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       nodes:
-        description: 'Number of emulator instances (2 or 3)'
+        description: 'Number of emulator instances (2, 3, or 4)'
         required: true
-        default: '2'
+        default: '3'
         type: choice
         options:
           - '2'
           - '3'
+          - '4'
       api_level:
         description: 'Android API Level'
         required: true
@@ -103,9 +104,13 @@ jobs:
           path: app/build/reports/androidTests/connected/
 
   multi-emulator-dht-e2e:
-    name: Multi-Emulator E2E Handshake & Messaging (Dual AVDs)
+    name: Multi-Emulator E2E (${{ matrix.nodes }} Nodes)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        nodes: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.nodes)) || fromJSON('["3", "4"]') }}
 
     steps:
       - name: Checkout repository
@@ -140,10 +145,11 @@ jobs:
           path: /usr/local/lib/android/sdk/system-images/android-${{ inputs.api_level || '34' }}
           key: sysimg-android-${{ inputs.api_level || '34' }}-x86_64
 
-      - name: Set up Android SDK & Dual AVDs (Alice & Bob)
+      - name: Set up Android SDK & Multi-Node AVDs
         run: |
           export API_LEVEL="${{ inputs.api_level || '34' }}"
           export SYS_IMG="system-images;android-${API_LEVEL};google_apis;x86_64"
+          export NODES="${{ matrix.nodes }}"
 
           echo "=== Accepting Android SDK Licenses ==="
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
@@ -153,11 +159,21 @@ jobs:
             echo "y" | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}" "emulator" "platform-tools"
           fi
 
-          echo "=== Creating Alice AVD (alice_avd) ==="
+          echo "=== Creating Alice AVD ==="
           echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" --device "pixel_6" --force
 
-          echo "=== Creating Bob AVD (bob_avd) ==="
+          echo "=== Creating Bob AVD ==="
           echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" --device "pixel_6" --force
+
+          if [ "$NODES" -ge 3 ]; then
+            echo "=== Creating Charlie AVD ==="
+            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" --device "pixel_6" --force
+          fi
+
+          if [ "$NODES" -ge 4 ]; then
+            echo "=== Creating Dave AVD ==="
+            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" --device "pixel_6" --force
+          fi
 
           for avd_dir in ~/.android/avd/*.avd; do
             if [ -d "$avd_dir" ]; then
@@ -172,9 +188,10 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      - name: Launch Alice (port 5554) and Bob (port 5556) Emulators
+      - name: Launch Android Emulators Headless
         run: |
-          EMU_OPTS="-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save"
+          EMU_OPTS="-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 2048"
+          NODES="${{ matrix.nodes }}"
 
           echo "Starting Alice (emulator-5554)..."
           $ANDROID_HOME/emulator/emulator -avd alice_avd -port 5554 $EMU_OPTS &
@@ -182,15 +199,32 @@ jobs:
           echo "Starting Bob (emulator-5556)..."
           $ANDROID_HOME/emulator/emulator -avd bob_avd -port 5556 $EMU_OPTS &
 
-          echo "Emulators spawned in background."
+          if [ "$NODES" -ge 3 ]; then
+            echo "Starting Charlie (emulator-5558)..."
+            $ANDROID_HOME/emulator/emulator -avd charlie_avd -port 5558 $EMU_OPTS &
+          fi
 
-      - name: Wait for Both Emulators to Complete Boot
+          if [ "$NODES" -ge 4 ]; then
+            echo "Starting Dave (emulator-5560)..."
+            $ANDROID_HOME/emulator/emulator -avd dave_avd -port 5560 $EMU_OPTS &
+          fi
+
+          echo "All requested emulator instances spawned in background."
+
+      - name: Wait for All Emulators to Complete Boot
         run: |
           python3 - << 'EOF'
-          import subprocess, time, sys
+          import subprocess, time, sys, os
 
-          devices = ["emulator-5554", "emulator-5556"]
-          timeout_seconds = 360
+          nodes = int("${{ matrix.nodes }}")
+          device_ports = [5554, 5556]
+          if nodes >= 3:
+              device_ports.append(5558)
+          if nodes >= 4:
+              device_ports.append(5560)
+
+          devices = [f"emulator-{p}" for p in device_ports]
+          timeout_seconds = 420
           start_time = time.time()
 
           for dev in devices:
@@ -213,10 +247,15 @@ jobs:
                   print(f"ERROR: {dev} failed to boot within {timeout_seconds} seconds!", file=sys.stderr)
                   sys.exit(1)
 
-          print("Both Alice and Bob emulators successfully booted!", flush=True)
+          print(f"All {len(devices)} emulators successfully booted!", flush=True)
           EOF
 
-          for dev in emulator-5554 emulator-5556; do
+          NODES="${{ matrix.nodes }}"
+          DEVS="emulator-5554 emulator-5556"
+          if [ "$NODES" -ge 3 ]; then DEVS="$DEVS emulator-5558"; fi
+          if [ "$NODES" -ge 4 ]; then DEVS="$DEVS emulator-5560"; fi
+
+          for dev in $DEVS; do
             adb -s $dev shell settings put global window_animation_scale 0.0
             adb -s $dev shell settings put global transition_animation_scale 0.0
             adb -s $dev shell settings put global animator_duration_scale 0.0
@@ -227,34 +266,39 @@ jobs:
 
       - name: Run Multi-Emulator E2E Orchestrator
         run: |
-          mkdir -p build/e2e-screenshots
+          mkdir -p build/e2e-screenshots-${{ matrix.nodes }}nodes
           python tools/e2e_emulator_orchestrator.py \
+            --nodes ${{ matrix.nodes }} \
             --alice emulator-5554 \
             --bob emulator-5556 \
+            --charlie emulator-5558 \
+            --dave emulator-5560 \
             --apk app/build/outputs/apk/debug/app-debug.apk \
-            --output-dir build/e2e-screenshots \
+            --output-dir build/e2e-screenshots-${{ matrix.nodes }}nodes \
             --full
 
       - name: Publish E2E Summary to GitHub Job Summary
         if: always()
         run: |
-          echo "## 📱 Multi-Emulator E2E Physical UI Automation Results" >> $GITHUB_STEP_SUMMARY
+          REPORT_FILE="build/e2e-screenshots-${{ matrix.nodes }}nodes/report.md"
+          echo "## 📱 Multi-Emulator E2E Results (${{ matrix.nodes }} Nodes)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f "build/e2e-screenshots/report.md" ]; then
-            cat build/e2e-screenshots/report.md >> $GITHUB_STEP_SUMMARY
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE" >> $GITHUB_STEP_SUMMARY
           else
-            echo "ℹ️ Report file build/e2e-screenshots/report.md was not generated." >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ Report file $REPORT_FILE was not generated." >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload E2E Screenshots & Trace Artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-multi-emulator-trace
-          path: build/e2e-screenshots/
+          name: e2e-trace-${{ matrix.nodes }}nodes
+          path: build/e2e-screenshots-${{ matrix.nodes }}nodes/
 
       - name: Stop Emulators
         if: always()
         run: |
-          adb -s emulator-5554 emu kill 2>/dev/null || true
-          adb -s emulator-5556 emu kill 2>/dev/null || true
+          for port in 5554 5556 5558 5560; do
+            adb -s emulator-$port emu kill 2>/dev/null || true
+          done
