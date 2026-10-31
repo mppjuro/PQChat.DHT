@@ -188,6 +188,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`3226a53`](https://github.com/mppjuro/PQChat.DHT/commit/3226a536d97709aec56a036fcb717a00b8885447) (2026-10-31) — **e2e**: add 3 and 4 emulator E2E tests with group creation and GitHub Actions workflow
+- [`3f86a69`](https://github.com/mppjuro/PQChat.DHT/commit/3f86a693467326e6d3a22b887460bfc7faf90d7c) (2026-10-31) — **e2e**: implement multi-emulator physical UI automation and dual-AVD GitHub Actions workflow
 - [`2b19b50`](https://github.com/mppjuro/PQChat.DHT/commit/2b19b50a5e7f25134a5d1e3f0f3c878d29f461c6) (2026-10-23) — **dht,viewmodel**: cover put iterative lookup and BobHandshakeStatus transitions
 - [`af04901`](https://github.com/mppjuro/PQChat.DHT/commit/af049014b59f2a1d18c0cc4f3f8ebbb5dcb8334f) (2026-10-22) — **e2e**: expand physical pixel UI Automator tests and full GitHub Workflows automation
 - [`4d1d93a`](https://github.com/mppjuro/PQChat.DHT/commit/4d1d93a2b2be5ea9add09e715cf30f55b8111a01) (2026-10-20) — **e2e**: implement multi-emulator orchestration and instrumented physical UI tests
