@@ -149,6 +149,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`bb30be4`](https://github.com/mppjuro/PQChat.DHT/commit/bb30be4985c4e3beee6a75b9d800e95d1c218bf9) (2026-10-26) — **deps**: bump gradle-wrapper from 9.8.1 to 9.8.2
 - [`f1fd93f`](https://github.com/mppjuro/PQChat.DHT/commit/f1fd93f64dd4a316ceae1ac38f18bf1128a09fbf) (2026-10-22) — fix android-emulator-runner script multiline syntax error and extract failure reporting to dedicated step
 - [`bf032a6`](https://github.com/mppjuro/PQChat.DHT/commit/bf032a6212c2f2799e3f7319414fc4cee8b1ac2b) (2026-10-22) — **emulator**: add -no-metrics and swiftshader options, harden ui test lifecycle
 - [`b928397`](https://github.com/mppjuro/PQChat.DHT/commit/b928397682fd757d9e3d36ef45eaf489e82e4678) (2026-10-19) — **deps**: bump com.google.gms.google-services from 4.4.2 to 4.5.0
