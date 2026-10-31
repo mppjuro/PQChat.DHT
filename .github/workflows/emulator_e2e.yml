@@ -64,15 +64,6 @@ jobs:
           sudo usermod -aG kvm $USER || true
           ls -la /dev/kvm || true
 
-      - name: Allocate 10GB Swap Space
-        run: |
-          echo "=== Configuring 10GB swap file for multi-emulator stability ==="
-          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
       - name: Cache AVD snapshots
         uses: actions/cache@v6
         id: avd-cache
@@ -151,13 +142,13 @@ jobs:
           sudo usermod -aG kvm $USER || true
           ls -la /dev/kvm || true
 
-      - name: Allocate 10GB Swap Space
+      - name: Allocate 8GB Extra Swap Space
         run: |
-          echo "=== Configuring 10GB swap file for multi-emulator stability ==="
-          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          echo "=== Adding 8GB extra swap space for multi-node stability ==="
+          sudo fallocate -l 8G /swapfile_extra || sudo dd if=/dev/zero of=/swapfile_extra bs=1M count=8192
+          sudo chmod 600 /swapfile_extra
+          sudo mkswap /swapfile_extra
+          sudo swapon /swapfile_extra
           free -h
 
       - name: Configure Android SDK Environment and PATH
