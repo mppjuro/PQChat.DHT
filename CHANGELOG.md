@@ -201,6 +201,9 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`9c0e3bb`](https://github.com/mppjuro/PQChat.DHT/commit/9c0e3bb1e351e20d78638eed52bc3a69b305cebf) (2026-10-26) — **deps**: bump com.google.firebase:firebase-bom from 35.0.2 to 35.1.0
+- [`019bd49`](https://github.com/mppjuro/PQChat.DHT/commit/019bd4933828e0070d6989050a957e025ef76fe6) (2026-10-26) — **deps**: bump androidx.test.uiautomator:uiautomator
+- [`8a5ba53`](https://github.com/mppjuro/PQChat.DHT/commit/8a5ba5309dcb7825a31833d2e945d78a67feadf9) (2026-10-26) — **deps**: bump actions/cache from 4 to 6
 - [`e968816`](https://github.com/mppjuro/PQChat.DHT/commit/e96881641d7ac62903c0bab46eeffce89886af62) (2026-10-20) — research module: traffic shaping metrics, BEP 44 retention, group chats, measurement loop refactoring, firestore.rules hardening and research_analyzer.py script
 - [`3dcf409`](https://github.com/mppjuro/PQChat.DHT/commit/3dcf409e14239001cd0afbb5cba01242887a9283) (2026-10-18) — decoupled 60-90m republish, ACK tombstones, resend expired messages, adaptive K (16 on LTE/CGNAT), and active chat keepalive (20-25s)
 - [`121515d`](https://github.com/mppjuro/PQChat.DHT/commit/121515d9e077782f83f18679e03d96d150a62f12) (2026-10-07) — DhtClient interface, implement FakeDht, isolate integration tests, and add GitHub Actions CI
