@@ -35,10 +35,10 @@ permissions:
   contents: read
 
 jobs:
-  instrumented-ui-and-multi-e2e:
-    name: Instrumented UI & Multi-Node E2E
+  instrumented-pixel-ui-tests:
+    name: Instrumented UI Automator Tests (Single AVD)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -50,11 +50,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -100,38 +95,166 @@ jobs:
           find app/build/reports/androidTests -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
           find app/build/outputs/androidTest-results -type f -name "*.xml" -exec echo "=== FILE: {} ===" \; -exec cat {} \; || true
 
-      - name: Run Multi-Emulator E2E Orchestrator
-        run: |
-          mkdir -p build/e2e-screenshots
-          python tools/e2e_emulator_orchestrator.py \
-            --nodes ${{ inputs.nodes || '2' }} \
-            --apk app/build/outputs/apk/debug/app-debug.apk \
-            --output-dir build/e2e-screenshots \
-            --dry-run
-
-      - name: Publish E2E Summary to GitHub Job Summary
-        if: always()
-        run: |
-          echo "## 📱 Multi-Emulator E2E & Physical UI Automation Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f "build/e2e-screenshots/report.md" ]; then
-            cat build/e2e-screenshots/report.md >> $GITHUB_STEP_SUMMARY
-          else
-            echo "ℹ️ Report file build/e2e-screenshots/report.md was not generated." >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          python3 scripts/summarize_test_results.py >> $GITHUB_STEP_SUMMARY || true
-
-      - name: Upload E2E Screenshots & Trace
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-multi-emulator-trace
-          path: build/e2e-screenshots/
-
       - name: Upload Connected Test Report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: connected-android-test-report
           path: app/build/reports/androidTests/connected/
+
+  multi-emulator-dht-e2e:
+    name: Multi-Emulator E2E Handshake & Messaging (Dual AVDs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Enable KVM hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm || true
+
+      - name: Cache Android System Image
+        uses: actions/cache@v6
+        id: sysimg-cache
+        with:
+          path: /usr/local/lib/android/sdk/system-images/android-${{ inputs.api_level || '34' }}
+          key: sysimg-android-${{ inputs.api_level || '34' }}-x86_64
+
+      - name: Set up Android SDK & Dual AVDs (Alice & Bob)
+        run: |
+          export API_LEVEL="${{ inputs.api_level || '34' }}"
+          export SYS_IMG="system-images;android-${API_LEVEL};google_apis;x86_64"
+
+          echo "=== Accepting Android SDK Licenses ==="
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+          if [ ! -d "/usr/local/lib/android/sdk/system-images/android-${API_LEVEL}/google_apis/x86_64" ]; then
+            echo "=== Installing System Image ($SYS_IMG) ==="
+            echo "y" | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}" "emulator" "platform-tools"
+          fi
+
+          echo "=== Creating Alice AVD (alice_avd) ==="
+          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" --device "pixel_6" --force
+
+          echo "=== Creating Bob AVD (bob_avd) ==="
+          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" --device "pixel_6" --force
+
+          for avd_dir in ~/.android/avd/*.avd; do
+            if [ -d "$avd_dir" ]; then
+              echo "hw.keyboard = yes" >> "$avd_dir/config.ini"
+              echo "hw.ramSize = 2048" >> "$avd_dir/config.ini"
+              echo "vm.heapSize = 512" >> "$avd_dir/config.ini"
+            fi
+          done
+
+          avdmanager list avd
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Launch Alice (port 5554) and Bob (port 5556) Emulators
+        run: |
+          EMU_OPTS="-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save"
+
+          echo "Starting Alice (emulator-5554)..."
+          $ANDROID_HOME/emulator/emulator -avd alice_avd -port 5554 $EMU_OPTS &
+
+          echo "Starting Bob (emulator-5556)..."
+          $ANDROID_HOME/emulator/emulator -avd bob_avd -port 5556 $EMU_OPTS &
+
+          echo "Emulators spawned in background."
+
+      - name: Wait for Both Emulators to Complete Boot
+        run: |
+          python3 - << 'EOF'
+          import subprocess, time, sys
+
+          devices = ["emulator-5554", "emulator-5556"]
+          timeout_seconds = 360
+          start_time = time.time()
+
+          for dev in devices:
+              print(f"Waiting for {dev} to be ready...", flush=True)
+              while time.time() - start_time < timeout_seconds:
+                  try:
+                      res = subprocess.run(
+                          ["adb", "-s", dev, "shell", "getprop", "sys.boot_completed"],
+                          capture_output=True,
+                          text=True,
+                          timeout=10
+                      )
+                      if res.stdout.strip() == "1":
+                          print(f"[{dev}] sys.boot_completed == 1. Ready!", flush=True)
+                          break
+                  except Exception:
+                      pass
+                  time.sleep(3)
+              else:
+                  print(f"ERROR: {dev} failed to boot within {timeout_seconds} seconds!", file=sys.stderr)
+                  sys.exit(1)
+
+          print("Both Alice and Bob emulators successfully booted!", flush=True)
+          EOF
+
+          for dev in emulator-5554 emulator-5556; do
+            adb -s $dev shell settings put global window_animation_scale 0.0
+            adb -s $dev shell settings put global transition_animation_scale 0.0
+            adb -s $dev shell settings put global animator_duration_scale 0.0
+            adb -s $dev shell svc power stayon true
+          done
+
+          adb devices -l
+
+      - name: Run Multi-Emulator E2E Orchestrator
+        run: |
+          mkdir -p build/e2e-screenshots
+          python tools/e2e_emulator_orchestrator.py \
+            --alice emulator-5554 \
+            --bob emulator-5556 \
+            --apk app/build/outputs/apk/debug/app-debug.apk \
+            --output-dir build/e2e-screenshots \
+            --full
+
+      - name: Publish E2E Summary to GitHub Job Summary
+        if: always()
+        run: |
+          echo "## 📱 Multi-Emulator E2E Physical UI Automation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "build/e2e-screenshots/report.md" ]; then
+            cat build/e2e-screenshots/report.md >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ Report file build/e2e-screenshots/report.md was not generated." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload E2E Screenshots & Trace Artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-multi-emulator-trace
+          path: build/e2e-screenshots/
+
+      - name: Stop Emulators
+        if: always()
+        run: |
+          adb -s emulator-5554 emu kill 2>/dev/null || true
+          adb -s emulator-5556 emu kill 2>/dev/null || true

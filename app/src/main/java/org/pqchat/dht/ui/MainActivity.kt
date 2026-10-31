@@ -11,6 +11,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
 import androidx.core.content.ContextCompat
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.ui.screens.*
@@ -59,34 +65,43 @@ class MainActivity : FragmentActivity() {
             }
 
             PQChatTheme(themeMode = themeMode) {
-                if (isDuressActive) {
-                    DecoyNotesScreen()
-                } else if (!isUnlocked && requiresLock) {
-                    BiometricLockScreen(
-                        onUnlockRequested = {
-                            BiometricAuthHelper.authenticate(
-                                activity = this@MainActivity,
-                                onSuccess = { isUnlocked = true }
-                            )
-                        },
-                        onPinSubmitted = { pin ->
-                            viewModel.verifyPin(pin)
-                        },
-                        onUnlockSuccess = {
-                            isUnlocked = true
-                        },
-                        onDuressTriggered = {
-                            viewModel.triggerDuressMode()
-                        },
-                        isPinConfigured = isPinConfigured || isDuressConfigured,
-                        isBiometricAvailable = isBiometricEnabled
-                    )
-                } else {
-                    MainAppNavigation(
-                        viewModel = viewModel,
-                        requiresLock = requiresLock,
-                        onLockRequested = { isUnlocked = false }
-                    )
+                @OptIn(ExperimentalComposeUiApi::class)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .semantics {
+                            testTagsAsResourceId = true
+                        }
+                ) {
+                    if (isDuressActive) {
+                        DecoyNotesScreen()
+                    } else if (!isUnlocked && requiresLock) {
+                        BiometricLockScreen(
+                            onUnlockRequested = {
+                                BiometricAuthHelper.authenticate(
+                                    activity = this@MainActivity,
+                                    onSuccess = { isUnlocked = true }
+                                )
+                            },
+                            onPinSubmitted = { pin ->
+                                viewModel.verifyPin(pin)
+                            },
+                            onUnlockSuccess = {
+                                isUnlocked = true
+                            },
+                            onDuressTriggered = {
+                                viewModel.triggerDuressMode()
+                            },
+                            isPinConfigured = isPinConfigured || isDuressConfigured,
+                            isBiometricAvailable = isBiometricEnabled
+                        )
+                    } else {
+                        MainAppNavigation(
+                            viewModel = viewModel,
+                            requiresLock = requiresLock,
+                            onLockRequested = { isUnlocked = false }
+                        )
+                    }
                 }
             }
         }

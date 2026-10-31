@@ -544,6 +544,7 @@ fun ContactItem(
             .fillMaxWidth()
             .border(1.dp, appColors.border, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
+            .testTag("contact_item_${contact.rawName}")
     ) {
         Row(
             modifier = Modifier

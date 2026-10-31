@@ -476,55 +476,52 @@ object QrCodeUtil {
         safeBitmap.getPixels(intArray, 0, width, 0, 0, width, height)
 
         val fullSource = RGBLuminanceSource(width, height, intArray)
-        val reader = MultiFormatReader().apply {
-            setHints(
-                mapOf(
-                    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                    DecodeHintType.TRY_HARDER to true
-                )
-            )
-        }
+        val hints = mapOf<DecodeHintType, Any>(
+            DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+            DecodeHintType.TRY_HARDER to true
+        )
+        val qrReader = com.google.zxing.qrcode.QRCodeReader()
 
         fun trySource(source: LuminanceSource, label: String): String? {
             // 1. HybridBinarizer
             try {
-                reader.reset()
-                val res = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
+                qrReader.reset()
+                val res = qrReader.decode(BinaryBitmap(HybridBinarizer(source)), hints).text
                 if (!res.isNullOrBlank()) {
                     android.util.Log.d("QrCodeUtil", "QR decode success with HybridBinarizer on $label")
                     return res
                 }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
 
             // 2. GlobalHistogramBinarizer
             try {
-                reader.reset()
-                val res = reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source))).text
+                qrReader.reset()
+                val res = qrReader.decode(BinaryBitmap(GlobalHistogramBinarizer(source)), hints).text
                 if (!res.isNullOrBlank()) {
                     android.util.Log.d("QrCodeUtil", "QR decode success with GlobalHistogramBinarizer on $label")
                     return res
                 }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
 
             // 3. Inverted HybridBinarizer
             try {
-                reader.reset()
-                val res = reader.decodeWithState(BinaryBitmap(HybridBinarizer(source.invert()))).text
+                qrReader.reset()
+                val res = qrReader.decode(BinaryBitmap(HybridBinarizer(source.invert())), hints).text
                 if (!res.isNullOrBlank()) {
                     android.util.Log.d("QrCodeUtil", "QR decode success with Inverted HybridBinarizer on $label")
                     return res
                 }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
 
             // 4. Inverted GlobalHistogramBinarizer
             try {
-                reader.reset()
-                val res = reader.decodeWithState(BinaryBitmap(GlobalHistogramBinarizer(source.invert()))).text
+                qrReader.reset()
+                val res = qrReader.decode(BinaryBitmap(GlobalHistogramBinarizer(source.invert())), hints).text
                 if (!res.isNullOrBlank()) {
                     android.util.Log.d("QrCodeUtil", "QR decode success with Inverted GlobalHistogramBinarizer on $label")
                     return res
                 }
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
 
             return null
         }
@@ -591,6 +588,9 @@ object QrCodeUtil {
         if (height > width * 1.2f) {
             // HandshakeScreen QR Card area (centered around Y: 35% - 75%, X: 10% - 90%)
             val screenCrops = listOf(
+                "Tight QR Card Center (43%-75%)" to Triple((width * 0.15f).toInt(), (height * 0.43f).toInt(), Pair((width * 0.70f).toInt(), (height * 0.32f).toInt())),
+                "Tight QR Card Upper (35%-67%)" to Triple((width * 0.15f).toInt(), (height * 0.35f).toInt(), Pair((width * 0.70f).toInt(), (height * 0.32f).toInt())),
+                "Tight QR Card Lower (50%-82%)" to Triple((width * 0.15f).toInt(), (height * 0.50f).toInt(), Pair((width * 0.70f).toInt(), (height * 0.32f).toInt())),
                 "Handshake QR Center (35%-75%)" to Triple((width * 0.10f).toInt(), (height * 0.35f).toInt(), Pair((width * 0.80f).toInt(), (height * 0.40f).toInt())),
                 "Handshake QR Extended (30%-80%)" to Triple((width * 0.05f).toInt(), (height * 0.30f).toInt(), Pair((width * 0.90f).toInt(), (height * 0.50f).toInt())),
                 "Middle Screen (20%-80%)" to Triple(0, (height * 0.20f).toInt(), Pair(width, (height * 0.60f).toInt())),
@@ -611,7 +611,7 @@ object QrCodeUtil {
                         trySource(cropped, label)?.let { return it }
 
                         // Try scaled 600x600 for the center crop
-                        if (label.startsWith("Handshake QR")) {
+                        if (label.startsWith("Handshake QR") || label.startsWith("Tight QR")) {
                             val cropBmp = Bitmap.createBitmap(safeBitmap, clampedX, clampedY, clampedW, clampedH)
                             val scaledCrop = Bitmap.createScaledBitmap(cropBmp, 600, 600, true)
                             val p = IntArray(360000)
@@ -667,7 +667,7 @@ object QrCodeUtil {
             inputStream.close()
 
             // 1. First check for steganographic handshake in raw PNG or image file bytes
-            val stego = extractHandshakeStego(rawBytes)
+            val stego = org.pqchat.dht.media.Png8Compressor.extractStegoFromPng8(rawBytes)
             if (stego != null && stego.size == STEG_HANDSHAKE_PAYLOAD_SIZE) {
                 android.util.Log.d("QrCodeUtil", "Steganographic handshake detected in URI file (${stego.size} bytes)!")
                 return base64Encode(stego)

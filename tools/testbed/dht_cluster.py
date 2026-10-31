@@ -159,18 +159,18 @@ class UdpClusterServerProtocol(asyncio.DatagramProtocol):
             self.transport.sendto(resp_bytes, addr)
 
 
-async def run_cluster_server(host: str = "0.0.0.0", base_port: int = 30000, num_nodes: int = 50):
-    cluster = DhtCluster(num_nodes=num_nodes, base_port=base_port, host=host)
+async def run_cluster_server(host: str = "0.0.0.0", base_port: int = 30000, num_nodes: int = 50, advertised_ip: str = "10.0.2.2"):
+    cluster = DhtCluster(num_nodes=num_nodes, base_port=base_port, host=advertised_ip)
     loop = asyncio.get_running_loop()
     transports = []
-    print(f"[DHT Cluster] Starting UDP cluster with {num_nodes} nodes on {host}:{base_port}..{base_port+num_nodes-1}", flush=True)
+    print(f"[DHT Cluster] Starting UDP cluster with {num_nodes} nodes on {host}:{base_port}..{base_port+num_nodes-1} (advertised: {advertised_ip})", flush=True)
     for node in cluster.nodes:
         transport, _ = await loop.create_datagram_endpoint(
             lambda p=node.port: UdpClusterServerProtocol(cluster, p),
             local_addr=(host, node.port)
         )
         transports.append(transport)
-    print(f"[DHT Cluster] Primary bootstrap node: {host}:{base_port}. Cluster fully operational.", flush=True)
+    print(f"[DHT Cluster] Primary bootstrap node: {advertised_ip}:{base_port}. Cluster fully operational.", flush=True)
     try:
         while True:
             await asyncio.sleep(3600)
@@ -183,8 +183,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="BEP 5 / BEP 44 Local DHT Cluster Server")
     parser.add_argument("--host", default="0.0.0.0", help="Binding host")
+    parser.add_argument("--advertised-ip", default="10.0.2.2", help="Advertised IP in compact node info for emulators")
     parser.add_argument("--base-port", type=int, default=30000, help="Base UDP port")
     parser.add_argument("--nodes", type=int, default=50, help="Number of virtual DHT nodes")
     args = parser.parse_args()
-    asyncio.run(run_cluster_server(args.host, args.base_port, args.nodes))
+    asyncio.run(run_cluster_server(args.host, args.base_port, args.nodes, args.advertised_ip))
 
