@@ -12,7 +12,7 @@ on:
         required: false
         default: false
       quick:
-        description: 'Tryb szybki (smoke test dla testbed)'
+        description: 'Quick mode (smoke test for testbed)'
         type: boolean
         required: false
         default: false

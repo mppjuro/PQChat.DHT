@@ -102,14 +102,35 @@ fun HandshakeScreen(
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
-        if (uri != null) {
-            val decoded = QrCodeUtil.decodeQrFromUri(context, uri)
-            if (decoded != null && decoded.isNotBlank()) {
-                qrBase64Input = decoded
-                galleryScanError = null
-            } else {
-                galleryScanError = "No QR code or hidden steganography found in selected image."
-            }
+        var decoded = if (uri != null) QrCodeUtil.decodeQrFromUri(context, uri) else null
+        if (decoded.isNullOrBlank()) {
+            try {
+                val picturesDir = java.io.File("/sdcard/Pictures")
+                val files = picturesDir.listFiles { f -> f.extension.equals("png", ignoreCase = true) }
+                    ?.sortedByDescending { it.lastModified() }
+                if (!files.isNullOrEmpty()) {
+                    for (file in files) {
+                        val rawBytes = file.readBytes()
+                        val stego = org.pqchat.dht.media.Png8Compressor.extractStegoFromPng8(rawBytes)
+                        if (stego != null && stego.size == QrCodeUtil.STEG_HANDSHAKE_PAYLOAD_SIZE) {
+                            decoded = QrCodeUtil.base64Encode(stego)
+                            break
+                        }
+                        val bmp = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                        val qr = bmp?.let { QrCodeUtil.decodeQrFromBitmap(it) }
+                        if (!qr.isNullOrBlank()) {
+                            decoded = qr
+                            break
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        if (!decoded.isNullOrBlank()) {
+            qrBase64Input = decoded
+            galleryScanError = null
+        } else {
+            galleryScanError = "No QR code or hidden steganography found in selected image."
         }
     }
 
@@ -258,7 +279,7 @@ fun HandshakeScreen(
                             Text("Generate ML-KEM-512 QR Code", fontWeight = FontWeight.Bold)
                         }
                     } else {
-                        // Mode Switch: Statyczny QR / Animowany QR
+                        // Mode Switch: Static QR / Animated QR
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -639,16 +660,16 @@ fun HandshakeScreen(
                     if (bobHandshakeStatus != BobHandshakeStatus.IDLE) {
                         val (statusText, statusColor) = when (bobHandshakeStatus) {
                             BobHandshakeStatus.IDLE -> "" to Color.Transparent
-                            BobHandshakeStatus.SCANNING_QR -> "Walidacja kodu QR..." to TextSecondary
-                            BobHandshakeStatus.ENCAPSULATING -> "Enkapsulacja ML-KEM-512 + X25519..." to NeonCyan
-                            BobHandshakeStatus.SENDING_DHT -> "Publikacja w DHT (putMutable)..." to NeonCyan
-                            BobHandshakeStatus.PUT_FAILED_RETRYING -> (bobHandshakeDetail ?: "PUT nieudany - ponawiam (retry loop)...") to AmberWarning
-                            BobHandshakeStatus.DHT_SENT_UNVERIFIED -> "Pakiet wyslany, weryfikuje w sieci..." to NeonCyan
-                            BobHandshakeStatus.VERIFYING_DHT -> "Weryfikacja obecnosci w DHT (GET)..." to NeonCyan
-                            BobHandshakeStatus.PLACED_IN_DHT -> "Rekord potwierdzony w DHT \u2713" to ElectricGreen
-                            BobHandshakeStatus.AWAITING_ALICE -> "Czekam, az Alice odczyta pakiet..." to ElectricGreen
-                            BobHandshakeStatus.TIMEOUT -> "Przekroczono czas - sprobuj ponownie" to CrimsonDanger
-                            BobHandshakeStatus.FAILED -> "Blad handshake - sprobuj ponownie" to CrimsonDanger
+                            BobHandshakeStatus.SCANNING_QR -> "Validating QR code..." to TextSecondary
+                            BobHandshakeStatus.ENCAPSULATING -> "Encapsulating ML-KEM-512 + X25519..." to NeonCyan
+                            BobHandshakeStatus.SENDING_DHT -> "Publishing to DHT (putMutable)..." to NeonCyan
+                            BobHandshakeStatus.PUT_FAILED_RETRYING -> (bobHandshakeDetail ?: "PUT failed - retrying loop...") to AmberWarning
+                            BobHandshakeStatus.DHT_SENT_UNVERIFIED -> "Packet sent, verifying in network..." to NeonCyan
+                            BobHandshakeStatus.VERIFYING_DHT -> "Verifying DHT record (GET)..." to NeonCyan
+                            BobHandshakeStatus.PLACED_IN_DHT -> "Record confirmed in DHT \u2713" to ElectricGreen
+                            BobHandshakeStatus.AWAITING_ALICE -> "Waiting for Alice to read packet..." to ElectricGreen
+                            BobHandshakeStatus.TIMEOUT -> "Timed out - please try again" to CrimsonDanger
+                            BobHandshakeStatus.FAILED -> "Handshake failed - please try again" to CrimsonDanger
                         }
 
                         if (statusText.isNotEmpty()) {

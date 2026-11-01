@@ -175,6 +175,20 @@ class AdbDevice:
         print(f"[{self.name}] Physical SWIPE from ({x1}, {y1}) to ({x2}, {y2})", flush=True)
         self.shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
 
+    def scroll_down(self, duration_ms: int = 300):
+        cx = self.screen_width // 2
+        y1 = int(self.screen_height * 0.75)
+        y2 = int(self.screen_height * 0.25)
+        self.swipe(cx, y1, cx, y2, duration_ms)
+        self.sleep(0.5)
+
+    def scroll_up(self, duration_ms: int = 300):
+        cx = self.screen_width // 2
+        y1 = int(self.screen_height * 0.25)
+        y2 = int(self.screen_height * 0.75)
+        self.swipe(cx, y1, cx, y2, duration_ms)
+        self.sleep(0.5)
+
     def tap_ratio(self, rx: float, ry: float):
         x = int(self.screen_width * rx)
         y = int(self.screen_height * ry)
@@ -367,7 +381,8 @@ class AdbDevice:
         content_desc: Optional[str] = None,
         resource_id: Optional[str] = None,
         test_tag: Optional[str] = None,
-        fallback_ratio: Optional[Tuple[float, float]] = None
+        fallback_ratio: Optional[Tuple[float, float]] = None,
+        auto_scroll: bool = True
     ) -> bool:
         desc = test_tag or text or content_desc or resource_id or "element"
         if self.dry_run:
@@ -375,6 +390,22 @@ class AdbDevice:
             return True
         self.close_keyboard()
         bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+        if bounds and auto_scroll:
+            x1, y1, x2, y2 = bounds
+            if y1 >= self.screen_height - 120 or y2 <= 120:
+                print(f"[{self.name}] '{desc}' bounds {bounds} near screen edge. Adjusting scroll...", flush=True)
+                if y1 >= self.screen_height - 120:
+                    self.scroll_down()
+                else:
+                    self.scroll_up()
+                bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+
+        if not bounds and auto_scroll:
+            self.scroll_down()
+            bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+            if not bounds:
+                self.scroll_up()
+
         if bounds:
             x1, y1, x2, y2 = bounds
             cx = (x1 + x2) // 2
@@ -425,6 +456,7 @@ class AdbDevice:
     def broadcast_media_scan(self, file_path: str):
         print(f"[{self.name}] Broadcasting media scan for {file_path}", flush=True)
         self.shell(f"am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://{file_path}")
+        self.shell(f"content insert --uri content://media/external/images/media --bind _data:s:{file_path} --bind mime_type:s:image/png")
 
     def clear_data(self, package: str = "org.pqchat.dht"):
         print(f"[{self.name}] Clearing data for {package}", flush=True)
@@ -643,14 +675,19 @@ class MultiEmulatorOrchestrator:
 
         # PhotoPicker: Tap thumbnail if found, or first grid cell
         print(f"[{responder.name}] Selecting photo in PhotoPicker...", flush=True)
-        thumb_bounds = responder.find_node(resource_id="icon_thumbnail") or responder.find_node(content_desc="Photo")
+        thumb_bounds = (
+            responder.find_node(resource_id="icon_thumbnail")
+            or responder.find_node(content_desc="Photo")
+            or responder.find_node(resource_id="thumbnail")
+        )
         if thumb_bounds:
             cx = (thumb_bounds[0] + thumb_bounds[2]) // 2
             cy = (thumb_bounds[1] + thumb_bounds[3]) // 2
             responder.tap(cx, cy)
+            self.sleep(1.5)
         else:
             responder.tap(180, 1450)
-        self.sleep(1.5)
+            self.sleep(1.5)
 
         # Only tap Done if present in UI
         if responder.find_node(text="Done"):
@@ -662,19 +699,40 @@ class MultiEmulatorOrchestrator:
         valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=12)
         if not valid_qr:
             print(f"[{responder.name}] Gallery QR detection pending or timed out. Falling back to direct Base64 manual input...", flush=True)
+            # Dismiss PhotoPicker if still open
+            if not responder.find_node(test_tag="handshake_bob_name_input"):
+                print(f"[{responder.name}] Dismissing PhotoPicker to return to HandshakeScreen...", flush=True)
+                responder.back()
+                self.sleep(1.5)
+
             b64_payload = initiator.extract_alice_qr_b64()
             if b64_payload:
-                responder.click_element(test_tag="handshake_toggle_manual_paste")
+                responder.close_keyboard()
+                # Scroll down to ensure manual paste toggle is visible
+                responder.scroll_down()
                 self.sleep(0.5)
-                responder.click_element(test_tag="handshake_manual_payload_input")
+                responder.click_element(test_tag="handshake_toggle_manual_paste", text="paste Base64", fallback_ratio=(0.5, 0.75))
+                self.sleep(0.8)
+                # Scroll down so the expanded input field is visible
+                responder.scroll_down()
+                self.sleep(0.5)
+                responder.click_element(test_tag="handshake_manual_payload_input", fallback_ratio=(0.5, 0.65))
                 responder.type_text(b64_payload)
+                responder.close_keyboard()
                 self.sleep(1.0)
+                # Scroll up if needed to check for the validation badge
+                responder.scroll_up()
+                self.sleep(0.5)
                 valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=15)
+                if not valid_qr:
+                    valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=5)
 
         sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
         self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS" if valid_qr else "FAIL", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
 
         # Responder: Tap "Encapsulate & Put to DHT"
+        if not responder.find_node(test_tag="handshake_encapsulate_button"):
+            responder.scroll_up()
         responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT", fallback_ratio=(0.5, 0.84))
         self.sleep(4.0)
 
@@ -692,11 +750,20 @@ class MultiEmulatorOrchestrator:
         responder.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
         self.sleep(2.0)
 
-        # Return both to ContactListScreen
-        initiator.back()
-        self.sleep(1.0)
-        responder.back()
-        self.sleep(1.0)
+        # Return both to ContactListScreen safely (from ChatScreen or HandshakeScreen)
+        if initiator.find_node(test_tag="chat_back_button") or initiator.find_node(test_tag="chat_message_input"):
+            initiator.click_element(test_tag="chat_back_button", fallback_ratio=(0.08, 0.08))
+            self.sleep(1.0)
+        elif not initiator.find_node(test_tag="contact_list_sync_chip"):
+            initiator.back()
+            self.sleep(1.0)
+
+        if responder.find_node(test_tag="chat_back_button") or responder.find_node(test_tag="chat_message_input"):
+            responder.click_element(test_tag="chat_back_button", fallback_ratio=(0.08, 0.08))
+            self.sleep(1.0)
+        elif not responder.find_node(test_tag="contact_list_sync_chip"):
+            responder.back()
+            self.sleep(1.0)
 
         self.log_step(f"Handshake Complete ({pair_label})", "PASS", f"Handshake complete between {initiator.name} and {responder.name}")
 
