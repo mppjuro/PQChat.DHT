@@ -62,7 +62,8 @@ android {
             "UnusedResources",
             "UseKtx",
             "ObsoleteSdkInt",
-            "OldTargetApi"
+            "OldTargetApi",
+            "SelectedPhotoAccess"
         )
     }
 

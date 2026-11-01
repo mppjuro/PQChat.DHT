@@ -2024,7 +2024,7 @@ fun GroupPollCard(
     val isExpired = currentPoll.isClosed || now > currentPoll.expirationTimestamp
     val totalVoters = votes.size
 
-    var selectedBitmask by remember { mutableStateOf(0) }
+    var selectedBitmask by remember { mutableIntStateOf(0) }
     var hasVotedLocally by remember { mutableStateOf(false) }
 
     Surface(
@@ -2239,7 +2239,7 @@ fun CreatePollDialog(
     var question by remember { mutableStateOf("") }
     var options by remember { mutableStateOf(listOf("", "")) }
     var isMultiChoice by remember { mutableStateOf(false) }
-    var durationHours by remember { mutableStateOf(24) }
+    var durationHours by remember { mutableIntStateOf(24) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

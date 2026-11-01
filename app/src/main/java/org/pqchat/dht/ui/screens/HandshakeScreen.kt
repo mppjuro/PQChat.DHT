@@ -105,7 +105,7 @@ fun HandshakeScreen(
         var decoded = if (uri != null) QrCodeUtil.decodeQrFromUri(context, uri) else null
         if (decoded.isNullOrBlank()) {
             try {
-                val picturesDir = java.io.File("/sdcard/Pictures")
+                val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
                 val files = picturesDir.listFiles { f -> f.extension.equals("png", ignoreCase = true) }
                     ?.sortedByDescending { it.lastModified() }
                 if (!files.isNullOrEmpty()) {

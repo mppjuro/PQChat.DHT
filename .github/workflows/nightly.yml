@@ -435,6 +435,8 @@ jobs:
     timeout-minutes: 15
     needs: [fast-unit-tests, slow-repository-tests, slow-statistical-tests, remote-dht-tests, real-dht-measurements, dht-testbed, e2e-two-devices-test, adversarial-dht-simulation]
     if: success() && (inputs.skip_release != true)
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
