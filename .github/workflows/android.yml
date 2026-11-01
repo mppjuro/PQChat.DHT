@@ -9,6 +9,13 @@ on:
 permissions:
   contents: write
 
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_PREFS_ROOT: /home/runner
+  ANDROID_SDK_HOME: /home/runner
+  ANDROID_AVD_HOME: /home/runner/.android/avd
+
 jobs:
   unit-tests-and-lint:
     name: Unit Tests & Lint

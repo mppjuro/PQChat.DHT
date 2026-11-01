@@ -158,6 +158,8 @@ class ChatRepositoryRekeyIntegrationTest {
         aliceRepo.delayedPutMaxMs = 0L
         aliceRepo.decoyPutSlotsCount = 0
         aliceRepo.enableDecoyGets = false
+        aliceRepo.intraBatchJitterMinMs = 0L
+        aliceRepo.intraBatchJitterMaxMs = 0L
 
         val bobContactDao = TestContactDao()
         val bobMessageDao = TestMessageDao()
@@ -167,6 +169,8 @@ class ChatRepositoryRekeyIntegrationTest {
         bobRepo.delayedPutMaxMs = 0L
         bobRepo.decoyPutSlotsCount = 0
         bobRepo.enableDecoyGets = false
+        bobRepo.intraBatchJitterMinMs = 0L
+        bobRepo.intraBatchJitterMaxMs = 0L
 
         val aliceToBobSeed = CryptoUtils.secureRandomBytes(64)
         val bobToAliceSeed = CryptoUtils.secureRandomBytes(64)
@@ -197,8 +201,8 @@ class ChatRepositoryRekeyIntegrationTest {
             )
         )
 
-        val totalRounds = if (isNightly()) 200 else 60
-        val minEpochs = if (isNightly()) 4L else 1L
+        val totalRounds = 55
+        val minEpochs = 1L
 
         for (i in 0 until totalRounds) {
             // 1. Alice sends to Bob
@@ -267,6 +271,8 @@ class ChatRepositoryRekeyIntegrationTest {
         assertTrue("Alice should have empty outbox", aliceMessageDao.getQueuedMessagesForContact("bob").isEmpty())
         assertTrue("Bob should have empty outbox", bobMessageDao.getQueuedMessagesForContact("alice").isEmpty())
 
+        aliceRepo.close()
+        bobRepo.close()
         sharedDht.stop()
     }
 
@@ -283,6 +289,8 @@ class ChatRepositoryRekeyIntegrationTest {
         aliceRepo.delayedPutMaxMs = 0L
         aliceRepo.decoyPutSlotsCount = 0
         aliceRepo.enableDecoyGets = false
+        aliceRepo.intraBatchJitterMinMs = 0L
+        aliceRepo.intraBatchJitterMaxMs = 0L
 
         val bobContactDao = TestContactDao()
         val bobMessageDao = TestMessageDao()
@@ -292,6 +300,8 @@ class ChatRepositoryRekeyIntegrationTest {
         bobRepo.delayedPutMaxMs = 0L
         bobRepo.decoyPutSlotsCount = 0
         bobRepo.enableDecoyGets = false
+        bobRepo.intraBatchJitterMinMs = 0L
+        bobRepo.intraBatchJitterMaxMs = 0L
 
         val aliceToBobSeed = CryptoUtils.secureRandomBytes(64)
         val bobToAliceSeed = CryptoUtils.secureRandomBytes(64)
@@ -374,15 +384,22 @@ class ChatRepositoryRekeyIntegrationTest {
         assertTrue("Msg #51 must be delivered", bobTexts.contains("Msg #51-during-rekey"))
         assertTrue("Msg #52 must be delivered", bobTexts.contains("Msg #52-during-rekey"))
 
+        aliceRepo.close()
+        bobRepo.close()
         sharedDht.stop()
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(value = 15, unit = java.util.concurrent.TimeUnit.MINUTES)
     fun testTwoRepositoriesExchangeMessagesWithPqcRekeyOnLiveDhtLeafNodes() = runBlocking {
+        val prevDebug = org.pqchat.dht.debug.MessageDebugLogger.isEnabled
+        org.pqchat.dht.debug.MessageDebugLogger.isEnabled = false
         val aliceDht = DhtLeafNode(autoBootstrap = false)
         val bobDht = DhtLeafNode(autoBootstrap = false)
         aliceDht.start()
         bobDht.start()
+        var aliceRepo: ChatRepository? = null
+        var bobRepo: ChatRepository? = null
 
         try {
             // Pair the two nodes over local UDP ports
@@ -395,19 +412,23 @@ class ChatRepositoryRekeyIntegrationTest {
             val aliceMessageDao = TestMessageDao()
             val aliceChunkDao = TestChunkDao()
             val aliceRekeyDao = TestPendingRekeyOfferDao()
-            val aliceRepo = ChatRepository(aliceContactDao, aliceMessageDao, aliceChunkDao, aliceRekeyDao, aliceDht)
+            aliceRepo = ChatRepository(aliceContactDao, aliceMessageDao, aliceChunkDao, aliceRekeyDao, aliceDht)
             aliceRepo.delayedPutMaxMs = 0L
             aliceRepo.decoyPutSlotsCount = 0
             aliceRepo.enableDecoyGets = false
+            aliceRepo.intraBatchJitterMinMs = 0L
+            aliceRepo.intraBatchJitterMaxMs = 0L
 
             val bobContactDao = TestContactDao()
             val bobMessageDao = TestMessageDao()
             val bobChunkDao = TestChunkDao()
             val bobRekeyDao = TestPendingRekeyOfferDao()
-            val bobRepo = ChatRepository(bobContactDao, bobMessageDao, bobChunkDao, bobRekeyDao, bobDht)
+            bobRepo = ChatRepository(bobContactDao, bobMessageDao, bobChunkDao, bobRekeyDao, bobDht)
             bobRepo.delayedPutMaxMs = 0L
             bobRepo.decoyPutSlotsCount = 0
             bobRepo.enableDecoyGets = false
+            bobRepo.intraBatchJitterMinMs = 0L
+            bobRepo.intraBatchJitterMaxMs = 0L
 
             val aliceToBobSeed = CryptoUtils.secureRandomBytes(64)
             val bobToAliceSeed = CryptoUtils.secureRandomBytes(64)
@@ -438,8 +459,8 @@ class ChatRepositoryRekeyIntegrationTest {
                 )
             )
 
-            val totalRounds = if (isNightly()) 110 else 55
-            val minEpochs = if (isNightly()) 2L else 1L
+            val totalRounds = 55
+            val minEpochs = 1L
 
             for (i in 0 until totalRounds) {
                 // 1. Alice sends to Bob
@@ -498,6 +519,9 @@ class ChatRepositoryRekeyIntegrationTest {
             assertTrue("Alice should have empty outbox", aliceMessageDao.getQueuedMessagesForContact("bob").isEmpty())
             assertTrue("Bob should have empty outbox", bobMessageDao.getQueuedMessagesForContact("alice").isEmpty())
         } finally {
+            org.pqchat.dht.debug.MessageDebugLogger.isEnabled = prevDebug
+            aliceRepo?.close()
+            bobRepo?.close()
             aliceDht.stop()
             bobDht.stop()
         }

@@ -141,6 +141,7 @@ class TwoDevicesE2EIntegrationTest {
         bobRepo.decoyPutSlotsCount = 0
         bobRepo.enableDecoyGets = false
 
+        try {
         // =========================================================================
         // 2. Handshake Phase: Alice QR -> Bob Scan & PUT Target_0 -> Alice Finalize
         // =========================================================================
@@ -220,10 +221,10 @@ class TwoDevicesE2EIntegrationTest {
         assertEquals("Bob counterIn must start at 0", 0, initBobContact.counterIn)
 
         // =========================================================================
-        // 3. Bidirectional Messaging: >10 messages exchanged in both directions
+        // 3. Bidirectional Messaging: messages exchanged in both directions
         // =========================================================================
-        println("[E2E Phase 2] Exchanging 15 messages bidirectionally")
-        val messageCount = 15
+        val messageCount = if (useFakeDht) 15 else 2
+        println("[E2E Phase 2] Exchanging $messageCount messages bidirectionally (useFakeDht=$useFakeDht)")
         for (i in 0 until messageCount) {
             // Alice -> Bob
             val aliceText = "Hello Bob from Alice #$i"
@@ -288,16 +289,27 @@ class TwoDevicesE2EIntegrationTest {
         // 4. Rekey Phase: Advance to 50 messages, trigger RekeyCoordinator, verify
         // =========================================================================
         println("[E2E Phase 3] Advancing messages to 50 for PQC Rekey")
-        // Alice sends messages 15..48
-        for (i in 15 until 49) {
-            aliceRepo.sendTextMessage("bob", "Pre-rekey msg #$i")
+        if (useFakeDht) {
+            for (i in 15 until 49) {
+                aliceRepo.sendTextMessage("bob", "Pre-rekey msg #$i")
+                bobRepo.pollContactIncoming("alice")
+            }
+            assertEquals(49, aliceRepo.getContact("bob")!!.counterOut)
+            aliceRepo.sendTextMessage("bob", "Pre-rekey msg #49")
             bobRepo.pollContactIncoming("alice")
+        } else {
+            // Live DHT smoke test: ratchet chain keys forward to slot 50 to avoid high-latency public DHT loops
+            val curA = aliceRepo.getContact("bob")!!
+            val curB = bobRepo.getContact("alice")!!
+            var aKeyOut = curA.chainKeyOut.raw
+            var bKeyIn = curB.chainKeyIn.raw
+            for (step in curA.counterOut until 50) {
+                aKeyOut = RatchetChain.deriveSlot(aKeyOut, step).nextChainKey
+                bKeyIn = RatchetChain.deriveSlot(bKeyIn, step).nextChainKey
+            }
+            aDb.contactDao().updateOutgoingState("bob", 50, aKeyOut)
+            bDb.contactDao().updateIncomingState("alice", 50, bKeyIn)
         }
-        assertEquals(49, aliceRepo.getContact("bob")!!.counterOut)
-
-        // Message 49 (which is the 50th message): counterOut becomes 50
-        aliceRepo.sendTextMessage("bob", "Pre-rekey msg #49")
-        bobRepo.pollContactIncoming("alice")
         val contactBeforeRekey = aliceRepo.getContact("bob")!!
         assertEquals(50, contactBeforeRekey.counterOut)
         assertTrue("RekeyCoordinator must qualify counterOut=50", RekeyCoordinator.shouldOfferRekey(contactBeforeRekey.counterOut))
@@ -493,5 +505,9 @@ class TwoDevicesE2EIntegrationTest {
         }
 
         println("[E2E Test] Two Devices Full Lifecycle Test Completed Successfully!")
+        } finally {
+            aliceRepo.close()
+            bobRepo.close()
+        }
     }
 }

@@ -93,20 +93,16 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
-                if (System.getProperty("runSlowTests") != null) {
-                    it.systemProperty("runSlowTests", System.getProperty("runSlowTests")!!)
+                it.maxHeapSize = "2048m"
+                listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations").forEach { prop ->
+                    System.getProperty(prop)?.let { value -> it.systemProperty(prop, value) }
                 }
-                if (System.getProperty("runNightlyTests") != null) {
-                    it.systemProperty("runNightlyTests", System.getProperty("runNightlyTests")!!)
-                }
-                if (System.getProperty("runRealDhtTests") != null) {
-                    it.systemProperty("runRealDhtTests", System.getProperty("runRealDhtTests")!!)
-                }
-                if (System.getProperty("useFakeDht") != null) {
-                    it.systemProperty("useFakeDht", System.getProperty("useFakeDht")!!)
-                }
-                if (System.getProperty("measuredIterations") != null) {
-                    it.systemProperty("measuredIterations", System.getProperty("measuredIterations")!!)
+                it.systemProperty("junit.jupiter.execution.timeout.default", "5m")
+                it.systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
+                it.testLogging {
+                    events("started", "passed", "skipped", "failed")
+                    showStandardStreams = false
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
                 }
                 it.useJUnitPlatform {
                     if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
@@ -121,6 +117,20 @@ android {
                 }
             }
         }
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "2048m"
+    listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations").forEach { prop ->
+        System.getProperty(prop)?.let { systemProperty(prop, it) }
+    }
+    systemProperty("junit.jupiter.execution.timeout.default", "5m")
+    systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
+    testLogging {
+        events("started", "passed", "skipped", "failed")
+        showStandardStreams = false
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
     }
 }
 

@@ -35,6 +35,13 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_PREFS_ROOT: /home/runner
+  ANDROID_SDK_HOME: /home/runner
+  ANDROID_AVD_HOME: /home/runner/.android/avd
+
 jobs:
   instrumented-pixel-ui-tests:
     name: Instrumented UI Automator Tests (Single AVD)
@@ -218,29 +225,45 @@ jobs:
             yes 2>/dev/null | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}" "emulator" "platform-tools"
           fi
 
-          mkdir -p ~/.android/avd
+          mkdir -p "$ANDROID_AVD_HOME"
+          mkdir -p /home/runner/.android/avd
 
           echo "=== Creating Alice AVD ==="
-          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" --device "pixel_6" --force || \
-          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" --force
+          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/alice_avd.avd" --device "pixel_6" --force || \
+          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/alice_avd.avd" --force
 
           echo "=== Creating Bob AVD ==="
-          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" --device "pixel_6" --force || \
-          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" --force
+          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/bob_avd.avd" --device "pixel_6" --force || \
+          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/bob_avd.avd" --force
 
           if [ "$NODES" -ge 3 ]; then
             echo "=== Creating Charlie AVD ==="
-            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" --device "pixel_6" --force || \
-            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" --force
+            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/charlie_avd.avd" --device "pixel_6" --force || \
+            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/charlie_avd.avd" --force
           fi
 
           if [ "$NODES" -ge 4 ]; then
             echo "=== Creating Dave AVD ==="
-            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" --device "pixel_6" --force || \
-            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" --force
+            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/dave_avd.avd" --device "pixel_6" --force || \
+            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/dave_avd.avd" --force
           fi
 
-          for avd_dir in ~/.android/avd/*.avd; do
+          # Ensure .ini files exist in $ANDROID_AVD_HOME (sync from $XDG_CONFIG_HOME/.android/avd or anywhere else)
+          if [ -d "/home/runner/.config/.android/avd" ]; then
+            cp -rn /home/runner/.config/.android/avd/* "$ANDROID_AVD_HOME/" 2>/dev/null || true
+          fi
+          for avd_name in alice_avd bob_avd $( [ "$NODES" -ge 3 ] && echo charlie_avd ) $( [ "$NODES" -ge 4 ] && echo dave_avd ); do
+            if [ ! -f "$ANDROID_AVD_HOME/${avd_name}.ini" ]; then
+              find /home/runner -name "${avd_name}.ini" -exec cp {} "$ANDROID_AVD_HOME/" \; 2>/dev/null || true
+            fi
+            if [ ! -f "$ANDROID_AVD_HOME/${avd_name}.ini" ]; then
+              echo "ERROR: ${avd_name}.ini was not found in $ANDROID_AVD_HOME!"
+              ls -la "$ANDROID_AVD_HOME" || true
+              exit 1
+            fi
+          done
+
+          for avd_dir in "$ANDROID_AVD_HOME"/*.avd; do
             if [ -d "$avd_dir" ]; then
               sed -i '/hw.keyboard/d' "$avd_dir/config.ini" || true
               sed -i '/hw.ramSize/d' "$avd_dir/config.ini" || true
@@ -259,8 +282,21 @@ jobs:
       - name: Launch Android Emulators Headless
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export ANDROID_PREFS_ROOT="/home/runner"
+          export ANDROID_SDK_HOME="/home/runner"
+          export ANDROID_AVD_HOME="/home/runner/.android/avd"
           export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
           EMULATOR_BIN="$(command -v emulator || echo "$ANDROID_HOME/emulator/emulator")"
+
+          echo "=== Verifying AVD availability for emulator binary ==="
+          AVD_LIST="$($EMULATOR_BIN -list-avds)"
+          echo "$AVD_LIST"
+          if [ -z "$AVD_LIST" ]; then
+            echo "ERROR: No AVDs found by emulator binary ($EMULATOR_BIN)! Directory contents of $ANDROID_AVD_HOME:"
+            ls -la "$ANDROID_AVD_HOME" || true
+            exit 1
+          fi
 
           EMU_OPTS="-no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 1536 -cores 1"
           NODES="${{ matrix.nodes }}"
@@ -309,12 +345,25 @@ jobs:
               device_ports.append(5560)
 
           devices = [f"emulator-{p}" for p in device_ports]
-          timeout_seconds = 420
-          start_time = time.time()
+          timeout_seconds = 600
 
           for dev in devices:
+              port = dev.replace("emulator-", "")
+              log_file = f"/tmp/emu_{port}.log"
               print(f"Waiting for {dev} to be ready...", flush=True)
+              start_time = time.time()
               while time.time() - start_time < timeout_seconds:
+                  # Fail-fast check: see if log has FATAL or Unknown AVD
+                  if os.path.exists(log_file):
+                      try:
+                          with open(log_file, "r", errors="replace") as f:
+                              content = f.read()
+                              if "Unknown AVD" in content or "PANIC: Unknown AVD" in content or "FATAL:" in content:
+                                  print(f"ERROR: Fast-failing {dev}! Detected fatal error in {log_file}:\n{content[-2000:]}", file=sys.stderr)
+                                  sys.exit(1)
+                      except Exception:
+                          pass
+
                   try:
                       res = subprocess.run(
                           ["adb", "-s", dev, "shell", "getprop", "sys.boot_completed"],
@@ -323,15 +372,13 @@ jobs:
                           timeout=10
                       )
                       if res.stdout.strip() == "1":
-                          print(f"[{dev}] sys.boot_completed == 1. Ready!", flush=True)
+                          print(f"[{dev}] sys.boot_completed == 1. Ready in {int(time.time() - start_time)}s!", flush=True)
                           break
                   except Exception:
                       pass
                   time.sleep(3)
               else:
                   print(f"ERROR: {dev} failed to boot within {timeout_seconds} seconds!", file=sys.stderr)
-                  port = dev.replace("emulator-", "")
-                  log_file = f"/tmp/emu_{port}.log"
                   if os.path.exists(log_file):
                       print(f"\n=== EMULATOR LOG DUMP ({log_file}) ===", file=sys.stderr)
                       with open(log_file, "r", errors="replace") as f:

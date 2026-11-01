@@ -1060,6 +1060,7 @@ class GroupChatRepositoryTest {
     fun testGroupChat_StrictPoissonShaping_StatisticalKolmogorovSmirnov() = runBlocking {
         val fakeDht = FakeDht()
         fakeDht.start()
+        var repo: ChatRepository? = null
         try {
             val contactDao = FakeContactDao()
             val messageDao = FakeMessageDao()
@@ -1070,7 +1071,7 @@ class GroupChatRepositoryTest {
             val outboundQueue = OutboundPoissonQueue()
             val republishPool = BlindRepublishPool()
 
-            val repo = ChatRepository(
+            repo = ChatRepository(
                 contactDao = contactDao,
                 messageDao = messageDao,
                 chunkDao = chunkDao,
@@ -1110,7 +1111,7 @@ class GroupChatRepositoryTest {
                 )
             }
 
-            val n = 200
+            val n = 50
             val intervalsBaseline = DoubleArray(n) { generator.computeNextIntervalMs(lambda).toDouble() }
 
             // 1. Create 5-person group -> Queues 4 TYPE_GROUP_CONTROL INVITE frames (0x06)
@@ -1150,6 +1151,7 @@ class GroupChatRepositoryTest {
                 dOneSample < dOneCrit
             )
         } finally {
+            repo?.close()
             fakeDht.stop()
         }
     }

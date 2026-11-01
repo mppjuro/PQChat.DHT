@@ -110,7 +110,7 @@ class ChatRepositoryPollingTest {
         val fakeContactDao = FakeContactDao()
         val fakeMessageDao = FakeMessageDao()
         val fakeChunkDao = FakeChunkDao()
-        val dhtNode = DhtLeafNode()
+        val dhtNode = DhtLeafNode(autoBootstrap = false)
         val repository = ChatRepository(fakeContactDao, fakeMessageDao, fakeChunkDao, dhtNode)
 
         val seed = CryptoUtils.secureRandomBytes(64)
@@ -142,6 +142,7 @@ class ChatRepositoryPollingTest {
         assertEquals("counterIn must remain 0 when current slot is empty", 0, c!!.counterIn)
         assertTrue("No messages should be delivered yet", fakeMessageDao.messages.isEmpty())
 
+        repository.close()
         dhtNode.stop()
     }
 
@@ -150,7 +151,7 @@ class ChatRepositoryPollingTest {
         val fakeContactDao = FakeContactDao()
         val fakeMessageDao = FakeMessageDao()
         val fakeChunkDao = FakeChunkDao()
-        val dhtNode = DhtLeafNode()
+        val dhtNode = DhtLeafNode(autoBootstrap = false)
         val repository = ChatRepository(fakeContactDao, fakeMessageDao, fakeChunkDao, dhtNode)
 
         val seed = CryptoUtils.secureRandomBytes(64)
@@ -192,6 +193,7 @@ class ChatRepositoryPollingTest {
         assertEquals("Message 0", msgs[0].rawTextContent)
         assertEquals("Message 1", msgs[1].rawTextContent)
 
+        repository.close()
         dhtNode.stop()
     }
 
@@ -200,7 +202,7 @@ class ChatRepositoryPollingTest {
         val fakeContactDao = FakeContactDao()
         val fakeMessageDao = FakeMessageDao()
         val fakeChunkDao = FakeChunkDao()
-        val dhtNode = DhtLeafNode()
+        val dhtNode = DhtLeafNode(autoBootstrap = false)
         val repository = ChatRepository(fakeContactDao, fakeMessageDao, fakeChunkDao, dhtNode)
 
         val seed1 = CryptoUtils.secureRandomBytes(64)
@@ -246,6 +248,7 @@ class ChatRepositoryPollingTest {
         assertEquals(0, updatedC2!!.counterIn)
         assertEquals(1, updatedC3!!.counterIn)
 
+        repository.close()
         dhtNode.stop()
     }
 }

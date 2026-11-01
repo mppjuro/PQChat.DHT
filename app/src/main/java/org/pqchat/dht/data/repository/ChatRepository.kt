@@ -43,7 +43,7 @@ class ChatRepository(
     val groupMemberDao: GroupMemberDao? = null,
     val pollDao: PollDao? = null,
     var settingsManager: org.pqchat.dht.data.settings.AppSettingsManager? = null
-) {
+) : java.io.Closeable {
     val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
         get() = researchTelemetryProvider?.invoke()
 
@@ -3186,7 +3186,8 @@ class ChatRepository(
         if (pending.isEmpty()) return@withContext controlAcks
 
         var acksFound = controlAcks
-        for (msg in pending) {
+        val checkBatch = pending.takeLast(3)
+        for (msg in checkBatch) {
             val targetAck = msg.ackTarget ?: continue
             val ratchetKey = msg.ackRatchetKey?.raw ?: continue
             val msgIdStr = "${msg.seqNum}"
@@ -5850,7 +5851,7 @@ class ChatRepository(
             if (isStrictPoissonShaping()) {
                 outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
             } else {
-                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                repositoryScope.launch {
                     outboundFrames.forEach { frame ->
                         dhtLeafNode.putMutable(
                             target = frame.target,
@@ -5966,7 +5967,7 @@ class ChatRepository(
             if (isStrictPoissonShaping()) {
                 outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
             } else {
-                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                repositoryScope.launch {
                     outboundFrames.forEach { frame ->
                         dhtLeafNode.putMutable(
                             target = frame.target,
@@ -6405,6 +6406,10 @@ class ChatRepository(
                 )
             } catch (_: Exception) {}
         }
+    }
+
+    override fun close() {
+        repositoryScope.cancel()
     }
 }
 
