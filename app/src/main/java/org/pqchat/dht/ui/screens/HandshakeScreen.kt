@@ -108,7 +108,7 @@ fun HandshakeScreen(
                 qrBase64Input = decoded
                 galleryScanError = null
             } else {
-                galleryScanError = "Nie znaleziono kodu QR ani ukrytej steganografii w wybranym obrazie."
+                galleryScanError = "No QR code or hidden steganography found in selected image."
             }
         }
     }

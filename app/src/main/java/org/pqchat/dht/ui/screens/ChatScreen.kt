@@ -120,16 +120,6 @@ fun ChatScreen(
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
-    val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
-    val syncRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "syncRotation"
-    )
     val timerLabel = remember(nextPollInMs) {
         when {
             nextPollInMs < 0L -> "Doze"
@@ -339,6 +329,7 @@ fun ChatScreen(
                         modifier = Modifier
                             .padding(end = 4.dp)
                             .height(32.dp)
+                            .testTag("chat_sync_chip")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -346,6 +337,16 @@ fun ChatScreen(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             if (isSyncing) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
+                                val syncRotation by infiniteTransition.animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 360f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(800, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Restart
+                                    ),
+                                    label = "syncRotation"
+                                )
                                 Icon(
                                     imageVector = Icons.Default.Sync,
                                     contentDescription = "Syncing…",

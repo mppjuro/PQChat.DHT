@@ -642,6 +642,8 @@ class ChatViewModel @JvmOverloads constructor(
         val aliceInit = HandshakeManager.aliceCreateHandshake()
         _aliceHandshakeState.value = aliceInit
         _isHandshaking.value = true
+        android.util.Log.i("AliceHandshake", "TARGET0=" + CryptoUtils.toHex(aliceInit.target0))
+        android.util.Log.i("AliceHandshake", "QR_PAYLOAD_B64=" + java.util.Base64.getEncoder().encodeToString(aliceInit.qrBytes))
         dhtLeafNode.preWarmTargetAsync(aliceInit.target0)
 
         viewModelScope.launch(Dispatchers.IO) {

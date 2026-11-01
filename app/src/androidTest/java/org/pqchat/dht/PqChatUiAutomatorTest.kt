@@ -224,22 +224,49 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {
             // Node is not in a scrollable container (e.g. TopAppBar, FAB, Dialog)
         }
-        val semanticsNode = nodeInteraction.fetchSemanticsNode()
-        val bounds = semanticsNode.boundsInScreen
+
+        var semanticsNode = nodeInteraction.fetchSemanticsNode()
+        var bounds = semanticsNode.boundsInScreen
+        var centerY = (bounds.top + bounds.height / 2f).toInt()
+        val displayHeight = uiDevice.displayHeight
+
+        // If node center is positioned off-screen or too close to navigation/status bars, adjust viewport with physical swipe
+        if (centerY > displayHeight - 150) {
+            swipeUpPhysical(steps = 10)
+            semanticsNode = nodeInteraction.fetchSemanticsNode()
+            bounds = semanticsNode.boundsInScreen
+            centerY = (bounds.top + bounds.height / 2f).toInt()
+        } else if (centerY < 150) {
+            swipeDownPhysical(steps = 10)
+            semanticsNode = nodeInteraction.fetchSemanticsNode()
+            bounds = semanticsNode.boundsInScreen
+            centerY = (bounds.top + bounds.height / 2f).toInt()
+        }
+
         val centerX = (bounds.left + bounds.width / 2f).toInt()
-        val centerY = (bounds.top + bounds.height / 2f).toInt()
         val clampedX = centerX.coerceIn(0, uiDevice.displayWidth - 1)
         val clampedY = centerY.coerceIn(0, uiDevice.displayHeight - 1)
 
         // Enforce physical pixel click via uiDevice as the primary mechanism
-        val clicked = uiDevice.click(clampedX, clampedY)
-        if (!clicked) {
-            // Direct Semantics action fallback only if physical touch injection failed
-            nodeInteraction.performClick()
+        val clicked = try {
+            uiDevice.click(clampedX, clampedY)
+        } catch (_: Throwable) {
+            false
         }
-
         uiDevice.waitForIdle()
         composeTestRule.waitForIdle()
+
+        if (!clicked) {
+            try {
+                nodeInteraction.performClick()
+            } catch (_: Throwable) {
+                try {
+                    nodeInteraction.performTouchInput { click() }
+                } catch (_: Throwable) {}
+            }
+            composeTestRule.waitForIdle()
+        }
+
         return bounds
     }
 
@@ -287,10 +314,8 @@ class PqChatUiAutomatorTest {
         val chipBounds = clickTagByPixelCoordinates("contact_list_sync_chip")
         assertNotNull(chipBounds)
 
-        // Raw coordinate click on screen padding area (safe no-op click)
-        val displayWidth = uiDevice.displayWidth
-        val displayHeight = uiDevice.displayHeight
-        clickRawScreenCoordinates(displayWidth / 2, displayHeight / 2)
+        // Raw coordinate click on safe non-navigating title area
+        clickRawScreenCoordinates(chipBounds.left.toInt() + 10, chipBounds.top.toInt() + 10)
     }
 
     // =========================================================================
@@ -1062,6 +1087,9 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
         }
 
+        runCatching {
+            composeTestRule.onNodeWithTag("settings_research_telemetry_switch").performScrollTo()
+        }
         clickTagByPixelCoordinates("settings_research_telemetry_switch")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()

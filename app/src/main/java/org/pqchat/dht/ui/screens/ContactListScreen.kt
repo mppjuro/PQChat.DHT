@@ -54,16 +54,6 @@ fun ContactListScreen(
 
     val isSyncing by viewModel.isSyncing.collectAsState()
 
-    val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
-    val syncRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "syncRotation"
-    )
 
     // Format countdown label: e.g. "12s", "1:04"
     val timerLabel = remember(nextPollInMs) {
@@ -125,6 +115,16 @@ fun ContactListScreen(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             if (isSyncing) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
+                                val syncRotation by infiniteTransition.animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 360f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(800, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Restart
+                                    ),
+                                    label = "syncRotation"
+                                )
                                 Icon(
                                     imageVector = Icons.Default.Sync,
                                     contentDescription = "Syncing…",

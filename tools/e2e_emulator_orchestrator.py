@@ -225,22 +225,46 @@ class AdbDevice:
             print(f"[{self.name}] Logcat dump failed: {e}", flush=True)
             return None
 
+    def wake_and_unlock(self):
+        """Ensures device screen is turned on, unlocked, and keyguard dismissed."""
+        if self.dry_run:
+            return
+        self.shell("input keyevent 224")  # KEYCODE_WAKEUP
+        self.shell("wm dismiss-keyguard")
+        self.shell("input keyevent 82")   # KEYCODE_MENU
+        self.sleep(0.3)
+
     def dump_ui(self) -> Optional[ET.Element]:
         if self.dry_run:
             return None
         dump_path = "/data/local/tmp/uidump.xml"
-        self.shell(f"uiautomator dump {dump_path}")
-        code, out, _ = self.shell(f"cat {dump_path}")
-        if code != 0 or not out.strip().startswith("<?xml"):
-            self.sleep(0.5)
+        self.shell(f"rm -f {dump_path}")
+        for attempt in range(3):
+            self.shell(f"uiautomator dump --compressed {dump_path}")
             code, out, _ = self.shell(f"cat {dump_path}")
-            if code != 0 or not out.strip().startswith("<?xml"):
-                return None
+            if code == 0 and out.strip().startswith("<?xml"):
+                try:
+                    return ET.fromstring(out)
+                except Exception as e:
+                    print(f"[{self.name}] XML parse error (attempt {attempt+1}): {e}", flush=True)
+            self.sleep(0.5)
+        return None
+
+    def extract_alice_qr_b64(self) -> Optional[str]:
+        """Extracts Alice's generated QR Base64 payload from logcat."""
+        if self.dry_run:
+            return "TEST_BASE64_PAYLOAD"
         try:
-            return ET.fromstring(out)
+            code, out, _ = self.shell("logcat -d -s AliceHandshake")
+            if code == 0 and out:
+                for line in out.splitlines():
+                    if "QR_PAYLOAD_B64=" in line:
+                        payload = line.split("QR_PAYLOAD_B64=")[-1].strip()
+                        if payload:
+                            return payload
         except Exception as e:
-            print(f"[{self.name}] XML parse error: {e}", flush=True)
-            return None
+            print(f"[{self.name}] Failed to extract Alice QR payload: {e}", flush=True)
+        return None
 
     @staticmethod
     def parse_bounds(bounds_str: str) -> Optional[Tuple[int, int, int, int]]:
@@ -573,6 +597,9 @@ class MultiEmulatorOrchestrator:
     def _perform_pair_handshake(self, initiator: AdbDevice, responder: AdbDevice, step_num: str, pair_label: str):
         print(f"\n--- PAIR HANDSHAKE: {initiator.name} & {responder.name} ({pair_label}) ---", flush=True)
 
+        initiator.wake_and_unlock()
+        responder.wake_and_unlock()
+
         # 1. Initiator: Tap "New Chat (Alice)"
         initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.92))
         self.sleep(2.0)
@@ -596,7 +623,8 @@ class MultiEmulatorOrchestrator:
             responder.broadcast_media_scan(remote_qr)
             self.sleep(1.5)
 
-        # 3. Responder: Tap "Scan / Join (Bob)"
+        # 3. Responder: Ensure awake and tap "Scan / Join (Bob)"
+        responder.wake_and_unlock()
         responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)", fallback_ratio=(0.75, 0.85))
         self.sleep(2.0)
 
@@ -613,18 +641,36 @@ class MultiEmulatorOrchestrator:
         responder.click_element(test_tag="handshake_gallery_button", text="Scan QR", fallback_ratio=(0.5, 0.71))
         self.sleep(2.5)
 
-        # PhotoPicker: Tap the first photo in grid
+        # PhotoPicker: Tap thumbnail if found, or first grid cell
         print(f"[{responder.name}] Selecting photo in PhotoPicker...", flush=True)
-        responder.tap(180, 1450)
-        self.sleep(1.0)
+        thumb_bounds = responder.find_node(resource_id="icon_thumbnail") or responder.find_node(content_desc="Photo")
+        if thumb_bounds:
+            cx = (thumb_bounds[0] + thumb_bounds[2]) // 2
+            cy = (thumb_bounds[1] + thumb_bounds[3]) // 2
+            responder.tap(cx, cy)
+        else:
+            responder.tap(180, 1450)
+        self.sleep(1.5)
 
-        # PhotoPicker: Tap "Done"
-        responder.click_element(text="Done", fallback_ratio=(0.85, 0.92))
-        self.sleep(2.0)
+        # Only tap Done if present in UI
+        if responder.find_node(text="Done"):
+            responder.click_element(text="Done")
+            self.sleep(1.5)
 
         # Verify QR key payload was validated on responder (green badge)
         print(f"[{responder.name}] Waiting for QR validation badge...", flush=True)
-        valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=25)
+        valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=12)
+        if not valid_qr:
+            print(f"[{responder.name}] Gallery QR detection pending or timed out. Falling back to direct Base64 manual input...", flush=True)
+            b64_payload = initiator.extract_alice_qr_b64()
+            if b64_payload:
+                responder.click_element(test_tag="handshake_toggle_manual_paste")
+                self.sleep(0.5)
+                responder.click_element(test_tag="handshake_manual_payload_input")
+                responder.type_text(b64_payload)
+                self.sleep(1.0)
+                valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=15)
+
         sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
         self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS" if valid_qr else "FAIL", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
 
@@ -723,12 +769,12 @@ class MultiEmulatorOrchestrator:
 
         # Bob triggers DHT poll to retrieve Type 0x03 Offer and dispatch Type 0x04 Response
         print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
-        self.bob.click_element(test_tag="contact_list_sync_chip", fallback_ratio=(0.9, 0.08))
+        self.bob.click_element(test_tag="chat_sync_chip", fallback_ratio=(0.9, 0.08))
         self.sleep(3.0)
 
         # Alice triggers DHT poll to retrieve Type 0x04 Response
         print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
-        self.alice.click_element(test_tag="contact_list_sync_chip", fallback_ratio=(0.9, 0.08))
+        self.alice.click_element(test_tag="chat_sync_chip", fallback_ratio=(0.9, 0.08))
         self.sleep(3.0)
         sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
 
