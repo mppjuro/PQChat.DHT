@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`2aeae21`](https://github.com/mppjuro/PQChat.DHT/commit/2aeae218d5c826bae0b0cfd053b030012163d380) (2026-11-01) — **ci**: resolve UI Automator idle timeouts and multi-emulator E2E synchronization
 - [`2a87adb`](https://github.com/mppjuro/PQChat.DHT/commit/2a87adbfc33b2f155ab52e304c2a91e21896121b) (2026-10-24) — **tor**: parallelize bootstrap DNS resolution with timeout and isolate TorFailClosedTest
 - [`976930a`](https://github.com/mppjuro/PQChat.DHT/commit/976930a14a77840079da2e1c96be33beba395846) (2026-10-24) — **dht**: align BEP 44 mutable put/get protocol, target derivation, and test suite execution
 - [`023a97e`](https://github.com/mppjuro/PQChat.DHT/commit/023a97ea4af271c868f3b7388e467430794f903a) (2026-10-23) — **test**: debug notes and comments corrected
