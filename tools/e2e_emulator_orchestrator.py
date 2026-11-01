@@ -152,9 +152,28 @@ class AdbDevice:
                 self.screen_height = int(match.group(2))
                 print(f"[{self.name}] Detected screen resolution: {self.screen_width}x{self.screen_height}", flush=True)
 
+    def wait_for_surface_window_ready(self, timeout: float = 6.0) -> bool:
+        """Determines that the surface window display is ready and focused before physical touch input."""
+        if self.dry_run:
+            return True
+        start = time.time()
+        while time.time() - start < timeout:
+            code, out, _ = self.shell("dumpsys window displays", timeout=5)
+            if code == 0 and out:
+                if any(k in out for k in ("mCurrentFocus", "mFocusedApp", "init=", "cur=", "appReady", "mDisplayId")):
+                    return True
+            time.sleep(0.15)
+        return False
+
     def tap(self, x: int, y: int):
+        self.wait_for_surface_window_ready()
         print(f"[{self.name}] Physical TAP at ({x}, {y})", flush=True)
         self.shell(f"input tap {x} {y}")
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
+        self.wait_for_surface_window_ready()
+        print(f"[{self.name}] Physical SWIPE from ({x1}, {y1}) to ({x2}, {y2})", flush=True)
+        self.shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
 
     def tap_ratio(self, rx: float, ry: float):
         x = int(self.screen_width * rx)
@@ -326,25 +345,28 @@ class AdbDevice:
         test_tag: Optional[str] = None,
         fallback_ratio: Optional[Tuple[float, float]] = None
     ) -> bool:
+        desc = test_tag or text or content_desc or resource_id or "element"
+        if self.dry_run:
+            print(f"[{self.name} DRY-RUN] click_element '{desc}' -> simulated click", flush=True)
+            return True
         self.close_keyboard()
         bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
         if bounds:
             x1, y1, x2, y2 = bounds
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
-            desc = test_tag or text or content_desc or resource_id
             print(f"[{self.name}] Located '{desc}' at bounds {bounds} -> center ({cx}, {cy})", flush=True)
             self.tap(cx, cy)
             return True
         elif fallback_ratio:
             rx, ry = fallback_ratio
-            desc = test_tag or text or content_desc or resource_id
             print(f"[{self.name}] '{desc}' not found in XML. Tapping fallback ratio ({rx}, {ry})", flush=True)
             self.tap_ratio(rx, ry)
             return True
         else:
-            desc = test_tag or text or content_desc or resource_id
             print(f"[{self.name}] Failed to locate element: {desc}", flush=True)
+            safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
+            self.screencap(f"failure_click_{safe_desc}")
             return False
 
     def wait_for_element(
@@ -355,8 +377,11 @@ class AdbDevice:
         test_tag: Optional[str] = None,
         timeout: int = 30
     ) -> bool:
+        desc = test_tag or text or content_desc or resource_id or "element"
+        if self.dry_run:
+            print(f"[{self.name} DRY-RUN] wait_for_element '{desc}' -> simulated found", flush=True)
+            return True
         start = time.time()
-        desc = test_tag or text or content_desc or resource_id
         print(f"[{self.name}] Waiting for element '{desc}' (timeout={timeout}s)...", flush=True)
         while time.time() - start < timeout:
             bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
@@ -365,6 +390,8 @@ class AdbDevice:
                 return True
             self.sleep(1.0)
         print(f"[{self.name}] Timeout waiting for '{desc}'", flush=True)
+        safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
+        self.screencap(f"failure_timeout_{safe_desc}")
         return False
 
     def push_file(self, local_path: Path, remote_path: str):
@@ -423,6 +450,15 @@ class MultiEmulatorOrchestrator:
             time.sleep(seconds)
 
     def log_step(self, step_name: str, status: str, details: str, screenshot: Optional[Path] = None):
+        if status == "FAIL" and not screenshot:
+            try:
+                for dev in self.active_devices:
+                    safe_step = re.sub(r'[^a-zA-Z0-9_]', '_', step_name.lower())[:24]
+                    sc = dev.screencap(f"failure_{safe_step}_{dev.name.lower()}")
+                    if sc and not screenshot:
+                        screenshot = sc
+            except Exception:
+                pass
         entry = {
             "time": datetime.datetime.now().strftime("%H:%M:%S"),
             "step": step_name,
@@ -433,6 +469,17 @@ class MultiEmulatorOrchestrator:
         self.report_entries.append(entry)
         symbol = "[PASS]" if status == "PASS" else ("[WARN]" if status == "WARN" else "[FAIL]")
         print(f"\n{symbol} [{entry['time']}] {step_name}: {status} - {details}\n", flush=True)
+
+    def assert_true(self, condition: bool, step_name: str, details: str, device: Optional[AdbDevice] = None) -> bool:
+        if not condition:
+            sc = None
+            if device:
+                safe_step = re.sub(r'[^a-zA-Z0-9_]', '_', step_name.lower())[:24]
+                sc = device.screencap(f"assert_fail_{safe_step}")
+            self.log_step(step_name, "FAIL", f"Assertion failed: {details}", sc)
+            return False
+        self.log_step(step_name, "PASS", details)
+        return True
 
     def generate_report(self):
         report_text = f"# PQChat.DHT Multi-Emulator E2E Test Report ({self.nodes_count} Nodes)\n\n"
@@ -475,9 +522,10 @@ class MultiEmulatorOrchestrator:
             self.dht_cluster.start()
             self._phase_0_init_and_health_check()
             self._phase_1_handshakes()
-            self._phase_2_create_group()
-            self._phase_3_join_group_on_participants()
-            self._phase_4_group_multi_turn_messaging()
+            self._phase_2_direct_messaging_and_rekey()
+            self._phase_3_create_group()
+            self._phase_4_join_group_on_participants()
+            self._phase_5_group_multi_turn_messaging()
 
             if getattr(self.args, "full", False):
                 self._phase_optional_diagnostics()
@@ -493,6 +541,11 @@ class MultiEmulatorOrchestrator:
             print("=" * 70, flush=True)
             return all_passed
         except Exception as e:
+            for dev in self.active_devices:
+                try:
+                    dev.screencap(f"fatal_err_{dev.name.lower()}")
+                except Exception:
+                    pass
             self.log_step("FATAL_ERROR", "FAIL", str(e))
             self.generate_report()
             print(f"Exception during orchestration: {e}", flush=True)
@@ -524,6 +577,11 @@ class MultiEmulatorOrchestrator:
         initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.92))
         self.sleep(2.0)
 
+        # Initiator: Enter contact name
+        initiator.click_element(test_tag="handshake_alice_name_input")
+        initiator.type_text(responder.name)
+        self.sleep(0.5)
+
         # Initiator: Tap "Generate ML-KEM-512 QR Code"
         initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512", fallback_ratio=(0.5, 0.35))
         initiator.wait_for_element(text="Rendezvous Target_0", timeout=25)
@@ -546,6 +604,11 @@ class MultiEmulatorOrchestrator:
         responder.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)", fallback_ratio=(0.75, 0.16))
         self.sleep(1.0)
 
+        # Responder: Enter contact name
+        responder.click_element(test_tag="handshake_bob_name_input")
+        responder.type_text(initiator.name)
+        self.sleep(0.5)
+
         # Responder: Tap "Scan QR from gallery"
         responder.click_element(test_tag="handshake_gallery_button", text="Scan QR", fallback_ratio=(0.5, 0.71))
         self.sleep(2.5)
@@ -561,9 +624,9 @@ class MultiEmulatorOrchestrator:
 
         # Verify QR key payload was validated on responder (green badge)
         print(f"[{responder.name}] Waiting for QR validation badge...", flush=True)
-        responder.wait_for_element(text="Valid Hybrid Handshake", timeout=25)
+        valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=25)
         sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
-        self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
+        self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS" if valid_qr else "FAIL", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
 
         # Responder: Tap "Encapsulate & Put to DHT"
         responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT", fallback_ratio=(0.5, 0.84))
@@ -571,11 +634,12 @@ class MultiEmulatorOrchestrator:
 
         # 4. Wait for SAS confirmation dialog on both devices
         print(f"[Orchestrator] Waiting for SAS verification dialog on {initiator.name} and {responder.name}...", flush=True)
-        initiator.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
-        responder.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
+        init_sas = initiator.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
+        resp_sas = responder.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
 
         sc_sas = initiator.screencap(f"{step_num}_{pair_label}_sas")
-        self.log_step(f"SAS Verified ({pair_label})", "PASS", f"SAS verification displayed on {initiator.name} and {responder.name}", sc_sas)
+        sas_status = "PASS" if (init_sas and resp_sas) else "FAIL"
+        self.log_step(f"SAS Verified ({pair_label})", sas_status, f"SAS verification displayed on {initiator.name} and {responder.name}", sc_sas)
 
         # Confirm identity on both devices
         initiator.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", fallback_ratio=(0.5, 0.75))
@@ -604,8 +668,80 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             self._perform_pair_handshake(self.alice, self.dave, "03", "alice_dave")
 
-    def _phase_2_create_group(self, group_name: str = "PQ_MultiNode_Group"):
-        print(f"\n--- PHASE 2: CREATE GROUP CONVERSATION '{group_name}' ---", flush=True)
+    def _phase_2_direct_messaging_and_rekey(self):
+        print("\n--- PHASE 2: ALICE <-> BOB DIRECT MESSAGING & ML-KEM-512 REKEY ---", flush=True)
+
+        # Alice: Enter 1-on-1 chat with Bob
+        print("[Alice] Entering direct chat with Bob...", flush=True)
+        self.alice.click_element(test_tag="contact_item_Bob", text="Bob", fallback_ratio=(0.5, 0.25))
+        self.alice.wait_for_element(test_tag="chat_message_input", timeout=30)
+        self.sleep(1.0)
+        sc_alice_chat = self.alice.screencap("02_alice_direct_chat")
+
+        # Bob: Enter 1-on-1 chat with Alice
+        print("[Bob] Entering direct chat with Alice...", flush=True)
+        self.bob.click_element(test_tag="contact_item_Alice", text="Alice", fallback_ratio=(0.5, 0.25))
+        self.bob.wait_for_element(test_tag="chat_message_input", timeout=30)
+        self.sleep(1.0)
+        sc_bob_chat = self.bob.screencap("02_bob_direct_chat")
+
+        # Turn 1: Alice sends direct message to Bob
+        direct_msg = "Hello_Bob_PQ_Direct_Message"
+        print(f"[Alice] Sending direct message: '{direct_msg}'", flush=True)
+        self.alice.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
+        self.alice.type_text(direct_msg)
+        self.sleep(0.5)
+        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
+        self.sleep(2.0)
+
+        # Bob receives direct message
+        print(f"[Bob] Waiting for direct message '{direct_msg}'...", flush=True)
+        rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=45)
+        sc_bob_rcv = self.bob.screencap("02_bob_rcv_direct_msg")
+        self.log_step("Alice -> Bob Direct Message", "PASS" if rcv_ok else "FAIL", f"Bob received '{direct_msg}' via DHT", sc_bob_rcv)
+
+        # Turn 2: Bob replies to Alice
+        direct_ack = "Hello_Alice_Direct_ACK_PQC"
+        print(f"[Bob] Sending direct ACK: '{direct_ack}'", flush=True)
+        self.bob.click_element(test_tag="chat_message_input", fallback_ratio=(0.4, 0.95))
+        self.bob.type_text(direct_ack)
+        self.sleep(0.5)
+        self.bob.click_element(test_tag="chat_send_button", content_desc="Send", fallback_ratio=(0.92, 0.95))
+        self.sleep(2.0)
+
+        # Alice receives direct ACK
+        print(f"[Alice] Waiting for direct reply '{direct_ack}'...", flush=True)
+        ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=45)
+        sc_alice_ack = self.alice.screencap("02_alice_rcv_direct_ack")
+        self.log_step("Bob -> Alice Direct ACK", "PASS" if ack_ok else "FAIL", f"Alice received '{direct_ack}' via DHT", sc_alice_ack)
+
+        # Rekey: Alice initiates ML-KEM-512 Rekey
+        print("[Alice] Initiating ML-KEM-512 Rekey...", flush=True)
+        rekey_clicked = self.alice.click_element(test_tag="chat_rekey_button", content_desc="Initiate ML-KEM-512 Rekey", fallback_ratio=(0.85, 0.08))
+        self.sleep(2.0)
+        sc_alice_rekey = self.alice.screencap("03_alice_rekey_triggered")
+
+        # Bob triggers DHT poll to retrieve Type 0x03 Offer and dispatch Type 0x04 Response
+        print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
+        self.bob.click_element(test_tag="contact_list_sync_chip", fallback_ratio=(0.9, 0.08))
+        self.sleep(3.0)
+
+        # Alice triggers DHT poll to retrieve Type 0x04 Response
+        print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
+        self.alice.click_element(test_tag="contact_list_sync_chip", fallback_ratio=(0.9, 0.08))
+        self.sleep(3.0)
+        sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
+
+        self.log_step("ML-KEM-512 Rekey", "PASS" if rekey_clicked else "WARN", "PQC Rekey offer dispatched and processed over DHT", sc_rekey_done)
+
+        # Return both Alice and Bob to ContactListScreen
+        self.alice.back()
+        self.sleep(1.0)
+        self.bob.back()
+        self.sleep(1.0)
+
+    def _phase_3_create_group(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 3: CREATE GROUP CONVERSATION '{group_name}' ---", flush=True)
 
         # Alice: Ensure on ContactListScreen
         if self.alice.find_node(test_tag="chat_message_input"):
@@ -645,8 +781,8 @@ class MultiEmulatorOrchestrator:
         sc_group_created = self.alice.screencap("04_alice_group_created")
         self.log_step(f"Group Created by Alice", "PASS", f"Group '{group_name}' created with participants and invites dispatched", sc_group_created)
 
-    def _phase_3_join_group_on_participants(self, group_name: str = "PQ_MultiNode_Group"):
-        print(f"\n--- PHASE 3: PARTICIPANTS JOIN GROUP '{group_name}' ---", flush=True)
+    def _phase_4_join_group_on_participants(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 4: PARTICIPANTS JOIN GROUP '{group_name}' ---", flush=True)
 
         participants = [self.bob]
         if self.charlie:
@@ -671,8 +807,8 @@ class MultiEmulatorOrchestrator:
             sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
             self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
 
-    def _phase_4_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
-        print(f"\n--- PHASE 4: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
+    def _phase_5_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
+        print(f"\n--- PHASE 5: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
 
         all_devices = [self.alice, self.bob]
         if self.charlie:

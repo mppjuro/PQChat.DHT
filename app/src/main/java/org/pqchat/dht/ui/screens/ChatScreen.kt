@@ -316,6 +316,17 @@ fun ChatScreen(
                                 tint = Color(0xFFFF5252)
                             )
                         }
+                    } else if (contactId != ChatRepository.SELF_CONTACT_ID) {
+                        IconButton(
+                            onClick = { viewModel.initiateRekey() },
+                            modifier = Modifier.testTag("chat_rekey_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = "Initiate ML-KEM-512 Rekey",
+                                tint = CryptoPurple
+                            )
+                        }
                     }
                     // ── DHT Sync Timer Chip ────────────────────────────────────────
                     Surface(

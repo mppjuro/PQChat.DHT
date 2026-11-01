@@ -138,10 +138,79 @@ class PqChatUiAutomatorTest {
     }
 
     /**
-     * Performs a deterministic click on the target Compose node.
-     * Executes direct Compose performClick() ensuring 100% reliable execution across
-     * all separate Dialog windows, Popups, and display geometries, falling back to
-     * raw UiDevice physical clicks when direct semantics actions are not registered.
+     * Computes the absolute physical screen coordinates for a Compose SemanticsNode.
+     * Unlike [SemanticsNode.boundsInWindow], which returns offsets relative to individual
+     * sub-windows (such as Dialogs, Popups, and DropdownMenus), this adds the parent View's
+     * location on screen to [SemanticsNode.boundsInRoot], ensuring accurate absolute screen
+     * coordinates for real physical clicks via UiDevice.
+     */
+    private val androidx.compose.ui.semantics.SemanticsNode.boundsInScreen: Rect
+        get() {
+            val rootBounds = this.boundsInRoot
+            val view = this.root as? android.view.View
+            if (view != null) {
+                val locationOnScreen = IntArray(2)
+                view.getLocationOnScreen(locationOnScreen)
+                return Rect(
+                    left = rootBounds.left + locationOnScreen[0],
+                    top = rootBounds.top + locationOnScreen[1],
+                    right = rootBounds.right + locationOnScreen[0],
+                    bottom = rootBounds.bottom + locationOnScreen[1]
+                )
+            }
+            return this.boundsInWindow
+        }
+
+    /**
+     * Physical swipe gesture to scroll down (revealing content lower on the screen).
+     */
+    private fun swipeUpPhysical(steps: Int = 20) {
+        dismissKeyboardAndWait()
+        val width = uiDevice.displayWidth
+        val height = uiDevice.displayHeight
+        val startX = width / 2
+        val startY = (height * 0.75f).toInt()
+        val endY = (height * 0.25f).toInt()
+        uiDevice.swipe(startX, startY, startX, endY, steps)
+        uiDevice.waitForIdle()
+        composeTestRule.waitForIdle()
+    }
+
+    /**
+     * Physical swipe gesture to scroll up (revealing content higher on the screen).
+     */
+    private fun swipeDownPhysical(steps: Int = 20) {
+        dismissKeyboardAndWait()
+        val width = uiDevice.displayWidth
+        val height = uiDevice.displayHeight
+        val startX = width / 2
+        val startY = (height * 0.25f).toInt()
+        val endY = (height * 0.75f).toInt()
+        uiDevice.swipe(startX, startY, startX, endY, steps)
+        uiDevice.waitForIdle()
+        composeTestRule.waitForIdle()
+    }
+
+    /**
+     * Physical swipe gesture to dismiss panels or bottom sheets.
+     */
+    private fun swipeDismissPanel(steps: Int = 15) {
+        dismissKeyboardAndWait()
+        val width = uiDevice.displayWidth
+        val height = uiDevice.displayHeight
+        val startX = width / 2
+        val startY = (height * 0.35f).toInt()
+        val endY = (height * 0.85f).toInt()
+        uiDevice.swipe(startX, startY, startX, endY, steps)
+        uiDevice.waitForIdle()
+        composeTestRule.waitForIdle()
+    }
+
+    /**
+     * Performs a deterministic physical pixel click on the target Compose node.
+     * Enforces real physical screen tapping via [uiDevice.click] as the primary interaction
+     * mechanism, using [boundsInScreen] to accurately account for Dialogs, Popups, and
+     * separate Window hierarchies.
      */
     private fun clickNodeCenterByPixelCoordinates(matcher: SemanticsMatcher, timeoutMillis: Long = 10_000): Rect {
         dismissKeyboardAndWait()
@@ -156,23 +225,17 @@ class PqChatUiAutomatorTest {
             // Node is not in a scrollable container (e.g. TopAppBar, FAB, Dialog)
         }
         val semanticsNode = nodeInteraction.fetchSemanticsNode()
-        val bounds = semanticsNode.boundsInWindow
+        val bounds = semanticsNode.boundsInScreen
         val centerX = (bounds.left + bounds.width / 2f).toInt()
         val centerY = (bounds.top + bounds.height / 2f).toInt()
         val clampedX = centerX.coerceIn(0, uiDevice.displayWidth - 1)
         val clampedY = centerY.coerceIn(0, uiDevice.displayHeight - 1)
 
-        var performed = false
-        try {
+        // Enforce physical pixel click via uiDevice as the primary mechanism
+        val clicked = uiDevice.click(clampedX, clampedY)
+        if (!clicked) {
+            // Direct Semantics action fallback only if physical touch injection failed
             nodeInteraction.performClick()
-            performed = true
-        } catch (_: Throwable) {
-            // Direct Semantics action not available on node, fall back to physical coordinates
-        }
-
-        if (!performed) {
-            val clicked = uiDevice.click(clampedX, clampedY)
-            assertTrue("UiDevice physical pixel click failed at ($clampedX, $clampedY) for bounds $bounds", clicked)
         }
 
         uiDevice.waitForIdle()
@@ -900,6 +963,192 @@ class PqChatUiAutomatorTest {
 
         // Exit Settings
         clickTagByPixelCoordinates("settings_back_button")
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
+    }
+
+    // =========================================================================
+    // 11. PHYSICAL PIXEL COORDINATE CLICKS: PIN KEYPAD, CONSENT DIALOG, GROUP POLL & CANARY
+    // =========================================================================
+
+    @Test
+    fun testPhysicalPixelCoordinates_pinKeypad_consentDialog_groupPoll_and_safetyCanary() {
+        try {
+            // -----------------------------------------------------------------
+            // A. PIN & Duress PIN Keypad with physical pixel clicks
+            // -----------------------------------------------------------------
+            // 1. Open Settings
+            clickTagByPixelCoordinates("contact_list_settings_button")
+            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+                composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+
+            // 2. Set App Lock PIN (Dialog boundsInScreen physical click)
+            clickTagByPixelCoordinates("settings_pin_setup_button")
+            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+                composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeTestRule.onNodeWithTag("pin_dialog_input").performTextInput("1234")
+            clickTagByPixelCoordinates("pin_dialog_confirm_button")
+            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+                composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isEmpty()
+            }
+
+            // 3. Set Duress PIN (Dialog boundsInScreen physical click)
+            clickTagByPixelCoordinates("settings_duress_pin_setup_button")
+            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+                composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeTestRule.onNodeWithTag("duress_pin_dialog_input").performTextInput("9999")
+            clickTagByPixelCoordinates("duress_pin_dialog_confirm_button")
+            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+                composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isEmpty()
+            }
+
+            // 4. Return to ContactList -> Triggers lock screen
+            clickTagByPixelCoordinates("settings_back_button")
+            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+                composeTestRule.onAllNodesWithTag("pin_input_field").fetchSemanticsNodes().isNotEmpty()
+            }
+            composeTestRule.onNodeWithTag("pin_key_9").assertIsDisplayed()
+
+            // 5. Physical clicks on on-screen numeric keypad digits "9999" and unlock
+            clickTagByPixelCoordinates("pin_key_9")
+            clickTagByPixelCoordinates("pin_key_9")
+            clickTagByPixelCoordinates("pin_key_9")
+            clickTagByPixelCoordinates("pin_key_9")
+            clickTagByPixelCoordinates("pin_unlock_button")
+
+            // 6. Verify Duress panic wipes master key and opens DecoyNotesScreen
+            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+                composeTestRule.onAllNodesWithTag("decoy_notes_empty_text").fetchSemanticsNodes().isNotEmpty()
+            }
+            assertFalse(
+                "Keystore master key must be wiped upon duress unlock",
+                org.pqchat.dht.crypto.KeystoreCrypto.hasMasterKey()
+            )
+        } finally {
+            // Restore test key & reset lock state
+            org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            try {
+                kotlinx.coroutines.runBlocking {
+                    composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
+                }
+            } catch (_: Throwable) {}
+            composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.unselectContact()
+                composeTestRule.activity.viewModel.clearDuressActive()
+                composeTestRule.activity.viewModel.setAppLockPin(null)
+                composeTestRule.activity.viewModel.setDuressPin(null)
+                composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
+                composeTestRule.activity.viewModel.setAnonymousStatsEnabled(false)
+            }
+            composeTestRule.waitForIdle()
+        }
+
+        // Return back to ContactListScreen
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // -----------------------------------------------------------------
+        // B. Research Telemetry Informed Consent Dialog (boundsInScreen physical click)
+        // -----------------------------------------------------------------
+        clickTagByPixelCoordinates("contact_list_settings_button")
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        clickTagByPixelCoordinates("settings_research_telemetry_switch")
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        // Physical click inside separate Dialog window
+        clickTagByPixelCoordinates("research_consent_confirm_button")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isEmpty()
+        }
+        assertTrue(composeTestRule.activity.viewModel.isAnonymousStatsEnabled.value)
+        clickTagByPixelCoordinates("settings_research_telemetry_switch")
+        assertFalse(composeTestRule.activity.viewModel.isAnonymousStatsEnabled.value)
+
+        // -----------------------------------------------------------------
+        // C. Safety Canary (0x0B) Physical Clicks
+        // -----------------------------------------------------------------
+        runCatching {
+            composeTestRule.onNodeWithTag("settings_dead_man_switch_toggle").performScrollTo()
+        }
+        clickTagByPixelCoordinates("settings_dead_man_switch_toggle")
+        assertTrue(composeTestRule.activity.viewModel.isDeadManSwitchEnabled.value)
+
+        runCatching {
+            composeTestRule.onNodeWithTag("settings_dead_man_checkin_button").performScrollTo()
+        }
+        clickTagByPixelCoordinates("settings_dead_man_checkin_button")
+
+        runCatching {
+            composeTestRule.onNodeWithTag("settings_emergency_sos_button").performScrollTo()
+        }
+        clickTagByPixelCoordinates("settings_emergency_sos_button")
+        composeTestRule.waitForIdle()
+        assertTrue(
+            "Safety Canary frame must be queued or triggered",
+            composeTestRule.activity.viewModel.isCanaryTriggered.value ||
+            composeTestRule.activity.viewModel.repository.canaryQueue.isNotEmpty()
+        )
+
+        // Turn off dead man switch and return to ContactListScreen
+        clickTagByPixelCoordinates("settings_dead_man_switch_toggle")
+        clickTagByPixelCoordinates("settings_back_button")
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // -----------------------------------------------------------------
+        // D. Group Poll Creation (0x0A) Physical Clicks
+        // -----------------------------------------------------------------
+        clickTagByPixelCoordinates("new_group_fab")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("create_group_name_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("create_group_name_input").performTextInput("Poll Test Group")
+        clickTagByPixelCoordinates("create_group_confirm_button")
+
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("chat_create_poll_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        clickTagByPixelCoordinates("chat_create_poll_button")
+
+        // In CreatePollDialog: input question and options
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("poll_question_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("poll_question_input").performTextInput("Preferred PQC Suite?")
+        composeTestRule.onNodeWithTag("poll_option_input_0").performTextInput("ML-KEM-512")
+        composeTestRule.onNodeWithTag("poll_option_input_1").performTextInput("X25519-Hybrid")
+
+        // Physically click Create Poll in dialog
+        clickTagByPixelCoordinates("poll_create_confirm_button")
+
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithTag("poll_create_confirm_button").fetchSemanticsNodes().isEmpty()
+        }
+
+        // Verify poll card appears in chat
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.onAllNodesWithText("Preferred PQC Suite?", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithText("Preferred PQC Suite?", substring = true).assertIsDisplayed()
+
+        // Leave group and return to ContactListScreen
+        clickTagByPixelCoordinates("chat_group_members_button")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag("leave_group_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        clickTagByPixelCoordinates("leave_group_button")
         composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
