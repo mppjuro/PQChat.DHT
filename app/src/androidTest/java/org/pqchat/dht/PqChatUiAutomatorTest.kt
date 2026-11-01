@@ -92,6 +92,17 @@ class PqChatUiAutomatorTest {
             }
         } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
+
+        // Ensure we are back on ContactListScreen if a previous test left the app in a subscreen
+        var backAttempts = 0
+        while (backAttempts < 3 && composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isEmpty()) {
+            try {
+                uiDevice.pressBack()
+            } catch (_: Throwable) {}
+            composeTestRule.waitForIdle()
+            backAttempts++
+        }
+
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
@@ -119,6 +130,14 @@ class PqChatUiAutomatorTest {
             }
         } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
+        var backAttempts = 0
+        while (backAttempts < 3 && composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isEmpty()) {
+            try {
+                uiDevice.pressBack()
+            } catch (_: Throwable) {}
+            composeTestRule.waitForIdle()
+            backAttempts++
+        }
     }
 
     /**
@@ -126,14 +145,20 @@ class PqChatUiAutomatorTest {
      */
     private fun dismissKeyboardAndWait() {
         try {
+            androidx.test.espresso.Espresso.closeSoftKeyboard()
+        } catch (_: Throwable) {}
+        try {
             val imm = InstrumentationRegistry.getInstrumentation().targetContext
                 .getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-            composeTestRule.activity.currentFocus?.let { focusView ->
-                imm?.hideSoftInputFromWindow(focusView.windowToken, 0)
-            }
+            val windowToken = composeTestRule.activity.currentFocus?.windowToken
+                ?: composeTestRule.activity.window.decorView.windowToken
+            imm?.hideSoftInputFromWindow(windowToken, 0)
+        } catch (_: Throwable) {}
+        try {
+            uiDevice.executeShellCommand("input keyevent 111")
         } catch (_: Throwable) {}
         uiDevice.waitForIdle()
-        Thread.sleep(150)
+        Thread.sleep(100)
         composeTestRule.waitForIdle()
     }
 
@@ -225,27 +250,16 @@ class PqChatUiAutomatorTest {
             // Node is not in a scrollable container (e.g. TopAppBar, FAB, Dialog)
         }
 
-        var semanticsNode = nodeInteraction.fetchSemanticsNode()
-        var bounds = semanticsNode.boundsInScreen
-        var centerY = (bounds.top + bounds.height / 2f).toInt()
-        val displayHeight = uiDevice.displayHeight
-
-        // If node center is positioned off-screen or too close to navigation/status bars, adjust viewport with physical swipe
-        if (centerY > displayHeight - 150) {
-            swipeUpPhysical(steps = 10)
-            semanticsNode = nodeInteraction.fetchSemanticsNode()
-            bounds = semanticsNode.boundsInScreen
-            centerY = (bounds.top + bounds.height / 2f).toInt()
-        } else if (centerY < 150) {
-            swipeDownPhysical(steps = 10)
-            semanticsNode = nodeInteraction.fetchSemanticsNode()
-            bounds = semanticsNode.boundsInScreen
-            centerY = (bounds.top + bounds.height / 2f).toInt()
-        }
-
+        val semanticsNode = nodeInteraction.fetchSemanticsNode()
+        val bounds = semanticsNode.boundsInScreen
         val centerX = (bounds.left + bounds.width / 2f).toInt()
+        val centerY = (bounds.top + bounds.height / 2f).toInt()
+
         val clampedX = centerX.coerceIn(0, uiDevice.displayWidth - 1)
         val clampedY = centerY.coerceIn(0, uiDevice.displayHeight - 1)
+
+        val isToggleable = semanticsNode.config.contains(SemanticsProperties.ToggleableState)
+        val initialToggleState = if (isToggleable) semanticsNode.config[SemanticsProperties.ToggleableState] else null
 
         // Enforce physical pixel click via uiDevice as the primary mechanism
         val clicked = try {
@@ -256,15 +270,20 @@ class PqChatUiAutomatorTest {
         uiDevice.waitForIdle()
         composeTestRule.waitForIdle()
 
-        if (!clicked) {
-            try {
-                nodeInteraction.performClick()
-            } catch (_: Throwable) {
+        if (isToggleable && initialToggleState != null) {
+            val currentToggleState = try {
+                nodeInteraction.fetchSemanticsNode().config[SemanticsProperties.ToggleableState]
+            } catch (_: Throwable) { null }
+            if (currentToggleState == initialToggleState) {
                 try {
-                    nodeInteraction.performTouchInput { click() }
-                } catch (_: Throwable) {}
+                    nodeInteraction.performClick()
+                } catch (_: Throwable) {
+                    try {
+                        nodeInteraction.performTouchInput { click() }
+                    } catch (_: Throwable) {}
+                }
+                composeTestRule.waitForIdle()
             }
-            composeTestRule.waitForIdle()
         }
 
         return bounds
@@ -316,6 +335,10 @@ class PqChatUiAutomatorTest {
 
         // Raw coordinate click on safe non-navigating title area
         clickRawScreenCoordinates(chipBounds.left.toInt() + 10, chipBounds.top.toInt() + 10)
+
+        // Verify physical swipe gestures
+        swipeUpPhysical(steps = 25)
+        swipeDownPhysical(steps = 25)
     }
 
     // =========================================================================

@@ -246,6 +246,8 @@ class AdbDevice:
         self.shell("input keyevent 224")  # KEYCODE_WAKEUP
         self.shell("wm dismiss-keyguard")
         self.shell("input keyevent 82")   # KEYCODE_MENU
+        self.shell("svc power stayon true")
+        self.shell("settings put system screen_off_timeout 2147483647")
         self.sleep(0.3)
 
     def dump_ui(self) -> Optional[ET.Element]:
@@ -612,6 +614,9 @@ class MultiEmulatorOrchestrator:
     def _phase_0_init_and_health_check(self):
         print("\n--- PHASE 0: INIT & HEALTH CHECK ---", flush=True)
         for dev in self.active_devices:
+            dev.wake_and_unlock()
+            dev.shell("svc power stayon true")
+            dev.shell("settings put system screen_off_timeout 2147483647")
             if not self.args.skip_install and self.args.apk:
                 apk_path = Path(self.args.apk)
                 if apk_path.exists():
@@ -657,7 +662,7 @@ class MultiEmulatorOrchestrator:
 
         # 3. Responder: Ensure awake and tap "Scan / Join (Bob)"
         responder.wake_and_unlock()
-        responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)", fallback_ratio=(0.75, 0.85))
+        responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)", fallback_ratio=(0.75, 0.82))
         self.sleep(2.0)
 
         # Ensure Bob tab is active
@@ -686,7 +691,7 @@ class MultiEmulatorOrchestrator:
             responder.tap(cx, cy)
             self.sleep(1.5)
         else:
-            responder.tap(180, 1450)
+            responder.tap(180, 450)
             self.sleep(1.5)
 
         # Only tap Done if present in UI
