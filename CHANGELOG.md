@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`173bfbe`](https://github.com/mppjuro/PQChat.DHT/commit/173bfbee8e6b05f4ee68533a7457eb4418e9d232) (2026-11-01) — **lint**: resolve SdCardPath and SelectedPhotoAccess errors, configure nightly release write permissions
+- [`8b1015b`](https://github.com/mppjuro/PQChat.DHT/commit/8b1015b02d99859d8a3e43501cd792fd6f8a1f78) (2026-11-01) — **ci**: optimize multi-emulator E2E orchestration, gallery indexing, and matrix execution
 - [`2aeae21`](https://github.com/mppjuro/PQChat.DHT/commit/2aeae218d5c826bae0b0cfd053b030012163d380) (2026-11-01) — **ci**: resolve UI Automator idle timeouts and multi-emulator E2E synchronization
 - [`2a87adb`](https://github.com/mppjuro/PQChat.DHT/commit/2a87adbfc33b2f155ab52e304c2a91e21896121b) (2026-10-24) — **tor**: parallelize bootstrap DNS resolution with timeout and isolate TorFailClosedTest
 - [`976930a`](https://github.com/mppjuro/PQChat.DHT/commit/976930a14a77840079da2e1c96be33beba395846) (2026-10-24) — **dht**: align BEP 44 mutable put/get protocol, target derivation, and test suite execution
