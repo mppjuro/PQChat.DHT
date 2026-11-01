@@ -149,6 +149,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`75cfbad`](https://github.com/mppjuro/PQChat.DHT/commit/75cfbad862c352ad796ed123f36747e9c186423a) (2026-11-01) — fix AVD path resolution, configure test timeouts and optimize nightly suites
 - [`86959dc`](https://github.com/mppjuro/PQChat.DHT/commit/86959dc8f623112adc6a4703c20c6f5aba1d9186) (2026-11-01) — **e2e**: allocate dedicated swapfile_extra to avoid text file busy conflict
 - [`78a501b`](https://github.com/mppjuro/PQChat.DHT/commit/78a501b89aaa4ebd4aaef4cbb8cc811eeadb7e59) (2026-11-01) — **e2e**: allocate 10GB swap, daemonize emulators with nohup, tune memory to 1536MB and capture emulator logs
 - [`a51c437`](https://github.com/mppjuro/PQChat.DHT/commit/a51c437cf680412e98f7026799ee6a3431f38d3a) (2026-11-01) — **e2e**: configure Android SDK tools in PATH and harden multi-node emulator workflow
