@@ -192,6 +192,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`878f670`](https://github.com/mppjuro/PQChat.DHT/commit/878f670255c881851543536baea2a885cdd34588) (2026-11-01) — **e2e**: fix pixel coordinate bounds in UI Automator and automate full multi-emulator E2E scenario
 - [`3226a53`](https://github.com/mppjuro/PQChat.DHT/commit/3226a536d97709aec56a036fcb717a00b8885447) (2026-10-31) — **e2e**: add 3 and 4 emulator E2E tests with group creation and GitHub Actions workflow
 - [`3f86a69`](https://github.com/mppjuro/PQChat.DHT/commit/3f86a693467326e6d3a22b887460bfc7faf90d7c) (2026-10-31) — **e2e**: implement multi-emulator physical UI automation and dual-AVD GitHub Actions workflow
 - [`2b19b50`](https://github.com/mppjuro/PQChat.DHT/commit/2b19b50a5e7f25134a5d1e3f0f3c878d29f461c6) (2026-10-23) — **dht,viewmodel**: cover put iterative lookup and BobHandshakeStatus transitions
