@@ -185,12 +185,14 @@ jobs:
           echo "$ANDROID_ROOT/emulator" >> $GITHUB_PATH
           echo "$ANDROID_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Cache Android System Image
+      - name: Cache Android System Image & Emulator
         uses: actions/cache@v6
         id: sysimg-cache
         with:
-          path: /usr/local/lib/android/sdk/system-images/android-${{ inputs.api_level || '34' }}
-          key: sysimg-android-${{ inputs.api_level || '34' }}-x86_64
+          path: |
+            /usr/local/lib/android/sdk/system-images/android-${{ inputs.api_level || '34' }}
+            /usr/local/lib/android/sdk/emulator
+          key: sysimg-emulator-android-${{ inputs.api_level || '34' }}-x86_64-v1
 
       - name: Set up Android SDK & Multi-Node AVDs
         run: |
@@ -220,10 +222,25 @@ jobs:
           echo "=== Accepting Android SDK Licenses ==="
           yes 2>/dev/null | sdkmanager --licenses > /dev/null || true
 
+          # 1. Ensure emulator & platform-tools packages are installed (required by avdmanager)
+          if [ ! -f "$ANDROID_HOME/emulator/package.xml" ] || [ ! -x "$ANDROID_HOME/emulator/emulator" ]; then
+            echo "=== Installing Android Emulator package ==="
+            yes 2>/dev/null | sdkmanager --install "emulator" "platform-tools" "platforms;android-${API_LEVEL}"
+          fi
+
+          # 2. Ensure system-images package is installed
           if [ ! -d "$ANDROID_HOME/system-images/android-${API_LEVEL}/google_apis/x86_64" ]; then
             echo "=== Installing System Image ($SYS_IMG) ==="
-            yes 2>/dev/null | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}" "emulator" "platform-tools"
+            yes 2>/dev/null | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}"
           fi
+
+          # 3. Assert emulator binary is present and executable
+          if [ ! -x "$ANDROID_HOME/emulator/emulator" ]; then
+            echo "ERROR: Emulator binary ($ANDROID_HOME/emulator/emulator) is missing or not executable!"
+            ls -la "$ANDROID_HOME" || true
+            exit 1
+          fi
+          echo "Verified emulator binary: $("$ANDROID_HOME/emulator/emulator" -version | head -n 1)"
 
           mkdir -p "$ANDROID_AVD_HOME"
           mkdir -p /home/runner/.android/avd
