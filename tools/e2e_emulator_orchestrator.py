@@ -192,14 +192,21 @@ settings put global animator_duration_scale 0.0
 svc power stayon true
 settings put system screen_off_timeout 2147483647
 settings put secure show_ime_with_hard_keyboard 0
+settings put global heads_up_notifications_enabled 0
+cmd notification set_dnd on
+cmd media_session volume --stream 5 --set 0
+cmd media_session volume --stream 2 --set 0
 input keyevent 224
 wm dismiss-keyguard
 input keyevent 82
 am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS
-for pkg in com.google.android.gms com.google.android.gsf com.google.android.as com.google.android.as.oss com.google.android.googlequicksearchbox com.google.android.apps.messaging com.google.android.apps.wellbeing com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.android.dialer com.google.android.contacts; do
+for pkg in com.google.android.inputmethod.latin com.android.inputmethod.latin com.google.android.settings.intelligence com.android.settings.intelligence com.google.android.dialer com.android.dialer com.google.android.apps.wellbeing com.google.android.googlequicksearchbox com.google.android.as com.google.android.as.oss com.google.android.gms com.google.android.gsf com.google.android.apps.messaging com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.google.android.contacts; do
   pm disable-user --user 0 $pkg 2>/dev/null || true
   am force-stop $pkg 2>/dev/null || true
 done
+appops set com.google.android.gms POST_NOTIFICATION ignore 2>/dev/null || true
+appops set com.android.settings POST_NOTIFICATION ignore 2>/dev/null || true
+appops set com.android.systemui TAKE_AUDIO_FOCUS ignore 2>/dev/null || true
 logcat -G 16M
 logcat -c
 """
@@ -207,7 +214,7 @@ logcat -c
         self._is_debloated = True
 
     def ensure_app_foreground(self, package: str = "org.pqchat.dht", activity: str = ".ui.MainActivity") -> bool:
-        """Verifies that org.pqchat.dht is in the foreground. If not, brings it to the front and closes system dialogs."""
+        """Verifies that org.pqchat.dht is in the foreground. If not, brings it to the front without closing MainActivity."""
         if self.dry_run:
             return True
 
@@ -221,7 +228,6 @@ logcat -c
         if package not in focus_info:
             print(f"[{self.name}] App {package} not in foreground (Current: {focus_info.strip()[:100]}). Restoring...", flush=True)
             self.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
-            self.shell("input keyevent 4")  # Dismiss any dialog
             self.sleep(0.3)
             self.shell(f"am start -n {package}/{activity} --activity-brought-to-front --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
             self.sleep(1.0)
@@ -295,16 +301,11 @@ logcat -c
         return "mInputShown=true" in out or "mIsInputViewShown=true" in out
 
     def close_keyboard(self):
-        if self.is_keyboard_open():
-            print(f"[{self.name}] Soft keyboard is open, closing...", flush=True)
-            self.shell("input keyevent 111")  # KEYCODE_ESCAPE
-            self.sleep(0.2)
-            if self.is_keyboard_open():
-                self.shell("input keyevent 4")  # KEYCODE_BACK
-                self.sleep(0.2)
-            self.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
-            self.sleep(0.2)
-            self.invalidate_ui_cache()
+        """Safely requests InputMethodManagerService to hide soft input without injecting KeyEvents."""
+        if self.dry_run:
+            return
+        self.shell("cmd input_method hide-soft-input")
+        self.invalidate_ui_cache()
 
     def screencap(self, filename: str) -> Optional[Path]:
         filepath = self.output_dir / f"{filename}.png"
@@ -479,13 +480,13 @@ logcat -c
         resource_id: Optional[str] = None,
         test_tag: Optional[str] = None,
         fallback_ratio: Optional[Tuple[float, float]] = None,
-        auto_scroll: bool = True
+        auto_scroll: bool = True,
+        capture_on_fail: bool = True
     ) -> bool:
         desc = test_tag or text or content_desc or resource_id or "element"
         if self.dry_run:
             print(f"[{self.name} DRY-RUN] click_element '{desc}' -> simulated click", flush=True)
             return True
-        self.close_keyboard()
         bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
         if not bounds:
             # Ensure app focus was not lost to launcher or system dialogs
@@ -522,8 +523,9 @@ logcat -c
             return True
         else:
             print(f"[{self.name}] Failed to locate element: {desc}", flush=True)
-            safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
-            self.screencap(f"failure_click_{safe_desc}")
+            if capture_on_fail:
+                safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
+                self.screencap(f"failure_click_{safe_desc}")
             return False
 
     def wait_for_element(
@@ -552,7 +554,7 @@ logcat -c
             # If sync_chip_tag is specified, tap it every 6s to trigger immediate DHT polling
             if sync_chip_tag and (time.time() - last_sync_time) >= 6.0:
                 print(f"[{self.name}] Triggering {sync_chip_tag} while waiting for '{desc}'...", flush=True)
-                self.click_element(test_tag=sync_chip_tag, auto_scroll=False)
+                self.click_element(test_tag=sync_chip_tag, auto_scroll=False, capture_on_fail=False)
                 last_sync_time = time.time()
 
             # Periodically ensure app focus
@@ -565,6 +567,104 @@ logcat -c
         safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
         self.screencap(f"failure_timeout_{safe_desc}")
         return False
+
+    def is_on_contact_list(self) -> bool:
+        """Determines if the device is currently displaying ContactListScreen."""
+        contact_tags = [
+            "contact_list_sync_chip",
+            "contact_list_diagnostics_button",
+            "contact_list_settings_button",
+            "new_chat_fab",
+            "join_chat_fab",
+            "new_group_fab",
+            "contact_list_add_button",
+            "contact_list_group_button",
+        ]
+        for tag in contact_tags:
+            if self.find_node(test_tag=tag):
+                return True
+        if (
+            self.find_node(text="New Chat (Alice)")
+            or self.find_node(text="Scan / Join (Bob)")
+            or self.find_node(text="New Group")
+        ):
+            return True
+        return False
+
+    def is_on_chat_screen(self) -> bool:
+        return bool(self.find_node(test_tag="chat_message_input") or self.find_node(test_tag="chat_back_button"))
+
+    def is_on_handshake_screen(self) -> bool:
+        return bool(
+            self.find_node(test_tag="handshake_back_button")
+            or self.find_node(test_tag="handshake_alice_tab")
+            or self.find_node(test_tag="handshake_bob_tab")
+            or self.find_node(test_tag="handshake_alice_name_input")
+            or self.find_node(test_tag="handshake_bob_name_input")
+        )
+
+    def is_on_diagnostics_screen(self) -> bool:
+        return bool(self.find_node(test_tag="diagnostics_back_button"))
+
+    def navigate_to_contact_list(self, max_attempts: int = 3) -> bool:
+        """
+        Safely returns the device to ContactListScreen without calling keyevent 4
+        when already on ContactListScreen (which would close MainActivity).
+        Prefers explicit semantic back buttons (chat_back_button, handshake_back_button,
+        diagnostics_back_button) with capture_on_fail=False.
+        """
+        if self.dry_run:
+            return True
+
+        for attempt in range(max_attempts):
+            if self.is_on_contact_list():
+                print(f"[{self.name}] Already on ContactListScreen.", flush=True)
+                return True
+
+            # Check explicit screen back buttons first
+            if self.find_node(test_tag="chat_back_button"):
+                print(f"[{self.name}] Navigating back from ChatScreen via chat_back_button", flush=True)
+                self.click_element(test_tag="chat_back_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            if self.find_node(test_tag="handshake_back_button"):
+                print(f"[{self.name}] Navigating back from HandshakeScreen via handshake_back_button", flush=True)
+                self.click_element(test_tag="handshake_back_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            if self.find_node(test_tag="diagnostics_back_button"):
+                print(f"[{self.name}] Navigating back from DiagnosticsScreen via diagnostics_back_button", flush=True)
+                self.click_element(test_tag="diagnostics_back_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            # Dismiss create group dialog if open
+            if self.find_node(test_tag="create_group_cancel_button"):
+                print(f"[{self.name}] Dismissing create group dialog via create_group_cancel_button", flush=True)
+                self.click_element(test_tag="create_group_cancel_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            # Dismiss SAS dialog if open without confirm/unconfirm
+            if self.find_node(test_tag="sas_dialog_close_button"):
+                print(f"[{self.name}] Dismissing SAS dialog via sas_dialog_close_button", flush=True)
+                self.click_element(test_tag="sas_dialog_close_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            # Only fallback to keyevent 4 if strictly NOT on ContactListScreen
+            if not self.is_on_contact_list():
+                print(f"[{self.name}] Explicit back button not found and not on ContactListScreen; fallback keyevent 4", flush=True)
+                self.back()
+                self.sleep(0.8)
+
+        is_on_cl = self.is_on_contact_list()
+        if not is_on_cl:
+            self.ensure_app_foreground()
+            is_on_cl = self.is_on_contact_list()
+        return is_on_cl
 
     def push_file(self, local_path: Path, remote_path: str):
         print(f"[{self.name}] Pushing {local_path.name} -> {remote_path}", flush=True)
@@ -595,6 +695,11 @@ logcat -c
         print(f"[{self.name}] Starting {package}/{activity} with local DHT cluster 10.0.2.2:30000", flush=True)
         self.shell(f"am start -W -n {package}/{activity} --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
         self.invalidate_ui_cache()
+
+
+def navigate_to_contact_list(node: AdbDevice) -> bool:
+    """Helper to return an AdbDevice to ContactListScreen safely."""
+    return node.navigate_to_contact_list()
 
 
 class MultiEmulatorOrchestrator:
@@ -761,12 +866,14 @@ class MultiEmulatorOrchestrator:
 
         # 1. Initiator: Tap "New Chat (Alice)" if not already on HandshakeScreen
         if not initiator.find_node(test_tag="handshake_alice_name_input"):
+            initiator.navigate_to_contact_list()
             initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
             self.sleep(1.5)
 
         if not initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10):
             print(f"[{initiator.name}] HandshakeScreen did not appear. Retrying foreground restore and FAB click...", flush=True)
             initiator.ensure_app_foreground()
+            initiator.navigate_to_contact_list()
             initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
             initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10)
 
@@ -814,12 +921,14 @@ class MultiEmulatorOrchestrator:
         responder.wake_and_unlock()
         responder.ensure_app_foreground()
         if not responder.find_node(test_tag="handshake_bob_tab"):
+            responder.navigate_to_contact_list()
             responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
             self.sleep(1.5)
 
         if not responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10):
             print(f"[{responder.name}] HandshakeScreen did not appear on responder. Retrying...", flush=True)
             responder.ensure_app_foreground()
+            responder.navigate_to_contact_list()
             responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
             responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10)
 
@@ -859,8 +968,9 @@ class MultiEmulatorOrchestrator:
                 self.sleep(1.5)
             else:
                 # Dismiss picker safely if no item found
-                responder.back()
-                self.sleep(1.0)
+                if not responder.find_node(test_tag="handshake_bob_name_input"):
+                    responder.back()
+                    self.sleep(1.0)
 
             valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=5)
 
@@ -917,19 +1027,8 @@ class MultiEmulatorOrchestrator:
             return False
 
         # Return both to ContactListScreen safely (from ChatScreen or HandshakeScreen)
-        if initiator.find_node(test_tag="chat_back_button") or initiator.find_node(test_tag="chat_message_input"):
-            initiator.click_element(test_tag="chat_back_button")
-            self.sleep(1.0)
-        elif not initiator.find_node(test_tag="contact_list_sync_chip"):
-            initiator.back()
-            self.sleep(1.0)
-
-        if responder.find_node(test_tag="chat_back_button") or responder.find_node(test_tag="chat_message_input"):
-            responder.click_element(test_tag="chat_back_button")
-            self.sleep(1.0)
-        elif not responder.find_node(test_tag="contact_list_sync_chip"):
-            responder.back()
-            self.sleep(1.0)
+        initiator.navigate_to_contact_list()
+        responder.navigate_to_contact_list()
 
         handshake_ok = (qr_gen_ok and valid_qr and init_sas and resp_sas)
         if handshake_ok:
@@ -1026,30 +1125,26 @@ class MultiEmulatorOrchestrator:
         if rekey_clicked:
             # Bob triggers DHT poll to retrieve Type 0x03 Offer and dispatch Type 0x04 Response
             print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
-            self.bob.click_element(test_tag="chat_sync_chip")
+            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(3.0)
 
             # Alice triggers DHT poll to retrieve Type 0x04 Response
             print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
-            self.alice.click_element(test_tag="chat_sync_chip")
+            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(3.0)
             self.log_step("ML-KEM-512 Rekey", "PASS", "PQC Rekey offer dispatched and processed over DHT", sc_rekey_done)
         else:
             self.log_step("ML-KEM-512 Rekey", "FAIL", "Rekey button 'chat_rekey_button' not found on Alice's chat screen", sc_rekey_done)
 
         # Return both Alice and Bob to ContactListScreen
-        self.alice.back()
-        self.sleep(1.0)
-        self.bob.back()
-        self.sleep(1.0)
+        self.alice.navigate_to_contact_list()
+        self.bob.navigate_to_contact_list()
 
     def _phase_3_create_group(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 3: CREATE GROUP CONVERSATION '{group_name}' ---", flush=True)
 
         self.alice.ensure_app_foreground()
-        if self.alice.find_node(test_tag="chat_message_input"):
-            self.alice.back()
-            self.sleep(1.0)
+        self.alice.navigate_to_contact_list()
 
         # Alice: Tap "New Group" FAB (NO fallback_ratio!)
         fab_clicked = self.alice.click_element(test_tag="new_group_fab", text="New Group")
@@ -1120,9 +1215,7 @@ class MultiEmulatorOrchestrator:
         for dev in participants:
             dev.ensure_app_foreground()
             print(f"[{dev.name}] Waiting for group '{group_name}' invite to arrive via DHT...", flush=True)
-            if dev.find_node(test_tag="chat_message_input"):
-                dev.back()
-                self.sleep(1.0)
+            dev.navigate_to_contact_list()
 
             # Wait for group item to appear on ContactListScreen (triggering immediate poll if delayed)
             rcv_grp = dev.wait_for_element(test_tag=f"group_item_{group_name}", text=group_name, timeout=60, sync_chip_tag="contact_list_sync_chip")
@@ -1247,12 +1340,13 @@ class MultiEmulatorOrchestrator:
     def _phase_optional_diagnostics(self):
         print("\n--- PHASE: DIAGNOSTICS & TELEMETRY ---", flush=True)
         try:
-            self.alice.back()
-            self.sleep(1.0)
+            self.alice.ensure_app_foreground()
+            self.alice.navigate_to_contact_list()
             self.alice.click_element(test_tag="contact_list_diagnostics_button", content_desc="Diagnostics")
             self.sleep(1.5)
             sc_diag = self.alice.screencap("09_alice_diagnostics")
-            self.alice.click_element(test_tag="diagnostics_back_button", content_desc="Back")
+            if not self.alice.click_element(test_tag="diagnostics_back_button", content_desc="Back", capture_on_fail=False):
+                self.alice.navigate_to_contact_list()
             self.log_step("Diagnostics Inspected", "PASS", "DHT metrics, routing table, and storage inspected", sc_diag)
         except Exception as e:
             self.log_step("Diagnostics Optional", "WARN", f"Skipped: {e}")
