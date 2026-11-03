@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`d11502a`](https://github.com/mppjuro/PQChat.DHT/commit/d11502a66260064ebc3734100b9ab08d4db0370c) (2026-11-03) — **test**: stabilize PqChatUiAutomatorTest on AVD API 34 in CI
 - [`eae4f5a`](https://github.com/mppjuro/PQChat.DHT/commit/eae4f5a289b556df8a3f331db13bddb64fb0abb6) (2026-11-03) — **test**: eliminate premature dialog and menu dismissal caused by keyevent 111
 - [`e749bba`](https://github.com/mppjuro/PQChat.DHT/commit/e749bbac3e202adf0ee9eaf7b744aac9a0a0cad2) (2026-11-03) — **test**: synchronize Compose semantics, orchestrator UI automation, and testbed DHT cluster
 - [`85c820f`](https://github.com/mppjuro/PQChat.DHT/commit/85c820f17a74ed5541b5bf3303def1764c945b1c) (2026-11-03) — **test**: resolve CI emulator instrumented test timeouts and activity lifecycle hangs
