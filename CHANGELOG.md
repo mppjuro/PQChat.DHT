@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`fc52488`](https://github.com/mppjuro/PQChat.DHT/commit/fc52488c13e2f3aabaa5af61a774fcfab8286895) (2026-11-03) — **e2e**: prevent keyevent 4 app exit and silence gms notification storm
 - [`f4368ba`](https://github.com/mppjuro/PQChat.DHT/commit/f4368ba76872359adbd0ea74225fe84fdc8f6a14) (2026-11-03) — **e2e**: eliminate keyboard obstruction, binder buffer exhaustion, and optimize qr key exchange
 - [`766e368`](https://github.com/mppjuro/PQChat.DHT/commit/766e36872a338c547edd447ec4124ceebe8e6091) (2026-11-03) — **e2e**: debloat emulators and stabilize multi-node orchestration
 - [`6d15dbb`](https://github.com/mppjuro/PQChat.DHT/commit/6d15dbbb9fb0f77d79551389d6adcddf0b9d1845) (2026-11-03) — **test**: prevent double-click in PqChatUiAutomatorTest helper
