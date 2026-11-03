@@ -214,6 +214,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`ff03da6`](https://github.com/mppjuro/PQChat.DHT/commit/ff03da63363f28d45dff6e0f9232e8325ac339e8) (2026-11-02) — **deps**: bump com.google.devtools.ksp from 2.3.12 to 2.3.13
+- [`3cf7e8d`](https://github.com/mppjuro/PQChat.DHT/commit/3cf7e8d942771a03fcde6e97fef817a6d26da686) (2026-11-02) — **deps**: bump com.android.application from 9.4.1 to 9.5.0
 - [`9c0e3bb`](https://github.com/mppjuro/PQChat.DHT/commit/9c0e3bb1e351e20d78638eed52bc3a69b305cebf) (2026-10-26) — **deps**: bump com.google.firebase:firebase-bom from 35.0.2 to 35.1.0
 - [`019bd49`](https://github.com/mppjuro/PQChat.DHT/commit/019bd4933828e0070d6989050a957e025ef76fe6) (2026-10-26) — **deps**: bump androidx.test.uiautomator:uiautomator
 - [`8a5ba53`](https://github.com/mppjuro/PQChat.DHT/commit/8a5ba5309dcb7825a31833d2e945d78a67feadf9) (2026-10-26) — **deps**: bump actions/cache from 4 to 6
