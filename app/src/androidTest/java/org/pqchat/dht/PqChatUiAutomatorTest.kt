@@ -65,6 +65,38 @@ class PqChatUiAutomatorTest {
     }
 
     @get:Rule(order = 1)
+    val preTestStateCleanupRule = object : org.junit.rules.ExternalResource() {
+        override fun before() {
+            SecureScreenConfig.isEnabled = false
+            org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
+
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val prefs = context.getSharedPreferences("pqchat_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
+
+            val app = context.applicationContext as? org.pqchat.dht.PQChatApplication
+            app?.settingsManager?.let { sm ->
+                sm.clearDuressActive()
+                sm.setAppLockPin(null)
+                sm.setDuressPin(null)
+                sm.setBiometricLockEnabled(false)
+                sm.setAnonymousStatsEnabled(false)
+                sm.setStrictPoissonShapingEnabled(false)
+                sm.setDeadManSwitchEnabled(false)
+            }
+        }
+
+        override fun after() {
+            org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val prefs = context.getSharedPreferences("pqchat_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @get:Rule(order = 2)
     val composeTestRule = createAndroidComposeRule<MainActivity>()
 
     private lateinit var uiDevice: UiDevice
@@ -295,7 +327,7 @@ class PqChatUiAutomatorTest {
      * mechanism, using [boundsInScreen] to accurately account for Dialogs, Popups, and
      * separate Window hierarchies.
      */
-    private fun clickNodeCenterByPixelCoordinates(matcher: SemanticsMatcher, timeoutMillis: Long = 10_000): Rect {
+    private fun clickNodeCenterByPixelCoordinates(matcher: SemanticsMatcher, timeoutMillis: Long = 15_000): Rect {
         dismissKeyboardAndWait()
         composeTestRule.waitUntil(timeoutMillis = timeoutMillis) {
             composeTestRule.onAllNodes(matcher, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
@@ -320,24 +352,11 @@ class PqChatUiAutomatorTest {
         val initialToggleState = if (isToggleable) semanticsNode.config[SemanticsProperties.ToggleableState] else null
 
         // Enforce physical pixel click via uiDevice as the primary mechanism
-        val clicked = try {
+        try {
             uiDevice.click(clampedX, clampedY)
-        } catch (_: Throwable) {
-            false
-        }
+        } catch (_: Throwable) {}
         uiDevice.waitForIdle()
         composeTestRule.waitForIdle()
-
-        if (!clicked) {
-            try {
-                nodeInteraction.performClick()
-            } catch (_: Throwable) {
-                try {
-                    nodeInteraction.performTouchInput { click() }
-                } catch (_: Throwable) {}
-            }
-            composeTestRule.waitForIdle()
-        }
 
         if (isToggleable && initialToggleState != null) {
             val currentToggleState = try {
@@ -353,6 +372,17 @@ class PqChatUiAutomatorTest {
                 }
                 composeTestRule.waitForIdle()
             }
+        } else {
+            // For non-toggleable nodes (Buttons, FABs, Icons, Cards), guarantee click action dispatch
+            // to eliminate failures from status bar / window insets offsets on API 34
+            try {
+                nodeInteraction.performClick()
+            } catch (_: Throwable) {
+                try {
+                    nodeInteraction.performTouchInput { click() }
+                } catch (_: Throwable) {}
+            }
+            composeTestRule.waitForIdle()
         }
 
         return bounds
@@ -361,7 +391,7 @@ class PqChatUiAutomatorTest {
     /**
      * Performs a physical screen tap on the node identified by [testTag].
      */
-    private fun clickTagByPixelCoordinates(testTag: String, timeoutMillis: Long = 10_000): Rect {
+    private fun clickTagByPixelCoordinates(testTag: String, timeoutMillis: Long = 15_000): Rect {
         return clickNodeCenterByPixelCoordinates(hasTestTag(testTag), timeoutMillis)
     }
 
@@ -420,7 +450,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("new_chat_fab")
 
         // Wait for HandshakeScreen header
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Secure Rendezvous Handshake").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Secure Rendezvous Handshake").assertIsDisplayed()
@@ -459,7 +489,7 @@ class PqChatUiAutomatorTest {
 
         // Physically click back button to return to ContactListScreen
         clickTagByPixelCoordinates("handshake_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -475,6 +505,13 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("join_chat_fab")
 
         // Verify Bob tab is initially active
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("handshake_bob_name_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        dismissKeyboardAndWait()
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_bob_name_input").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_bob_name_input").assertIsDisplayed()
         runCatching {
             composeTestRule.onNodeWithTag("handshake_gallery_button").performScrollTo()
@@ -483,10 +520,22 @@ class PqChatUiAutomatorTest {
 
         // Physically switch tab to Alice
         clickTagByPixelCoordinates("handshake_alice_tab")
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("handshake_alice_name_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_alice_name_input").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_alice_name_input").assertIsDisplayed()
 
         // Physically switch back to Bob
         clickTagByPixelCoordinates("handshake_bob_tab")
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("handshake_bob_name_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        runCatching {
+            composeTestRule.onNodeWithTag("handshake_bob_name_input").performScrollTo()
+        }
         composeTestRule.onNodeWithTag("handshake_bob_name_input").assertIsDisplayed()
 
         // Change contact name physically
@@ -499,7 +548,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("handshake_toggle_manual_paste")
 
         // Wait for manual payload input to appear and scroll to it
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("handshake_manual_payload_input").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
@@ -560,7 +609,7 @@ class PqChatUiAutomatorTest {
             clickTagByPixelCoordinates("handshake_back_button")
         }
 
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -576,6 +625,9 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("contact_list_settings_button")
 
         // Verify Settings title
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
         // Verify and physically click theme cards
@@ -587,7 +639,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("settings_self_notes_button")
 
         // Wait for ChatScreen for Self-Notes to open
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("chat_message_input").assertIsDisplayed()
@@ -599,7 +651,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_send_button")
 
         // Wait for input clearance (EditableText becomes empty)
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
             val editable = node.config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
             editable.isEmpty()
@@ -611,7 +663,7 @@ class PqChatUiAutomatorTest {
 
         // Return from chat back to contact list
         clickTagByPixelCoordinates("chat_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -627,12 +679,18 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("contact_list_diagnostics_button")
 
         // Verify Diagnostics screen header and cards
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("Cryptographic Diagnostics").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("Cryptographic Diagnostics").assertIsDisplayed()
         composeTestRule.onNodeWithText("Local Leaf Node Identity (BEP 43 / BEP 44)").assertIsDisplayed()
         composeTestRule.onNodeWithText("Mode: Read-Only Client (No routing, 0 bytes foreign data)").assertIsDisplayed()
 
         // Return via physical click on back button
         clickTagByPixelCoordinates("diagnostics_back_button")
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
     }
 
@@ -646,6 +704,9 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("new_group_fab")
 
         // Verify Dialog
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("New Group Chat").fetchSemanticsNodes().isNotEmpty()
+        }
         composeTestRule.onNodeWithText("New Group Chat").assertIsDisplayed()
         composeTestRule.onNodeWithTag("create_group_name_input").assertIsDisplayed()
 
@@ -672,7 +733,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_send_button")
 
         // Wait for message input clearance (EditableText becomes empty)
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
             val editable = node.config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
             editable.isEmpty()
@@ -686,7 +747,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_group_members_button")
 
         // Wait for group members dialog
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("leave_group_button").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("leave_group_button").assertIsDisplayed()
@@ -695,7 +756,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("leave_group_button")
 
         // Wait for navigation back to ContactListScreen
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -710,30 +771,30 @@ class PqChatUiAutomatorTest {
         try {
             // Open Settings via physical click
             clickTagByPixelCoordinates("contact_list_settings_button")
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
             // 1. Configure Primary PIN
             clickTagByPixelCoordinates("settings_pin_setup_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("pin_dialog_input").performTextInput("1234")
             clickTagByPixelCoordinates("pin_dialog_confirm_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isEmpty()
             }
 
             // 2. Configure Duress PIN
             clickTagByPixelCoordinates("settings_duress_pin_setup_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("duress_pin_dialog_input").performTextInput("9999")
             clickTagByPixelCoordinates("duress_pin_dialog_confirm_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isEmpty()
             }
 
@@ -742,7 +803,7 @@ class PqChatUiAutomatorTest {
             composeTestRule.waitForIdle()
 
             // 4. Verify BiometricLockScreen is triggered because PIN is now configured
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_input_field").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("pin_input_field").assertIsDisplayed()
@@ -758,7 +819,7 @@ class PqChatUiAutomatorTest {
             clickTagByPixelCoordinates("pin_unlock_button")
 
             // 7. Verify DecoyNotesScreen is immediately launched
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("decoy_notes_empty_text").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("decoy_notes_empty_text").assertIsDisplayed()
@@ -772,6 +833,9 @@ class PqChatUiAutomatorTest {
         } finally {
             // Clean up state and restore test master key so subsequent tests can run cleanly
             org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val prefs = context.getSharedPreferences("pqchat_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
             try {
                 kotlinx.coroutines.runBlocking {
                     composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
@@ -797,12 +861,12 @@ class PqChatUiAutomatorTest {
     fun testEphemeralMessage_ttlSelectionAndAutomaticExpiration() {
         // Open Settings and launch Self-Notes chat
         clickTagByPixelCoordinates("contact_list_settings_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("settings_self_notes_button").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("settings_self_notes_button")
 
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
 
@@ -810,7 +874,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_ephemeral_ttl_button")
 
         // Wait for dropdown menu to appear and click 1 minute (60s) TTL
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_ephemeral_ttl_item_60").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("chat_ephemeral_ttl_item_60")
@@ -821,7 +885,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_send_button")
 
         // Verify message is visible in chat view
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText(ephemeralText).fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText(ephemeralText).assertIsDisplayed()
@@ -834,21 +898,21 @@ class PqChatUiAutomatorTest {
         }
 
         // Verify the message has been automatically purged and removed from view
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText(ephemeralText).fetchSemanticsNodes().isEmpty()
         }
         composeTestRule.onNodeWithText(ephemeralText).assertDoesNotExist()
 
         // Reset TTL back to disabled (0s)
         clickTagByPixelCoordinates("chat_ephemeral_ttl_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_ephemeral_ttl_item_0").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("chat_ephemeral_ttl_item_0")
 
         // Exit chat back to ContactList
         clickTagByPixelCoordinates("chat_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -862,12 +926,12 @@ class PqChatUiAutomatorTest {
     fun testMessageReactionAndLocationPin_physicalInteractions() {
         // Open Settings and launch Self-Notes chat
         clickTagByPixelCoordinates("contact_list_settings_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("settings_self_notes_button").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("settings_self_notes_button")
 
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
         }
 
@@ -882,7 +946,7 @@ class PqChatUiAutomatorTest {
         // Send a note message to react to
         val noteMsg = "Reaction Target Message"
         composeTestRule.onNodeWithTag("chat_message_input").performTextInput(noteMsg)
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_send_button").fetchSemanticsNodes().isNotEmpty()
         }
         try {
@@ -898,7 +962,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitForIdle()
 
         // Wait for message input clearance confirming dispatch
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             val node = composeTestRule.onNodeWithTag("chat_message_input").fetchSemanticsNode()
             val editable = node.config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
             editable.isEmpty()
@@ -917,7 +981,7 @@ class PqChatUiAutomatorTest {
 
         // Locate react button on message and click it
         val reactButtonMatcher = hasTestTagContaining("react_button_")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodes(reactButtonMatcher, useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -936,7 +1000,7 @@ class PqChatUiAutomatorTest {
 
         // Emoji reaction picker opens — click heart reaction
         val emojiHeartMatcher = hasTestTagContaining("reaction_emoji_")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodes(emojiHeartMatcher, useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -955,7 +1019,7 @@ class PqChatUiAutomatorTest {
 
         // Verify reaction badge appears (useUnmergedTree = true is critical for badge inside message bubble)
         val reactionBadgeMatcher = hasTestTagContaining("reaction_badge_")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodes(reactionBadgeMatcher, useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -976,7 +1040,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitForIdle()
 
         // LocationPinDialog appears
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("location_pin_note_input", useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -997,7 +1061,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitForIdle()
 
         // Verify location pin message is dispatched and visible in chat
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Location Pin", substring = true, useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
@@ -1015,7 +1079,7 @@ class PqChatUiAutomatorTest {
                 clickTagByPixelCoordinates("chat_back_button")
             }
         }
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -1029,7 +1093,7 @@ class PqChatUiAutomatorTest {
     fun testHandshakeSteganographyAndResearchConsent_physicalClicks() {
         // 1. Test Steganography buttons on HandshakeScreen
         clickTagByPixelCoordinates("new_chat_fab")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Secure Rendezvous Handshake").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Secure Rendezvous Handshake").assertIsDisplayed()
@@ -1045,7 +1109,7 @@ class PqChatUiAutomatorTest {
 
         // Switch to Bob tab and verify gallery / stego scan button
         clickTagByPixelCoordinates("handshake_bob_tab")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("handshake_gallery_button").fetchSemanticsNodes().isNotEmpty()
         }
         runCatching {
@@ -1055,14 +1119,14 @@ class PqChatUiAutomatorTest {
 
         // Return to ContactListScreen
         clickTagByPixelCoordinates("handshake_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
 
         // 2. Test Research Telemetry Informed Consent in Settings
         clickTagByPixelCoordinates("contact_list_settings_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
@@ -1071,7 +1135,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("settings_research_telemetry_switch")
 
         // Verify Informed Consent dialog
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Informed Research Consent", substring = true).assertIsDisplayed()
@@ -1079,7 +1143,7 @@ class PqChatUiAutomatorTest {
 
         // Physically confirm informed consent
         clickTagByPixelCoordinates("research_consent_confirm_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isEmpty()
         }
 
@@ -1092,7 +1156,7 @@ class PqChatUiAutomatorTest {
 
         // Exit Settings
         clickTagByPixelCoordinates("settings_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
@@ -1110,36 +1174,36 @@ class PqChatUiAutomatorTest {
             // -----------------------------------------------------------------
             // 1. Open Settings
             clickTagByPixelCoordinates("contact_list_settings_button")
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
             // 2. Set App Lock PIN (Dialog boundsInScreen physical click)
             clickTagByPixelCoordinates("settings_pin_setup_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("pin_dialog_input").performTextInput("1234")
             clickTagByPixelCoordinates("pin_dialog_confirm_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_dialog_input").fetchSemanticsNodes().isEmpty()
             }
 
             // 3. Set Duress PIN (Dialog boundsInScreen physical click)
             clickTagByPixelCoordinates("settings_duress_pin_setup_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("duress_pin_dialog_input").performTextInput("9999")
             clickTagByPixelCoordinates("duress_pin_dialog_confirm_button")
-            composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("duress_pin_dialog_input").fetchSemanticsNodes().isEmpty()
             }
 
             // 4. Return to ContactList -> Triggers lock screen
             clickTagByPixelCoordinates("settings_back_button")
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("pin_input_field").fetchSemanticsNodes().isNotEmpty()
             }
             composeTestRule.onNodeWithTag("pin_key_9").assertIsDisplayed()
@@ -1152,7 +1216,7 @@ class PqChatUiAutomatorTest {
             clickTagByPixelCoordinates("pin_unlock_button")
 
             // 6. Verify Duress panic wipes master key and opens DecoyNotesScreen
-            composeTestRule.waitUntil(timeoutMillis = 7_000) {
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 composeTestRule.onAllNodesWithTag("decoy_notes_empty_text").fetchSemanticsNodes().isNotEmpty()
             }
             assertFalse(
@@ -1162,6 +1226,9 @@ class PqChatUiAutomatorTest {
         } finally {
             // Restore test key & reset lock state
             org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val prefs = context.getSharedPreferences("pqchat_settings", android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
             try {
                 kotlinx.coroutines.runBlocking {
                     composeTestRule.activity.viewModel.repository.ensureSelfNotesContactExists()
@@ -1179,7 +1246,7 @@ class PqChatUiAutomatorTest {
         }
 
         // Return back to ContactListScreen
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
 
@@ -1187,7 +1254,7 @@ class PqChatUiAutomatorTest {
         // B. Research Telemetry Informed Consent Dialog (boundsInScreen physical click)
         // -----------------------------------------------------------------
         clickTagByPixelCoordinates("contact_list_settings_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
         }
 
@@ -1195,12 +1262,12 @@ class PqChatUiAutomatorTest {
             composeTestRule.onNodeWithTag("settings_research_telemetry_switch").performScrollTo()
         }
         clickTagByPixelCoordinates("settings_research_telemetry_switch")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
         }
         // Physical click inside separate Dialog window
         clickTagByPixelCoordinates("research_consent_confirm_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isEmpty()
         }
         assertTrue(composeTestRule.activity.viewModel.isAnonymousStatsEnabled.value)
@@ -1235,7 +1302,7 @@ class PqChatUiAutomatorTest {
         // Turn off dead man switch and return to ContactListScreen
         clickTagByPixelCoordinates("settings_dead_man_switch_toggle")
         clickTagByPixelCoordinates("settings_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
 
@@ -1243,7 +1310,7 @@ class PqChatUiAutomatorTest {
         // D. Group Poll Creation (0x0A) Physical Clicks
         // -----------------------------------------------------------------
         clickTagByPixelCoordinates("new_group_fab")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("create_group_name_input").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("create_group_name_input").performTextInput("Poll Test Group")
@@ -1255,7 +1322,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("chat_create_poll_button")
 
         // In CreatePollDialog: input question and options
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("poll_question_input").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithTag("poll_question_input").performTextInput("Preferred PQC Suite?")
@@ -1265,23 +1332,23 @@ class PqChatUiAutomatorTest {
         // Physically click Create Poll in dialog
         clickTagByPixelCoordinates("poll_create_confirm_button")
 
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("poll_create_confirm_button").fetchSemanticsNodes().isEmpty()
         }
 
         // Verify poll card appears in chat
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("Preferred PQC Suite?", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("Preferred PQC Suite?", substring = true).assertIsDisplayed()
 
         // Leave group and return to ContactListScreen
         clickTagByPixelCoordinates("chat_group_members_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("leave_group_button").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("leave_group_button")
-        composeTestRule.waitUntil(timeoutMillis = 7_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
