@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`f4368ba`](https://github.com/mppjuro/PQChat.DHT/commit/f4368ba76872359adbd0ea74225fe84fdc8f6a14) (2026-11-03) — **e2e**: eliminate keyboard obstruction, binder buffer exhaustion, and optimize qr key exchange
 - [`766e368`](https://github.com/mppjuro/PQChat.DHT/commit/766e36872a338c547edd447ec4124ceebe8e6091) (2026-11-03) — **e2e**: debloat emulators and stabilize multi-node orchestration
 - [`6d15dbb`](https://github.com/mppjuro/PQChat.DHT/commit/6d15dbbb9fb0f77d79551389d6adcddf0b9d1845) (2026-11-03) — **test**: prevent double-click in PqChatUiAutomatorTest helper
 - [`d11502a`](https://github.com/mppjuro/PQChat.DHT/commit/d11502a66260064ebc3734100b9ab08d4db0370c) (2026-11-03) — **test**: stabilize PqChatUiAutomatorTest on AVD API 34 in CI
