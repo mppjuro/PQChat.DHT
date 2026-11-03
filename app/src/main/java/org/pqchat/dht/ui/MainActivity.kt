@@ -35,14 +35,22 @@ class MainActivity : FragmentActivity() {
         lockAppCallback?.invoke()
     }
 
+    private fun applyCustomBootstrap(intent: android.content.Intent?) {
+        val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
+        if (bootstrapPort > 0) {
+            val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
+            val endpoints = listOf(Pair(host, bootstrapPort))
+            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = endpoints
+            (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
+                app.dhtLeafNode.reconfigureCustomBootstrap(endpoints)
+            }
+        }
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val bootstrapPort = intent.getIntExtra("dht_bootstrap_port", -1)
-        if (bootstrapPort > 0) {
-            val host = intent.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
-            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = listOf(Pair(host, bootstrapPort))
-        }
+        applyCustomBootstrap(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,11 +59,7 @@ class MainActivity : FragmentActivity() {
         // Initialize Notification Channels
         NotificationHelper.createNotificationChannel(this)
 
-        val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
-        if (bootstrapPort > 0) {
-            val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
-            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = listOf(Pair(host, bootstrapPort))
-        }
+        applyCustomBootstrap(intent)
 
 
         setContent {

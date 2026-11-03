@@ -832,6 +832,15 @@ open class DhtLeafNode(
         list
     }
 
+    fun reconfigureCustomBootstrap(endpoints: List<Pair<String, Int>>) {
+        customBootstrapEndpoints = endpoints
+        routingTable.clear()
+        fastestNodesCache.clear()
+        scope.launch(Dispatchers.IO) {
+            bootstrap()
+        }
+    }
+
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
         if (isTestLoopbackMode) return@withContext
         val cached = getCachedFastestNodes()

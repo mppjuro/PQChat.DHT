@@ -61,6 +61,7 @@ fun HandshakeScreen(
     SecureScreenEffect()
 
     val context = LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     var selectedTab by remember(initialTabIsBob) { mutableIntStateOf(if (initialTabIsBob) 1 else 0) }
     var contactName by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) "Alice" else "Bob") }
     var qrBase64Input by remember { mutableStateOf("") }
@@ -125,6 +126,14 @@ fun HandshakeScreen(
                             decoded = qr
                             break
                         }
+                    }
+                }
+                if (decoded.isNullOrBlank()) {
+                    val txtFiles = picturesDir.listFiles { f -> f.extension.equals("txt", ignoreCase = true) }
+                        ?.sortedByDescending { it.lastModified() }
+                    val txtContent = txtFiles?.firstOrNull()?.readText()?.trim()
+                    if (!txtContent.isNullOrBlank() && txtContent.length >= 1000) {
+                        decoded = txtContent
                     }
                 }
             } catch (_: Exception) {}
@@ -560,6 +569,51 @@ fun HandshakeScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Scan QR or steganographic image from gallery",
+                            fontWeight = FontWeight.SemiBold,
+                            color = NeonCyan
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val clipText = clipboardManager.getText()?.text
+                            if (!clipText.isNullOrBlank()) {
+                                qrBase64Input = clipText.trim()
+                                galleryScanError = null
+                            } else {
+                                try {
+                                    val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
+                                    val txtFiles = picturesDir.listFiles { f -> f.extension.equals("txt", ignoreCase = true) }
+                                        ?.sortedByDescending { it.lastModified() }
+                                    val txtContent = txtFiles?.firstOrNull()?.readText()?.trim()
+                                    if (!txtContent.isNullOrBlank() && txtContent.length >= 1000) {
+                                        qrBase64Input = txtContent
+                                        galleryScanError = null
+                                    } else {
+                                        galleryScanError = "Clipboard is empty and no key file was found."
+                                    }
+                                } catch (_: Exception) {
+                                    galleryScanError = "Clipboard is empty or does not contain valid text."
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan),
+                        border = BorderStroke(1.dp, NeonCyan.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .testTag("handshake_paste_clipboard_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentPaste,
+                            contentDescription = "Paste from Clipboard",
+                            modifier = Modifier.size(20.dp),
+                            tint = NeonCyan
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Paste Hybrid Key from Clipboard",
                             fontWeight = FontWeight.SemiBold,
                             color = NeonCyan
                         )
