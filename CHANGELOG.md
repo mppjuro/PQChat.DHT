@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`85c820f`](https://github.com/mppjuro/PQChat.DHT/commit/85c820f17a74ed5541b5bf3303def1764c945b1c) (2026-11-03) — **test**: resolve CI emulator instrumented test timeouts and activity lifecycle hangs
 - [`75d6ee2`](https://github.com/mppjuro/PQChat.DHT/commit/75d6ee2bb2dd070f42396ca0d5590f38d5a0e12d) (2026-11-01) — **test**: resolve UI Automator tap drops and multi-node E2E screen lock timeouts
 - [`173bfbe`](https://github.com/mppjuro/PQChat.DHT/commit/173bfbee8e6b05f4ee68533a7457eb4418e9d232) (2026-11-01) — **lint**: resolve SdCardPath and SelectedPhotoAccess errors, configure nightly release write permissions
 - [`8b1015b`](https://github.com/mppjuro/PQChat.DHT/commit/8b1015b02d99859d8a3e43501cd792fd6f8a1f78) (2026-11-01) — **ci**: optimize multi-emulator E2E orchestration, gallery indexing, and matrix execution
