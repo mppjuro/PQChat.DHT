@@ -35,6 +35,16 @@ class MainActivity : FragmentActivity() {
         lockAppCallback?.invoke()
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val bootstrapPort = intent.getIntExtra("dht_bootstrap_port", -1)
+        if (bootstrapPort > 0) {
+            val host = intent.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
+            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = listOf(Pair(host, bootstrapPort))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

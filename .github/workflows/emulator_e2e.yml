@@ -285,9 +285,15 @@ jobs:
               sed -i '/hw.keyboard/d' "$avd_dir/config.ini" || true
               sed -i '/hw.ramSize/d' "$avd_dir/config.ini" || true
               sed -i '/vm.heapSize/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.audioInput/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.audioOutput/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.gps/d' "$avd_dir/config.ini" || true
               echo "hw.keyboard = yes" >> "$avd_dir/config.ini"
               echo "hw.ramSize = 1536" >> "$avd_dir/config.ini"
               echo "vm.heapSize = 256" >> "$avd_dir/config.ini"
+              echo "hw.audioInput = no" >> "$avd_dir/config.ini"
+              echo "hw.audioOutput = no" >> "$avd_dir/config.ini"
+              echo "hw.gps = no" >> "$avd_dir/config.ini"
             fi
           done
 
@@ -411,12 +417,28 @@ jobs:
           if [ "$NODES" -ge 3 ]; then DEVS="$DEVS emulator-5558"; fi
           if [ "$NODES" -ge 4 ]; then DEVS="$DEVS emulator-5560"; fi
 
+          echo "=== Debloating Emulators and Disabling Background Bloatware ==="
+          DEBLOAT_PKGS="com.google.android.as com.google.android.as.oss com.google.android.googlequicksearchbox com.google.android.apps.messaging com.google.android.apps.wellbeing com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.android.dialer com.google.android.contacts"
+
           for dev in $DEVS; do
+            echo "Optimizing and debloating $dev..."
             adb -s $dev wait-for-device
             adb -s $dev shell settings put global window_animation_scale 0.0
             adb -s $dev shell settings put global transition_animation_scale 0.0
             adb -s $dev shell settings put global animator_duration_scale 0.0
             adb -s $dev shell svc power stayon true
+            adb -s $dev shell settings put system screen_off_timeout 2147483647
+            adb -s $dev shell settings put global hide_error_dialogs 1
+            adb -s $dev shell settings put secure immersive_mode_confirmations confirmed
+            adb -s $dev shell input keyevent 224
+            adb -s $dev shell wm dismiss-keyguard
+            adb -s $dev shell input keyevent 82
+            adb -s $dev shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS
+
+            for pkg in $DEBLOAT_PKGS; do
+              adb -s $dev shell pm disable-user --user 0 $pkg 2>/dev/null || true
+              adb -s $dev shell am force-stop $pkg 2>/dev/null || true
+            done
           done
 
           adb devices -l
