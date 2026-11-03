@@ -56,10 +56,39 @@ open class DhtLeafNode(
         var isTestLoopbackMode: Boolean = false
 
         /**
+         * Testbed mode flag (isolated local DHT cluster, no public internet nodes).
+         */
+        @Volatile
+        var isLocalTestbedMode: Boolean = false
+
+        /**
          * Additional custom bootstrap endpoints (e.g. local testbed / emulator cluster).
          */
         @Volatile
         var customBootstrapEndpoints: List<Pair<String, Int>> = emptyList()
+
+        fun isEmulator(): Boolean {
+            if (android.os.Build.FINGERPRINT == "robolectric") return false
+            return (android.os.Build.FINGERPRINT.startsWith("generic")
+                    || android.os.Build.FINGERPRINT.startsWith("unknown")
+                    || android.os.Build.MODEL.contains("google_sdk")
+                    || android.os.Build.MODEL.contains("Emulator")
+                    || android.os.Build.MODEL.contains("Android SDK built for x86")
+                    || android.os.Build.MANUFACTURER.contains("Genymotion")
+                    || android.os.Build.HARDWARE.contains("goldfish")
+                    || android.os.Build.HARDWARE.contains("ranchu"))
+        }
+
+        fun isLocalTestbedActive(): Boolean {
+            if (isLocalTestbedMode) return true
+            if (customBootstrapEndpoints.isNotEmpty()) {
+                return customBootstrapEndpoints.all { (host, _) ->
+                    host == "10.0.2.2" || host == "127.0.0.1" || host == "localhost" ||
+                    host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.")
+                }
+            }
+            return false
+        }
 
         val BOOTSTRAP_HOSTS = listOf(
             Pair("router.bittorrent.com", 6881),
@@ -482,10 +511,16 @@ open class DhtLeafNode(
     override fun getActivePeerCount(): Int = if (isTestLoopbackMode) routingTable.size.coerceAtLeast(8) else routingTable.size
 
     fun getCachedFastestNodes(): List<DhtPeer> {
-        return fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
+        val list = fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
+        return if (isLocalTestbedActive()) {
+            list.filter { isLoopbackOrLocal(it.address) }
+        } else {
+            list
+        }
     }
 
     suspend fun loadCachedNodesFromDb() = withContext(Dispatchers.IO) {
+        if (isLocalTestbedActive()) return@withContext
         val dao = nodeCacheDao ?: return@withContext
         try {
             val cachedEntities = dao.getFastestNodes(MAX_CACHED_NODES)
@@ -519,6 +554,9 @@ open class DhtLeafNode(
         rttMs: Long,
         nodeId: ByteArray? = null
     ) {
+        if (isLocalTestbedActive() && !isLoopbackOrLocal(address)) {
+            return
+        }
         val nId = if (nodeId != null && nodeId.size == 20) nodeId else ByteArray(20)
         val peer = DhtPeer(
             nodeId = nId,
@@ -568,6 +606,9 @@ open class DhtLeafNode(
     }
 
     fun addPeer(nodeId: ByteArray, address: InetSocketAddress) {
+        if (isLocalTestbedActive() && !isLoopbackOrLocal(address)) {
+            return
+        }
         val peer = DhtPeer(nodeId, address)
         if (!routingTable.contains(peer)) {
             if (routingTable.size < 128) {
@@ -601,7 +642,9 @@ open class DhtLeafNode(
                     // Update routing table if node ID is present
                     val responderId = msg.responseData["id"] as? ByteArray
                     if (responderId != null && responderId.size == 20) {
-                        addPeer(responderId, sender)
+                        if (!isLocalTestbedActive() || isLoopbackOrLocal(sender)) {
+                            addPeer(responderId, sender)
+                        }
                     }
 
                     // Parse compact 'nodes' list if present in response
@@ -741,6 +784,7 @@ open class DhtLeafNode(
     fun parseCompactNodesList(bytes: ByteArray): List<DhtPeer> {
         val count = bytes.size / 26
         val list = ArrayList<DhtPeer>(count)
+        val isLocalMode = isLocalTestbedActive()
         for (i in 0 until count) {
             val offset = i * 26
             val nodeId = bytes.copyOfRange(offset, offset + 20)
@@ -748,6 +792,9 @@ open class DhtLeafNode(
             val ip = InetAddress.getByAddress(ipBytes)
             val port = ((bytes[offset + 24].toInt() and 0xFF) shl 8) or (bytes[offset + 25].toInt() and 0xFF)
             val addr = InetSocketAddress(ip, port)
+            if (isLocalMode && !isLoopbackOrLocal(addr)) {
+                continue
+            }
             addPeer(nodeId, addr)
             list.add(DhtPeer(nodeId, addr))
         }
@@ -786,7 +833,11 @@ open class DhtLeafNode(
             Pair("10.0.2.17", DEFAULT_DHT_PORT)
         )
         val localEndpoints = if (customBootstrapEndpoints.isNotEmpty()) {
-            customBootstrapEndpoints + baseEndpoints
+            if (isLocalTestbedActive()) {
+                customBootstrapEndpoints
+            } else {
+                customBootstrapEndpoints + baseEndpoints
+            }
         } else {
             baseEndpoints
         }
@@ -805,6 +856,9 @@ open class DhtLeafNode(
             for (peer in getLocalPeers()) {
                 list.add(peer.address)
             }
+        }
+        if (isLocalTestbedActive()) {
+            return@withContext list
         }
         if (torProxyConfig?.enabled == true) {
             for ((host, port) in hosts) {
@@ -834,8 +888,15 @@ open class DhtLeafNode(
 
     fun reconfigureCustomBootstrap(endpoints: List<Pair<String, Int>>) {
         customBootstrapEndpoints = endpoints
+        val isLocal = endpoints.isNotEmpty() && endpoints.all { (h, _) ->
+            h == "10.0.2.2" || h == "127.0.0.1" || h == "localhost" || h.startsWith("10.") || h.startsWith("192.168.") || h.startsWith("172.")
+        }
+        if (isLocal) {
+            isLocalTestbedMode = true
+        }
         routingTable.clear()
         fastestNodesCache.clear()
+        targetRouteCache.clear()
         scope.launch(Dispatchers.IO) {
             bootstrap()
         }
@@ -843,6 +904,7 @@ open class DhtLeafNode(
 
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
         if (isTestLoopbackMode) return@withContext
+        val isLocal = isLocalTestbedActive()
         val cached = getCachedFastestNodes()
         val randomTarget = CryptoUtils.secureRandomBytes(20)
 
@@ -852,7 +914,7 @@ open class DhtLeafNode(
             launch {
                 try {
                     val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                    sendQuery(node, query, 1000L)
+                    sendQuery(node, query, if (isLocal) 500L else 1000L)
                 } catch (_: Exception) {
                 }
             }
@@ -864,15 +926,15 @@ open class DhtLeafNode(
                 launch {
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                        sendQuery(peer.address, query, TIMEOUT_MS)
+                        sendQuery(peer.address, query, if (isLocal) 500L else TIMEOUT_MS)
                     } catch (_: Exception) {
                     }
                 }
             }
         } else emptyList()
 
-        // Fallback or augment with public bootstrap servers
-        val bootstrapNodes = resolveBootstrapNodes()
+        // Fallback or augment with public bootstrap servers (ONLY if not in local testbed mode!)
+        val bootstrapNodes = if (isLocal) emptyList() else resolveBootstrapNodes()
         val initialJobs = bootstrapNodes.map { bootstrapNode ->
             launch {
                 try {
@@ -901,7 +963,7 @@ open class DhtLeafNode(
                 launch {
                     try {
                         val query = KrpcMessage.createFindNodeQuery(myNodeId, randomTarget)
-                        sendQuery(peer.address, query, TIMEOUT_MS)
+                        sendQuery(peer.address, query, if (isLocal) 500L else TIMEOUT_MS)
                     } catch (_: Exception) {
                     }
                 }
@@ -1040,6 +1102,7 @@ open class DhtLeafNode(
             return@withContext emptyList()
         }
         val targetHex = CryptoUtils.toHex(target)
+        val isLocalMode = isLocalTestbedActive()
         val localPeers = getLocalPeers()
         val cachedRoute = targetRouteCache[target] ?: emptyList()
         val routingPeers = findClosestNodes(target, count = maxOf(16, k * 2))
@@ -1047,13 +1110,14 @@ open class DhtLeafNode(
 
         val swarmPeers = (cachedRoute + routingPeers + cachedFastest)
             .filter { !isBootstrapRouter(it.address) }
+            .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
             .distinctBy { it.address }
 
         val initialPeers = if (swarmPeers.isNotEmpty()) {
             swarmPeers
         } else if (localPeers.isNotEmpty()) {
             localPeers
-        } else if (autoBootstrap) {
+        } else if (autoBootstrap && !isLocalMode) {
             resolveBootstrapNodes().map { DhtPeer(CryptoUtils.secureRandomBytes(20), it) }
         } else {
             emptyList()
@@ -1063,7 +1127,7 @@ open class DhtLeafNode(
             return@withContext emptyList()
         }
 
-        val isLiveNetwork = initialPeers.any { !isLoopbackOrLocal(it.address) }
+        val isLiveNetwork = !isLocalMode && initialPeers.any { !isLoopbackOrLocal(it.address) }
         val maxHops = if (isLiveNetwork) 5 else 3
 
         val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
@@ -1099,7 +1163,7 @@ open class DhtLeafNode(
                     launch {
                         try {
                             val query = KrpcMessage.createFindNodeQuery(myNodeId, target)
-                            val resp = sendQuery(peer.address, query, timeoutMs = 2500L)
+                            val resp = sendQuery(peer.address, query, timeoutMs = if (isLocalMode) 500L else 2500L)
                             if (resp != null) {
                                 val respId = resp.responseData["id"] as? ByteArray
                                 if (respId != null && respId.size == 20 && !isBootstrapRouter(peer.address)) {
@@ -1111,7 +1175,7 @@ open class DhtLeafNode(
                                 if (nodesBytes != null) {
                                     val discovered = parseCompactNodesList(nodesBytes)
                                     discovered.forEach { node ->
-                                        if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
+                                        if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
                                             candidatePool.putIfAbsent(node.address, node)
                                         }
                                     }
@@ -1296,13 +1360,16 @@ open class DhtLeafNode(
                 }
         }
 
-        val allCandidates = (storedPeers + remoteCandidates).distinctBy { it.address }
+        val isLocalMode = isLocalTestbedActive()
+        val allCandidates = (storedPeers + remoteCandidates)
+            .distinctBy { it.address }
+            .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
         val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
         allCandidates.forEach { candidatePool[it.address] = it }
         if (candidatePool.isEmpty()) {
             if (localPeers.isNotEmpty()) {
                 localPeers.forEach { candidatePool[it.address] = it }
-            } else if (autoBootstrap) {
+            } else if (autoBootstrap && !isLocalMode) {
                 resolveBootstrapNodes().forEach {
                     candidatePool[it] = DhtPeer(CryptoUtils.secureRandomBytes(20), it)
                 }
@@ -1314,7 +1381,7 @@ open class DhtLeafNode(
             return@withContext null
         }
 
-        val isLiveNetwork = candidatePool.values.any { !isLoopbackOrLocal(it.address) }
+        val isLiveNetwork = !isLocalMode && candidatePool.values.any { !isLoopbackOrLocal(it.address) }
         val minHops = if (isLiveNetwork) 4 else 1
         val maxHops = if (isLiveNetwork) 5 else 2
 
@@ -1407,7 +1474,7 @@ open class DhtLeafNode(
                                 if (nodesBytes != null) {
                                     val discovered = parseCompactNodesList(nodesBytes)
                                     discovered.forEach { node ->
-                                        if (!isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
+                                        if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
                                             candidatePool.putIfAbsent(node.address, node)
                                         }
                                     }
@@ -1593,6 +1660,7 @@ open class DhtLeafNode(
         val peersWithoutToken = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
 
         // 1. Initial candidates population
+        val isLocalMode = isLocalTestbedActive()
         val cachedRoute = targetRouteCache[target] ?: emptyList()
         val routingPeers = findClosestNodes(target, count = 24)
         val fastestNodes = getCachedFastestNodes()
@@ -1600,25 +1668,29 @@ open class DhtLeafNode(
 
         (cachedRoute + routingPeers + fastestNodes + localPeers)
             .filter { !isBootstrapRouter(it.address) }
+            .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
             .distinctBy { it.address }
             .forEach { candidatePool[it.address] = it }
 
-        if (candidatePool.size < 4 && autoBootstrap) {
+        if (candidatePool.size < 4 && autoBootstrap && !isLocalMode) {
             resolveBootstrapNodes().forEach {
                 candidatePool[it] = DhtPeer(CryptoUtils.secureRandomBytes(20), it)
             }
         }
 
-        val isLiveNetwork = candidatePool.values.any { !isLoopbackOrLocal(it.address) }
+        val isLiveNetwork = !isLocalMode && candidatePool.values.any { !isLoopbackOrLocal(it.address) }
         val maxLookupHops = if (isLiveNetwork) 8 else 3
-        val maxLookupQueries = if (isLiveNetwork) 80 else 16
+        val maxLookupQueries = if (isLiveNetwork) 80 else 24
+        val queryTimeoutMs = if (isLocalMode) 500L else 2500L
 
         // 2. Iterative BEP 44 token-harvesting lookup (sending "q": "get" to harvest tokens and closest nodes simultaneously)
         for (hop in 1..maxLookupHops) {
             if (queriesSent.get() >= maxLookupQueries) break
+            if (isLocalMode && tokenMap.size >= 8 && hop >= 2) break
 
             val unqueried = candidatePool.values
                 .filter { it.address !in queriedAddresses && (candidatePool.size <= 3 || !isBootstrapRouter(it.address)) }
+                .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
                 .sortedWith { a, b ->
                     val distA = xorDistance(a.nodeId, target)
                     val distB = xorDistance(b.nodeId, target)
@@ -1646,7 +1718,7 @@ open class DhtLeafNode(
                         try {
                             queriesSent.incrementAndGet()
                             val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                            val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = 2500L)
+                            val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = queryTimeoutMs)
                             when (res) {
                                 is QueryResult.Success -> {
                                     responsesReceived.incrementAndGet()
@@ -1707,7 +1779,7 @@ open class DhtLeafNode(
                             try {
                                 queriesSent.incrementAndGet()
                                 val getQuery = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                                val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = 2500L)
+                                val res = sendQueryWithResult(peer.address, getQuery, timeoutMs = queryTimeoutMs)
                                 when (res) {
                                     is QueryResult.Success -> {
                                         responsesReceived.incrementAndGet()
@@ -1831,7 +1903,7 @@ open class DhtLeafNode(
                             salt = salt,
                             readOnly = false
                         )
-                        val res = sendQueryWithResult(peer.address, putQuery, timeoutMs = 2500L)
+                        val res = sendQueryWithResult(peer.address, putQuery, timeoutMs = if (isLocalMode) 1000L else 2500L)
                         when (res) {
                             is QueryResult.Success -> {
                                 putAcks.incrementAndGet()
@@ -1854,13 +1926,14 @@ open class DhtLeafNode(
             }
 
             val startPut = System.currentTimeMillis()
-            // Wait until we reach 5 ACKs or all target nodes reply or 3500ms timeout
-            while (putAcks.get() < minOf(5, targetPutNodes.size) && (System.currentTimeMillis() - startPut) < 3500L) {
-                if (putAcks.get() >= 3 && (System.currentTimeMillis() - startPut) > 1500L) {
+            val maxPutWait = if (isLocalMode) 1000L else 3500L
+            // Wait until we reach 5 ACKs or all target nodes reply or maxPutWait timeout
+            while (putAcks.get() < minOf(5, targetPutNodes.size) && (System.currentTimeMillis() - startPut) < maxPutWait) {
+                if (putAcks.get() >= 3 && (System.currentTimeMillis() - startPut) > (if (isLocalMode) 150L else 1500L)) {
                     putJobs.forEach { it.cancel() }
                     break
                 }
-                delay(25)
+                delay(10)
             }
             putJobs.forEach { it.cancel() }
         }
@@ -1946,10 +2019,13 @@ open class DhtLeafNode(
      */
     override suspend fun sendKeepalivePing(): Boolean = withContext(Dispatchers.IO) {
         if (isTestLoopbackMode) return@withContext true
+        val fallbackPeer = if (!isLocalTestbedActive()) {
+            resolveBootstrapNodes().firstOrNull()?.let { DhtPeer(ByteArray(20), it) }
+        } else null
         val targetPeer = getCachedFastestNodes().firstOrNull()
             ?: routingTable.firstOrNull()
             ?: getLocalPeers().firstOrNull()
-            ?: resolveBootstrapNodes().firstOrNull()?.let { DhtPeer(ByteArray(20), it) }
+            ?: fallbackPeer
             ?: return@withContext false
 
         try {

@@ -57,6 +57,13 @@ class PQChatApplication : Application() {
 
         // Initialize Core Components & Singletons
         database = AppDatabase.getInstance(this)
+        if (DhtLeafNode.isEmulator()) {
+            DhtLeafNode.isLocalTestbedMode = true
+            if (DhtLeafNode.customBootstrapEndpoints.isEmpty()) {
+                DhtLeafNode.customBootstrapEndpoints = listOf(Pair("10.0.2.2", 30000))
+            }
+        }
+
         dhtLeafNode = DhtLeafNode(port = DhtLeafNode.DEFAULT_DHT_PORT, nodeCacheDao = database.dhtNodeCacheDao())
 
         // 1 & 2: Fail-Closed Tor configuration prior to any network start or worker queues

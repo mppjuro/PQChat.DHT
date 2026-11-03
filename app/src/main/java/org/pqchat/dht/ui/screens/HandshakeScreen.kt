@@ -63,7 +63,7 @@ fun HandshakeScreen(
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     var selectedTab by remember(initialTabIsBob) { mutableIntStateOf(if (initialTabIsBob) 1 else 0) }
-    var contactName by remember(initialTabIsBob) { mutableStateOf(if (initialTabIsBob) "Alice" else "Bob") }
+    var contactName by remember { mutableStateOf("") }
     var qrBase64Input by remember { mutableStateOf("") }
     var isManualInputExpanded by remember { mutableStateOf(false) }
 
@@ -94,11 +94,17 @@ fun HandshakeScreen(
 
     // Ensure fresh handshake state on entrance and cleanup on disposal
     LaunchedEffect(Unit) {
+        contactName = ""
+        qrBase64Input = ""
+        isManualInputExpanded = false
+        galleryScanError = null
         viewModel.resetHandshakeState()
     }
 
     DisposableEffect(Unit) {
         onDispose {
+            contactName = ""
+            qrBase64Input = ""
             viewModel.resetHandshakeState()
         }
     }
@@ -185,6 +191,8 @@ fun HandshakeScreen(
                 navigationIcon = {
                     IconButton(
                         onClick = {
+                            contactName = ""
+                            qrBase64Input = ""
                             viewModel.resetHandshakeState()
                             onBack()
                         },
@@ -213,7 +221,10 @@ fun HandshakeScreen(
                     selected = selectedTab == 0,
                     onClick = {
                         selectedTab = 0
-                        contactName = "Bob"
+                        contactName = ""
+                        qrBase64Input = ""
+                        isManualInputExpanded = false
+                        galleryScanError = null
                         viewModel.resetHandshakeState()
                     },
                     text = { Text("Alice (Display QR)") },
@@ -224,7 +235,10 @@ fun HandshakeScreen(
                     selected = selectedTab == 1,
                     onClick = {
                         selectedTab = 1
-                        contactName = "Alice"
+                        contactName = ""
+                        qrBase64Input = ""
+                        isManualInputExpanded = false
+                        galleryScanError = null
                         viewModel.resetHandshakeState()
                         // If camera permission not yet granted, request it on tab switch
                         if (!hasCameraPermission) {
@@ -283,7 +297,10 @@ fun HandshakeScreen(
 
                     if (aliceInitState == null) {
                         Button(
-                            onClick = { viewModel.startAliceHandshake(contactName) },
+                            onClick = {
+                                val name = contactName.trim().ifBlank { "Bob" }
+                                viewModel.startAliceHandshake(name)
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
@@ -442,7 +459,12 @@ fun HandshakeScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { viewModel.resetHandshakeState() },
+                                onClick = {
+                                    contactName = ""
+                                    qrBase64Input = ""
+                                    galleryScanError = null
+                                    viewModel.resetHandshakeState()
+                                },
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AmberWarning),
                                 border = BorderStroke(1.dp, AmberWarning),
                                 shape = RoundedCornerShape(12.dp),
@@ -455,7 +477,8 @@ fun HandshakeScreen(
                             Button(
                                 onClick = {
                                     viewModel.resetHandshakeState()
-                                    viewModel.startAliceHandshake(contactName)
+                                    val name = contactName.trim().ifBlank { "Bob" }
+                                    viewModel.startAliceHandshake(name)
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black),
                                 shape = RoundedCornerShape(12.dp),
@@ -695,7 +718,8 @@ fun HandshakeScreen(
                         onClick = {
                             try {
                                 val bytes = QrCodeUtil.decodeQrString(qrBase64Input)
-                                viewModel.processBobHandshake(bytes, contactName)
+                                val name = contactName.trim().ifBlank { "Alice" }
+                                viewModel.processBobHandshake(bytes, name)
                             } catch (_: Exception) {}
                         },
                         enabled = isPayloadValid && !isHandshaking && (bobHandshakeStatus == BobHandshakeStatus.IDLE || bobHandshakeStatus == BobHandshakeStatus.FAILED || bobHandshakeStatus == BobHandshakeStatus.TIMEOUT),
@@ -839,6 +863,8 @@ fun HandshakeScreen(
             AlertDialog(
                 modifier = Modifier.semantics { testTagsAsResourceId = true },
                 onDismissRequest = {
+                    contactName = ""
+                    qrBase64Input = ""
                     viewModel.resetHandshakeState()
                     onBack()
                 },
@@ -913,6 +939,8 @@ fun HandshakeScreen(
                         onClick = {
                             val targetId = completedState.contactId
                             viewModel.confirmHandshakeAndVerify(targetId)
+                            contactName = ""
+                            qrBase64Input = ""
                             onSuccess(targetId)
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -934,6 +962,8 @@ fun HandshakeScreen(
                         onClick = {
                             val targetId = completedState.contactId
                             viewModel.confirmHandshakeWithoutVerification(targetId)
+                            contactName = ""
+                            qrBase64Input = ""
                             onSuccess(targetId)
                         },
                         colors = ButtonDefaults.outlinedButtonColors(

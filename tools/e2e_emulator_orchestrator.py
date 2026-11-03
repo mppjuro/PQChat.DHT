@@ -229,7 +229,7 @@ logcat -c
             print(f"[{self.name}] App {package} not in foreground (Current: {focus_info.strip()[:100]}). Restoring...", flush=True)
             self.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
             self.sleep(0.3)
-            self.shell(f"am start -n {package}/{activity} --activity-brought-to-front --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
+            self.shell(f"am start -n {package}/{activity} --activity-brought-to-front --ez is_local_testbed true --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
             self.sleep(1.0)
             self.invalidate_ui_cache()
             return True
@@ -279,9 +279,20 @@ logcat -c
         y = int(self.screen_height * ry)
         self.tap(x, y)
 
-    def type_text(self, text: str):
+    def clear_focused_text(self, count: int = 50):
+        """Clears existing text in the currently focused input field using KEYCODE_MOVE_END and KEYCODE_DEL."""
+        if self.dry_run:
+            return
+        self.shell("input keyevent 123")
+        del_events = " ".join(["67"] * min(count, 60))
+        self.shell(f"input keyevent {del_events}")
+        self.sleep(0.1)
+
+    def type_text(self, text: str, clear_first: bool = True):
+        if clear_first:
+            self.clear_focused_text()
         escaped = text.replace(" ", "%s").replace("&", "\\&").replace("'", "\\'")
-        print(f"[{self.name}] Typing text: '{text}'", flush=True)
+        print(f"[{self.name}] Typing text: '{text}' (clear_first={clear_first})", flush=True)
         self.shell(f"input text {escaped}")
         self.sleep(0.3)
         self.close_keyboard()
@@ -312,14 +323,16 @@ logcat -c
         print(f"[{self.name}] Capturing screenshot -> {filepath.name}", flush=True)
         if self.dry_run:
             return filepath
+        remote_tmp = f"/data/local/tmp/{filename}.png"
         try:
-            remote_tmp = f"/sdcard/{filename}.png"
             self.shell(f"screencap -p {remote_tmp}")
             code, _, _ = self.run_cmd(["pull", remote_tmp, str(filepath)], timeout=15)
+            self.shell(f"rm -f {remote_tmp}")
             if code == 0 and filepath.exists():
                 return filepath
         except Exception as e:
             print(f"[{self.name}] Screencap failed: {e}", flush=True)
+            self.shell(f"rm -f {remote_tmp}")
         return None
 
     def dump_logcat(self, filename: str) -> Optional[Path]:
@@ -409,13 +422,14 @@ logcat -c
         text: Optional[str] = None,
         content_desc: Optional[str] = None,
         resource_id: Optional[str] = None,
-        test_tag: Optional[str] = None
+        test_tag: Optional[str] = None,
+        allow_substring: Optional[bool] = None
     ) -> Optional[Tuple[int, int, int, int]]:
         root = self.dump_ui()
         if root is None:
             return None
 
-        # Pass 1: Match by test_tag or resource_id
+        # Pass 1: Match by test_tag or resource_id (EXACT match only)
         target_tag = test_tag or resource_id
         if target_tag:
             for node in root.iter("node"):
@@ -423,13 +437,11 @@ logcat -c
                 n_desc = node.attrib.get("content-desc", "")
                 n_text = node.attrib.get("text", "")
                 if (
-                    target_tag in n_id
-                    or n_id == target_tag
+                    n_id == target_tag
                     or n_id.endswith(f":id/{target_tag}")
                     or n_id.endswith(f"/{target_tag}")
                     or n_desc == target_tag
-                    or target_tag in n_desc
-                    or target_tag == n_text
+                    or n_text == target_tag
                 ):
                     bounds_str = node.attrib.get("bounds", "")
                     if bounds_str:
@@ -455,21 +467,25 @@ logcat -c
                         return bounds
 
         # Pass 3: Substring text or content_desc
-        for node in root.iter("node"):
-            n_text = node.attrib.get("text", "")
-            n_desc = node.attrib.get("content-desc", "")
-            if text and (text.lower() in n_text.lower() or text.lower() in n_desc.lower()):
-                bounds_str = node.attrib.get("bounds", "")
-                if bounds_str:
-                    bounds = self.parse_bounds(bounds_str)
-                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
-                        return bounds
-            if content_desc and content_desc.lower() in n_desc.lower():
-                bounds_str = node.attrib.get("bounds", "")
-                if bounds_str:
-                    bounds = self.parse_bounds(bounds_str)
-                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
-                        return bounds
+        # When test_tag is explicitly provided, do NOT fall through to Pass 3 substring matching
+        # unless allow_substring is explicitly set to True.
+        should_allow_substring = allow_substring if allow_substring is not None else (test_tag is None)
+        if should_allow_substring:
+            for node in root.iter("node"):
+                n_text = node.attrib.get("text", "")
+                n_desc = node.attrib.get("content-desc", "")
+                if text and (text.lower() in n_text.lower() or text.lower() in n_desc.lower()):
+                    bounds_str = node.attrib.get("bounds", "")
+                    if bounds_str:
+                        bounds = self.parse_bounds(bounds_str)
+                        if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
+                            return bounds
+                if content_desc and content_desc.lower() in n_desc.lower():
+                    bounds_str = node.attrib.get("bounds", "")
+                    if bounds_str:
+                        bounds = self.parse_bounds(bounds_str)
+                        if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
+                            return bounds
 
         return None
 
@@ -481,17 +497,30 @@ logcat -c
         test_tag: Optional[str] = None,
         fallback_ratio: Optional[Tuple[float, float]] = None,
         auto_scroll: bool = True,
-        capture_on_fail: bool = True
+        capture_on_fail: bool = True,
+        allow_substring: Optional[bool] = None
     ) -> bool:
         desc = test_tag or text or content_desc or resource_id or "element"
         if self.dry_run:
             print(f"[{self.name} DRY-RUN] click_element '{desc}' -> simulated click", flush=True)
             return True
-        bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+        bounds = self.find_node(
+            text=text,
+            content_desc=content_desc,
+            resource_id=resource_id,
+            test_tag=test_tag,
+            allow_substring=allow_substring
+        )
         if not bounds:
             # Ensure app focus was not lost to launcher or system dialogs
             self.ensure_app_foreground()
-            bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+            bounds = self.find_node(
+                text=text,
+                content_desc=content_desc,
+                resource_id=resource_id,
+                test_tag=test_tag,
+                allow_substring=allow_substring
+            )
 
         if bounds and auto_scroll:
             x1, y1, x2, y2 = bounds
@@ -501,11 +530,23 @@ logcat -c
                     self.scroll_down()
                 else:
                     self.scroll_up()
-                bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+                bounds = self.find_node(
+                    text=text,
+                    content_desc=content_desc,
+                    resource_id=resource_id,
+                    test_tag=test_tag,
+                    allow_substring=allow_substring
+                )
 
         if not bounds and auto_scroll:
             self.scroll_down()
-            bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+            bounds = self.find_node(
+                text=text,
+                content_desc=content_desc,
+                resource_id=resource_id,
+                test_tag=test_tag,
+                allow_substring=allow_substring
+            )
             if not bounds:
                 self.scroll_up()
 
@@ -535,7 +576,8 @@ logcat -c
         resource_id: Optional[str] = None,
         test_tag: Optional[str] = None,
         timeout: int = 30,
-        sync_chip_tag: Optional[str] = None
+        sync_chip_tag: Optional[str] = None,
+        allow_substring: Optional[bool] = None
     ) -> bool:
         desc = test_tag or text or content_desc or resource_id or "element"
         if self.dry_run:
@@ -545,7 +587,13 @@ logcat -c
         print(f"[{self.name}] Waiting for element '{desc}' (timeout={timeout}s)...", flush=True)
         last_sync_time = start
         while time.time() - start < timeout:
-            bounds = self.find_node(text=text, content_desc=content_desc, resource_id=resource_id, test_tag=test_tag)
+            bounds = self.find_node(
+                text=text,
+                content_desc=content_desc,
+                resource_id=resource_id,
+                test_tag=test_tag,
+                allow_substring=allow_substring
+            )
             if bounds:
                 print(f"[{self.name}] Found '{desc}'!", flush=True)
                 return True
@@ -693,7 +741,7 @@ logcat -c
 
     def start_app(self, package: str = "org.pqchat.dht", activity: str = ".ui.MainActivity"):
         print(f"[{self.name}] Starting {package}/{activity} with local DHT cluster 10.0.2.2:30000", flush=True)
-        self.shell(f"am start -W -n {package}/{activity} --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
+        self.shell(f"am start -W -n {package}/{activity} --ez is_local_testbed true --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
         self.invalidate_ui_cache()
 
 
@@ -879,7 +927,8 @@ class MultiEmulatorOrchestrator:
 
         # Initiator: Enter contact name
         initiator.click_element(test_tag="handshake_alice_name_input")
-        initiator.type_text(responder.name)
+        initiator.clear_focused_text()
+        initiator.type_text(responder.name, clear_first=True)
         self.sleep(0.5)
 
         # Initiator: Tap "Generate ML-KEM-512 QR Code"
@@ -904,6 +953,8 @@ class MultiEmulatorOrchestrator:
             return False
 
         # 2. Push key material to responder
+        # Clean any old images or text files in /sdcard/ and /sdcard/Pictures/ to ensure PhotoPicker only shows the fresh QR
+        responder.shell("rm -f /sdcard/*.png /sdcard/Pictures/*.png /sdcard/Pictures/*.txt")
         if b64_payload:
             # Put directly into system clipboard on responder via ADB
             escaped_b64 = b64_payload.replace('"', '\\"')
@@ -938,7 +989,8 @@ class MultiEmulatorOrchestrator:
 
         # Responder: Enter contact name
         responder.click_element(test_tag="handshake_bob_name_input")
-        responder.type_text(initiator.name)
+        responder.clear_focused_text()
+        responder.type_text(initiator.name, clear_first=True)
         self.sleep(0.5)
         responder.close_keyboard()
 
@@ -1155,27 +1207,28 @@ class MultiEmulatorOrchestrator:
 
         # Alice: Enter group name
         self.alice.click_element(test_tag="create_group_name_input")
-        self.alice.type_text(group_name)
+        self.alice.clear_focused_text()
+        self.alice.type_text(group_name, clear_first=True)
         self.sleep(1.0)
 
         # Alice: Select participants (strictly verify each participant without fallback_ratio!)
         selected_all = True
         print("[Alice] Selecting participant Bob in group dialog...", flush=True)
-        if not self.alice.click_element(test_tag="group_participant_Bob", text="Bob"):
+        if not self.alice.click_element(test_tag="group_participant_Bob", allow_substring=False):
             print("[Alice] Failed to select participant Bob!", flush=True)
             selected_all = False
         self.sleep(0.5)
 
         if self.charlie:
             print("[Alice] Selecting participant Charlie in group dialog...", flush=True)
-            if not self.alice.click_element(test_tag="group_participant_Charlie", text="Charlie"):
+            if not self.alice.click_element(test_tag="group_participant_Charlie", allow_substring=False):
                 print("[Alice] Failed to select participant Charlie!", flush=True)
                 selected_all = False
             self.sleep(0.5)
 
         if self.dave:
             print("[Alice] Selecting participant Dave in group dialog...", flush=True)
-            if not self.alice.click_element(test_tag="group_participant_Dave", text="Dave"):
+            if not self.alice.click_element(test_tag="group_participant_Dave", allow_substring=False):
                 print("[Alice] Failed to select participant Dave!", flush=True)
                 selected_all = False
             self.sleep(0.5)

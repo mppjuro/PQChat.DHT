@@ -37,10 +37,15 @@ class MainActivity : FragmentActivity() {
 
     private fun applyCustomBootstrap(intent: android.content.Intent?) {
         val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
-        if (bootstrapPort > 0) {
+        val isTestbedExplicit = intent?.getBooleanExtra("is_local_testbed", false) == true
+        if (bootstrapPort > 0 || isTestbedExplicit) {
+            val port = if (bootstrapPort > 0) bootstrapPort else 30000
             val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
-            val endpoints = listOf(Pair(host, bootstrapPort))
+            val endpoints = listOf(Pair(host, port))
             org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = endpoints
+            if (host == "10.0.2.2" || host == "127.0.0.1" || host.startsWith("10.") || host.startsWith("192.168.")) {
+                org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedMode = true
+            }
             (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
                 app.dhtLeafNode.reconfigureCustomBootstrap(endpoints)
             }

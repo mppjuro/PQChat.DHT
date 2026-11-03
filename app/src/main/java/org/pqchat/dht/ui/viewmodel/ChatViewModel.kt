@@ -870,7 +870,8 @@ class ChatViewModel @JvmOverloads constructor(
                         val target0Copy = bobResult.target0.copyOf()
                     val frameCopy = bobResult.frame.copyOf()
                     val edPrivateKeySeedCopy = bobResult.edPrivateKeySeed.copyOf()
-                    viewModelScope.launch(Dispatchers.IO) {
+                    bobRepublishJob?.cancel()
+                    bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
                         try {
                             for (extraAttempt in 1..3) {
                                 delay(10_000L)
