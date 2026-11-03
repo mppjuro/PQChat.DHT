@@ -33,6 +33,9 @@ import org.pqchat.dht.ui.util.BatteryOptimizationHelper
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.ExperimentalComposeUiApi
 import org.pqchat.dht.ui.viewmodel.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,7 +91,9 @@ fun SettingsScreen(
     val researchTtlSamplesCount by viewModel.researchTtlSamplesCount.collectAsState()
     val researchSyncStatus by viewModel.researchSyncStatus.collectAsState()
 
+    @OptIn(ExperimentalComposeUiApi::class)
     Scaffold(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         topBar = {
             TopAppBar(
                 title = { Text("Settings", fontWeight = FontWeight.Bold) },

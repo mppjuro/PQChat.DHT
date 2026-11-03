@@ -1,10 +1,13 @@
 package org.pqchat.dht
 
+import android.os.Build
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.rule.GrantPermissionRule
 import org.junit.After
 import org.junit.Assert.assertNotNull
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.pqchat.dht.crypto.KeystoreCrypto
@@ -14,6 +17,20 @@ import org.pqchat.dht.ui.util.SecureScreenConfig
 
 @RunWith(AndroidJUnit4::class)
 class MainActivityInstrumentedSmokeTest {
+
+    @get:Rule
+    val permissionRule: GrantPermissionRule = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        GrantPermissionRule.grant(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            android.Manifest.permission.READ_MEDIA_IMAGES
+        )
+    } else {
+        GrantPermissionRule.grant(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        )
+    }
 
     @Before
     fun setUp() {

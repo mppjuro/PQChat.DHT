@@ -41,6 +41,12 @@ class MainActivity : FragmentActivity() {
         // Initialize Notification Channels
         NotificationHelper.createNotificationChannel(this)
 
+        val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
+        if (bootstrapPort > 0) {
+            val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
+            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = listOf(Pair(host, bootstrapPort))
+        }
+
 
         setContent {
             val themeMode by viewModel.themeMode.collectAsState()

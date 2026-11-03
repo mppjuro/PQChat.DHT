@@ -155,7 +155,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: instrumented-test-results
-          path: app/build/reports/androidTests/connected/
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/
 
   update-changelog:
     name: Generate & Update Changelog

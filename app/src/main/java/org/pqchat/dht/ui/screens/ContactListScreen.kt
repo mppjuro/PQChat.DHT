@@ -20,6 +20,10 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -76,7 +80,9 @@ fun ContactListScreen(
         contacts.filter { it.id != ChatRepository.SELF_CONTACT_ID }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     Scaffold(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         topBar = {
             TopAppBar(
                 title = {
@@ -190,7 +196,11 @@ fun ContactListScreen(
         },
         containerColor = appColors.background,
         floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End) {
+            @OptIn(ExperimentalComposeUiApi::class)
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.semantics { testTagsAsResourceId = true }
+            ) {
                 ExtendedFloatingActionButton(
                     onClick = { showCreateGroupDialog = true },
                     containerColor = CryptoPurple,
@@ -200,6 +210,10 @@ fun ContactListScreen(
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .padding(bottom = 8.dp)
+                        .semantics {
+                            testTagsAsResourceId = true
+                            contentDescription = "new_group_fab"
+                        }
                         .testTag("new_group_fab")
                 )
                 ExtendedFloatingActionButton(
@@ -211,6 +225,10 @@ fun ContactListScreen(
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .padding(bottom = 8.dp)
+                        .semantics {
+                            testTagsAsResourceId = true
+                            contentDescription = "join_chat_fab"
+                        }
                         .testTag("join_chat_fab")
                 )
                 ExtendedFloatingActionButton(
@@ -220,7 +238,12 @@ fun ContactListScreen(
                     icon = { Icon(Icons.Default.QrCode, contentDescription = null) },
                     text = { Text("New Chat (Alice)") },
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.testTag("new_chat_fab")
+                    modifier = Modifier
+                        .semantics {
+                            testTagsAsResourceId = true
+                            contentDescription = "new_chat_fab"
+                        }
+                        .testTag("new_chat_fab")
                 )
             }
         }
@@ -726,7 +749,9 @@ fun CreateGroupDialog(
     var groupName by remember { mutableStateOf("") }
     val selectedContactIds = remember { mutableStateListOf<String>() }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     AlertDialog(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {

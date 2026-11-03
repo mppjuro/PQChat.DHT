@@ -54,11 +54,13 @@ class PqChatUiAutomatorTest {
     val permissionRule: GrantPermissionRule = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         GrantPermissionRule.grant(
             android.Manifest.permission.CAMERA,
-            android.Manifest.permission.POST_NOTIFICATIONS
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            android.Manifest.permission.READ_MEDIA_IMAGES
         )
     } else {
         GrantPermissionRule.grant(
-            android.Manifest.permission.CAMERA
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
         )
     }
 

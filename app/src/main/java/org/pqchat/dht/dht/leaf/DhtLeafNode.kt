@@ -55,6 +55,12 @@ open class DhtLeafNode(
         @Volatile
         var isTestLoopbackMode: Boolean = false
 
+        /**
+         * Additional custom bootstrap endpoints (e.g. local testbed / emulator cluster).
+         */
+        @Volatile
+        var customBootstrapEndpoints: List<Pair<String, Int>> = emptyList()
+
         val BOOTSTRAP_HOSTS = listOf(
             Pair("router.bittorrent.com", 6881),
             Pair("dht.transmissionbt.com", 6881),
@@ -768,7 +774,7 @@ open class DhtLeafNode(
     }
 
     fun getLocalPeers(): List<DhtPeer> {
-        val localEndpoints = listOf(
+        val baseEndpoints = listOf(
             Pair("10.0.2.2", DEFAULT_DHT_PORT),
             Pair("10.0.2.2", 49161),
             Pair("10.0.2.2", 49162),
@@ -779,6 +785,11 @@ open class DhtLeafNode(
             Pair("10.0.2.16", DEFAULT_DHT_PORT),
             Pair("10.0.2.17", DEFAULT_DHT_PORT)
         )
+        val localEndpoints = if (customBootstrapEndpoints.isNotEmpty()) {
+            customBootstrapEndpoints + baseEndpoints
+        } else {
+            baseEndpoints
+        }
         return localEndpoints.mapNotNull { (ipStr, p) ->
             try {
                 DhtPeer(ByteArray(20), InetSocketAddress(InetAddress.getByName(ipStr), p))

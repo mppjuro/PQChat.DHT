@@ -32,6 +32,9 @@ import kotlinx.coroutines.isActive
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -164,7 +167,9 @@ fun HandshakeScreen(
         }
     }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     Scaffold(
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         topBar = {
             TopAppBar(
                 title = { Text("Secure Rendezvous Handshake") },
@@ -776,7 +781,9 @@ fun HandshakeScreen(
 
         val completedState = handshakeCompleted
         if (completedState != null) {
+            @OptIn(ExperimentalComposeUiApi::class)
             AlertDialog(
+                modifier = Modifier.semantics { testTagsAsResourceId = true },
                 onDismissRequest = {
                     viewModel.resetHandshakeState()
                     onBack()

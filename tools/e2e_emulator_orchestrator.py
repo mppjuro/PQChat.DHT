@@ -198,6 +198,9 @@ class AdbDevice:
         escaped = text.replace(" ", "%s").replace("&", "\\&").replace("'", "\\'")
         print(f"[{self.name}] Typing text: '{text}'", flush=True)
         self.shell(f"input text {escaped}")
+        self.sleep(0.3)
+        self.close_keyboard()
+        self.sleep(0.3)
 
     def keyevent(self, keycode: int):
         print(f"[{self.name}] Keyevent: {keycode}", flush=True)
@@ -306,59 +309,40 @@ class AdbDevice:
             for node in root.iter("node"):
                 n_id = node.attrib.get("resource-id", "")
                 n_desc = node.attrib.get("content-desc", "")
+                n_text = node.attrib.get("text", "")
                 if (
                     target_tag in n_id
-                    or n_desc == target_tag
+                    or n_id == target_tag
+                    or n_id.endswith(f":id/{target_tag}")
                     or n_id.endswith(f"/{target_tag}")
-                    or f":id/{target_tag}" in n_id
+                    or n_desc == target_tag
+                    or target_tag in n_desc
+                    or target_tag == n_text
                 ):
                     bounds_str = node.attrib.get("bounds", "")
                     if bounds_str:
                         bounds = self.parse_bounds(bounds_str)
-                        if bounds:
+                        if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
                             return bounds
 
-        # Pass 2: Clickable elements matching exact text or content_desc
+        # Pass 2: Exact text or content_desc
         for node in root.iter("node"):
-            clickable = node.attrib.get("clickable", "false") == "true"
-            if not clickable:
-                continue
             n_text = node.attrib.get("text", "").strip()
             n_desc = node.attrib.get("content-desc", "").strip()
             if text and (n_text.lower() == text.lower() or n_desc.lower() == text.lower()):
                 bounds_str = node.attrib.get("bounds", "")
                 if bounds_str:
                     bounds = self.parse_bounds(bounds_str)
-                    if bounds:
+                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
                         return bounds
             if content_desc and n_desc.lower() == content_desc.lower():
                 bounds_str = node.attrib.get("bounds", "")
                 if bounds_str:
                     bounds = self.parse_bounds(bounds_str)
-                    if bounds:
+                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
                         return bounds
 
-        # Pass 3: Clickable elements matching substring text or content_desc
-        for node in root.iter("node"):
-            clickable = node.attrib.get("clickable", "false") == "true"
-            if not clickable:
-                continue
-            n_text = node.attrib.get("text", "")
-            n_desc = node.attrib.get("content-desc", "")
-            if text and (text.lower() in n_text.lower() or text.lower() in n_desc.lower()):
-                bounds_str = node.attrib.get("bounds", "")
-                if bounds_str:
-                    bounds = self.parse_bounds(bounds_str)
-                    if bounds:
-                        return bounds
-            if content_desc and content_desc.lower() in n_desc.lower():
-                bounds_str = node.attrib.get("bounds", "")
-                if bounds_str:
-                    bounds = self.parse_bounds(bounds_str)
-                    if bounds:
-                        return bounds
-
-        # Pass 4: Any element matching text or content_desc (messages, labels, etc.)
+        # Pass 3: Substring text or content_desc
         for node in root.iter("node"):
             n_text = node.attrib.get("text", "")
             n_desc = node.attrib.get("content-desc", "")
@@ -366,13 +350,13 @@ class AdbDevice:
                 bounds_str = node.attrib.get("bounds", "")
                 if bounds_str:
                     bounds = self.parse_bounds(bounds_str)
-                    if bounds:
+                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
                         return bounds
             if content_desc and content_desc.lower() in n_desc.lower():
                 bounds_str = node.attrib.get("bounds", "")
                 if bounds_str:
                     bounds = self.parse_bounds(bounds_str)
-                    if bounds:
+                    if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
                         return bounds
 
         return None
@@ -473,10 +457,12 @@ class AdbDevice:
         ]
         for perm in permissions:
             self.shell(f"pm grant {package} {perm}")
+        self.shell(f"dumpsys deviceidle whitelist +{package}")
+        self.shell(f"appops set {package} POST_NOTIFICATION allow")
 
     def start_app(self, package: str = "org.pqchat.dht", activity: str = ".ui.MainActivity"):
-        print(f"[{self.name}] Starting {package}/{activity}", flush=True)
-        self.shell(f"am start -n {package}/{activity}")
+        print(f"[{self.name}] Starting {package}/{activity} with local DHT cluster 10.0.2.2:30000", flush=True)
+        self.shell(f"am start -n {package}/{activity} --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
 
 
 class MultiEmulatorOrchestrator:
@@ -625,6 +611,8 @@ class MultiEmulatorOrchestrator:
             dev.clear_data()
             dev.grant_app_permissions()
             dev.start_app()
+            self.sleep(1.0)
+            dev.grant_app_permissions()
 
         self.sleep(3.0)
         for dev in self.active_devices:
@@ -638,7 +626,7 @@ class MultiEmulatorOrchestrator:
         responder.wake_and_unlock()
 
         # 1. Initiator: Tap "New Chat (Alice)"
-        initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.92))
+        initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", fallback_ratio=(0.75, 0.89))
         self.sleep(2.0)
 
         # Initiator: Enter contact name
@@ -648,10 +636,10 @@ class MultiEmulatorOrchestrator:
 
         # Initiator: Tap "Generate ML-KEM-512 QR Code"
         initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512", fallback_ratio=(0.5, 0.35))
-        initiator.wait_for_element(text="Rendezvous Target_0", timeout=25)
+        qr_gen_ok = initiator.wait_for_element(text="Rendezvous Target_0", timeout=25)
         self.sleep(1.0)
         qr_sc = initiator.screencap(f"{step_num}_{pair_label}_qr")
-        self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
+        self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS" if qr_gen_ok else "FAIL", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
 
         # 2. Push screenshot to responder's gallery
         if qr_sc and qr_sc.exists():
@@ -867,7 +855,7 @@ class MultiEmulatorOrchestrator:
             self.sleep(1.0)
 
         # Alice: Tap "New Group" FAB
-        self.alice.click_element(test_tag="new_group_fab", text="New Group", fallback_ratio=(0.75, 0.85))
+        self.alice.click_element(test_tag="new_group_fab", text="New Group", fallback_ratio=(0.75, 0.75))
         self.sleep(2.0)
 
         # Alice: Enter group name
@@ -915,15 +903,16 @@ class MultiEmulatorOrchestrator:
                 self.sleep(1.0)
 
             # Wait for group item to appear on ContactListScreen (delivered via Type 0x06 invite over DHT)
-            dev.wait_for_element(test_tag=f"group_item_{group_name}", text=group_name, timeout=60)
+            rcv_grp = dev.wait_for_element(test_tag=f"group_item_{group_name}", text=group_name, timeout=60)
             sc_group_list = dev.screencap(f"04_{dev.name.lower()}_group_appeared")
-            self.log_step(f"Group Received on {dev.name}", "PASS", f"Received group invite frame for '{group_name}'", sc_group_list)
+            self.log_step(f"Group Received on {dev.name}", "PASS" if rcv_grp else "FAIL", f"Received group invite frame for '{group_name}'", sc_group_list)
 
             # Click group item to enter group chat
             dev.click_element(test_tag=f"group_item_{group_name}", text=group_name, fallback_ratio=(0.5, 0.3))
             self.sleep(2.0)
+            in_chat = dev.wait_for_element(test_tag="chat_message_input", timeout=15)
             sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
-            self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
+            self.log_step(f"{dev.name} Entered Group Chat", "PASS" if in_chat else "FAIL", f"{dev.name} active in '{group_name}'", sc_group_chat)
 
     def _phase_5_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 5: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
@@ -945,9 +934,9 @@ class MultiEmulatorOrchestrator:
 
         for dev in all_devices[1:]:
             print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-            dev.wait_for_element(text=msg1, timeout=45)
+            rcv1 = dev.wait_for_element(text=msg1, timeout=45)
             sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
-            self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
+            self.log_step(f"{dev.name} Received Msg 1", "PASS" if rcv1 else "FAIL", f"Received Alice's group message: '{msg1}'", sc_rcv)
 
         # Turn 2: Bob sends to Group
         msg2 = f"Bob_reporting_in_{group_name}"
@@ -960,9 +949,9 @@ class MultiEmulatorOrchestrator:
 
         for dev in [self.alice] + all_devices[2:]:
             print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
-            dev.wait_for_element(text=msg2, timeout=45)
+            rcv2 = dev.wait_for_element(text=msg2, timeout=45)
             sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
-            self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
+            self.log_step(f"{dev.name} Received Msg 2", "PASS" if rcv2 else "FAIL", f"Received Bob's group message: '{msg2}'", sc_rcv)
 
         # Turn 3: Charlie sends to Group (if nodes >= 3)
         if self.charlie:
@@ -979,9 +968,9 @@ class MultiEmulatorOrchestrator:
                 targets.append(self.dave)
             for dev in targets:
                 print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                dev.wait_for_element(text=msg3, timeout=45)
+                rcv3 = dev.wait_for_element(text=msg3, timeout=45)
                 sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
-                self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
+                self.log_step(f"{dev.name} Received Msg 3", "PASS" if rcv3 else "FAIL", f"Received Charlie's group message: '{msg3}'", sc_rcv)
 
         # Turn 4: Dave sends to Group (if nodes >= 4)
         if self.dave:
@@ -995,9 +984,9 @@ class MultiEmulatorOrchestrator:
 
             for dev in [self.alice, self.bob, self.charlie]:
                 print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                dev.wait_for_element(text=msg4, timeout=45)
+                rcv4 = dev.wait_for_element(text=msg4, timeout=45)
                 sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
-                self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
+                self.log_step(f"{dev.name} Received Msg 4", "PASS" if rcv4 else "FAIL", f"Received Dave's group message: '{msg4}'", sc_rcv)
 
         self.log_step("Group Multi-Turn Complete", "PASS", f"All {len(all_devices)} participants successfully exchanged messages in '{group_name}'")
 

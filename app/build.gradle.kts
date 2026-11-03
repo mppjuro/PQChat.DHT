@@ -102,9 +102,11 @@ android {
                 it.systemProperty("junit.jupiter.execution.timeout.default", "5m")
                 it.systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
                 it.testLogging {
-                    events("started", "passed", "skipped", "failed")
-                    showStandardStreams = false
-                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+                    events("passed", "skipped", "failed", "standardOut", "standardError")
+                    showExceptions = true
+                    showCauses = true
+                    showStackTraces = true
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
                 }
                 it.useJUnitPlatform {
                     if (System.getenv("RUN_SLOW_TESTS") != "true" && System.getProperty("runSlowTests") != "true") {
@@ -130,9 +132,11 @@ tasks.withType<Test>().configureEach {
     systemProperty("junit.jupiter.execution.timeout.default", "5m")
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
     testLogging {
-        events("started", "passed", "skipped", "failed")
-        showStandardStreams = false
-        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+        events("passed", "skipped", "failed", "standardOut", "standardError")
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
 
