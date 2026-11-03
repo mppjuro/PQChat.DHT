@@ -151,6 +151,29 @@ fun MainAppNavigation(
         }
     }
 
+    androidx.activity.compose.BackHandler(enabled = currentScreen !is Screen.ContactList) {
+        when (currentScreen) {
+            is Screen.Chat -> {
+                viewModel.unselectContact()
+                currentScreen = Screen.ContactList
+            }
+            is Screen.Settings -> {
+                if (requiresLock) {
+                    onLockRequested()
+                }
+                currentScreen = Screen.ContactList
+            }
+            is Screen.Handshake -> {
+                viewModel.resetHandshakeState()
+                currentScreen = Screen.ContactList
+            }
+            is Screen.Diagnostics -> {
+                currentScreen = Screen.ContactList
+            }
+            Screen.ContactList -> {}
+        }
+    }
+
     when (val screen = currentScreen) {
         is Screen.ContactList -> {
             ContactListScreen(

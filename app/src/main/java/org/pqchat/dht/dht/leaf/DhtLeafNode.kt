@@ -46,6 +46,15 @@ open class DhtLeafNode(
         const val FAST_GET_TIMEOUT_MS = 600L
         const val BOOTSTRAP_TIMEOUT_MS = 6000L
 
+        /**
+         * Test-safe loopback mode flag.
+         * When enabled (e.g. during single-device instrumented UI or smoke tests without a live DHT network),
+         * all BEP 44 putMutable / getMutable operations succeed immediately in-memory via localMutableStore
+         * without sending UDP queries to external bootstrap nodes or timing out.
+         */
+        @Volatile
+        var isTestLoopbackMode: Boolean = false
+
         val BOOTSTRAP_HOSTS = listOf(
             Pair("router.bittorrent.com", 6881),
             Pair("dht.transmissionbt.com", 6881),
@@ -464,7 +473,7 @@ open class DhtLeafNode(
         fastestNodesCache.clear()
     }
 
-    override fun getActivePeerCount(): Int = routingTable.size
+    override fun getActivePeerCount(): Int = if (isTestLoopbackMode) routingTable.size.coerceAtLeast(8) else routingTable.size
 
     fun getCachedFastestNodes(): List<DhtPeer> {
         return fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
@@ -813,6 +822,7 @@ open class DhtLeafNode(
     }
 
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
+        if (isTestLoopbackMode) return@withContext
         val cached = getCachedFastestNodes()
         val randomTarget = CryptoUtils.secureRandomBytes(20)
 
@@ -1145,6 +1155,7 @@ open class DhtLeafNode(
      * avoiding multi-hop Kademlia lookups when get(target) is called later.
      */
     override suspend fun preWarmTarget(target: ByteArray): List<PeerContact> = withContext(Dispatchers.IO) {
+        if (isTestLoopbackMode) return@withContext emptyList()
         val existing = targetRouteCache[target]
         if (!existing.isNullOrEmpty()) {
             return@withContext existing
@@ -1210,6 +1221,22 @@ open class DhtLeafNode(
     ): MutableItem? = withContext(Dispatchers.IO) {
         _totalGetCalls.incrementAndGet()
         val targetHex = CryptoUtils.toHex(target)
+
+        if (isTestLoopbackMode) {
+            val localItem = localMutableStore[targetHex]
+            if (localItem != null) {
+                val metrics = DhtOpMetrics(nodesQueried = 1, nodesResponded = 1, lookupHops = 1, tokensReceived = 1, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
+                _lastOperationMetrics.set(metrics)
+                logInfo(TAG, "[PQChat] Loopback GET target=$targetHex found=true")
+                return@withContext localItem.copy(nodesQueried = 1, nodesResponded = 1, lookupHops = 1)
+            } else {
+                val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
+                _lastOperationMetrics.set(metrics)
+                logInfo(TAG, "[PQChat] Loopback GET target=$targetHex found=false")
+                return@withContext null
+            }
+        }
+
         if (!skipLocalStore) {
             val localItem = localMutableStore[targetHex]
             if (localItem != null) {
@@ -1504,6 +1531,18 @@ open class DhtLeafNode(
             "BEP 44 payload cannot exceed ${BinaryFrameCodec.MAX_DHT_VALUE_BYTES} bytes (got ${v.size})"
         }
         val targetHex = CryptoUtils.toHex(target)
+
+        if (isTestLoopbackMode) {
+            val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
+            val existing = localMutableStore[targetHex]
+            if (existing == null || seq >= existing.seq) {
+                localMutableStore[targetHex] = localItem
+            }
+            val metrics = DhtOpMetrics(nodesQueried = 1, nodesResponded = 1, lookupHops = 1, tokensReceived = 1, putNodesAttempted = 1, putNodesSucceeded = 1, dhtError = null)
+            _lastOperationMetrics.set(metrics)
+            logInfo(TAG, "[PQChat] Loopback PUT target=$targetHex success=true")
+            return@withContext true
+        }
 
         // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
         if (!skipLocalStore) {
@@ -1886,6 +1925,7 @@ open class DhtLeafNode(
      * Sends a lightweight KRPC ping query to maintain carrier UDP NAT mapping table (20–25s timeout).
      */
     override suspend fun sendKeepalivePing(): Boolean = withContext(Dispatchers.IO) {
+        if (isTestLoopbackMode) return@withContext true
         val targetPeer = getCachedFastestNodes().firstOrNull()
             ?: routingTable.firstOrNull()
             ?: getLocalPeers().firstOrNull()

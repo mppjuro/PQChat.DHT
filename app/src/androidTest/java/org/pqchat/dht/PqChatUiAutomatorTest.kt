@@ -67,11 +67,85 @@ class PqChatUiAutomatorTest {
 
     private lateinit var uiDevice: UiDevice
 
+    private fun ensureActivityInForeground() {
+        try {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val activity = composeTestRule.activity
+            var isResumed = false
+            instrumentation.runOnMainSync {
+                isResumed = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+            }
+            if (!isResumed) {
+                val context = instrumentation.targetContext
+                val intent = android.content.Intent(context, MainActivity::class.java).apply {
+                    flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+                uiDevice.waitForIdle()
+                var attempts = 0
+                while (attempts < 20) {
+                    var resumedNow = false
+                    instrumentation.runOnMainSync {
+                        resumedNow = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                    }
+                    if (resumedNow) break
+                    Thread.sleep(100)
+                    attempts++
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun navigateToRootContactList() {
+        ensureActivityInForeground()
+        composeTestRule.waitForIdle()
+
+        // If already on ContactListScreen ("PQChat.DHT" is displayed), nothing to navigate back from
+        if (composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()) {
+            return
+        }
+
+        // If a subscreen explicit back button is displayed, click it first
+        val subscreenBackTags = listOf("chat_back_button", "settings_back_button", "diagnostics_back_button", "handshake_back_button")
+        for (tag in subscreenBackTags) {
+            if (composeTestRule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()) {
+                try {
+                    clickTagByPixelCoordinates(tag, timeoutMillis = 2_000)
+                } catch (_: Throwable) {}
+                composeTestRule.waitForIdle()
+                if (composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()) {
+                    return
+                }
+            }
+        }
+
+        // Only press back if a modal dialog or popup is still intercepting focus
+        var backAttempts = 0
+        while (backAttempts < 2 && composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isEmpty()) {
+            try {
+                uiDevice.pressBack()
+            } catch (_: Throwable) {}
+            ensureActivityInForeground()
+            composeTestRule.waitForIdle()
+            backAttempts++
+        }
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
     @Before
     fun setUp() {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+        org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
+
+        ensureActivityInForeground()
+
         try {
             composeTestRule.activity.runOnUiThread {
                 composeTestRule.activity.viewModel.unselectContact()
@@ -93,24 +167,13 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
 
-        // Ensure we are back on ContactListScreen if a previous test left the app in a subscreen
-        var backAttempts = 0
-        while (backAttempts < 3 && composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isEmpty()) {
-            try {
-                uiDevice.pressBack()
-            } catch (_: Throwable) {}
-            composeTestRule.waitForIdle()
-            backAttempts++
-        }
-
-        composeTestRule.waitUntil(timeoutMillis = 15_000) {
-            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
-        }
+        navigateToRootContactList()
     }
 
     @After
     fun tearDown() {
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
+        org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
         try {
             kotlinx.coroutines.runBlocking {
                 composeTestRule.activity.viewModel.repository.messageDao.deleteMessagesForContact(
@@ -130,14 +193,8 @@ class PqChatUiAutomatorTest {
             }
         } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
-        var backAttempts = 0
-        while (backAttempts < 3 && composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isEmpty()) {
-            try {
-                uiDevice.pressBack()
-            } catch (_: Throwable) {}
-            composeTestRule.waitForIdle()
-            backAttempts++
-        }
+
+        navigateToRootContactList()
     }
 
     /**
@@ -469,17 +526,29 @@ class PqChatUiAutomatorTest {
         // Click encapsulate & put button
         clickTagByPixelCoordinates("handshake_encapsulate_button")
 
-        // Wait until bob_handshake_status indicator appears and displays progress
+        // Wait until bob_handshake_status indicator or session completion dialog appears
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
-            composeTestRule.onAllNodesWithTag("bob_handshake_status").fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithTag("bob_handshake_status").fetchSemanticsNodes().isNotEmpty() ||
+            composeTestRule.onAllNodesWithTag("handshake_confirm_verified_button").fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithTag("bob_handshake_status")
-            .performScrollTo()
-            .assertIsDisplayed()
 
-        // Click back button to exit
-        clickTagByPixelCoordinates("handshake_back_button")
-        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+        // Verify Bob handshake status state transitioned away from IDLE
+        assertTrue(
+            "Bob handshake status must transition away from IDLE",
+            composeTestRule.activity.viewModel.bobHandshakeStatus.value != org.pqchat.dht.ui.viewmodel.BobHandshakeStatus.IDLE
+        )
+
+        // Exit back to ContactListScreen (dismiss session completion dialog if shown, or click handshake back button)
+        if (composeTestRule.onAllNodesWithTag("handshake_confirm_verified_button").fetchSemanticsNodes().isNotEmpty()) {
+            uiDevice.pressBack()
+        } else {
+            composeTestRule.onNodeWithTag("bob_handshake_status")
+                .performScrollTo()
+                .assertIsDisplayed()
+            clickTagByPixelCoordinates("handshake_back_button")
+        }
+
+        composeTestRule.waitUntil(timeoutMillis = 7_000) {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()

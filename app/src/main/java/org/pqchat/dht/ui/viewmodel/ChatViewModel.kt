@@ -631,6 +631,8 @@ class ChatViewModel @JvmOverloads constructor(
      * Alice initiates Handshake:
      * Generates QR code data, begins polling Target_0 on DHT.
      */
+    private var aliceHandshakeJob: Job? = null
+    private var bobHandshakeJob: Job? = null
     private var bobRepublishJob: Job? = null
 
     /**
@@ -646,7 +648,8 @@ class ChatViewModel @JvmOverloads constructor(
         android.util.Log.i("AliceHandshake", "QR_PAYLOAD_B64=" + java.util.Base64.getEncoder().encodeToString(aliceInit.qrBytes))
         dhtLeafNode.preWarmTargetAsync(aliceInit.target0)
 
-        viewModelScope.launch(Dispatchers.IO) {
+        aliceHandshakeJob?.cancel()
+        aliceHandshakeJob = viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Waiting for partner to scan QR and PUT to DHT..."
             var attempts = 0
             val maxAttempts = 200 // 200 * 3000ms = 600s = 10 minutes
@@ -731,7 +734,8 @@ class ChatViewModel @JvmOverloads constructor(
             android.util.Log.w("BobHandshake", "Bob handshake is already running, ignoring duplicate invocation")
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        bobHandshakeJob?.cancel()
+        bobHandshakeJob = viewModelScope.launch(Dispatchers.IO) {
             _isHandshaking.value = true
             _statusNotification.value = "Encapsulating Post-Quantum secret and sending to DHT..."
             setBobHandshakeStatus(BobHandshakeStatus.SCANNING_QR)
@@ -862,7 +866,8 @@ class ChatViewModel @JvmOverloads constructor(
                     _statusNotification.value = "Connected! SAS: ${bobResult.sas}. Post-quantum ratcheting active."
 
                     // Copy sensitive material for 3x 10s background republishes before wiping bobResult
-                    val target0Copy = bobResult.target0.copyOf()
+                    if (!org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode) {
+                        val target0Copy = bobResult.target0.copyOf()
                     val frameCopy = bobResult.frame.copyOf()
                     val edPrivateKeySeedCopy = bobResult.edPrivateKeySeed.copyOf()
                     viewModelScope.launch(Dispatchers.IO) {
@@ -883,6 +888,7 @@ class ChatViewModel @JvmOverloads constructor(
                         } catch (_: Exception) {
                         } finally {
                             java.util.Arrays.fill(edPrivateKeySeedCopy, 0.toByte())
+                        }
                         }
                     }
 
@@ -1043,6 +1049,10 @@ class ChatViewModel @JvmOverloads constructor(
     }
 
     fun resetHandshakeState() {
+        aliceHandshakeJob?.cancel()
+        aliceHandshakeJob = null
+        bobHandshakeJob?.cancel()
+        bobHandshakeJob = null
         bobRepublishJob?.cancel()
         bobRepublishJob = null
         isBobHandshakeProcessing.set(false)
