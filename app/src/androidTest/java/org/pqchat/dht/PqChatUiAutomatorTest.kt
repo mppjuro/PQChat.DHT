@@ -207,17 +207,16 @@ class PqChatUiAutomatorTest {
             androidx.test.espresso.Espresso.closeSoftKeyboard()
         } catch (_: Throwable) {}
         try {
-            val imm = InstrumentationRegistry.getInstrumentation().targetContext
-                .getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-            val windowToken = composeTestRule.activity.currentFocus?.windowToken
-                ?: composeTestRule.activity.window.decorView.windowToken
-            imm?.hideSoftInputFromWindow(windowToken, 0)
-        } catch (_: Throwable) {}
-        try {
-            uiDevice.executeShellCommand("input keyevent 111")
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            instrumentation.runOnMainSync {
+                val activity = composeTestRule.activity
+                val imm = activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                val windowToken = activity.currentFocus?.windowToken ?: activity.window.decorView.windowToken
+                imm?.hideSoftInputFromWindow(windowToken, 0)
+            }
         } catch (_: Throwable) {}
         uiDevice.waitForIdle()
-        Thread.sleep(100)
+        Thread.sleep(50)
         composeTestRule.waitForIdle()
     }
 
@@ -328,6 +327,17 @@ class PqChatUiAutomatorTest {
         }
         uiDevice.waitForIdle()
         composeTestRule.waitForIdle()
+
+        if (!clicked) {
+            try {
+                nodeInteraction.performClick()
+            } catch (_: Throwable) {
+                try {
+                    nodeInteraction.performTouchInput { click() }
+                } catch (_: Throwable) {}
+            }
+            composeTestRule.waitForIdle()
+        }
 
         if (isToggleable && initialToggleState != null) {
             val currentToggleState = try {

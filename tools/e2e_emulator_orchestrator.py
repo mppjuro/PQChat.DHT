@@ -209,9 +209,15 @@ class AdbDevice:
     def back(self):
         self.keyevent(4)
 
+    def is_keyboard_open(self) -> bool:
+        res = self.shell("dumpsys input_method")
+        return "mInputShown=true" in res or "mIsInputViewShown=true" in res
+
     def close_keyboard(self):
-        self.keyevent(111)  # KEYCODE_ESCAPE
-        self.sleep(0.3)
+        if self.is_keyboard_open():
+            print(f"[{self.name}] Soft keyboard is open, closing...", flush=True)
+            self.keyevent(111)  # KEYCODE_ESCAPE
+            self.sleep(0.3)
 
     def screencap(self, filename: str) -> Optional[Path]:
         filepath = self.output_dir / f"{filename}.png"
