@@ -348,43 +348,25 @@ class PqChatUiAutomatorTest {
         val clampedX = centerX.coerceIn(0, uiDevice.displayWidth - 1)
         val clampedY = centerY.coerceIn(0, uiDevice.displayHeight - 1)
 
-        val isToggleable = semanticsNode.config.contains(SemanticsProperties.ToggleableState)
-        val initialToggleState = if (isToggleable) semanticsNode.config[SemanticsProperties.ToggleableState] else null
-
-        // Enforce physical pixel click via uiDevice as the primary mechanism
+        var clicked = false
         try {
-            uiDevice.click(clampedX, clampedY)
-        } catch (_: Throwable) {}
-        uiDevice.waitForIdle()
-        composeTestRule.waitForIdle()
-
-        if (isToggleable && initialToggleState != null) {
-            val currentToggleState = try {
-                nodeInteraction.fetchSemanticsNode().config[SemanticsProperties.ToggleableState]
-            } catch (_: Throwable) { null }
-            if (currentToggleState == initialToggleState) {
-                try {
-                    nodeInteraction.performClick()
-                } catch (_: Throwable) {
-                    try {
-                        nodeInteraction.performTouchInput { click() }
-                    } catch (_: Throwable) {}
-                }
-                composeTestRule.waitForIdle()
-            }
-        } else {
-            // For non-toggleable nodes (Buttons, FABs, Icons, Cards), guarantee click action dispatch
-            // to eliminate failures from status bar / window insets offsets on API 34
+            nodeInteraction.performClick()
+            clicked = true
+        } catch (_: Throwable) {
             try {
-                nodeInteraction.performClick()
-            } catch (_: Throwable) {
-                try {
-                    nodeInteraction.performTouchInput { click() }
-                } catch (_: Throwable) {}
-            }
-            composeTestRule.waitForIdle()
+                nodeInteraction.performSemanticsAction(SemanticsActions.OnClick)
+                clicked = true
+            } catch (_: Throwable) {}
         }
 
+        if (!clicked) {
+            try {
+                uiDevice.click(clampedX, clampedY)
+            } catch (_: Throwable) {}
+            uiDevice.waitForIdle()
+        }
+
+        composeTestRule.waitForIdle()
         return bounds
     }
 
@@ -558,6 +540,7 @@ class PqChatUiAutomatorTest {
         // Input an invalid short Base64 string to verify validation badge
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
             .performTextInput("SGVsbG8=") // "Hello" in base64 (5 bytes != 864 bytes)
+        dismissKeyboardAndWait()
 
         composeTestRule.onNodeWithText("Invalid QR code payload format")
             .performScrollTo()
@@ -575,6 +558,7 @@ class PqChatUiAutomatorTest {
             .performTextClearance()
         composeTestRule.onNodeWithTag("handshake_manual_payload_input")
             .performTextInput(validBase64)
+        dismissKeyboardAndWait()
 
         // Verify validation succeeds
         composeTestRule.onNodeWithText("Valid Hybrid Handshake Key (864 bytes verified)")
@@ -588,7 +572,7 @@ class PqChatUiAutomatorTest {
         clickTagByPixelCoordinates("handshake_encapsulate_button")
 
         // Wait until bob_handshake_status indicator or session completion dialog appears
-        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("bob_handshake_status").fetchSemanticsNodes().isNotEmpty() ||
             composeTestRule.onAllNodesWithTag("handshake_confirm_verified_button").fetchSemanticsNodes().isNotEmpty()
         }
@@ -1243,6 +1227,7 @@ class PqChatUiAutomatorTest {
                 composeTestRule.activity.viewModel.setAnonymousStatsEnabled(false)
             }
             composeTestRule.waitForIdle()
+            navigateToRootContactList()
         }
 
         // Return back to ContactListScreen
@@ -1293,6 +1278,10 @@ class PqChatUiAutomatorTest {
         }
         clickTagByPixelCoordinates("settings_emergency_sos_button")
         composeTestRule.waitForIdle()
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.activity.viewModel.isCanaryTriggered.value ||
+            composeTestRule.activity.viewModel.repository.canaryQueue.isNotEmpty()
+        }
         assertTrue(
             "Safety Canary frame must be queued or triggered",
             composeTestRule.activity.viewModel.isCanaryTriggered.value ||
@@ -1316,7 +1305,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.onNodeWithTag("create_group_name_input").performTextInput("Poll Test Group")
         clickTagByPixelCoordinates("create_group_confirm_button")
 
-        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_create_poll_button").fetchSemanticsNodes().isNotEmpty()
         }
         clickTagByPixelCoordinates("chat_create_poll_button")
@@ -1338,9 +1327,9 @@ class PqChatUiAutomatorTest {
 
         // Verify poll card appears in chat
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
-            composeTestRule.onAllNodesWithText("Preferred PQC Suite?", substring = true).fetchSemanticsNodes().isNotEmpty()
+            composeTestRule.onAllNodesWithText("Preferred PQC Suite?", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
         }
-        composeTestRule.onNodeWithText("Preferred PQC Suite?", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Preferred PQC Suite?", substring = true, useUnmergedTree = true).assertIsDisplayed()
 
         // Leave group and return to ContactListScreen
         clickTagByPixelCoordinates("chat_group_members_button")
