@@ -4507,6 +4507,18 @@ class ChatRepository(
         val inviteFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
         for (contactId in shuffledContactIds) {
             try {
+                val recipientMemberId = memberEntities.firstOrNull { it.contactId == contactId }?.memberId
+                val recipientSummary = membersSummary.firstOrNull {
+                    recipientMemberId != null && it.memberId.contentEquals(uuidStringToBytes(recipientMemberId))
+                }
+                val inviteMembers = if (recipientSummary != null) {
+                    listOf(membersSummary.first(), recipientSummary) +
+                        membersSummary.drop(1).filterNot {
+                            it.memberId.contentEquals(recipientSummary.memberId)
+                        }
+                } else {
+                    membersSummary
+                }
                 sendGroupControlInvite(
                     contactId = contactId,
                     groupIdBytes = groupIdBytes,
@@ -4515,7 +4527,7 @@ class ChatRepository(
                     myChainKeyOut = myChainKeyOut,
                     currentCounter = 0L,
                     groupName = groupName,
-                    membersSummary = membersSummary,
+                    membersSummary = inviteMembers,
                     outboundCollector = if (isStrictPoissonShaping()) inviteFrames else null
                 )
             } catch (_: Exception) {}
@@ -5007,7 +5019,13 @@ class ChatRepository(
             BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> {
                 var existingGroup = groupDao?.getGroupById(groupId)
                 if (existingGroup == null) {
-                    val myMemberId = UUID.randomUUID().toString()
+                    // The inviter assigns stable member IDs and places this
+                    // invitee immediately after the sender in the summary.
+                    val assignedMemberId = control.members
+                        .firstOrNull { !it.memberId.contentEquals(control.senderMemberId) }
+                        ?.memberId
+                    val myMemberId = assignedMemberId?.let(::bytesToUuidString)
+                        ?: UUID.randomUUID().toString()
                     val myChainKeyOut = CryptoUtils.secureRandomBytes(64)
                     val newGroup = GroupEntity(
                         groupId = groupId,
@@ -5129,6 +5147,32 @@ class ChatRepository(
                         isActive = true
                     )
                     groupMemberDao?.insertOrUpdate(newMember)
+                }
+
+                // In the E2E/star topology, the inviter is the only node with
+                // pairwise contacts to every participant. Relay sender keys so
+                // every member can poll that sender's recipient-specific slots.
+                if (existingGroup.myMemberId != senderMemberId) {
+                    val recipients = (groupMemberDao?.getMembersForGroup(groupId) ?: emptyList())
+                        .filter {
+                            it.isActive &&
+                                it.memberId != existingGroup.myMemberId &&
+                                it.memberId != senderMemberId &&
+                                it.contactId != null &&
+                                it.contactId != contactId
+                        }
+                    for (recipient in recipients) {
+                        sendGroupControlRekeyOrInviteInternal(
+                            contactId = recipient.contactId!!,
+                            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                            groupIdBytes = control.groupId,
+                            groupEpoch = control.groupEpoch,
+                            myMemberIdBytes = control.senderMemberId,
+                            myChainKeyOut = control.senderGroupChainKey,
+                            currentCounter = control.currentCounter.toLong(),
+                            groupName = control.groupName
+                        )
+                    }
                 }
             }
             BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> {
@@ -6412,4 +6456,3 @@ class ChatRepository(
         repositoryScope.cancel()
     }
 }
-
