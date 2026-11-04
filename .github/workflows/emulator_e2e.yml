@@ -78,7 +78,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ inputs.api_level || '34' }}
+          key: avd-${{ inputs.api_level || '34' }}-disk-10g
 
       - name: Build Debug & Test APKs
         run: ./gradlew assembleDebug assembleDebugAndroidTest
@@ -91,7 +91,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           ram-size: 4096M
-          disk-size: 6000M
+          disk-size: 10000M
           disable-animations: true
           emulator-boot-timeout: 600
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-metrics
