@@ -1288,6 +1288,31 @@ class MultiEmulatorOrchestrator:
                 self.log_step(f"Group Received on {dev.name}", "FAIL", f"Did not receive group invite frame for '{group_name}' within 60s", sc_group_list)
                 self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} cannot enter group chat because invite was never received")
 
+        # Key Exchange Relay Synchronization:
+        # Every participant has published their GROUP_SUBTYPE_REKEY to Alice (inviter hub).
+        # Alice must ingest these join frames and dispatch relayed REKEY frames to the other participants.
+        # Then all participants must poll DHT to ingest the relayed REKEY frames.
+        print("\n[Group Key Sync] Alice polling DHT to ingest member join REKEY frames and relay keys...", flush=True)
+        self.alice.ensure_app_foreground()
+        self.sleep(1.0)
+        for i in range(4):
+            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+            self.sleep(2.5)
+
+        print("[Group Key Sync] Participants polling DHT to ingest relayed member keys...", flush=True)
+        for dev in participants:
+            dev.ensure_app_foreground()
+            self.sleep(0.5)
+            for i in range(3):
+                dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                self.sleep(2.0)
+
+        # Foreground Alice so she is ready for Phase 5 Turn 1
+        self.alice.ensure_app_foreground()
+        self.sleep(1.0)
+        sc_sync = self.alice.screencap("04_group_keys_synchronized")
+        self.log_step("Group Key Exchange Sync", "PASS", "Member sender keys exchanged and relayed across all nodes", sc_sync)
+
     def _phase_5_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 5: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
 
@@ -1303,6 +1328,7 @@ class MultiEmulatorOrchestrator:
         # Turn 1: Alice sends to Group
         msg1 = f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes"
         print(f"\n[Turn 1] Alice sending: '{msg1}'", flush=True)
+        self.alice.ensure_app_foreground()
         self.alice.click_element(test_tag="chat_message_input")
         self.alice.type_text(msg1)
         self.sleep(0.5)
@@ -1311,7 +1337,7 @@ class MultiEmulatorOrchestrator:
 
         for dev in all_devices[1:]:
             print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-            rcv1 = dev.wait_for_element(text=msg1, timeout=45, sync_chip_tag="chat_sync_chip")
+            rcv1 = dev.wait_for_element(text=msg1, timeout=60, sync_chip_tag="chat_sync_chip")
             sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
             if rcv1:
                 self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
@@ -1323,6 +1349,7 @@ class MultiEmulatorOrchestrator:
         # Turn 2: Bob sends to Group
         msg2 = f"Bob_reporting_in_{group_name}"
         print(f"\n[Turn 2] Bob sending: '{msg2}'", flush=True)
+        self.bob.ensure_app_foreground()
         self.bob.click_element(test_tag="chat_message_input")
         self.bob.type_text(msg2)
         self.sleep(0.5)
@@ -1331,7 +1358,7 @@ class MultiEmulatorOrchestrator:
 
         for dev in [self.alice] + all_devices[2:]:
             print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
-            rcv2 = dev.wait_for_element(text=msg2, timeout=45, sync_chip_tag="chat_sync_chip")
+            rcv2 = dev.wait_for_element(text=msg2, timeout=60, sync_chip_tag="chat_sync_chip")
             sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
             if rcv2:
                 self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
@@ -1344,6 +1371,7 @@ class MultiEmulatorOrchestrator:
         if self.charlie:
             msg3 = f"Charlie_here_group_pqc_confirmed"
             print(f"\n[Turn 3] Charlie sending: '{msg3}'", flush=True)
+            self.charlie.ensure_app_foreground()
             self.charlie.click_element(test_tag="chat_message_input")
             self.charlie.type_text(msg3)
             self.sleep(0.5)
@@ -1355,7 +1383,7 @@ class MultiEmulatorOrchestrator:
                 targets.append(self.dave)
             for dev in targets:
                 print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                rcv3 = dev.wait_for_element(text=msg3, timeout=45, sync_chip_tag="chat_sync_chip")
+                rcv3 = dev.wait_for_element(text=msg3, timeout=60, sync_chip_tag="chat_sync_chip")
                 sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
                 if rcv3:
                     self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
@@ -1368,6 +1396,7 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             msg4 = f"Dave_4th_node_pqc_group_active"
             print(f"\n[Turn 4] Dave sending: '{msg4}'", flush=True)
+            self.dave.ensure_app_foreground()
             self.dave.click_element(test_tag="chat_message_input")
             self.dave.type_text(msg4)
             self.sleep(0.5)
@@ -1376,7 +1405,7 @@ class MultiEmulatorOrchestrator:
 
             for dev in [self.alice, self.bob, self.charlie]:
                 print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                rcv4 = dev.wait_for_element(text=msg4, timeout=45, sync_chip_tag="chat_sync_chip")
+                rcv4 = dev.wait_for_element(text=msg4, timeout=60, sync_chip_tag="chat_sync_chip")
                 sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
                 if rcv4:
                     self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)

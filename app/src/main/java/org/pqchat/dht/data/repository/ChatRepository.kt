@@ -3593,7 +3593,7 @@ class ChatRepository(
         val lookaheadDistance: Int = 0
     ) : PollTask {
         override val isSelf: Boolean = false
-        override val entityId: String get() = groupId
+        override val entityId: String get() = "${groupId}_${member.memberId}"
         override val priorityWeight: Double
             get() = if (lookaheadDistance == 0) 10.0 else 10.0 / (1.0 + lookaheadDistance)
 
@@ -3890,6 +3890,7 @@ class ChatRepository(
                 // In focused pool, guarantee current in-sequence slot (k=0) if it exists
                 val focusedCurrent = focusedPool.filter {
                     (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is GroupMemberSlotPollTask && it.lookaheadDistance == 0) ||
                     (it is SkippedKeyPollTask)
                 }
                 val result = mutableListOf<PollTask>()
@@ -3905,11 +3906,29 @@ class ChatRepository(
                     result.addAll(sampleWithoutReplacement(focusedPool, focusQuota))
                 }
 
-                result.addAll(sampleWithoutReplacement(backgroundPool, bgQuota))
+                // In background pool, guarantee current in-sequence slot (k=0) if it exists
+                val bgCurrent = backgroundPool.filter {
+                    (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is GroupMemberSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is SkippedKeyPollTask)
+                }
+                if (bgCurrent.isNotEmpty() && bgQuota > 0) {
+                    val guaranteedBg = bgCurrent.take(bgQuota)
+                    result.addAll(guaranteedBg)
+                    val remainingBgPool = backgroundPool.filter { t -> guaranteedBg.none { it.target.contentEquals(t.target) } }
+                    val remainingBgQuota = bgQuota - guaranteedBg.size
+                    if (remainingBgQuota > 0 && remainingBgPool.isNotEmpty()) {
+                        result.addAll(sampleWithoutReplacement(remainingBgPool, remainingBgQuota))
+                    }
+                } else {
+                    result.addAll(sampleWithoutReplacement(backgroundPool, bgQuota))
+                }
+
                 return result.take(batchSize)
             } else if (focusedPool.isNotEmpty()) {
                 val focusedCurrent = focusedPool.filter {
                     (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is GroupMemberSlotPollTask && it.lookaheadDistance == 0) ||
                     (it is SkippedKeyPollTask)
                 }
                 val result = mutableListOf<PollTask>()
@@ -3926,12 +3945,46 @@ class ChatRepository(
                     return sampleWithoutReplacement(focusedPool, batchSize)
                 }
             } else {
-                return sampleWithoutReplacement(backgroundPool, batchSize)
+                val bgCurrent = backgroundPool.filter {
+                    (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is GroupMemberSlotPollTask && it.lookaheadDistance == 0) ||
+                    (it is SkippedKeyPollTask)
+                }
+                if (bgCurrent.isNotEmpty()) {
+                    val guaranteed = bgCurrent.take(batchSize)
+                    val result = mutableListOf<PollTask>()
+                    result.addAll(guaranteed)
+                    val remaining = backgroundPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
+                    val remainingQuota = batchSize - guaranteed.size
+                    if (remainingQuota > 0 && remaining.isNotEmpty()) {
+                        result.addAll(sampleWithoutReplacement(remaining, remainingQuota))
+                    }
+                    return result.take(batchSize)
+                } else {
+                    return sampleWithoutReplacement(backgroundPool, batchSize)
+                }
             }
         } else {
             // General poll (APP_ACTIVE_OTHER, BACKGROUND_IDLE, DOZE_SLEEP):
-            // Sample fairly across all candidate slots
-            return sampleWithoutReplacement(candidates, batchSize)
+            // Sample fairly across all candidate slots, prioritizing current slots (k=0)
+            val currentTasks = candidates.filter {
+                (it is ContactSlotPollTask && it.lookaheadDistance == 0) ||
+                (it is GroupMemberSlotPollTask && it.lookaheadDistance == 0) ||
+                (it is SkippedKeyPollTask)
+            }
+            if (currentTasks.isNotEmpty()) {
+                val guaranteed = currentTasks.take(batchSize)
+                val result = mutableListOf<PollTask>()
+                result.addAll(guaranteed)
+                val remaining = candidates.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
+                val remainingQuota = batchSize - guaranteed.size
+                if (remainingQuota > 0 && remaining.isNotEmpty()) {
+                    result.addAll(sampleWithoutReplacement(remaining, remainingQuota))
+                }
+                return result.take(batchSize)
+            } else {
+                return sampleWithoutReplacement(candidates, batchSize)
+            }
         }
     }
 
@@ -5120,7 +5173,7 @@ class ChatRepository(
 
                 if (existingMember != null) {
                     val updated = existingMember.copy(
-                        contactId = contactId,
+                        contactId = existingMember.contactId,
                         chainKeyIn = EncryptedBlob(control.senderGroupChainKey, "group_members", "${groupId}_${senderMemberId}", "chainKeyIn"),
                         counterIn = control.currentCounter.toInt(),
                         isActive = true
