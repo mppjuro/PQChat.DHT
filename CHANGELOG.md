@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`3108415`](https://github.com/mppjuro/PQChat.DHT/commit/3108415678d2a79cd9bce5a3b00f2453819040aa) (2026-11-04) — **group**: synchronize relayed member keys and prioritize current poll slots in E2E
 - [`5fde4bf`](https://github.com/mppjuro/PQChat.DHT/commit/5fde4bf78219dab75a1a42d4535c71e87867af20) (2026-11-04) — **group**: preserve member routing across invites
 - [`4d470b9`](https://github.com/mppjuro/PQChat.DHT/commit/4d470b98e2c7ec8988aacea6397033fdcfdba531) (2026-11-04) — **dht**: retry custom bootstrap discovery
 - [`506d81f`](https://github.com/mppjuro/PQChat.DHT/commit/506d81fbc6893c2dc5e0b53070a57dbdbef7b6d9) (2026-11-03) — **e2e**: isolate local dht cluster and prevent contact name concatenation
