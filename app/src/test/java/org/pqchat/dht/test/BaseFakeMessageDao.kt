@@ -74,6 +74,9 @@ open class BaseFakeMessageDao : MessageDao {
     ): Boolean =
         messages.any { it.contactId == contactId && it.seqEpoch == seqEpoch && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 
+    override suspend fun existsMessageWithSlotTarget(slotTarget: ByteArray): Boolean =
+        messages.any { it.slotTarget != null && it.slotTarget.contentEquals(slotTarget) }
+
     override suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean =
         messages.any { it.contactId == contactId && it.seqNum == seqNum && it.isOutgoing == isOutgoing }
 

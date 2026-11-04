@@ -320,6 +320,8 @@ class ThreeNodeGroupTest {
         assertTrue("Bob must receive Alice's msg1", bobRecvMsg1)
         val charlieRecvMsg1 = charlieRepo.pollGroupIncoming(groupId)
         assertTrue("Charlie must receive Alice's msg1", charlieRecvMsg1)
+        assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Hello_Group_from_Alice_all_3_nodes" && !it.isOutgoing })
+        assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Hello_Group_from_Alice_all_3_nodes" && !it.isOutgoing })
 
         // Turn 2: Bob sends group message
         val bobSent2 = bobRepo.sendGroupMessage(groupId, "Bob_reporting_in_PQ_MultiNode_Group")
@@ -329,6 +331,8 @@ class ThreeNodeGroupTest {
         assertTrue("Alice must receive Bob's msg2", aliceRecvMsg2)
         val charlieRecvMsg2 = charlieRepo.pollGroupIncoming(groupId)
         assertTrue("Charlie must receive Bob's msg2", charlieRecvMsg2)
+        assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Bob_reporting_in_PQ_MultiNode_Group" && !it.isOutgoing })
+        assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Bob_reporting_in_PQ_MultiNode_Group" && !it.isOutgoing })
 
         // Turn 3: Charlie sends group message
         val charlieSent3 = charlieRepo.sendGroupMessage(groupId, "Charlie_here_group_pqc_confirmed")
@@ -338,5 +342,7 @@ class ThreeNodeGroupTest {
         assertTrue("Alice must receive Charlie's msg3", aliceRecvMsg3)
         val bobRecvMsg3 = bobRepo.pollGroupIncoming(groupId)
         assertTrue("Bob must receive Charlie's msg3", bobRecvMsg3)
+        assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
+        assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
     }
 }

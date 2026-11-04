@@ -3614,7 +3614,8 @@ class ChatRepository(
                         if (frameMsg.msgType == BinaryFrameCodec.TYPE_TEXT_MESSAGE) {
                             val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
                             val seqEpoch = slot.counter / 65536
-                            if (!messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)) {
+                            val alreadyExists = messageDao.existsMessageWithSlotTarget(slot.target)
+                            if (!alreadyExists) {
                                 messageDao.insertMessage(
                                     MessageEntity(
                                         contactId = groupId,
@@ -3641,7 +3642,8 @@ class ChatRepository(
                         } else if (frameMsg.msgType == BinaryFrameCodec.TYPE_LOCATION_PIN) {
                             val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
                             val seqEpoch = slot.counter / 65536
-                            if (!messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)) {
+                            val alreadyExists = messageDao.existsMessageWithSlotTarget(slot.target)
+                            if (!alreadyExists) {
                                 val locText = org.pqchat.dht.protocol.LocationPinData(
                                     locPayload.latitude,
                                     locPayload.longitude,
@@ -3674,7 +3676,8 @@ class ChatRepository(
                             val assembled = voiceSegmentAssembler.ingest(voicePayload)
                             if (assembled != null) {
                                 val seqEpoch = slot.counter / 65536
-                                if (!messageDao.existsMessageWithEpoch(groupId, seqEpoch, slot.counter, false)) {
+                                val alreadyExists = messageDao.existsMessageWithSlotTarget(slot.target)
+                                if (!alreadyExists) {
                                     messageDao.insertMessage(
                                         MessageEntity(
                                             contactId = groupId,
@@ -3696,6 +3699,61 @@ class ChatRepository(
                                     )
                                     onIncomingMessageDelivered?.invoke(groupId, "Voice Note (${assembled.totalDurationMs / 1000}s)", false)
                                 }
+                            }
+                        } else if (frameMsg.msgType == BinaryFrameCodec.TYPE_GROUP_POLL) {
+                            when (val pollPayload = frameMsg.payload) {
+                                is BinaryFrameCodec.DecodedPayload.GroupPollCreate -> {
+                                    val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                    val seqEpoch = slot.counter / 65536
+                                    val optionsJson = org.json.JSONArray(pollPayload.options).toString()
+                                    pollDao?.insertOrUpdatePoll(
+                                        PollEntity(
+                                            pollId = pollIdStr,
+                                            groupId = groupId,
+                                            creatorMemberId = member.memberId,
+                                            creatorName = member.rawMemberName,
+                                            question = pollPayload.question,
+                                            optionsJson = optionsJson,
+                                            isMultiChoice = pollPayload.isMultiChoice,
+                                            expirationTimestamp = pollPayload.expirationTimestamp,
+                                            createdAt = frameMsg.timestampUTC
+                                        )
+                                    )
+                                    val alreadyExists = messageDao.existsMessageWithSlotTarget(slot.target)
+                                    if (!alreadyExists) {
+                                        messageDao.insertMessage(
+                                            MessageEntity(
+                                                contactId = groupId,
+                                                isOutgoing = false,
+                                                seqEpoch = seqEpoch,
+                                                seqNum = slot.counter,
+                                                ackNum = frameMsg.ackNum,
+                                                timestamp = frameMsg.timestampUTC,
+                                                textContent = "[Poll] ${pollPayload.question}",
+                                                status = "DELIVERED",
+                                                slotTarget = slot.target,
+                                                slotEdSeed = slot.edPrivateKeySeed,
+                                                senderMemberId = member.memberId,
+                                                senderName = member.rawMemberName,
+                                                pollId = pollIdStr
+                                            )
+                                        )
+                                        onIncomingMessageDelivered?.invoke(groupId, "[Poll] ${pollPayload.question}", false)
+                                    }
+                                }
+                                is BinaryFrameCodec.DecodedPayload.GroupPollVote -> {
+                                    val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                    pollDao?.insertOrUpdateVote(
+                                        PollVoteEntity(
+                                            pollId = pollIdStr,
+                                            memberId = member.memberId,
+                                            memberName = member.rawMemberName,
+                                            selectedBitmask = pollPayload.selectedOptionsBitmask,
+                                            voteTimestamp = pollPayload.voteTimestamp
+                                        )
+                                    )
+                                }
+                                else -> {}
                             }
                         }
                     }
@@ -5169,7 +5227,7 @@ class ChatRepository(
                 val existingGroup = groupDao?.getGroupById(groupId) ?: return@withContext
                 val existingMember = groupMemberDao?.getMember(groupId, senderMemberId)
                 val allMembers = groupMemberDao?.getMembersForGroup(groupId) ?: emptyList()
-                val placeholderMember = allMembers.firstOrNull { it.contactId == contactId && it.memberId != senderMemberId }
+                val placeholderMember = allMembers.firstOrNull { it.contactId == contactId && it.memberId != senderMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
 
                 if (existingMember != null) {
                     val updated = existingMember.copy(
@@ -5222,7 +5280,7 @@ class ChatRepository(
                             groupEpoch = control.groupEpoch,
                             myMemberIdBytes = control.senderMemberId,
                             myChainKeyOut = control.senderGroupChainKey,
-                            currentCounter = control.currentCounter.toLong(),
+                            currentCounter = control.currentCounter,
                             groupName = control.groupName
                         )
                     }
@@ -6222,7 +6280,7 @@ class ChatRepository(
                                 BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
                                     val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
                                     val seqEpoch = activeSlot.counter / 65536
-                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                    val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                     if (!alreadyExists) {
                                         messageDao.insertMessage(
                                             MessageEntity(
@@ -6252,7 +6310,7 @@ class ChatRepository(
                                 BinaryFrameCodec.TYPE_LOCATION_PIN -> {
                                     val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
                                     val seqEpoch = activeSlot.counter / 65536
-                                    val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                    val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                     if (!alreadyExists) {
                                         val locText = org.pqchat.dht.protocol.LocationPinData(
                                             locPayload.latitude,
@@ -6287,7 +6345,7 @@ class ChatRepository(
                                     val assembled = voiceSegmentAssembler.ingest(voicePayload)
                                     if (assembled != null) {
                                         val seqEpoch = activeSlot.counter / 65536
-                                        val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                        val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                         if (!alreadyExists) {
                                             messageDao.insertMessage(
                                                 MessageEntity(
@@ -6331,7 +6389,7 @@ class ChatRepository(
                                                     createdAt = frameMsg.timestampUTC
                                                 )
                                             )
-                                            val alreadyExists = messageDao.existsMessageWithEpoch(groupId, seqEpoch, activeSlot.counter, false)
+                                            val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                             if (!alreadyExists) {
                                                 messageDao.insertMessage(
                                                     MessageEntity(

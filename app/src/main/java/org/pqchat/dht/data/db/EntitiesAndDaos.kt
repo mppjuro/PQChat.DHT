@@ -951,6 +951,9 @@ interface MessageDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE contactId = :contactId AND seqEpoch = :seqEpoch AND seqNum = :seqNum AND isOutgoing = :isOutgoing)")
     suspend fun existsMessageWithEpoch(contactId: String, seqEpoch: Int, seqNum: Int, isOutgoing: Boolean): Boolean
 
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE slotTarget = :slotTarget)")
+    suspend fun existsMessageWithSlotTarget(slotTarget: ByteArray): Boolean
+
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE contactId = :contactId AND seqNum = :seqNum AND isOutgoing = :isOutgoing)")
     suspend fun existsMessage(contactId: String, seqNum: Int, isOutgoing: Boolean): Boolean
 
