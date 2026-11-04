@@ -48,8 +48,7 @@ class ChatHeadServiceTimeoutTest {
     }
 
     @Test
-    @Config(sdk = [35])
-    fun testOnTimeoutExecutesOnAndroid15Sdk35() {
+    fun testOnTimeoutReleasesWakeLockForTimeoutIdOnDataSync() {
         val controller = Robolectric.buildService(ChatHeadService::class.java)
         val service = controller.create().get()
 
@@ -59,10 +58,9 @@ class ChatHeadServiceTimeoutTest {
         lock.acquire(30_000L)
         assertTrue(lock.isHeld)
 
-        // On Android 15 (API 35), onTimeout is native to Service
         service.onTimeout(42, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
 
-        assertFalse("WakeLock must be released on API 35 onTimeout", lock.isHeld)
+        assertFalse("WakeLock must be released after onTimeout", lock.isHeld)
         controller.destroy()
     }
 }
