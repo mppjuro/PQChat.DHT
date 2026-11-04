@@ -290,6 +290,7 @@ open class DhtLeafNode(
     @Volatile
     private var socket: DatagramSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var bootstrapJob: Job? = null
     private val pendingTransactions = ConcurrentHashMap<String, CompletableDeferred<KrpcMessage.Response>>()
     private val routingTable = CopyOnWriteArrayList<DhtPeer>()
     private fun logInfo(tag: String, msg: String) {
@@ -897,8 +898,22 @@ open class DhtLeafNode(
         routingTable.clear()
         fastestNodesCache.clear()
         targetRouteCache.clear()
-        scope.launch(Dispatchers.IO) {
-            bootstrap()
+        startBootstrapWithRetry()
+    }
+
+    /**
+     * Emulator and mobile network interfaces can become routable shortly after the
+     * process starts. Retry initial discovery so a transient ENETUNREACH does not
+     * leave the leaf node permanently without peers.
+     */
+    private fun startBootstrapWithRetry() {
+        bootstrapJob?.cancel()
+        bootstrapJob = scope.launch {
+            repeat(6) { attempt ->
+                bootstrap()
+                if (routingTable.isNotEmpty() || !isActive) return@launch
+                if (attempt < 5) delay(1000L)
+            }
         }
     }
 
@@ -2037,4 +2052,3 @@ open class DhtLeafNode(
         }
     }
 }
-
