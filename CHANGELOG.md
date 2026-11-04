@@ -162,6 +162,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`34af98f`](https://github.com/mppjuro/PQChat.DHT/commit/34af98f7563cfbc02ef1a3b7b978057c5de2fd2f) (2026-11-04) — increase emulator disk allocation
 - [`2499235`](https://github.com/mppjuro/PQChat.DHT/commit/249923541e549ace023fd64f7fd12260120d2ef8) (2026-11-01) — **emulator**: explicitly install emulator package before avdmanager invocation
 - [`75cfbad`](https://github.com/mppjuro/PQChat.DHT/commit/75cfbad862c352ad796ed123f36747e9c186423a) (2026-11-01) — fix AVD path resolution, configure test timeouts and optimize nightly suites
 - [`86959dc`](https://github.com/mppjuro/PQChat.DHT/commit/86959dc8f623112adc6a4703c20c6f5aba1d9186) (2026-11-01) — **e2e**: allocate dedicated swapfile_extra to avoid text file busy conflict
