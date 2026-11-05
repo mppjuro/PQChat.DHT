@@ -506,6 +506,8 @@ class ChatRepository(
         const val DEFAULT_POLL_BATCH_SIZE = N_POLL_TARGETS
         const val SELF_CONTACT_ID = "self_notes_loopback"
         const val MAX_SKIPPED_KEYS_PER_CONTACT = 100
+        private const val GROUP_PUT_MAX_ATTEMPTS = 3
+        private const val GROUP_PUT_RETRY_DELAY_MS = 150L
 
         fun getBackoffDelayMs(retryCount: Int): Long {
             val baseDelay = 1000L
@@ -513,6 +515,30 @@ class ChatRepository(
             val exponential = baseDelay * (1L shl minOf(retryCount, 5))
             return minOf(exponential, maxDelay)
         }
+    }
+
+    private suspend fun putGroupFrameWithRetries(
+        target: ByteArray,
+        frame: ByteArray,
+        signingKey: ByteArray
+    ): Boolean {
+        repeat(GROUP_PUT_MAX_ATTEMPTS) { attempt ->
+            if (dhtLeafNode.putMutable(
+                    target = target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = signingKey,
+                    skipLocalStore = false
+                )
+            ) {
+                return true
+            }
+            if (attempt < GROUP_PUT_MAX_ATTEMPTS - 1) {
+                delay(GROUP_PUT_RETRY_DELAY_MS * (attempt + 1))
+            }
+        }
+        return false
     }
 
     suspend fun ensureSelfNotesContactExists() = withContext(Dispatchers.IO) {
@@ -5436,13 +5462,10 @@ class ChatRepository(
                     groupId = groupIdBytes,
                     senderMemberId = myMemberIdBytes
                 )
-                val success = dhtLeafNode.putMutable(
+                val success = putGroupFrameWithRetries(
                     target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false
+                    frame = frame,
+                    signingKey = slot.edPrivateKeySeed
                 )
                 if (success) {
                     decoyTargetPool.registerPopulatedTarget(slot.target)

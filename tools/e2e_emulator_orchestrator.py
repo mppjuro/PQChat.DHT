@@ -1408,6 +1408,25 @@ class MultiEmulatorOrchestrator:
             for dev in [self.alice, self.bob, self.charlie]:
                 print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
                 rcv4 = dev.wait_for_element(text=msg4, timeout=60, sync_chip_tag="chat_sync_chip")
+                if not rcv4:
+                    # Group fan-out writes are independent DHT records. A recipient can
+                    # miss the first polling window while the other records are visible.
+                    # Retry the focused poll before declaring the delivery failed.
+                    dev.ensure_app_foreground()
+                    for retry in range(2):
+                        print(
+                            f"[{dev.name}] Retrying Dave's group message poll "
+                            f"({retry + 1}/2)...",
+                            flush=True,
+                        )
+                        dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                        if dev.wait_for_element(
+                            text=msg4,
+                            timeout=20,
+                            sync_chip_tag="chat_sync_chip",
+                        ):
+                            rcv4 = True
+                            break
                 sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
                 if rcv4:
                     self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
