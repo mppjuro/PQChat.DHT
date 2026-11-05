@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`05e829c`](https://github.com/mppjuro/PQChat.DHT/commit/05e829c6c6bd66135be268a57e4064cfd1498c50) (2026-11-05) — **ci**: stabilize multi-emulator group sync
+- [`92e8b11`](https://github.com/mppjuro/PQChat.DHT/commit/92e8b115bec74bcf1b5c9d35bacc18dacf11cc46) (2026-11-04) — **group**: deduplicate group messages by unique slot target instead of colliding sequence epoch
 - [`3108415`](https://github.com/mppjuro/PQChat.DHT/commit/3108415678d2a79cd9bce5a3b00f2453819040aa) (2026-11-04) — **group**: synchronize relayed member keys and prioritize current poll slots in E2E
 - [`5fde4bf`](https://github.com/mppjuro/PQChat.DHT/commit/5fde4bf78219dab75a1a42d4535c71e87867af20) (2026-11-04) — **group**: preserve member routing across invites
 - [`4d470b9`](https://github.com/mppjuro/PQChat.DHT/commit/4d470b98e2c7ec8988aacea6397033fdcfdba531) (2026-11-04) — **dht**: retry custom bootstrap discovery
@@ -210,6 +212,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`4c83e8a`](https://github.com/mppjuro/PQChat.DHT/commit/4c83e8a1cc379718049d8b3696ab5ee5a4f60294) (2026-11-04) — remove API 35 Robolectric dependency in chat head timeout test
 - [`878f670`](https://github.com/mppjuro/PQChat.DHT/commit/878f670255c881851543536baea2a885cdd34588) (2026-11-01) — **e2e**: fix pixel coordinate bounds in UI Automator and automate full multi-emulator E2E scenario
 - [`3226a53`](https://github.com/mppjuro/PQChat.DHT/commit/3226a536d97709aec56a036fcb717a00b8885447) (2026-10-31) — **e2e**: add 3 and 4 emulator E2E tests with group creation and GitHub Actions workflow
 - [`3f86a69`](https://github.com/mppjuro/PQChat.DHT/commit/3f86a693467326e6d3a22b887460bfc7faf90d7c) (2026-10-31) — **e2e**: implement multi-emulator physical UI automation and dual-AVD GitHub Actions workflow
@@ -227,6 +230,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`e1be294`](https://github.com/mppjuro/PQChat.DHT/commit/e1be294e9c88d2eb36557ea7be90fe4b8c97df67) (2026-11-04) — plan
 - [`ff03da6`](https://github.com/mppjuro/PQChat.DHT/commit/ff03da63363f28d45dff6e0f9232e8325ac339e8) (2026-11-02) — **deps**: bump com.google.devtools.ksp from 2.3.12 to 2.3.13
 - [`3cf7e8d`](https://github.com/mppjuro/PQChat.DHT/commit/3cf7e8d942771a03fcde6e97fef817a6d26da686) (2026-11-02) — **deps**: bump com.android.application from 9.4.1 to 9.5.0
 - [`9c0e3bb`](https://github.com/mppjuro/PQChat.DHT/commit/9c0e3bb1e351e20d78638eed52bc3a69b305cebf) (2026-10-26) — **deps**: bump com.google.firebase:firebase-bom from 35.0.2 to 35.1.0
