@@ -169,6 +169,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`0e32a57`](https://github.com/mppjuro/PQChat.DHT/commit/0e32a576490878a7eebc3494d767a591cfec7e3e) (2026-11-05) — separate commit tests on simulated DHT from nightly tests on real DHT
 - [`34af98f`](https://github.com/mppjuro/PQChat.DHT/commit/34af98f7563cfbc02ef1a3b7b978057c5de2fd2f) (2026-11-04) — increase emulator disk allocation
 - [`2499235`](https://github.com/mppjuro/PQChat.DHT/commit/249923541e549ace023fd64f7fd12260120d2ef8) (2026-11-01) — **emulator**: explicitly install emulator package before avdmanager invocation
 - [`75cfbad`](https://github.com/mppjuro/PQChat.DHT/commit/75cfbad862c352ad796ed123f36747e9c186423a) (2026-11-01) — fix AVD path resolution, configure test timeouts and optimize nightly suites
