@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`53ee747`](https://github.com/mppjuro/PQChat.DHT/commit/53ee74703f504ea8309e91c8e33ed711e564c901) (2026-11-05) — retry delayed group message polling
+- [`556a3ea`](https://github.com/mppjuro/PQChat.DHT/commit/556a3ea8cc50a0f11d243bf3a85914a136286d51) (2026-11-05) — retry group message DHT puts
 - [`05e829c`](https://github.com/mppjuro/PQChat.DHT/commit/05e829c6c6bd66135be268a57e4064cfd1498c50) (2026-11-05) — **ci**: stabilize multi-emulator group sync
 - [`92e8b11`](https://github.com/mppjuro/PQChat.DHT/commit/92e8b115bec74bcf1b5c9d35bacc18dacf11cc46) (2026-11-04) — **group**: deduplicate group messages by unique slot target instead of colliding sequence epoch
 - [`3108415`](https://github.com/mppjuro/PQChat.DHT/commit/3108415678d2a79cd9bce5a3b00f2453819040aa) (2026-11-04) — **group**: synchronize relayed member keys and prioritize current poll slots in E2E
