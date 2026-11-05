@@ -21,9 +21,25 @@ on:
         type: boolean
         required: false
         default: true
+      nodes:
+        description: 'Number of emulator instances for real DHT E2E (3, 4, or all)'
+        type: choice
+        required: false
+        default: 'all'
+        options:
+          - 'all'
+          - '3'
+          - '4'
 
 permissions:
   contents: write
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_PREFS_ROOT: /home/runner
+  ANDROID_SDK_HOME: /home/runner
+  ANDROID_AVD_HOME: /home/runner/.android/avd
 
 jobs:
   fast-unit-tests:
@@ -282,7 +298,7 @@ jobs:
           if [ "${{ inputs.quick }}" = "true" ]; then
             python -m tools.testbed.testbed_runner --quick
           else
-            python -m tools.testbed.testbed_runner --runs 100 --nodes 150
+            python -m tools.testbed.testbed_runner --nodes 150 --runs 100
           fi
 
       - name: Run Threat Simulator & Generate Comparison
@@ -429,11 +445,347 @@ jobs:
             tools/testbed/adversarial_simulation_results.csv
             app/build/reports/tests/testDebugUnitTest/
 
+  multi-emulator-dht-real-e2e:
+    name: Multi-Emulator Real DHT E2E (${{ matrix.nodes }} Nodes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        nodes: ${{ (github.event_name == 'workflow_dispatch' && inputs.nodes != 'all') && fromJSON(format('["{0}"]', inputs.nodes)) || fromJSON('["3", "4"]') }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+
+      - name: Enable KVM hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 666 /dev/kvm || true
+          sudo usermod -aG kvm $USER || true
+          ls -la /dev/kvm || true
+
+      - name: Install emulator runtime libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libpulse0
+
+      - name: Allocate 8GB Extra Swap Space
+        run: |
+          echo "=== Adding 8GB extra swap space for multi-node stability ==="
+          sudo fallocate -l 8G /swapfile_extra || sudo dd if=/dev/zero of=/swapfile_extra bs=1M count=8192
+          sudo chmod 600 /swapfile_extra
+          sudo mkswap /swapfile_extra
+          sudo swapon /swapfile_extra
+          free -h
+
+      - name: Configure Android SDK Environment and PATH
+        run: |
+          ANDROID_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_ROOT" >> $GITHUB_ENV
+
+          # Detect cmdline-tools directory containing sdkmanager and avdmanager
+          CMDLINE_DIR=""
+          if [ -d "$ANDROID_ROOT/cmdline-tools/latest/bin" ]; then
+            CMDLINE_DIR="$ANDROID_ROOT/cmdline-tools/latest/bin"
+          else
+            for d in "$ANDROID_ROOT/cmdline-tools"/*/bin; do
+              if [ -x "$d/sdkmanager" ]; then
+                CMDLINE_DIR="$d"
+                break
+              fi
+            done
+          fi
+
+          if [ -n "$CMDLINE_DIR" ]; then
+            echo "Configuring cmdline-tools from: $CMDLINE_DIR"
+            echo "$CMDLINE_DIR" >> $GITHUB_PATH
+          fi
+
+          echo "$ANDROID_ROOT/emulator" >> $GITHUB_PATH
+          echo "$ANDROID_ROOT/platform-tools" >> $GITHUB_PATH
+
+      - name: Cache Android System Image & Emulator
+        uses: actions/cache@v6
+        id: sysimg-cache
+        with:
+          path: |
+            /usr/local/lib/android/sdk/system-images/android-34
+            /usr/local/lib/android/sdk/emulator
+          key: sysimg-emulator-android-34-x86_64-v1
+
+      - name: Set up Android SDK & Multi-Node AVDs
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+            export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          fi
+          for d in "$ANDROID_HOME/cmdline-tools"/*/bin; do
+            if [ -x "$d/sdkmanager" ]; then
+              export PATH="$d:$PATH"
+              break
+            fi
+          done
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+
+          export API_LEVEL="34"
+          export SYS_IMG="system-images;android-${API_LEVEL};google_apis;x86_64"
+          export NODES="${{ matrix.nodes }}"
+
+          yes 2>/dev/null | sdkmanager --licenses > /dev/null || true
+
+          if [ ! -f "$ANDROID_HOME/emulator/package.xml" ] || [ ! -x "$ANDROID_HOME/emulator/emulator" ]; then
+            yes 2>/dev/null | sdkmanager --install "emulator" "platform-tools" "platforms;android-${API_LEVEL}"
+          fi
+
+          if [ ! -d "$ANDROID_HOME/system-images/android-${API_LEVEL}/google_apis/x86_64" ]; then
+            yes 2>/dev/null | sdkmanager --install "$SYS_IMG" "platforms;android-${API_LEVEL}"
+          fi
+
+          mkdir -p "$ANDROID_AVD_HOME"
+          mkdir -p /home/runner/.android/avd
+
+          echo "=== Creating Alice AVD ==="
+          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/alice_avd.avd" --device "pixel_6" --force || \
+          echo "no" | avdmanager create avd -n alice_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/alice_avd.avd" --force
+
+          echo "=== Creating Bob AVD ==="
+          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/bob_avd.avd" --device "pixel_6" --force || \
+          echo "no" | avdmanager create avd -n bob_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/bob_avd.avd" --force
+
+          if [ "$NODES" -ge 3 ]; then
+            echo "=== Creating Charlie AVD ==="
+            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/charlie_avd.avd" --device "pixel_6" --force || \
+            echo "no" | avdmanager create avd -n charlie_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/charlie_avd.avd" --force
+          fi
+
+          if [ "$NODES" -ge 4 ]; then
+            echo "=== Creating Dave AVD ==="
+            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/dave_avd.avd" --device "pixel_6" --force || \
+            echo "no" | avdmanager create avd -n dave_avd -k "$SYS_IMG" -p "$ANDROID_AVD_HOME/dave_avd.avd" --force
+          fi
+
+          if [ -d "/home/runner/.config/.android/avd" ]; then
+            cp -rn /home/runner/.config/.android/avd/* "$ANDROID_AVD_HOME/" 2>/dev/null || true
+          fi
+          for avd_name in alice_avd bob_avd $( [ "$NODES" -ge 3 ] && echo charlie_avd ) $( [ "$NODES" -ge 4 ] && echo dave_avd ); do
+            if [ ! -f "$ANDROID_AVD_HOME/${avd_name}.ini" ]; then
+              find /home/runner -name "${avd_name}.ini" -exec cp {} "$ANDROID_AVD_HOME/" \; 2>/dev/null || true
+            fi
+          done
+
+          for avd_dir in "$ANDROID_AVD_HOME"/*.avd; do
+            if [ -d "$avd_dir" ]; then
+              sed -i '/hw.keyboard/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.ramSize/d' "$avd_dir/config.ini" || true
+              sed -i '/vm.heapSize/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.audioInput/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.audioOutput/d' "$avd_dir/config.ini" || true
+              sed -i '/hw.gps/d' "$avd_dir/config.ini" || true
+              echo "hw.keyboard = yes" >> "$avd_dir/config.ini"
+              echo "hw.ramSize = 2048" >> "$avd_dir/config.ini"
+              echo "vm.heapSize = 384" >> "$avd_dir/config.ini"
+              echo "hw.audioInput = no" >> "$avd_dir/config.ini"
+              echo "hw.audioOutput = no" >> "$avd_dir/config.ini"
+              echo "hw.gps = no" >> "$avd_dir/config.ini"
+            fi
+          done
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Launch Android Emulators Headless
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export ANDROID_PREFS_ROOT="/home/runner"
+          export ANDROID_SDK_HOME="/home/runner"
+          export ANDROID_AVD_HOME="/home/runner/.android/avd"
+          export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
+          EMULATOR_BIN="$(command -v emulator || echo "$ANDROID_HOME/emulator/emulator")"
+
+          EMU_OPTS="-no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 2048 -cores 2"
+          NODES="${{ matrix.nodes }}"
+
+          mkdir -p /tmp/emu_logs
+
+          echo "Starting Alice (emulator-5554)..."
+          nohup $EMULATOR_BIN -avd alice_avd -port 5554 $EMU_OPTS > /tmp/emu_5554.log 2>&1 &
+          sleep 5
+
+          echo "Starting Bob (emulator-5556)..."
+          nohup $EMULATOR_BIN -avd bob_avd -port 5556 $EMU_OPTS > /tmp/emu_5556.log 2>&1 &
+          sleep 5
+
+          if [ "$NODES" -ge 3 ]; then
+            echo "Starting Charlie (emulator-5558)..."
+            nohup $EMULATOR_BIN -avd charlie_avd -port 5558 $EMU_OPTS > /tmp/emu_5558.log 2>&1 &
+            sleep 5
+          fi
+
+          if [ "$NODES" -ge 4 ]; then
+            echo "Starting Dave (emulator-5560)..."
+            nohup $EMULATOR_BIN -avd dave_avd -port 5560 $EMU_OPTS > /tmp/emu_5560.log 2>&1 &
+            sleep 5
+          fi
+
+      - name: Wait for All Emulators to Complete Boot
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+
+          python3 - << 'EOF'
+          import subprocess, time, sys, os
+
+          subprocess.run(["adb", "start-server"], check=False)
+
+          nodes = int("${{ matrix.nodes }}")
+          device_ports = [5554, 5556]
+          if nodes >= 3:
+              device_ports.append(5558)
+          if nodes >= 4:
+              device_ports.append(5560)
+
+          devices = [f"emulator-{p}" for p in device_ports]
+          timeout_seconds = 600
+
+          for dev in devices:
+              port = dev.replace("emulator-", "")
+              log_file = f"/tmp/emu_{port}.log"
+              print(f"Waiting for {dev} to be ready...", flush=True)
+              start_time = time.time()
+              while time.time() - start_time < timeout_seconds:
+                  try:
+                      res = subprocess.run(
+                          ["adb", "-s", dev, "shell", "getprop", "sys.boot_completed"],
+                          capture_output=True,
+                          text=True,
+                          timeout=10
+                      )
+                      if res.stdout.strip() == "1":
+                          print(f"[{dev}] sys.boot_completed == 1. Ready in {int(time.time() - start_time)}s!", flush=True)
+                          break
+                  except Exception:
+                      pass
+                  time.sleep(3)
+              else:
+                  print(f"ERROR: {dev} failed to boot within {timeout_seconds} seconds!", file=sys.stderr)
+                  sys.exit(1)
+          EOF
+
+          NODES="${{ matrix.nodes }}"
+          DEVS="emulator-5554 emulator-5556"
+          if [ "$NODES" -ge 3 ]; then DEVS="$DEVS emulator-5558"; fi
+          if [ "$NODES" -ge 4 ]; then DEVS="$DEVS emulator-5560"; fi
+
+          DEBLOAT_PKGS="com.google.android.inputmethod.latin com.android.inputmethod.latin com.google.android.settings.intelligence com.android.settings.intelligence com.google.android.dialer com.android.dialer com.google.android.apps.wellbeing com.google.android.googlequicksearchbox com.google.android.as com.google.android.as.oss com.google.android.gms com.google.android.gsf com.google.android.apps.messaging com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.google.android.contacts"
+
+          for dev in $DEVS; do
+            adb -s $dev wait-for-device
+            adb -s $dev shell "
+              settings put global window_animation_scale 0.0
+              settings put global transition_animation_scale 0.0
+              settings put global animator_duration_scale 0.0
+              svc power stayon true
+              settings put system screen_off_timeout 2147483647
+              settings put global hide_error_dialogs 1
+              settings put secure immersive_mode_confirmations confirmed
+              settings put secure show_ime_with_hard_keyboard 0
+              settings put global heads_up_notifications_enabled 0
+              cmd notification set_dnd on
+              cmd media_session volume --stream 5 --set 0
+              cmd media_session volume --stream 2 --set 0
+              input keyevent 224
+              wm dismiss-keyguard
+              input keyevent 82
+              am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS
+              for pkg in $DEBLOAT_PKGS; do
+                pm disable-user --user 0 \$pkg 2>/dev/null || true
+                am force-stop \$pkg 2>/dev/null || true
+              done
+              logcat -G 16M
+              logcat -c
+            "
+          done
+
+      - name: Run Multi-Emulator E2E on Real BitTorrent DHT
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+
+          mkdir -p build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes
+          python3 tools/e2e_emulator_orchestrator.py \
+            --real-dht \
+            --nodes ${{ matrix.nodes }} \
+            --alice emulator-5554 \
+            --bob emulator-5556 \
+            --charlie emulator-5558 \
+            --dave emulator-5560 \
+            --apk app/build/outputs/apk/debug/app-debug.apk \
+            --output-dir build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes \
+            --full
+
+      - name: Publish Real DHT E2E Summary to GitHub Job Summary
+        if: always()
+        run: |
+          REPORT_FILE="build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes/report.md"
+          echo "## 📱 Multi-Emulator Real Mainline DHT Results (${{ matrix.nodes }} Nodes)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ Report file $REPORT_FILE was not generated." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload E2E Screenshots & Trace Artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-dht-e2e-trace-${{ matrix.nodes }}nodes
+          path: |
+            build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes/
+            /tmp/emu_*.log
+
+      - name: Stop Emulators
+        if: always()
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+
+          for port in 5554 5556 5558 5560; do
+            adb -s emulator-$port emu kill 2>/dev/null || true
+          done
+
   nightly-release:
     name: Build & Publish Nightly Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [fast-unit-tests, slow-repository-tests, slow-statistical-tests, remote-dht-tests, real-dht-measurements, dht-testbed, e2e-two-devices-test, adversarial-dht-simulation]
+    needs: [fast-unit-tests, slow-repository-tests, slow-statistical-tests, remote-dht-tests, real-dht-measurements, dht-testbed, e2e-two-devices-test, adversarial-dht-simulation, multi-emulator-dht-real-e2e]
     if: success() && (inputs.skip_release != true)
     permissions:
       contents: write
@@ -487,19 +839,20 @@ jobs:
             ## 🌙 PQChat.DHT Nightly Build
 
             Automated daily developer build (`app-debug.apk`) after passing the full nightly test suite:
-            - **Fast Unit Tests:** Zaliczone (standardowa suita jednostkowa)
-            - **Slow Repository & Rekey Tests:** Zaliczone (PQC Rekey, ChatRepository Concurrency, Polling, Property)
-            - **Slow Statistical & Tor Tests:** Zaliczone (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
+            - **Fast Unit Tests:** Passed (standard unit test suite)
+            - **Slow Repository & Rekey Tests:** Passed (PQC Rekey, ChatRepository Concurrency, Polling, Property)
+            - **Slow Statistical & Tor Tests:** Passed (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
             - **Two Devices End-to-End Lifecycle:** Passed (Handshake, >10 Msg, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, DhtLeafNode / FakeDht)
-            - **Real BEP 44 Remote Integration Tests:** Zaliczone (Live Mainline DHT)
+            - **Real BEP 44 Remote Integration Tests:** Passed (Live Mainline DHT)
             - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
-            - **Byzantine & Adversarial DHT Attack Simulation:** Zaliczone (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
+            - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
+            - **Multi-Emulator Real DHT E2E Tests:** Passed (3 & 4 nodes full lifecycle on live Mainline DHT)
 
-            ### Metadane kompilacji:
+            ### Build Metadata:
             - **Commit:** [`${{ env.SHORT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            - **Data wydania:** ${{ env.BUILD_DATE }}
-            - **Pakiet APK:** `${{ env.APK_NAME }}`
+            - **Release Date:** ${{ env.BUILD_DATE }}
+            - **APK Package:** ${{ env.APK_NAME }}
 
             > [!NOTE]
             > This APK package is a developer build signed with a public debug key. Requires enabling installation from unknown sources on Android.

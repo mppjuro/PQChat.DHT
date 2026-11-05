@@ -54,12 +54,16 @@ class PoissonTrafficGenerator(
     val eventFlow: SharedFlow<CoverEvent> = _eventFlow.asSharedFlow()
 
     @Volatile
+    var isFastMode: Boolean = false
+
+    @Volatile
     private var isRunning = false
 
     /**
      * Compute next Poisson interval delta_t in milliseconds.
      */
     fun computeNextIntervalMs(currentLambda: Double = lambda): Long {
+        if (isFastMode) return 100L
         val u = random.nextDouble().coerceIn(1e-10, 1.0 - 1e-10)
         val deltaSeconds = -(1.0 / currentLambda) * ln(u)
         return (deltaSeconds * 1000.0).toLong().coerceAtLeast(1000L)

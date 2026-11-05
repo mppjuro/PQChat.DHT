@@ -36,18 +36,46 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun applyCustomBootstrap(intent: android.content.Intent?) {
-        val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
-        val isTestbedExplicit = intent?.getBooleanExtra("is_local_testbed", false) == true
-        if (bootstrapPort > 0 || isTestbedExplicit) {
-            val port = if (bootstrapPort > 0) bootstrapPort else 30000
-            val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
-            val endpoints = listOf(Pair(host, port))
-            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = endpoints
-            if (host == "10.0.2.2" || host == "127.0.0.1" || host.startsWith("10.") || host.startsWith("192.168.")) {
-                org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedMode = true
-            }
+        val useRealDht = intent?.getBooleanExtra("use_real_dht", false) == true
+        if (useRealDht) {
+            org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = emptyList()
+            org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedMode = false
             (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
-                app.dhtLeafNode.reconfigureCustomBootstrap(endpoints)
+                app.dhtLeafNode.reconfigureCustomBootstrap(emptyList())
+            }
+        } else {
+            val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
+            val isTestbedExplicit = intent?.getBooleanExtra("is_local_testbed", false) == true
+            if (bootstrapPort > 0 || isTestbedExplicit) {
+                val port = if (bootstrapPort > 0) bootstrapPort else 30000
+                val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
+                val endpoints = listOf(Pair(host, port))
+                org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = endpoints
+                if (host == "10.0.2.2" || host == "127.0.0.1" || host.startsWith("10.") || host.startsWith("192.168.")) {
+                    org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedMode = true
+                }
+                (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
+                    app.dhtLeafNode.reconfigureCustomBootstrap(endpoints)
+                }
+            }
+        }
+
+        val e2eFastMode = intent?.getBooleanExtra("e2e_fast_mode", false) == true
+        if (e2eFastMode) {
+            (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
+                app.settingsManager.setIntervalForegroundChat(2000L)
+                app.settingsManager.setIntervalAppActive(2000L)
+                app.settingsManager.setIntervalBackgroundIdle(3000L)
+                app.settingsManager.setIntervalDozeSleep(5000L)
+                app.pollingScheduler.pollingManager.jitterRatio = 0.0
+                app.pollingScheduler.pollingManager.updateIntervals(
+                    foreground = 2000L,
+                    appActive = 2000L,
+                    bgIdle = 3000L,
+                    doze = 5000L
+                )
+                app.trafficGenerator.isFastMode = true
+                app.repository.isFastTestMode = true
             }
         }
     }

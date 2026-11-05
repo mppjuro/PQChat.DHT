@@ -213,6 +213,7 @@ class ChatRepository(
 
     var onIncomingMessageDelivered: ((contactId: String, textContent: String, isImage: Boolean) -> Unit)? = null
     var onRepublishTaskUpdated: (() -> Unit)? = null
+    @Volatile var isFastTestMode: Boolean = false
 
     suspend fun markMessageExpiredOffline(messageId: Long) = withContext(Dispatchers.IO) {
         messageDao.updateStatus(messageId, "EXPIRED_OFFLINE")
@@ -5102,13 +5103,25 @@ class ChatRepository(
         policy: org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(),
         currentTimeMs: Long = System.currentTimeMillis()
     ): Int = withContext(Dispatchers.IO) {
+        val effectivePolicy = if ((isFastTestMode || org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) && policy == org.pqchat.dht.traffic.RepublishPolicy()) {
+            org.pqchat.dht.traffic.RepublishPolicy(
+                tier1IntervalMs = 15_000L,
+                tier1ThresholdMs = 60_000L,
+                tier2IntervalMs = 30_000L,
+                tier2ThresholdMs = 120_000L,
+                tier3IntervalMs = 60_000L,
+                maxTtlMs = 600_000L
+            )
+        } else {
+            policy
+        }
         val unconfirmed = pendingGroupControls.values.toList()
         if (unconfirmed.isEmpty()) return@withContext 0
 
         var retransmittedCount = 0
         for (record in unconfirmed) {
             val age = (currentTimeMs - record.timestamp).coerceAtLeast(0L)
-            if (policy.isExpired(age)) {
+            if (effectivePolicy.isExpired(age)) {
                 org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(record.taskId)
                 pendingGroupControls.remove(record.taskId)
                 continue
@@ -5120,7 +5133,7 @@ class ChatRepository(
                 continue
             }
 
-            val interval = policy.getIntervalForAge(age)
+            val interval = effectivePolicy.getIntervalForAge(age)
             val timeSinceLast = if (record.lastRepublishedTimestamp == 0L) {
                 Long.MAX_VALUE
             } else {

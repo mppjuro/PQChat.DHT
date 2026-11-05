@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml">
-    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/android.yml/badge.svg" alt="Android CI" />
+  <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/commit_tests.yml">
+    <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/commit_tests.yml/badge.svg" alt="Commit Tests" />
   </a>
   <a href="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly.yml">
     <img src="https://github.com/mppjuro/PQChat.DHT/actions/workflows/nightly.yml/badge.svg" alt="Nightly Tests &amp; Release" />
@@ -235,7 +235,7 @@ python threat_simulator.py
 
 ```text
 PQChat.DHT/
-├── .github/workflows/       # CI: android.yml, nightly.yml, formal_verification.yml
+├── .github/workflows/       # CI: commit_tests.yml, nightly.yml, formal_verification.yml
 ├── app/
 │   └── src/
 │       ├── main/java/org/pqchat/dht/

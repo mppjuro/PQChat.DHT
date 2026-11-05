@@ -44,15 +44,18 @@ if hasattr(sys.stdout, "reconfigure"):
 class LocalDhtClusterManager:
     """Manages an in-process or background isolated DHT cluster for real UDP routing."""
 
-    def __init__(self, base_port: int = 30000, num_nodes: int = 50, output_dir: Optional[Path] = None, dry_run: bool = False):
+    def __init__(self, base_port: int = 30000, num_nodes: int = 20, output_dir: Optional[Path] = None, dry_run: bool = False, enabled: bool = True):
         self.base_port = base_port
         self.num_nodes = num_nodes
         self.output_dir = output_dir or Path("build")
         self.dry_run = dry_run
+        self.enabled = enabled
         self.process: Optional[subprocess.Popen] = None
         self.log_file = None
 
     def is_healthy(self) -> bool:
+        if not self.enabled:
+            return True
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.settimeout(0.6)
@@ -65,8 +68,12 @@ class LocalDhtClusterManager:
             sock.close()
 
     def start(self):
+        if not self.enabled:
+            print("[DHT Cluster] Local cluster disabled (using real DHT network).", flush=True)
+            return
+
         if self.dry_run:
-            print("[DHT Cluster DRY-RUN] Would start local DHT cluster on base_port 30000", flush=True)
+            print(f"[DHT Cluster DRY-RUN] Would start local DHT cluster on base_port {self.base_port}", flush=True)
             return
 
         if self.is_healthy():
@@ -94,12 +101,12 @@ class LocalDhtClusterManager:
             )
 
             start = time.time()
-            while time.time() - start < 6.0:
+            while time.time() - start < 8.0:
                 if self.is_healthy():
                     print(f"[DHT Cluster] Local cluster is active and serving KRPC queries on port {self.base_port}.", flush=True)
                     return
                 time.sleep(0.3)
-            print("[DHT Cluster] Warning: Cluster spawned but did not respond to initial ping in 6s.", flush=True)
+            print("[DHT Cluster] Warning: Cluster spawned but did not respond to initial ping in 8s.", flush=True)
         except Exception as e:
             print(f"[DHT Cluster] Failed to launch background cluster: {e}", flush=True)
 
@@ -123,17 +130,29 @@ class LocalDhtClusterManager:
 class AdbDevice:
     """Controls an Android emulator instance via physical ADB commands."""
 
-    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False):
+    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False, real_dht: bool = False, fast_mode: bool = True):
         self.serial = serial
         self.name = name
         self.output_dir = output_dir
         self.dry_run = dry_run
+        self.real_dht = real_dht
+        self.fast_mode = fast_mode
         self.screen_width = 1080
         self.screen_height = 2400
         self._cached_ui: Optional[ET.Element] = None
         self._last_dump_time: float = 0.0
         self._is_debloated: bool = False
         self._detect_screen_size()
+
+    def get_app_start_flags(self) -> str:
+        flags = []
+        if self.real_dht:
+            flags.append("--ez use_real_dht true --ez is_local_testbed false")
+        else:
+            flags.append("--ez is_local_testbed true --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
+        if self.fast_mode:
+            flags.append("--ez e2e_fast_mode true")
+        return " ".join(flags)
 
     def invalidate_ui_cache(self):
         self._cached_ui = None
@@ -229,7 +248,8 @@ logcat -c
             print(f"[{self.name}] App {package} not in foreground (Current: {focus_info.strip()[:100]}). Restoring...", flush=True)
             self.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
             self.sleep(0.3)
-            self.shell(f"am start -n {package}/{activity} --activity-brought-to-front --ez is_local_testbed true --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
+            flags = self.get_app_start_flags()
+            self.shell(f"am start -n {package}/{activity} --activity-brought-to-front {flags}")
             self.sleep(1.0)
             self.invalidate_ui_cache()
             return True
@@ -740,8 +760,10 @@ logcat -c
         self.shell(f"appops set {package} POST_NOTIFICATION allow")
 
     def start_app(self, package: str = "org.pqchat.dht", activity: str = ".ui.MainActivity"):
-        print(f"[{self.name}] Starting {package}/{activity} with local DHT cluster 10.0.2.2:30000", flush=True)
-        self.shell(f"am start -W -n {package}/{activity} --ez is_local_testbed true --ei dht_bootstrap_port 30000 --es dht_bootstrap_host 10.0.2.2")
+        dht_desc = "real BitTorrent DHT" if self.real_dht else "local DHT cluster 10.0.2.2:30000"
+        flags = self.get_app_start_flags()
+        print(f"[{self.name}] Starting {package}/{activity} with {dht_desc} (flags: {flags})", flush=True)
+        self.shell(f"am start -W -n {package}/{activity} {flags}")
         self.invalidate_ui_cache()
 
 
@@ -760,10 +782,13 @@ class MultiEmulatorOrchestrator:
         self.report_path = self.output_dir / "report.md"
         self.nodes_count = args.nodes
 
-        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run)
-        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run)
-        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run) if self.nodes_count >= 3 else None
-        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run) if self.nodes_count >= 4 else None
+        real_dht = getattr(args, "real_dht", False)
+        fast_mode = getattr(args, "e2e_fast_mode", True)
+
+        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode)
+        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode)
+        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode) if self.nodes_count >= 3 else None
+        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode) if self.nodes_count >= 4 else None
 
         self.active_devices = [self.alice, self.bob]
         if self.charlie:
@@ -771,7 +796,13 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             self.active_devices.append(self.dave)
 
-        self.dht_cluster = LocalDhtClusterManager(base_port=30000, num_nodes=50, output_dir=self.output_dir, dry_run=args.dry_run)
+        self.dht_cluster = LocalDhtClusterManager(
+            base_port=30000,
+            num_nodes=20,
+            output_dir=self.output_dir,
+            dry_run=args.dry_run,
+            enabled=not real_dht
+        )
         self.report_entries: List[Dict[str, str]] = []
 
     def sleep(self, seconds: float):
@@ -1171,19 +1202,27 @@ class MultiEmulatorOrchestrator:
         # Rekey: Alice initiates ML-KEM-512 Rekey (NO fallback_ratio!)
         print("[Alice] Initiating ML-KEM-512 Rekey...", flush=True)
         rekey_clicked = self.alice.click_element(test_tag="chat_rekey_button", content_desc="Initiate ML-KEM-512 Rekey")
-        self.sleep(2.0)
+        self.sleep(2.0 if not self.args.real_dht else 4.0)
         sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
 
         if rekey_clicked:
             # Bob triggers DHT poll to retrieve Type 0x03 Offer and dispatch Type 0x04 Response
             print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
             self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(3.0)
+            self.sleep(3.0 if not self.args.real_dht else 7.0)
 
             # Alice triggers DHT poll to retrieve Type 0x04 Response
             print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
             self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(3.0)
+            self.sleep(3.0 if not self.args.real_dht else 7.0)
+
+            # Channel stabilization: ensure both sides complete ratchet update and flush pending ACK
+            print("[Channel Stabilization] Stabilizing ratchet channel after rekey...", flush=True)
+            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+            self.sleep(2.0 if not self.args.real_dht else 5.0)
+            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+            self.sleep(2.0 if not self.args.real_dht else 5.0)
+
             self.log_step("ML-KEM-512 Rekey", "PASS", "PQC Rekey offer dispatched and processed over DHT", sc_rekey_done)
         else:
             self.log_step("ML-KEM-512 Rekey", "FAIL", "Rekey button 'chat_rekey_button' not found on Alice's chat screen", sc_rekey_done)
@@ -1191,6 +1230,7 @@ class MultiEmulatorOrchestrator:
         # Return both Alice and Bob to ContactListScreen
         self.alice.navigate_to_contact_list()
         self.bob.navigate_to_contact_list()
+        self.sleep(2.0 if not self.args.real_dht else 4.0)
 
     def _phase_3_create_group(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 3: CREATE GROUP CONVERSATION '{group_name}' ---", flush=True)
@@ -1241,7 +1281,7 @@ class MultiEmulatorOrchestrator:
 
         # Alice: Tap "Create Group" (NO fallback_ratio!)
         confirmed = self.alice.click_element(test_tag="create_group_confirm_button", text="Create Group")
-        self.sleep(3.0)
+        self.sleep(3.0 if not self.args.real_dht else 8.0)
 
         sc_group_created = self.alice.screencap("04_alice_group_created")
         group_confirmed = (
@@ -1265,28 +1305,60 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             participants.append(self.dave)
 
+        invite_timeout = 45 if not self.args.real_dht else 150
+        all_participants_joined = True
+        missing_participants = []
+
         for dev in participants:
             dev.ensure_app_foreground()
-            print(f"[{dev.name}] Waiting for group '{group_name}' invite to arrive via DHT...", flush=True)
+            print(f"[{dev.name}] Waiting for group '{group_name}' invite to arrive via DHT (timeout={invite_timeout}s)...", flush=True)
             dev.navigate_to_contact_list()
 
-            # Wait for group item to appear on ContactListScreen (triggering immediate poll if delayed)
-            rcv_grp = dev.wait_for_element(test_tag=f"group_item_{group_name}", text=group_name, timeout=60, sync_chip_tag="contact_list_sync_chip")
+            start_wait = time.time()
+            rcv_grp = False
+            last_sync_chip = 0.0
+            if self.args.dry_run:
+                rcv_grp = True
+            while time.time() - start_wait < invite_timeout and not rcv_grp:
+                if dev.find_node(test_tag=f"group_item_{group_name}", text=group_name):
+                    rcv_grp = True
+                    break
+                elapsed = time.time() - start_wait
+                if (time.time() - last_sync_chip) >= 6.0:
+                    dev.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
+                    last_sync_chip = time.time()
+
+                if elapsed > 20.0 and int(elapsed) % 15 == 0:
+                    print(f"[{dev.name}] Group invite delayed ({int(elapsed)}s). Triggering inviter Alice to retransmit...", flush=True)
+                    self.alice.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
+                    dev.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
+
+                dev.sleep(1.5)
+
             sc_group_list = dev.screencap(f"04_{dev.name.lower()}_group_appeared")
             if rcv_grp:
                 self.log_step(f"Group Received on {dev.name}", "PASS", f"Received group invite frame for '{group_name}'", sc_group_list)
                 # Click group item to enter group chat (strictly without fallback_ratio!)
                 clicked = dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
-                self.sleep(2.0)
+                self.sleep(2.0 if not self.args.real_dht else 4.0)
                 in_chat = clicked and dev.wait_for_element(test_tag="chat_message_input", timeout=15)
                 sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
                 if in_chat:
                     self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
                 else:
                     self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} failed to open group chat '{group_name}'", sc_group_chat)
+                    all_participants_joined = False
+                    missing_participants.append(dev.name)
             else:
-                self.log_step(f"Group Received on {dev.name}", "FAIL", f"Did not receive group invite frame for '{group_name}' within 60s", sc_group_list)
+                self.log_step(f"Group Received on {dev.name}", "FAIL", f"Did not receive group invite frame for '{group_name}' within {invite_timeout}s", sc_group_list)
                 self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} cannot enter group chat because invite was never received")
+                all_participants_joined = False
+                missing_participants.append(dev.name)
+
+        if not all_participants_joined:
+            sc_sync_fail = self.alice.screencap("04_group_keys_sync_failed")
+            self.log_step("Group Key Exchange Sync", "FAIL", f"Cannot sync keys: {missing_participants} never received group invite", sc_sync_fail)
+            return
 
         # Key Exchange Relay Synchronization:
         # Every participant has published their GROUP_SUBTYPE_REKEY to Alice (inviter hub).
@@ -1295,19 +1367,20 @@ class MultiEmulatorOrchestrator:
         print("\n[Group Key Sync] Alice polling DHT to ingest member join REKEY frames and relay keys...", flush=True)
         self.alice.ensure_app_foreground()
         self.sleep(1.0)
-        for i in range(4):
+        alice_sync_rounds = 4 if not self.args.real_dht else 8
+        alice_sync_delay = 2.5 if not self.args.real_dht else 4.0
+        for i in range(alice_sync_rounds):
             self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(2.5)
+            self.sleep(alice_sync_delay)
 
         print("[Group Key Sync] Participants polling DHT to ingest relayed member keys...", flush=True)
-        # Relayed sender keys are republished asynchronously. A fixed number of
-        # polls can finish before the relay reaches the recipient, making the
-        # first message from a newly joined member intermittently invisible.
-        for _ in range(20):
+        member_sync_rounds = 10 if not self.args.real_dht else 25
+        member_sync_delay = 2.0 if not self.args.real_dht else 4.0
+        for _ in range(member_sync_rounds):
             for dev in participants:
                 dev.ensure_app_foreground()
                 dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(2.0)
+            self.sleep(member_sync_delay)
 
         # Foreground Alice so she is ready for Phase 5 Turn 1
         self.alice.ensure_app_foreground()
@@ -1326,6 +1399,8 @@ class MultiEmulatorOrchestrator:
 
         all_turns_ok = True
         fails_count = 0
+        msg_timeout = 45 if not self.args.real_dht else 90
+        send_settle = 2.0 if not self.args.real_dht else 6.0
 
         # Turn 1: Alice sends to Group
         msg1 = f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes"
@@ -1335,11 +1410,11 @@ class MultiEmulatorOrchestrator:
         self.alice.type_text(msg1)
         self.sleep(0.5)
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(2.0)
+        self.sleep(send_settle)
 
         for dev in all_devices[1:]:
             print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-            rcv1 = dev.wait_for_element(text=msg1, timeout=60, sync_chip_tag="chat_sync_chip")
+            rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
             sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
             if rcv1:
                 self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
@@ -1356,11 +1431,11 @@ class MultiEmulatorOrchestrator:
         self.bob.type_text(msg2)
         self.sleep(0.5)
         self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(2.0)
+        self.sleep(send_settle)
 
         for dev in [self.alice] + all_devices[2:]:
             print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
-            rcv2 = dev.wait_for_element(text=msg2, timeout=60, sync_chip_tag="chat_sync_chip")
+            rcv2 = dev.wait_for_element(text=msg2, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
             sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
             if rcv2:
                 self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
@@ -1378,14 +1453,14 @@ class MultiEmulatorOrchestrator:
             self.charlie.type_text(msg3)
             self.sleep(0.5)
             self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.sleep(2.0)
+            self.sleep(send_settle)
 
             targets = [self.alice, self.bob]
             if self.dave:
                 targets.append(self.dave)
             for dev in targets:
                 print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                rcv3 = dev.wait_for_element(text=msg3, timeout=60, sync_chip_tag="chat_sync_chip")
+                rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
                 sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
                 if rcv3:
                     self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
@@ -1403,11 +1478,11 @@ class MultiEmulatorOrchestrator:
             self.dave.type_text(msg4)
             self.sleep(0.5)
             self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.sleep(2.0)
+            self.sleep(send_settle)
 
             for dev in [self.alice, self.bob, self.charlie]:
                 print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                rcv4 = dev.wait_for_element(text=msg4, timeout=60, sync_chip_tag="chat_sync_chip")
+                rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
                 if not rcv4:
                     # Group fan-out writes are independent DHT records. A recipient can
                     # miss the first polling window while the other records are visible.
@@ -1467,6 +1542,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-install", action="store_true", help="Skip APK install if already deployed")
     parser.add_argument("--full", action="store_true", help="Run additional optional phases (reactions, diagnostics)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without running ADB commands")
+    parser.add_argument("--real-dht", action="store_true", help="Run against real BitTorrent Mainline DHT network instead of simulated local cluster")
+    parser.add_argument("--e2e-fast-mode", action="store_true", default=True, help="Enable deterministic fast traffic & polling mode (default: True)")
+    parser.add_argument("--no-fast-mode", action="store_false", dest="e2e_fast_mode", help="Disable fast traffic & polling mode")
     return parser.parse_args()
 
 
