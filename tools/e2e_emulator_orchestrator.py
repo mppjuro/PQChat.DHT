@@ -1300,12 +1300,14 @@ class MultiEmulatorOrchestrator:
             self.sleep(2.5)
 
         print("[Group Key Sync] Participants polling DHT to ingest relayed member keys...", flush=True)
-        for dev in participants:
-            dev.ensure_app_foreground()
-            self.sleep(0.5)
-            for i in range(3):
+        # Relayed sender keys are republished asynchronously. A fixed number of
+        # polls can finish before the relay reaches the recipient, making the
+        # first message from a newly joined member intermittently invisible.
+        for _ in range(20):
+            for dev in participants:
+                dev.ensure_app_foreground()
                 dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                self.sleep(2.0)
+            self.sleep(2.0)
 
         # Foreground Alice so she is ready for Phase 5 Turn 1
         self.alice.ensure_app_foreground()
