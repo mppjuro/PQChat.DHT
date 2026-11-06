@@ -3963,6 +3963,24 @@ class ChatRepository(
             return scored.sortedByDescending { it.second }.take(k).map { it.first }
         }
 
+        fun selectCurrentFairly(pool: List<PollTask>, k: Int): List<PollTask> {
+            if (pool.size <= k) return pool
+            if (k <= 0) return emptyList()
+
+            val byEntity = pool.groupBy { it.entityId }.values.toMutableList()
+            byEntity.shuffle(CryptoUtils.secureRandom)
+            val guaranteed = byEntity.take(k).map { entityTasks ->
+                entityTasks[CryptoUtils.secureRandom.nextInt(entityTasks.size)]
+            }.toMutableList()
+
+            if (guaranteed.size < k) {
+                val selectedTargets = guaranteed.map { CryptoUtils.toHex(it.target) }.toSet()
+                val remaining = pool.filter { CryptoUtils.toHex(it.target) !in selectedTargets }
+                guaranteed += sampleWithoutReplacement(remaining, k - guaranteed.size)
+            }
+            return guaranteed.take(k)
+        }
+
         if (focusContactId != null) {
             val focusedPool = candidates.filter { it.isFocused }
             val backgroundPool = candidates.filter { !it.isFocused }
@@ -3998,7 +4016,7 @@ class ChatRepository(
                     (it is SkippedKeyPollTask)
                 }
                 if (bgCurrent.isNotEmpty() && bgQuota > 0) {
-                    val guaranteedBg = bgCurrent.take(bgQuota)
+                    val guaranteedBg = selectCurrentFairly(bgCurrent, bgQuota)
                     result.addAll(guaranteedBg)
                     val remainingBgPool = backgroundPool.filter { t -> guaranteedBg.none { it.target.contentEquals(t.target) } }
                     val remainingBgQuota = bgQuota - guaranteedBg.size
@@ -4036,7 +4054,7 @@ class ChatRepository(
                     (it is SkippedKeyPollTask)
                 }
                 if (bgCurrent.isNotEmpty()) {
-                    val guaranteed = bgCurrent.take(batchSize)
+                    val guaranteed = selectCurrentFairly(bgCurrent, batchSize)
                     val result = mutableListOf<PollTask>()
                     result.addAll(guaranteed)
                     val remaining = backgroundPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
@@ -4058,7 +4076,7 @@ class ChatRepository(
                 (it is SkippedKeyPollTask)
             }
             if (currentTasks.isNotEmpty()) {
-                val guaranteed = currentTasks.take(batchSize)
+                val guaranteed = selectCurrentFairly(currentTasks, batchSize)
                 val result = mutableListOf<PollTask>()
                 result.addAll(guaranteed)
                 val remaining = candidates.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
