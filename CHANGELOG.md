@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`ae47259`](https://github.com/mppjuro/PQChat.DHT/commit/ae47259528d25128a1ebda1f44e3c5ab28c17e4d) (2026-11-06) — **polling**: prevent group polling starvation
 - [`53ee747`](https://github.com/mppjuro/PQChat.DHT/commit/53ee74703f504ea8309e91c8e33ed711e564c901) (2026-11-05) — retry delayed group message polling
 - [`556a3ea`](https://github.com/mppjuro/PQChat.DHT/commit/556a3ea8cc50a0f11d243bf3a85914a136286d51) (2026-11-05) — retry group message DHT puts
 - [`05e829c`](https://github.com/mppjuro/PQChat.DHT/commit/05e829c6c6bd66135be268a57e4064cfd1498c50) (2026-11-05) — **ci**: stabilize multi-emulator group sync
