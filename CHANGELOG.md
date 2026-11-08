@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`30aa77d`](https://github.com/mppjuro/PQChat.DHT/commit/30aa77d193364c474d6361fedb79c927cee4e0a4) (2026-11-08) — **test**: resolve flaky TrafficThreatModelStatisticalTest and Chi-Square = 5600.0 bug
 - [`1937812`](https://github.com/mppjuro/PQChat.DHT/commit/1937812ca2fcad0f57c3e9fb740393298c5d433a) (2026-11-08) — **e2e**: resolve testbed 4-node & real DHT multi-emulator test failures
 - [`ae47259`](https://github.com/mppjuro/PQChat.DHT/commit/ae47259528d25128a1ebda1f44e3c5ab28c17e4d) (2026-11-06) — **polling**: prevent group polling starvation
 - [`53ee747`](https://github.com/mppjuro/PQChat.DHT/commit/53ee74703f504ea8309e91c8e33ed711e564c901) (2026-11-05) — retry delayed group message polling
