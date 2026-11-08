@@ -56,6 +56,13 @@ open class DhtLeafNode(
         var isTestLoopbackMode: Boolean = false
 
         /**
+         * Strict E2E Fast Mode flag to eliminate non-essential background DHT traffic
+         * (decoys, slow pre-warming, cover dummy writes) competing for UDP sockets.
+         */
+        @Volatile
+        var isFastTestMode: Boolean = false
+
+        /**
          * Testbed mode flag (isolated local DHT cluster, no public internet nodes).
          */
         @Volatile
@@ -1254,7 +1261,7 @@ open class DhtLeafNode(
      * avoiding multi-hop Kademlia lookups when get(target) is called later.
      */
     override suspend fun preWarmTarget(target: ByteArray): List<PeerContact> = withContext(Dispatchers.IO) {
-        if (isTestLoopbackMode) return@withContext emptyList()
+        if (isFastTestMode || isTestLoopbackMode) return@withContext emptyList()
         val existing = targetRouteCache[target]
         if (!existing.isNullOrEmpty()) {
             return@withContext existing
@@ -1265,6 +1272,7 @@ open class DhtLeafNode(
     }
 
     override fun preWarmTargetAsync(target: ByteArray): Job {
+        if (isFastTestMode) return CompletableDeferred<Unit>().apply { complete(Unit) }
         return scope.launch {
             try {
                 preWarmTarget(target)
@@ -2010,7 +2018,7 @@ open class DhtLeafNode(
      * Send dummy cover traffic (chaffing) to random target.
      */
     override suspend fun sendCoverTrafficDummy(): ByteArray? {
-        if (torTransportMode == TorTransportMode.BLOCKED_ERROR) {
+        if (isFastTestMode || torTransportMode == TorTransportMode.BLOCKED_ERROR) {
             return null
         }
         val dummySeed = CryptoUtils.secureRandomBytes(32)

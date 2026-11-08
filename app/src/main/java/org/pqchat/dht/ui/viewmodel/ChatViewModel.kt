@@ -461,6 +461,10 @@ class ChatViewModel @JvmOverloads constructor(
 
     /** Trigger an immediate DHT poll (ignores current countdown). */
     fun triggerImmediatePoll() {
+        val selectedId = _selectedContactId.value
+        if (selectedId != null && pollingManager.activeChatContactId != selectedId) {
+            pollingManager.onChatOpened(selectedId)
+        }
         pollingManager.triggerImmediatePoll()
     }
 

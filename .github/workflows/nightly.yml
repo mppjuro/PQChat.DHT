@@ -605,6 +605,10 @@ jobs:
             fi
           done
 
+          RAM_MB=2048
+          if [ "$NODES" -ge 3 ]; then
+            RAM_MB=1536
+          fi
           for avd_dir in "$ANDROID_AVD_HOME"/*.avd; do
             if [ -d "$avd_dir" ]; then
               sed -i '/hw.keyboard/d' "$avd_dir/config.ini" || true
@@ -614,7 +618,7 @@ jobs:
               sed -i '/hw.audioOutput/d' "$avd_dir/config.ini" || true
               sed -i '/hw.gps/d' "$avd_dir/config.ini" || true
               echo "hw.keyboard = yes" >> "$avd_dir/config.ini"
-              echo "hw.ramSize = 2048" >> "$avd_dir/config.ini"
+              echo "hw.ramSize = $RAM_MB" >> "$avd_dir/config.ini"
               echo "vm.heapSize = 384" >> "$avd_dir/config.ini"
               echo "hw.audioInput = no" >> "$avd_dir/config.ini"
               echo "hw.audioOutput = no" >> "$avd_dir/config.ini"
@@ -623,7 +627,9 @@ jobs:
           done
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          ./gradlew assembleDebug
+          ./gradlew --stop
 
       - name: Launch Android Emulators Headless
         run: |
@@ -635,8 +641,12 @@ jobs:
           export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
           EMULATOR_BIN="$(command -v emulator || echo "$ANDROID_HOME/emulator/emulator")"
 
-          EMU_OPTS="-no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory 2048 -cores 2"
           NODES="${{ matrix.nodes }}"
+          RAM_MB=2048
+          if [ "$NODES" -ge 3 ]; then
+            RAM_MB=1536
+          fi
+          EMU_OPTS="-no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -no-metrics -no-snapshot-save -memory $RAM_MB -cores 2"
 
           mkdir -p /tmp/emu_logs
 
@@ -762,6 +772,7 @@ jobs:
             --dave emulator-5560 \
             --apk app/build/outputs/apk/debug/app-debug.apk \
             --output-dir "$OUTPUT_DIR" \
+            --skip-debloat \
             $([ "${{ matrix.mode }}" = "testbed" ] && echo "--full")
 
       - name: Publish E2E Summary to GitHub Job Summary

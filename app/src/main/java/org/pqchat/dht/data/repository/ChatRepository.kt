@@ -48,7 +48,8 @@ class ChatRepository(
         get() = researchTelemetryProvider?.invoke()
 
     fun isStrictPoissonShaping(): Boolean =
-        strictPoissonShapingEnabledProvider?.invoke() ?: isStrictPoissonShapingEnabled
+        if (isFastTestMode) false
+        else strictPoissonShapingEnabledProvider?.invoke() ?: isStrictPoissonShapingEnabled
 
     val canaryQueue = java.util.concurrent.ConcurrentLinkedQueue<org.pqchat.dht.traffic.OutboundPoissonFrame>()
 
@@ -397,7 +398,7 @@ class ChatRepository(
      * blurs sender emission and registers the target in DecoyTargetPool.
      */
     internal suspend fun publishDecoyPutSlots(count: Int) {
-        if (count <= 0) return
+        if (isFastTestMode || count <= 0) return
         for (i in 0 until count) {
             val dummySeed = CryptoUtils.secureRandomBytes(32)
             val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
@@ -828,14 +829,16 @@ class ChatRepository(
 
             // 7. Put to DHT under Target_i
             val tStart = System.currentTimeMillis()
-            val success = dhtLeafNode.putMutable(
-                target = slot.target,
-                v = frame,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf
-            )
+            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+                dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+            } ?: false
             val rttMs = System.currentTimeMillis() - tStart
             researchTelemetry?.recordPacketEvent(
                 role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
@@ -1871,9 +1874,11 @@ class ChatRepository(
      * then queries the current slot counterIn.
      */
     suspend fun pollContactIncoming(contactId: String): Boolean = withContext(Dispatchers.IO) {
-        getContactMutex(contactId).withLock {
-            pollContactIncomingInternal(contactId)
-        }
+        withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+            getContactMutex(contactId).withLock {
+                pollContactIncomingInternal(contactId)
+            }
+        } ?: false
     }
 
     internal suspend fun pollPendingSkippedKeys(contactId: String): Boolean {
@@ -3360,6 +3365,7 @@ class ChatRepository(
     }
 
     private fun preWarmNextIncomingTarget(chainKeyIn: ByteArray, counterIn: Int) {
+        if (isFastTestMode) return
         val nextTarget = RatchetChain.getNextExpectedTarget(chainKeyIn, counterIn)
         dhtLeafNode.preWarmTargetAsync(nextTarget)
         val nextSlot = RatchetChain.deriveSlot(chainKeyIn, counterIn)
@@ -4279,8 +4285,8 @@ class ChatRepository(
         // 2. Apply Weighted Fair Stratified Sampling without replacement
         val sampledTasks = sampleWeightedFairStratified(tasks, batchSize, focusContactId).toMutableList()
 
-        // 3. Constant budget adjustment: pad with DecoyTargetPool queries if fewer than batchSize
-        val countNeeded = batchSize - sampledTasks.size
+        // 3. Constant budget adjustment: pad with DecoyTargetPool queries if fewer than batchSize (bypassed in fast test mode)
+        val countNeeded = if (isFastTestMode) 0 else (batchSize - sampledTasks.size)
         if (countNeeded > 0) {
             val decoyTargets = decoyTargetPool.getDecoyTargets(countNeeded) {
                 runBlocking { collectExpiringAndPastTargets(focusContactId) }
@@ -4295,16 +4301,28 @@ class ChatRepository(
             }
         }
 
-        // 4. Random permutation: Fisher-Yates shuffle with CSPRNG
-        val finalTasks = sampledTasks.take(batchSize).shuffled(CryptoUtils.secureRandom)
+        // 4. Permutation / Prioritization: focused active chat targets are prioritized and executed first
+        val finalTasks = if (focusContactId != null) {
+            val (focused, other) = sampledTasks.partition { it.isFocused }
+            if (isFastTestMode) {
+                focused + other
+            } else {
+                focused + other.shuffled(CryptoUtils.secureRandom)
+            }
+        } else {
+            sampledTasks.take(batchSize).shuffled(CryptoUtils.secureRandom)
+        }
 
-        // 5. Execute batch sequentially with intra-batch jitter
+        // 5. Execute batch sequentially with bounded timeouts and intra-batch jitter
         var anyReceived = false
+        val taskTimeout = if (isFastTestMode) 6_000L else 15_000L
         for (i in finalTasks.indices) {
             val task = finalTasks[i]
             try {
                 val tStart = System.currentTimeMillis()
-                val item = dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf)
+                val item = withTimeoutOrNull(taskTimeout) {
+                    dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf)
+                }
                 val rttMs = System.currentTimeMillis() - tStart
                 if (item != null) {
                     researchTelemetry?.recordPacketEvent(
@@ -4324,8 +4342,8 @@ class ChatRepository(
                 }
             } catch (_: Exception) {}
 
-            // Apply intra-batch jitter between queries
-            if (i < finalTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
+            // Apply intra-batch jitter between queries (bypassed in fast test mode)
+            if (!isFastTestMode && i < finalTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
                 val span = (intraBatchJitterMaxMs - intraBatchJitterMinMs).coerceAtLeast(1L)
                 val jitter = intraBatchJitterMinMs + (CryptoUtils.secureRandom.nextDouble() * span).toLong()
                 if (jitter > 0L) {
@@ -4370,6 +4388,7 @@ class ChatRepository(
      * Pre-warms in the background the next expected incoming targets for all known contacts concurrently.
      */
     suspend fun preWarmAllContactsNextTargets() = coroutineScope {
+        if (isFastTestMode) return@coroutineScope
         val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
         contacts.map { contact ->
             async {
@@ -4383,6 +4402,7 @@ class ChatRepository(
      * Pre-warms in the background the next expected incoming target for a specific contact.
      */
     suspend fun preWarmContactNextTarget(contactId: String) = withContext(Dispatchers.IO) {
+        if (isFastTestMode) return@withContext
         val contact = contactDao.getContactById(contactId) ?: return@withContext
         val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
         dhtLeafNode.preWarmTarget(nextTarget)
@@ -4523,14 +4543,16 @@ class ChatRepository(
                 timestamp = System.currentTimeMillis()
             )
 
-            val success = dhtLeafNode.putMutable(
-                target = slot.target,
-                v = frame,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf
-            )
+            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+                dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+            } ?: false
 
             if (success) {
                 decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -4654,39 +4676,43 @@ class ChatRepository(
             groupMemberDao?.insertOrUpdateAll(memberEntities)
         }
 
-        // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact with random permutation and interleaved queuing
+        // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact with bounded concurrency and interleaved queuing
         val shuffledContactIds = if (invitedContactIds.size > 1) {
             invitedContactIds.shuffled(CryptoUtils.secureRandom)
         } else {
             invitedContactIds
         }
-        val inviteFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
-        for (contactId in shuffledContactIds) {
-            try {
-                val recipientMemberId = memberEntities.firstOrNull { it.contactId == contactId }?.memberId
-                val recipientSummary = membersSummary.firstOrNull {
-                    recipientMemberId != null && it.memberId.contentEquals(uuidStringToBytes(recipientMemberId))
-                }
-                val inviteMembers = if (recipientSummary != null) {
-                    listOf(membersSummary.first(), recipientSummary) +
-                        membersSummary.drop(1).filterNot {
-                            it.memberId.contentEquals(recipientSummary.memberId)
+        val inviteFrames = java.util.Collections.synchronizedList(mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>())
+        coroutineScope {
+            shuffledContactIds.map { contactId ->
+                async {
+                    try {
+                        val recipientMemberId = memberEntities.firstOrNull { it.contactId == contactId }?.memberId
+                        val recipientSummary = membersSummary.firstOrNull {
+                            recipientMemberId != null && it.memberId.contentEquals(uuidStringToBytes(recipientMemberId))
                         }
-                } else {
-                    membersSummary
+                        val inviteMembers = if (recipientSummary != null) {
+                            listOf(membersSummary.first(), recipientSummary) +
+                                membersSummary.drop(1).filterNot {
+                                    it.memberId.contentEquals(recipientSummary.memberId)
+                                }
+                        } else {
+                            membersSummary
+                        }
+                        sendGroupControlInvite(
+                            contactId = contactId,
+                            groupIdBytes = groupIdBytes,
+                            groupEpoch = 1L,
+                            myMemberIdBytes = myMemberIdBytes,
+                            myChainKeyOut = myChainKeyOut,
+                            currentCounter = 0L,
+                            groupName = groupName,
+                            membersSummary = inviteMembers,
+                            outboundCollector = if (isStrictPoissonShaping()) inviteFrames else null
+                        )
+                    } catch (_: Exception) {}
                 }
-                sendGroupControlInvite(
-                    contactId = contactId,
-                    groupIdBytes = groupIdBytes,
-                    groupEpoch = 1L,
-                    myMemberIdBytes = myMemberIdBytes,
-                    myChainKeyOut = myChainKeyOut,
-                    currentCounter = 0L,
-                    groupName = groupName,
-                    membersSummary = inviteMembers,
-                    outboundCollector = if (isStrictPoissonShaping()) inviteFrames else null
-                )
-            } catch (_: Exception) {}
+            }.awaitAll()
         }
         if (inviteFrames.isNotEmpty()) {
             outboundPoissonQueue.enqueueInterleaved(inviteFrames)
@@ -4791,14 +4817,16 @@ class ChatRepository(
                 return@withLock true
             }
 
-            val success = dhtLeafNode.putMutable(
-                target = slot.target,
-                v = frame,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf
-            )
+            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+                dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+            } ?: false
 
             if (success) {
                 contactDao.updateOutgoingState(
@@ -4955,14 +4983,16 @@ class ChatRepository(
                 return true
             }
 
-            val success = dhtLeafNode.putMutable(
-                target = slot.target,
-                v = frame,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf
-            )
+            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+                dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = isSelf
+                )
+            } ?: false
 
             if (success) {
                 contactDao.updateOutgoingState(
@@ -5329,17 +5359,23 @@ class ChatRepository(
                                 it.contactId != null &&
                                 it.contactId != contactId
                         }
-                    for (recipient in recipients) {
-                        sendGroupControlRekeyOrInviteInternal(
-                            contactId = recipient.contactId!!,
-                            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
-                            groupIdBytes = control.groupId,
-                            groupEpoch = control.groupEpoch,
-                            myMemberIdBytes = control.senderMemberId,
-                            myChainKeyOut = control.senderGroupChainKey,
-                            currentCounter = control.currentCounter,
-                            groupName = control.groupName
-                        )
+                    coroutineScope {
+                        recipients.map { recipient ->
+                            async {
+                                try {
+                                    sendGroupControlRekeyOrInvite(
+                                        contactId = recipient.contactId!!,
+                                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                                        groupIdBytes = control.groupId,
+                                        groupEpoch = control.groupEpoch,
+                                        myMemberIdBytes = control.senderMemberId,
+                                        myChainKeyOut = control.senderGroupChainKey,
+                                        currentCounter = control.currentCounter,
+                                        groupName = control.groupName
+                                    )
+                                } catch (_: Exception) {}
+                            }
+                        }.awaitAll()
                     }
                 }
             }
@@ -6224,22 +6260,26 @@ class ChatRepository(
             if (it.size > 1) it.shuffled(CryptoUtils.secureRandom) else it
         }
 
-        val rekeyFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
-        for (member in eligibleMembers) {
-            val contactId = member.contactId ?: continue
-            try {
-                sendGroupControlRekeyOrInvite(
-                    contactId = contactId,
-                    controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
-                    groupIdBytes = groupIdBytes,
-                    groupEpoch = newEpoch,
-                    myMemberIdBytes = myMemberIdBytes,
-                    myChainKeyOut = newChainKeyOut,
-                    currentCounter = 0L,
-                    groupName = group.rawGroupName,
-                    outboundCollector = if (isStrictPoissonShaping()) rekeyFrames else null
-                )
-            } catch (_: Exception) {}
+        val rekeyFrames = java.util.Collections.synchronizedList(mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>())
+        coroutineScope {
+            eligibleMembers.map { member ->
+                async {
+                    val contactId = member.contactId ?: return@async
+                    try {
+                        sendGroupControlRekeyOrInvite(
+                            contactId = contactId,
+                            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                            groupIdBytes = groupIdBytes,
+                            groupEpoch = newEpoch,
+                            myMemberIdBytes = myMemberIdBytes,
+                            myChainKeyOut = newChainKeyOut,
+                            currentCounter = 0L,
+                            groupName = group.rawGroupName,
+                            outboundCollector = if (isStrictPoissonShaping()) rekeyFrames else null
+                        )
+                    } catch (_: Exception) {}
+                }
+            }.awaitAll()
         }
         if (rekeyFrames.isNotEmpty()) {
             outboundPoissonQueue.enqueueInterleaved(rekeyFrames)
@@ -6261,22 +6301,26 @@ class ChatRepository(
                 if (it.size > 1) it.shuffled(CryptoUtils.secureRandom) else it
             }
 
-            val leaveFrames = mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>()
-            for (member in eligibleMembers) {
-                val contactId = member.contactId ?: continue
-                try {
-                    sendGroupControlRekeyOrInvite(
-                        contactId = contactId,
-                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_LEAVE,
-                        groupIdBytes = groupIdBytes,
-                        groupEpoch = group.groupEpoch,
-                        myMemberIdBytes = myMemberIdBytes,
-                        myChainKeyOut = group.rawMyChainKeyOut,
-                        currentCounter = group.myCounterOut.toLong(),
-                        groupName = group.rawGroupName,
-                        outboundCollector = if (isStrictPoissonShaping()) leaveFrames else null
-                    )
-                } catch (_: Exception) {}
+            val leaveFrames = java.util.Collections.synchronizedList(mutableListOf<org.pqchat.dht.traffic.OutboundPoissonFrame>())
+            coroutineScope {
+                eligibleMembers.map { member ->
+                    async {
+                        val contactId = member.contactId ?: return@async
+                        try {
+                            sendGroupControlRekeyOrInvite(
+                                contactId = contactId,
+                                controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_LEAVE,
+                                groupIdBytes = groupIdBytes,
+                                groupEpoch = group.groupEpoch,
+                                myMemberIdBytes = myMemberIdBytes,
+                                myChainKeyOut = group.rawMyChainKeyOut,
+                                currentCounter = group.myCounterOut.toLong(),
+                                groupName = group.rawGroupName,
+                                outboundCollector = if (isStrictPoissonShaping()) leaveFrames else null
+                            )
+                        } catch (_: Exception) {}
+                    }
+                }.awaitAll()
             }
             if (leaveFrames.isNotEmpty()) {
                 outboundPoissonQueue.enqueueInterleaved(leaveFrames)
@@ -6286,12 +6330,13 @@ class ChatRepository(
     }
 
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
-        getGroupMutex(groupId).withLock {
-            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
-            val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withLock false
-            val groupIdBytes = uuidStringToBytes(groupId)
-            val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
-            var anyReceived = false
+        withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+            getGroupMutex(groupId).withLock {
+                val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+                val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withLock false
+                val groupIdBytes = uuidStringToBytes(groupId)
+                val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+                var anyReceived = false
 
             for (member in members) {
                 if (member.memberId == group.myMemberId) continue
@@ -6529,7 +6574,8 @@ class ChatRepository(
             }
             anyReceived
         }
-    }
+    } ?: false
+}
 
     suspend fun pollAllGroupsIncoming(): List<Boolean> = coroutineScope {
         val groups = groupDao?.getAllActiveGroups() ?: emptyList()

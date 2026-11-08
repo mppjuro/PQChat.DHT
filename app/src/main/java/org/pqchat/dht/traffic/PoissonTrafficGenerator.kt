@@ -63,7 +63,9 @@ class PoissonTrafficGenerator(
      * Compute next Poisson interval delta_t in milliseconds.
      */
     fun computeNextIntervalMs(currentLambda: Double = lambda): Long {
-        if (isFastMode) return 100L
+        if (isFastMode) {
+            return if (outboundPoissonQueue.peek() != null || pendingAckQueue.peek() != null) 50L else 1000L
+        }
         val u = random.nextDouble().coerceIn(1e-10, 1.0 - 1e-10)
         val deltaSeconds = -(1.0 / currentLambda) * ln(u)
         return (deltaSeconds * 1000.0).toLong().coerceAtLeast(1000L)
@@ -172,7 +174,7 @@ class PoissonTrafficGenerator(
                     isFirstSend = false,
                     payloadSize = ackPayload.size
                 )
-            } else if (isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
+            } else if (!isFastMode && isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
                 val entry = blindRepublishPool.sampleRandomEntry()
                 if (entry != null) {
                     val tStart = System.currentTimeMillis()
@@ -259,6 +261,18 @@ class PoissonTrafficGenerator(
                 isBlindRepublish = false,
                 isFirstSend = true,
                 payloadSize = canaryFrame.payload.size
+            )
+        }
+
+        if (isFastMode) {
+            return CoverEvent(
+                timestamp = System.currentTimeMillis(),
+                targetHex = "",
+                intervalSeconds = delayMs / 1000.0,
+                isAck = false,
+                isBlindRepublish = false,
+                isFirstSend = false,
+                payloadSize = 0
             )
         }
 

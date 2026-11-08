@@ -87,6 +87,9 @@ data class OutboundPoissonFrame(
  * Poisson departures on UDP output.
  */
 class OutboundPoissonQueue {
+    @Volatile
+    var isFastMode: Boolean = false
+
     private val classQueues = mapOf(
         PacketClass.URGENT_CONTROL to ConcurrentLinkedDeque<OutboundPoissonFrame>(),
         PacketClass.DIRECT_MESSAGE to ConcurrentLinkedDeque<OutboundPoissonFrame>(),
@@ -146,9 +149,10 @@ class OutboundPoissonQueue {
         dummyFactory: (() -> OutboundPoissonFrame)? = null
     ) {
         if (frames.isEmpty()) return
+        val effectiveDummyFactory = if (isFastMode) null else dummyFactory
         synchronized(this) {
             val targetQueue = classQueues[PacketClass.GROUP_MESSAGE]!!
-            if (frames.size == 1 && dummyFactory == null) {
+            if (frames.size == 1 && effectiveDummyFactory == null) {
                 targetQueue.addLast(frames[0].copy(packetClass = PacketClass.GROUP_MESSAGE))
                 return
             }
@@ -164,8 +168,8 @@ class OutboundPoissonQueue {
             if (existing.isEmpty()) {
                 // If queue is empty, space out group frames with dummy cover frames
                 for (i in frames.indices) {
-                    if (i > 0 && dummyFactory != null) {
-                        interleaved.add(dummyFactory.invoke())
+                    if (i > 0 && effectiveDummyFactory != null) {
+                        interleaved.add(effectiveDummyFactory.invoke())
                     }
                     interleaved.add(frames[i].copy(packetClass = PacketClass.GROUP_MESSAGE))
                 }
@@ -182,8 +186,8 @@ class OutboundPoissonQueue {
                             (pos >= (frameIdx * stride).toInt() || existingIdx >= existing.size)
 
                     if (shouldPlaceGroupFrame) {
-                        if (dummyFactory != null && lastWasGroupFrame) {
-                            interleaved.add(dummyFactory.invoke())
+                        if (effectiveDummyFactory != null && lastWasGroupFrame) {
+                            interleaved.add(effectiveDummyFactory.invoke())
                         }
                         interleaved.add(frames[frameIdx++].copy(packetClass = PacketClass.GROUP_MESSAGE))
                         lastWasGroupFrame = true
@@ -194,8 +198,8 @@ class OutboundPoissonQueue {
                 }
 
                 while (frameIdx < frames.size) {
-                    if (dummyFactory != null && lastWasGroupFrame) {
-                        interleaved.add(dummyFactory.invoke())
+                    if (effectiveDummyFactory != null && lastWasGroupFrame) {
+                        interleaved.add(effectiveDummyFactory.invoke())
                     }
                     interleaved.add(frames[frameIdx++].copy(packetClass = PacketClass.GROUP_MESSAGE))
                     lastWasGroupFrame = true
@@ -230,6 +234,7 @@ class OutboundPoissonQueue {
      * Classes 2..5 are interleaved according to the 8-slot WFQ cycle.
      */
     fun poll(coverProvider: (() -> OutboundPoissonFrame?)? = null): OutboundPoissonFrame? {
+        val effectiveCoverProvider = if (isFastMode) null else coverProvider
         synchronized(this) {
             // Priority 1: Urgent Rekey / Handshake
             val urgent = classQueues[PacketClass.URGENT_CONTROL]!!.pollFirst()
@@ -240,7 +245,7 @@ class OutboundPoissonQueue {
             val hasImage = classQueues[PacketClass.IMAGE_CHUNK]!!.isNotEmpty()
             val hasCover = classQueues[PacketClass.BACKGROUND_COVER]!!.isNotEmpty()
 
-            if (!hasDirect && !hasGroup && !hasImage && !hasCover && coverProvider == null) {
+            if (!hasDirect && !hasGroup && !hasImage && !hasCover && effectiveCoverProvider == null) {
                 return null
             }
 
@@ -252,8 +257,8 @@ class OutboundPoissonQueue {
                 if (q.isNotEmpty()) {
                     currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
                     return q.pollFirst()
-                } else if (targetClass == PacketClass.BACKGROUND_COVER && coverProvider != null) {
-                    val coverFrame = coverProvider.invoke()
+                } else if (targetClass == PacketClass.BACKGROUND_COVER && effectiveCoverProvider != null) {
+                    val coverFrame = effectiveCoverProvider.invoke()
                     if (coverFrame != null) {
                         currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
                         return coverFrame
@@ -266,7 +271,7 @@ class OutboundPoissonQueue {
                 val q = classQueues[c]!!
                 if (q.isNotEmpty()) return q.pollFirst()
             }
-            return coverProvider?.invoke()
+            return effectiveCoverProvider?.invoke()
         }
     }
 

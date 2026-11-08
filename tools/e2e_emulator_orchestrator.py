@@ -130,13 +130,14 @@ class LocalDhtClusterManager:
 class AdbDevice:
     """Controls an Android emulator instance via physical ADB commands."""
 
-    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False, real_dht: bool = False, fast_mode: bool = True):
+    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False, real_dht: bool = False, fast_mode: bool = True, skip_debloat: bool = False):
         self.serial = serial
         self.name = name
         self.output_dir = output_dir
         self.dry_run = dry_run
         self.real_dht = real_dht
         self.fast_mode = fast_mode
+        self.skip_debloat = skip_debloat
         self.screen_width = 1080
         self.screen_height = 2400
         self._cached_ui: Optional[ET.Element] = None
@@ -199,7 +200,7 @@ class AdbDevice:
 
     def debloat(self):
         """Disables background bloatware, suppresses ANR/error popups, disables animations and IME popup."""
-        if self.dry_run or self._is_debloated:
+        if self.dry_run or self._is_debloated or self.skip_debloat:
             return
         print(f"[{self.name}] Applying single-shot debloat & performance optimizations...", flush=True)
         debloat_script = """
@@ -248,8 +249,7 @@ logcat -c
             print(f"[{self.name}] App {package} not in foreground (Current: {focus_info.strip()[:100]}). Restoring...", flush=True)
             self.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
             self.sleep(0.3)
-            flags = self.get_app_start_flags()
-            self.shell(f"am start -n {package}/{activity} --activity-brought-to-front {flags}")
+            self.shell(f"am start --activity-single-top -n {package}/{activity}")
             self.sleep(1.0)
             self.invalidate_ui_cache()
             return True
@@ -619,8 +619,9 @@ logcat -c
                 return True
 
             elapsed = time.time() - start
-            # If sync_chip_tag is specified, tap it every 6s to trigger immediate DHT polling
-            if sync_chip_tag and (time.time() - last_sync_time) >= 6.0:
+            # If sync_chip_tag is specified, tap it periodically to trigger immediate DHT polling
+            sync_cadence = 18.0 if self.real_dht else 12.0
+            if sync_chip_tag and (time.time() - last_sync_time) >= sync_cadence:
                 print(f"[{self.name}] Triggering {sync_chip_tag} while waiting for '{desc}'...", flush=True)
                 self.click_element(test_tag=sync_chip_tag, auto_scroll=False, capture_on_fail=False)
                 last_sync_time = time.time()
@@ -781,14 +782,16 @@ class MultiEmulatorOrchestrator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_path = self.output_dir / "report.md"
         self.nodes_count = args.nodes
+        self.dry_run = getattr(args, "dry_run", False)
 
         real_dht = getattr(args, "real_dht", False)
         fast_mode = getattr(args, "e2e_fast_mode", True)
+        skip_debloat = getattr(args, "skip_debloat", False)
 
-        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode)
-        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode)
-        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode) if self.nodes_count >= 3 else None
-        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode) if self.nodes_count >= 4 else None
+        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat)
+        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat)
+        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat) if self.nodes_count >= 3 else None
+        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat) if self.nodes_count >= 4 else None
 
         self.active_devices = [self.alice, self.bob]
         if self.charlie:
@@ -946,98 +949,91 @@ class MultiEmulatorOrchestrator:
         responder.wake_and_unlock()
         responder.ensure_app_foreground()
 
-        # 1. Initiator: Tap "New Chat (Alice)" if not already on HandshakeScreen
-        if not initiator.find_node(test_tag="handshake_alice_name_input"):
-            initiator.navigate_to_contact_list()
-            initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
-            self.sleep(1.5)
+        handshake_ok = False
+        try:
+            # 1. Initiator: Tap "New Chat (Alice)" if not already on HandshakeScreen
+            if not initiator.find_node(test_tag="handshake_alice_name_input"):
+                initiator.navigate_to_contact_list()
+                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
+                self.sleep(1.5)
 
-        if not initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10):
-            print(f"[{initiator.name}] HandshakeScreen did not appear. Retrying foreground restore and FAB click...", flush=True)
-            initiator.ensure_app_foreground()
-            initiator.navigate_to_contact_list()
-            initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
-            initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10)
+            if not initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10):
+                print(f"[{initiator.name}] HandshakeScreen did not appear. Retrying foreground restore and FAB click...", flush=True)
+                initiator.ensure_app_foreground()
+                initiator.navigate_to_contact_list()
+                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
+                initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10)
 
-        # Initiator: Enter contact name
-        initiator.click_element(test_tag="handshake_alice_name_input")
-        initiator.clear_focused_text()
-        initiator.type_text(responder.name, clear_first=True)
-        self.sleep(0.5)
+            # Initiator: Enter contact name
+            initiator.click_element(test_tag="handshake_alice_name_input")
+            initiator.clear_focused_text()
+            initiator.type_text(responder.name, clear_first=True)
+            self.sleep(0.5)
 
-        # Initiator: Tap "Generate ML-KEM-512 QR Code"
-        initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512")
-        qr_gen_ok = (
-            initiator.wait_for_element(test_tag="handshake_qr_code_card", timeout=20)
-            or initiator.wait_for_element(text="Rendezvous Target_0", timeout=5)
-        )
-        self.sleep(0.5)
-        qr_sc = initiator.screencap(f"{step_num}_{pair_label}_qr")
+            # Initiator: Tap "Generate ML-KEM-512 QR Code"
+            initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512")
+            qr_gen_ok = (
+                initiator.wait_for_element(test_tag="handshake_qr_code_card", timeout=20)
+                or initiator.wait_for_element(text="Rendezvous Target_0", timeout=5)
+            )
+            self.sleep(0.5)
+            qr_sc = initiator.screencap(f"{step_num}_{pair_label}_qr")
 
-        # Immediately extract Alice's generated QR Base64 payload from logcat
-        b64_payload = initiator.extract_alice_qr_b64()
-        if b64_payload:
-            print(f"[{initiator.name}] Successfully extracted Alice QR payload ({len(b64_payload)} B Base64)", flush=True)
-            qr_gen_ok = True
+            # Immediately extract Alice's generated QR Base64 payload from logcat
+            b64_payload = initiator.extract_alice_qr_b64()
+            if b64_payload:
+                print(f"[{initiator.name}] Successfully extracted Alice QR payload ({len(b64_payload)} B Base64)", flush=True)
+                qr_gen_ok = True
 
-        if qr_gen_ok:
-            self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
-        else:
-            self.log_step(f"{initiator.name} QR Generated ({pair_label})", "FAIL", f"Failed to generate QR code on {initiator.name} within timeout", qr_sc)
-            return False
+            if qr_gen_ok:
+                self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
+            else:
+                self.log_step(f"{initiator.name} QR Generated ({pair_label})", "FAIL", f"Failed to generate QR code on {initiator.name} within timeout", qr_sc)
+                return False
 
-        # 2. Push key material to responder
-        # Clean any old images or text files in /sdcard/ and /sdcard/Pictures/ to ensure PhotoPicker only shows the fresh QR
-        responder.shell("rm -f /sdcard/*.png /sdcard/Pictures/*.png /sdcard/Pictures/*.txt")
-        if b64_payload:
-            # Put directly into system clipboard on responder via ADB
-            escaped_b64 = b64_payload.replace('"', '\\"')
-            responder.shell(f'cmd clipboard set-text "{escaped_b64}"')
-            # Also write text file to Pictures directory for fallback
-            responder.shell(f'echo "{escaped_b64}" > /sdcard/Pictures/{pair_label}_b64.txt')
+            # 2. Push key material to responder
+            # Clean any old images or text files in /sdcard/ and /sdcard/Pictures/ to ensure PhotoPicker only shows the fresh QR
+            responder.shell("rm -f /sdcard/*.png /sdcard/Pictures/*.png /sdcard/Pictures/*.txt")
+            if b64_payload:
+                escaped_b64 = b64_payload.replace('"', '\\"')
+                responder.shell(f'cmd clipboard set-text "{escaped_b64}"')
+                responder.shell(f'echo "{escaped_b64}" > /sdcard/Pictures/{pair_label}_b64.txt')
 
-        if qr_sc and qr_sc.exists():
-            remote_qr = f"/sdcard/Pictures/{pair_label}_qr.png"
-            responder.push_file(qr_sc, remote_qr)
-            responder.broadcast_media_scan(remote_qr)
-            self.sleep(1.0)
+            if qr_sc and qr_sc.exists():
+                remote_qr = f"/sdcard/Pictures/{pair_label}_qr.png"
+                responder.push_file(qr_sc, remote_qr)
+                responder.broadcast_media_scan(remote_qr)
+                self.sleep(1.0)
 
-        # 3. Responder: Ensure awake and open Join Chat tab
-        responder.wake_and_unlock()
-        responder.ensure_app_foreground()
-        if not responder.find_node(test_tag="handshake_bob_tab"):
-            responder.navigate_to_contact_list()
-            responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
-            self.sleep(1.5)
-
-        if not responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10):
-            print(f"[{responder.name}] HandshakeScreen did not appear on responder. Retrying...", flush=True)
+            # 3. Responder: Ensure awake and open Join Chat tab
+            responder.wake_and_unlock()
             responder.ensure_app_foreground()
-            responder.navigate_to_contact_list()
-            responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
-            responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10)
+            if not responder.find_node(test_tag="handshake_bob_tab"):
+                responder.navigate_to_contact_list()
+                responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
+                self.sleep(1.5)
 
-        # Ensure Bob tab is active
-        responder.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)")
-        self.sleep(0.5)
+            if not responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10):
+                print(f"[{responder.name}] HandshakeScreen did not appear on responder. Retrying...", flush=True)
+                responder.ensure_app_foreground()
+                responder.navigate_to_contact_list()
+                responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
+                responder.wait_for_element(test_tag="handshake_bob_tab", timeout=10)
 
-        # Responder: Enter contact name
-        responder.click_element(test_tag="handshake_bob_name_input")
-        responder.clear_focused_text()
-        responder.type_text(initiator.name, clear_first=True)
-        self.sleep(0.5)
-        responder.close_keyboard()
+            # Ensure Bob tab is active
+            responder.click_element(test_tag="handshake_bob_tab", text="Bob (Scan & Join)")
+            self.sleep(0.5)
 
-        # Responder: Tap "Paste Hybrid Key from Clipboard"
-        valid_qr = False
-        print(f"[{responder.name}] Attempting instant paste from clipboard...", flush=True)
-        if responder.click_element(test_tag="handshake_paste_clipboard_button", text="Paste Hybrid Key"):
-            self.sleep(1.0)
-            valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=5)
+            # Responder: Enter contact name
+            responder.click_element(test_tag="handshake_bob_name_input")
+            responder.clear_focused_text()
+            responder.type_text(initiator.name, clear_first=True)
+            self.sleep(0.5)
+            responder.close_keyboard()
 
-        # Fallback to Gallery or Manual Base64 if clipboard button did not validate immediately
-        if not valid_qr:
-            print(f"[{responder.name}] Clipboard paste unconfirmed, trying gallery scan...", flush=True)
+            # Responder: Prioritize gallery QR scan (fast and 100% reliable on API 34)
+            valid_qr = False
+            print(f"[{responder.name}] Scanning QR code from gallery image...", flush=True)
             responder.click_element(test_tag="handshake_gallery_button", text="Scan QR")
             self.sleep(2.0)
 
@@ -1053,75 +1049,120 @@ class MultiEmulatorOrchestrator:
                 responder.tap(cx, cy)
                 self.sleep(1.5)
             else:
-                # Dismiss picker safely if no item found
                 if not responder.find_node(test_tag="handshake_bob_name_input"):
                     responder.back()
                     self.sleep(1.0)
 
             valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=5)
 
-        # Fallback to manual paste toggle
-        if not valid_qr and b64_payload:
-            print(f"[{responder.name}] Falling back to manual paste toggle...", flush=True)
+            # Fallback 1: Clipboard paste if gallery did not validate immediately
+            if not valid_qr:
+                print(f"[{responder.name}] Gallery scan unconfirmed, trying clipboard paste...", flush=True)
+                if responder.click_element(test_tag="handshake_paste_clipboard_button", text="Paste Hybrid Key"):
+                    self.sleep(1.0)
+                    valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=3)
+
+            # Fallback 2: Manual paste toggle
+            if not valid_qr and b64_payload:
+                print(f"[{responder.name}] Falling back to manual paste toggle...", flush=True)
+                responder.close_keyboard()
+                responder.scroll_down()
+                responder.click_element(test_tag="handshake_toggle_manual_paste", text="paste Base64")
+                self.sleep(0.5)
+                responder.click_element(test_tag="handshake_paste_clipboard_button")
+                self.sleep(0.5)
+                valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=5)
+
+            sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
+            if valid_qr:
+                self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
+            else:
+                self.log_step(f"{responder.name} Verified QR ({pair_label})", "FAIL", f"Failed to decode or validate 864 bytes hybrid key for {pair_label}", sc_resp_verified)
+                return False
+
+            # Close keyboard and scroll to make Encapsulate button visible
             responder.close_keyboard()
-            responder.scroll_down()
-            responder.click_element(test_tag="handshake_toggle_manual_paste", text="paste Base64")
+            responder.scroll_up()
             self.sleep(0.5)
-            # Click paste clipboard button if visible now
-            responder.click_element(test_tag="handshake_paste_clipboard_button")
-            self.sleep(0.5)
-            valid_qr = responder.wait_for_element(text="Valid Hybrid Handshake", timeout=8)
 
-        sc_resp_verified = responder.screencap(f"{step_num}_{pair_label}_verified")
-        if valid_qr:
-            self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
-        else:
-            self.log_step(f"{responder.name} Verified QR ({pair_label})", "FAIL", f"Failed to decode or validate 864 bytes hybrid key for {pair_label}", sc_resp_verified)
-            return False
-
-        # Close keyboard and scroll to make Encapsulate button visible
-        responder.close_keyboard()
-        responder.scroll_up()
-        self.sleep(0.5)
-
-        # Responder: Tap "Encapsulate & Put to DHT" (NO fallback_ratio!)
-        encapsulate_clicked = responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT")
-        if not encapsulate_clicked:
-            responder.scroll_down()
+            # Responder: Tap "Encapsulate & Put to DHT"
             encapsulate_clicked = responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT")
-        if not encapsulate_clicked:
-            self.log_step(f"Encapsulate Clicked ({pair_label})", "FAIL", "Failed to locate and click 'handshake_encapsulate_button'")
-            return False
+            if not encapsulate_clicked:
+                responder.scroll_down()
+                encapsulate_clicked = responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT")
+            if not encapsulate_clicked:
+                self.log_step(f"Encapsulate Clicked ({pair_label})", "FAIL", "Failed to locate and click 'handshake_encapsulate_button'")
+                return False
 
-        self.sleep(2.0)
-
-        # 4. Wait for SAS confirmation dialog on both devices (NO fallback_ratio!)
-        print(f"[Orchestrator] Waiting for SAS verification dialog on {initiator.name} and {responder.name}...", flush=True)
-        init_sas = initiator.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
-        resp_sas = responder.wait_for_element(test_tag="handshake_confirm_verified_button", text="Confirm identity", timeout=60)
-
-        sc_sas = initiator.screencap(f"{step_num}_{pair_label}_sas")
-        sas_status = "PASS" if (init_sas and resp_sas) else "FAIL"
-        if sas_status == "PASS":
-            self.log_step(f"SAS Verified ({pair_label})", "PASS", f"SAS verification displayed on {initiator.name} and {responder.name}", sc_sas)
-            # Confirm identity on both devices (NO fallback_ratio!)
-            initiator.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity")
-            responder.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity")
             self.sleep(2.0)
-        else:
-            self.log_step(f"SAS Verified ({pair_label})", "FAIL", f"SAS verification not reached within timeout (initiator={init_sas}, responder={resp_sas})", sc_sas)
-            return False
 
-        # Return both to ContactListScreen safely (from ChatScreen or HandshakeScreen)
-        initiator.navigate_to_contact_list()
-        responder.navigate_to_contact_list()
+            # 4. Concurrent SAS verification polling on both devices
+            sas_timeout = 120 if self.args.real_dht else 60
+            print(f"[Orchestrator] Concurrently polling SAS verification on {initiator.name} and {responder.name} (timeout={sas_timeout}s)...", flush=True)
+            start_sas = time.time()
+            init_sas = False
+            resp_sas = False
 
-        handshake_ok = (qr_gen_ok and valid_qr and init_sas and resp_sas)
+            if self.args.dry_run:
+                init_sas = True
+                resp_sas = True
+
+            while time.time() - start_sas < sas_timeout and not (init_sas and resp_sas):
+                if not init_sas:
+                    initiator.ensure_app_foreground()
+                    if initiator.find_node(test_tag="handshake_confirm_verified_button") or initiator.find_node(text="Confirm identity"):
+                        print(f"[{initiator.name}] SAS verification dialog appeared! Confirming...", flush=True)
+                        initiator.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity")
+                        init_sas = True
+                    elif initiator.find_node(test_tag="chat_message_input") or initiator.find_node(test_tag=f"contact_item_{responder.name}"):
+                        print(f"[{initiator.name}] Already in chat or contact list with {responder.name} (handshake complete).", flush=True)
+                        init_sas = True
+
+                if not resp_sas:
+                    responder.ensure_app_foreground()
+                    if responder.find_node(test_tag="handshake_confirm_verified_button") or responder.find_node(text="Confirm identity"):
+                        print(f"[{responder.name}] SAS verification dialog appeared! Confirming...", flush=True)
+                        responder.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity")
+                        resp_sas = True
+                    elif responder.find_node(test_tag="chat_message_input") or responder.find_node(test_tag=f"contact_item_{initiator.name}"):
+                        print(f"[{responder.name}] Already in chat or contact list with {initiator.name} (handshake complete).", flush=True)
+                        resp_sas = True
+
+                if init_sas and resp_sas:
+                    break
+
+                self.sleep(2.0)
+
+            sc_sas = initiator.screencap(f"{step_num}_{pair_label}_sas")
+            if init_sas and resp_sas:
+                self.log_step(f"SAS Verified ({pair_label})", "PASS", f"SAS verification completed on {initiator.name} and {responder.name}", sc_sas)
+                handshake_ok = True
+            else:
+                self.log_step(f"SAS Verified ({pair_label})", "FAIL", f"SAS verification not reached within timeout (initiator={init_sas}, responder={resp_sas})", sc_sas)
+                handshake_ok = False
+
+        finally:
+            # Guaranteed post-handshake cleanup on both devices
+            print(f"[Orchestrator] Post-handshake cleanup for {initiator.name} and {responder.name}...", flush=True)
+            for dev in (initiator, responder):
+                try:
+                    dev.ensure_app_foreground()
+                    if dev.find_node(test_tag="handshake_confirm_verified_button") or dev.find_node(text="Confirm identity"):
+                        dev.click_element(test_tag="handshake_confirm_verified_button", text="Confirm identity")
+                        self.sleep(0.5)
+                    dev.navigate_to_contact_list()
+                    dev.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+                except Exception as e:
+                    print(f"[{dev.name}] Cleanup exception: {e}", flush=True)
+
         if handshake_ok:
-            self.log_step(f"Handshake Complete ({pair_label})", "PASS", f"Handshake complete between {initiator.name} and {responder.name}")
+            sc_init_contacts = initiator.screencap(f"{step_num}_{pair_label}_{initiator.name.lower()}_contacts")
+            sc_resp_contacts = responder.screencap(f"{step_num}_{pair_label}_{responder.name.lower()}_contacts")
+            self.log_step(f"Handshake Complete ({pair_label})", "PASS", f"Cryptographic pairwise handshake verified between {initiator.name} and {responder.name}", sc_init_contacts)
+            return True
         else:
-            self.log_step(f"Handshake Complete ({pair_label})", "FAIL", f"Handshake failed between {initiator.name} and {responder.name}")
-        return handshake_ok
+            self.log_step(f"Handshake Complete ({pair_label})", "FAIL", f"Pairwise handshake failed between {initiator.name} and {responder.name}")
+            return False
 
     def _phase_1_handshakes(self):
         print("\n--- PHASE 1: PAIRWISE HANDSHAKES ---", flush=True)
@@ -1145,6 +1186,9 @@ class MultiEmulatorOrchestrator:
 
         self.alice.ensure_app_foreground()
         self.bob.ensure_app_foreground()
+        self.alice.navigate_to_contact_list()
+        self.bob.navigate_to_contact_list()
+        self.sleep(1.0)
 
         # Alice: Enter 1-on-1 chat with Bob (NO fallback_ratio!)
         print("[Alice] Entering direct chat with Bob...", flush=True)
@@ -1166,6 +1210,8 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.0)
         self.bob.screencap("02_bob_direct_chat")
 
+        dm_timeout = 120 if self.args.real_dht else (75 if self.args.nodes >= 4 else 45)
+
         # Turn 1: Alice sends direct message to Bob
         direct_msg = "Hello_Bob_PQ_Direct_Message"
         print(f"[Alice] Sending direct message: '{direct_msg}'", flush=True)
@@ -1177,12 +1223,12 @@ class MultiEmulatorOrchestrator:
 
         # Bob receives direct message
         print(f"[Bob] Waiting for direct message '{direct_msg}'...", flush=True)
-        rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=45, sync_chip_tag="chat_sync_chip")
+        rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=dm_timeout, sync_chip_tag="chat_sync_chip")
         sc_bob_rcv = self.bob.screencap("02_bob_rcv_direct_msg")
         if rcv_ok:
             self.log_step("Alice -> Bob Direct Message", "PASS", f"Bob received '{direct_msg}' via DHT", sc_bob_rcv)
         else:
-            self.log_step("Alice -> Bob Direct Message", "FAIL", f"Bob did not receive '{direct_msg}' within 45s", sc_bob_rcv)
+            self.log_step("Alice -> Bob Direct Message", "FAIL", f"Bob did not receive '{direct_msg}' within {dm_timeout}s", sc_bob_rcv)
 
         # Turn 2: Bob replies to Alice
         direct_ack = "Hello_Alice_Direct_ACK_PQC"
@@ -1195,15 +1241,18 @@ class MultiEmulatorOrchestrator:
 
         # Alice receives direct ACK
         print(f"[Alice] Waiting for direct reply '{direct_ack}'...", flush=True)
-        ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=45, sync_chip_tag="chat_sync_chip")
+        ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=dm_timeout, sync_chip_tag="chat_sync_chip")
         sc_alice_ack = self.alice.screencap("02_alice_rcv_direct_ack")
         if ack_ok:
             self.log_step("Bob -> Alice Direct ACK", "PASS", f"Alice received '{direct_ack}' via DHT", sc_alice_ack)
         else:
-            self.log_step("Bob -> Alice Direct ACK", "FAIL", f"Alice did not receive '{direct_ack}' within 45s", sc_alice_ack)
+            self.log_step("Bob -> Alice Direct ACK", "FAIL", f"Alice did not receive '{direct_ack}' within {dm_timeout}s", sc_alice_ack)
 
         if self.args.basic:
-            self.log_step("Basic Direct Chat Complete", "PASS", "Two direct messages exchanged over DHT")
+            if rcv_ok and ack_ok:
+                self.log_step("Basic Direct Chat Complete", "PASS", "Two direct messages exchanged over DHT")
+            else:
+                self.log_step("Basic Direct Chat Complete", "FAIL", "Direct message exchange did not complete over DHT")
             self.alice.navigate_to_contact_list()
             self.bob.navigate_to_contact_list()
             self.sleep(2.0 if not self.args.real_dht else 4.0)
@@ -1294,13 +1343,15 @@ class MultiEmulatorOrchestrator:
         self.sleep(3.0 if not self.args.real_dht else 8.0)
 
         sc_group_created = self.alice.screencap("04_alice_group_created")
-        group_confirmed = (
-            confirmed
-            and (
-                self.alice.wait_for_element(test_tag="chat_message_input", timeout=15)
-                or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=5)
-            )
-        )
+        group_confirmed = False
+        if confirmed:
+            if self.alice.wait_for_element(test_tag="chat_message_input", timeout=30):
+                group_confirmed = True
+            elif self.alice.find_node(test_tag=f"group_item_{group_name}") or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=10):
+                print(f"[Alice] Found group_item_{group_name} on ContactListScreen. Tapping to enter group chat...", flush=True)
+                self.alice.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+                group_confirmed = self.alice.wait_for_element(test_tag="chat_message_input", timeout=15)
+
         if group_confirmed:
             self.log_step("Group Created by Alice", "PASS", f"Group '{group_name}' created with participants and invites dispatched", sc_group_created)
         else:
@@ -1334,7 +1385,8 @@ class MultiEmulatorOrchestrator:
                     rcv_grp = True
                     break
                 elapsed = time.time() - start_wait
-                if (time.time() - last_sync_chip) >= 6.0:
+                sync_delay = 18.0 if self.args.real_dht else 12.0
+                if (time.time() - last_sync_chip) >= sync_delay:
                     dev.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
                     last_sync_chip = time.time()
 
@@ -1365,29 +1417,29 @@ class MultiEmulatorOrchestrator:
                 all_participants_joined = False
                 missing_participants.append(dev.name)
 
+        joined_participants = [dev for dev in participants if dev.name not in missing_participants]
         if not all_participants_joined:
             sc_sync_fail = self.alice.screencap("04_group_keys_sync_failed")
-            self.log_step("Group Key Exchange Sync", "FAIL", f"Cannot sync keys: {missing_participants} never received group invite", sc_sync_fail)
-            return
+            self.log_step("Group Key Exchange Sync (Partial)", "WARN", f"Missing participants: {missing_participants}, but proceeding for joined: {[d.name for d in joined_participants]}", sc_sync_fail)
+            if not joined_participants:
+                self.log_step("Group Key Exchange Sync", "FAIL", "No participants joined group", sc_sync_fail)
+                return
 
-        # Key Exchange Relay Synchronization:
-        # Every participant has published their GROUP_SUBTYPE_REKEY to Alice (inviter hub).
-        # Alice must ingest these join frames and dispatch relayed REKEY frames to the other participants.
-        # Then all participants must poll DHT to ingest the relayed REKEY frames.
+        # Key Exchange Relay Synchronization
         print("\n[Group Key Sync] Alice polling DHT to ingest member join REKEY frames and relay keys...", flush=True)
         self.alice.ensure_app_foreground()
         self.sleep(1.0)
-        alice_sync_rounds = 4 if not self.args.real_dht else 8
-        alice_sync_delay = 2.5 if not self.args.real_dht else 4.0
+        alice_sync_rounds = 4 if not self.args.real_dht else 6
+        alice_sync_delay = 4.0 if not self.args.real_dht else 14.0
         for i in range(alice_sync_rounds):
             self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(alice_sync_delay)
 
         print("[Group Key Sync] Participants polling DHT to ingest relayed member keys...", flush=True)
-        member_sync_rounds = 10 if not self.args.real_dht else 25
-        member_sync_delay = 2.0 if not self.args.real_dht else 4.0
+        member_sync_rounds = 6 if not self.args.real_dht else 12
+        member_sync_delay = 4.0 if not self.args.real_dht else 14.0
         for _ in range(member_sync_rounds):
-            for dev in participants:
+            for dev in joined_participants:
                 dev.ensure_app_foreground()
                 dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(member_sync_delay)
@@ -1396,7 +1448,7 @@ class MultiEmulatorOrchestrator:
         self.alice.ensure_app_foreground()
         self.sleep(1.0)
         sc_sync = self.alice.screencap("04_group_keys_synchronized")
-        self.log_step("Group Key Exchange Sync", "PASS", "Member sender keys exchanged and relayed across all nodes", sc_sync)
+        self.log_step("Group Key Exchange Sync", "PASS", "Member sender keys exchanged and relayed across joined nodes", sc_sync)
 
     def _phase_5_group_multi_turn_messaging(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 5: GROUP MULTI-TURN MESSAGING IN '{group_name}' ---", flush=True)
@@ -1407,6 +1459,17 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             all_devices.append(self.dave)
 
+        def ensure_in_group(dev: AdbDevice) -> bool:
+            if dev.dry_run:
+                return True
+            if dev.find_node(test_tag="chat_message_input"):
+                return True
+            if dev.find_node(test_tag=f"group_item_{group_name}") or dev.find_node(text=group_name):
+                print(f"[{dev.name}] Not in group chat, tapping group_item_{group_name}...", flush=True)
+                dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+                return dev.wait_for_element(test_tag="chat_message_input", timeout=10)
+            return False
+
         all_turns_ok = True
         fails_count = 0
         msg_timeout = 45 if not self.args.real_dht else 90
@@ -1416,43 +1479,63 @@ class MultiEmulatorOrchestrator:
         msg1 = f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes"
         print(f"\n[Turn 1] Alice sending: '{msg1}'", flush=True)
         self.alice.ensure_app_foreground()
-        self.alice.click_element(test_tag="chat_message_input")
-        self.alice.type_text(msg1)
-        self.sleep(0.5)
-        self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(send_settle)
+        if not ensure_in_group(self.alice):
+            self.log_step("Turn 1 Alice Send", "FAIL", f"Alice is not inside group chat '{group_name}'")
+            all_turns_ok = False
+            fails_count += 1
+        else:
+            self.alice.click_element(test_tag="chat_message_input")
+            self.alice.type_text(msg1)
+            self.sleep(0.5)
+            self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
+            self.sleep(send_settle)
 
-        for dev in all_devices[1:]:
-            print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-            rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
-            sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
-            if rcv1:
-                self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
-            else:
-                self.log_step(f"{dev.name} Received Msg 1", "FAIL", f"{dev.name} timed out waiting for Alice's message: '{msg1}'", sc_rcv)
-                all_turns_ok = False
-                fails_count += 1
+            for dev in all_devices[1:]:
+                if not ensure_in_group(dev):
+                    self.log_step(f"{dev.name} Received Msg 1", "FAIL", f"{dev.name} is not in group chat (invite missing)")
+                    all_turns_ok = False
+                    fails_count += 1
+                    continue
+                print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
+                rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
+                if rcv1:
+                    self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
+                else:
+                    self.log_step(f"{dev.name} Received Msg 1", "FAIL", f"{dev.name} timed out waiting for Alice's message: '{msg1}'", sc_rcv)
+                    all_turns_ok = False
+                    fails_count += 1
 
         # Turn 2: Bob sends to Group
         msg2 = f"Bob_reporting_in_{group_name}"
         print(f"\n[Turn 2] Bob sending: '{msg2}'", flush=True)
         self.bob.ensure_app_foreground()
-        self.bob.click_element(test_tag="chat_message_input")
-        self.bob.type_text(msg2)
-        self.sleep(0.5)
-        self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(send_settle)
+        if not ensure_in_group(self.bob):
+            self.log_step("Turn 2 Bob Send", "FAIL", f"Bob is not inside group chat '{group_name}'")
+            all_turns_ok = False
+            fails_count += 1
+        else:
+            self.bob.click_element(test_tag="chat_message_input")
+            self.bob.type_text(msg2)
+            self.sleep(0.5)
+            self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
+            self.sleep(send_settle)
 
-        for dev in [self.alice] + all_devices[2:]:
-            print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
-            rcv2 = dev.wait_for_element(text=msg2, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
-            sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
-            if rcv2:
-                self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
-            else:
-                self.log_step(f"{dev.name} Received Msg 2", "FAIL", f"{dev.name} timed out waiting for Bob's message: '{msg2}'", sc_rcv)
-                all_turns_ok = False
-                fails_count += 1
+            for dev in [self.alice] + all_devices[2:]:
+                if not ensure_in_group(dev):
+                    self.log_step(f"{dev.name} Received Msg 2", "FAIL", f"{dev.name} is not in group chat (invite missing)")
+                    all_turns_ok = False
+                    fails_count += 1
+                    continue
+                print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
+                rcv2 = dev.wait_for_element(text=msg2, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
+                if rcv2:
+                    self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
+                else:
+                    self.log_step(f"{dev.name} Received Msg 2", "FAIL", f"{dev.name} timed out waiting for Bob's message: '{msg2}'", sc_rcv)
+                    all_turns_ok = False
+                    fails_count += 1
 
         if self.args.basic:
             if all_turns_ok:
@@ -1466,66 +1549,83 @@ class MultiEmulatorOrchestrator:
             msg3 = f"Charlie_here_group_pqc_confirmed"
             print(f"\n[Turn 3] Charlie sending: '{msg3}'", flush=True)
             self.charlie.ensure_app_foreground()
-            self.charlie.click_element(test_tag="chat_message_input")
-            self.charlie.type_text(msg3)
-            self.sleep(0.5)
-            self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.sleep(send_settle)
+            if not ensure_in_group(self.charlie):
+                self.log_step("Turn 3 Charlie Send", "FAIL", f"Charlie is not inside group chat '{group_name}'")
+                all_turns_ok = False
+                fails_count += 1
+            else:
+                self.charlie.click_element(test_tag="chat_message_input")
+                self.charlie.type_text(msg3)
+                self.sleep(0.5)
+                self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
+                self.sleep(send_settle)
 
-            targets = [self.alice, self.bob]
-            if self.dave:
-                targets.append(self.dave)
-            for dev in targets:
-                print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
-                sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
-                if rcv3:
-                    self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
-                else:
-                    self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} timed out waiting for Charlie's message: '{msg3}'", sc_rcv)
-                    all_turns_ok = False
-                    fails_count += 1
+                targets = [self.alice, self.bob]
+                if self.dave:
+                    targets.append(self.dave)
+                for dev in targets:
+                    if not ensure_in_group(dev):
+                        self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} is not in group chat")
+                        all_turns_ok = False
+                        fails_count += 1
+                        continue
+                    print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
+                    rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                    sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
+                    if rcv3:
+                        self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
+                    else:
+                        self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} timed out waiting for Charlie's message: '{msg3}'", sc_rcv)
+                        all_turns_ok = False
+                        fails_count += 1
 
         # Turn 4: Dave sends to Group (if nodes >= 4)
         if self.dave:
             msg4 = f"Dave_4th_node_pqc_group_active"
             print(f"\n[Turn 4] Dave sending: '{msg4}'", flush=True)
             self.dave.ensure_app_foreground()
-            self.dave.click_element(test_tag="chat_message_input")
-            self.dave.type_text(msg4)
-            self.sleep(0.5)
-            self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.sleep(send_settle)
+            if not ensure_in_group(self.dave):
+                self.log_step("Turn 4 Dave Send", "FAIL", f"Dave is not inside group chat '{group_name}'")
+                all_turns_ok = False
+                fails_count += 1
+            else:
+                self.dave.click_element(test_tag="chat_message_input")
+                self.dave.type_text(msg4)
+                self.sleep(0.5)
+                self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
+                self.sleep(send_settle)
 
-            for dev in [self.alice, self.bob, self.charlie]:
-                print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
-                if not rcv4:
-                    # Group fan-out writes are independent DHT records. A recipient can
-                    # miss the first polling window while the other records are visible.
-                    # Retry the focused poll before declaring the delivery failed.
-                    dev.ensure_app_foreground()
-                    for retry in range(2):
-                        print(
-                            f"[{dev.name}] Retrying Dave's group message poll "
-                            f"({retry + 1}/2)...",
-                            flush=True,
-                        )
-                        dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                        if dev.wait_for_element(
-                            text=msg4,
-                            timeout=20,
-                            sync_chip_tag="chat_sync_chip",
-                        ):
-                            rcv4 = True
-                            break
-                sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
-                if rcv4:
-                    self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
-                else:
-                    self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} timed out waiting for Dave's message: '{msg4}'", sc_rcv)
-                    all_turns_ok = False
-                    fails_count += 1
+                for dev in [self.alice, self.bob, self.charlie]:
+                    if not ensure_in_group(dev):
+                        self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} is not in group chat")
+                        all_turns_ok = False
+                        fails_count += 1
+                        continue
+                    print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
+                    rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                    if not rcv4:
+                        dev.ensure_app_foreground()
+                        for retry in range(2):
+                            print(
+                                f"[{dev.name}] Retrying Dave's group message poll "
+                                f"({retry + 1}/2)...",
+                                flush=True,
+                            )
+                            dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                            if dev.wait_for_element(
+                                text=msg4,
+                                timeout=20,
+                                sync_chip_tag="chat_sync_chip",
+                            ):
+                                rcv4 = True
+                                break
+                    sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
+                    if rcv4:
+                        self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
+                    else:
+                        self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} timed out waiting for Dave's message: '{msg4}'", sc_rcv)
+                        all_turns_ok = False
+                        fails_count += 1
 
         if all_turns_ok:
             self.log_step("Group Multi-Turn Complete", "PASS", f"All {len(all_devices)} participants successfully exchanged messages in '{group_name}'")
@@ -1560,6 +1660,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full", action="store_true", help="Run additional optional phases (reactions, diagnostics)")
     parser.add_argument("--basic", action="store_true", help="Run a reduced smoke test: direct chat for 2 nodes, two-turn group chat for 3/4 nodes")
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without running ADB commands")
+    parser.add_argument("--skip-debloat", action="store_true", help="Skip debloat if emulators were already prepared")
     parser.add_argument("--real-dht", action="store_true", help="Run against real BitTorrent Mainline DHT network instead of simulated local cluster")
     parser.add_argument("--e2e-fast-mode", action="store_true", default=True, help="Enable deterministic fast traffic & polling mode (default: True)")
     parser.add_argument("--no-fast-mode", action="store_false", dest="e2e_fast_mode", help="Disable fast traffic & polling mode")

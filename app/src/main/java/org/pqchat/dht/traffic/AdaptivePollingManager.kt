@@ -24,6 +24,7 @@ class AdaptivePollingManager(
     var onKeepalivePingRequested: (suspend () -> Unit)? = null
     private var keepaliveJob: Job? = null
     @Volatile var pollBatchSize: Int = N_POLL_TARGETS
+    @Volatile var isFastMode: Boolean = false
 
     constructor(
         onPollRequested: suspend (contactId: String?) -> Unit,
@@ -43,6 +44,7 @@ class AdaptivePollingManager(
      * Otherwise, sends a synthetic decoy dummy packet.
      */
     suspend fun executeCoverTrafficTick(dhtClient: org.pqchat.dht.dht.leaf.DhtClient? = null) {
+        if (isFastMode) return
         val tg = trafficGenerator
         if (tg != null) {
             tg.processCoverTrafficTick()
@@ -135,15 +137,23 @@ class AdaptivePollingManager(
 
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
     fun triggerImmediatePoll() {
-        if (_isSyncing.value) return
-        _isSyncing.value = true
-
         val job = pollingJob
         if (job != null && job.isActive) {
             forceImmediatePoll = true
             immediateSignal?.complete(Unit)
+            if (!_isSyncing.value) {
+                _isSyncing.value = true
+            }
         } else {
-            // In DOZE_SLEEP or when loop is paused, launch a one-shot poll with timeout protection
+            // In DOZE_SLEEP or when loop is paused, launch a one-shot poll with timeout protection.
+            // If already syncing, only proceed if the prior attempt has exceeded timeout (hung).
+            if (_isSyncing.value) {
+                val elapsed = System.currentTimeMillis() - lastPollFinishedTimestamp
+                if (elapsed < immediatePollTimeoutMs) {
+                    return
+                }
+            }
+            _isSyncing.value = true
             scope.launch {
                 try {
                     withTimeoutOrNull(immediatePollTimeoutMs) {
@@ -370,8 +380,9 @@ class AdaptivePollingManager(
             val myJob = coroutineContext.job
             while (isActive) {
                 _isSyncing.value = true
+                val cycleTimeout = if (isFastMode) 10_000L else 30_000L
                 try {
-                    withTimeoutOrNull(30_000L) {
+                    withTimeoutOrNull(cycleTimeout) {
                         onPollRequested(activeChatContactId)
                     }
                 } catch (e: CancellationException) {
@@ -390,7 +401,7 @@ class AdaptivePollingManager(
                 }
 
                 // During idle period between polls, run pre-warming in background to warm routes before next poll
-                if (onIdlePreWarm != null && isActive) {
+                if (onIdlePreWarm != null && isActive && !isFastMode) {
                     scope.launch {
                         try {
                             onIdlePreWarm?.invoke(activeChatContactId)

@@ -74,8 +74,16 @@ class MainActivity : FragmentActivity() {
                     bgIdle = 3000L,
                     doze = 5000L
                 )
+                app.pollingScheduler.pollingManager.isFastMode = true
                 app.trafficGenerator.isFastMode = true
                 app.repository.isFastTestMode = true
+                app.repository.outboundPoissonQueue.isFastMode = true
+                org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode = true
+                app.researchTelemetryManager.ttlSampler?.stop()
+                app.repository.decoyTargetPool.clear()
+                app.repository.blindRepublishPool.clear()
+                app.repository.delayedPutMaxMs = 0L
+                app.repository.decoyPutSlotsCount = 0
             }
         }
     }
