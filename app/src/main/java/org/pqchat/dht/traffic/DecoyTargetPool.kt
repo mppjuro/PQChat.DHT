@@ -13,7 +13,8 @@ import java.util.concurrent.ConcurrentLinkedDeque
  * ensuring they survive stateful adversary 0-PUT filtering.
  */
 class DecoyTargetPool(
-    private val maxCapacity: Int = 100
+    private val maxCapacity: Int = 100,
+    var random: java.util.Random = CryptoUtils.secureRandom
 ) {
     private val pool = ConcurrentLinkedDeque<ByteArray>()
 
@@ -55,7 +56,7 @@ class DecoyTargetPool(
         val snapshot = pool.toList()
 
         if (snapshot.isNotEmpty()) {
-            val shuffled = snapshot.shuffled(CryptoUtils.secureRandom)
+            val shuffled = snapshot.shuffled(random)
             targets.addAll(shuffled.take(count))
         }
 
@@ -67,7 +68,9 @@ class DecoyTargetPool(
         }
 
         while (targets.size < count) {
-            targets.add(CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)))
+            val dummyBytes = ByteArray(32)
+            random.nextBytes(dummyBytes)
+            targets.add(CryptoUtils.sha1(dummyBytes))
         }
 
         return targets

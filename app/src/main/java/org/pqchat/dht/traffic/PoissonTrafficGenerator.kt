@@ -34,8 +34,8 @@ class PoissonTrafficGenerator(
             null
         }
     },
-    private val random: java.util.Random = CryptoUtils.secureRandom
-) {
+    var random: java.util.Random = CryptoUtils.secureRandom
+) : java.io.Closeable {
     data class CoverEvent(
         val timestamp: Long,
         val targetHex: String,
@@ -321,6 +321,10 @@ class PoissonTrafficGenerator(
     fun stop() {
         isRunning = false
         scope.cancel()
+    }
+
+    override fun close() {
+        stop()
     }
 
     /**

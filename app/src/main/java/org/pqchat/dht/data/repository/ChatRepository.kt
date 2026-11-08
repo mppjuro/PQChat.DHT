@@ -42,7 +42,8 @@ class ChatRepository(
     val groupDao: GroupDao? = null,
     val groupMemberDao: GroupMemberDao? = null,
     val pollDao: PollDao? = null,
-    var settingsManager: org.pqchat.dht.data.settings.AppSettingsManager? = null
+    var settingsManager: org.pqchat.dht.data.settings.AppSettingsManager? = null,
+    var pollBatchRandom: java.util.Random = CryptoUtils.secureRandom
 ) : java.io.Closeable {
     val researchTelemetry: org.pqchat.dht.research.ResearchTelemetryManager?
         get() = researchTelemetryProvider?.invoke()
@@ -3961,7 +3962,7 @@ class ChatRepository(
                 val fairnessDamping = Math.sqrt(entityCount.toDouble()).coerceAtLeast(1.0)
                 val effectiveWeight = (task.priorityWeight / fairnessDamping).coerceAtLeast(1e-4)
 
-                val u = CryptoUtils.secureRandom.nextDouble().coerceIn(1e-12, 1.0 - 1e-12)
+                val u = pollBatchRandom.nextDouble().coerceIn(1e-12, 1.0 - 1e-12)
                 val key = Math.pow(u, 1.0 / effectiveWeight)
                 Pair(task, key)
             }
@@ -3974,9 +3975,9 @@ class ChatRepository(
             if (k <= 0) return emptyList()
 
             val byEntity = pool.groupBy { it.entityId }.values.toMutableList()
-            byEntity.shuffle(CryptoUtils.secureRandom)
+            byEntity.shuffle(pollBatchRandom)
             val guaranteed = byEntity.take(k).map { entityTasks ->
-                entityTasks[CryptoUtils.secureRandom.nextInt(entityTasks.size)]
+                entityTasks[pollBatchRandom.nextInt(entityTasks.size)]
             }.toMutableList()
 
             if (guaranteed.size < k) {
@@ -4301,16 +4302,12 @@ class ChatRepository(
             }
         }
 
-        // 4. Permutation / Prioritization: focused active chat targets are prioritized and executed first
-        val finalTasks = if (focusContactId != null) {
+        // 4. Permutation / Prioritization: in fast test mode, focused active chat targets are prioritized and executed first; in production, all queries are shuffled in random permutation
+        val finalTasks = if (isFastTestMode && focusContactId != null) {
             val (focused, other) = sampledTasks.partition { it.isFocused }
-            if (isFastTestMode) {
-                focused + other
-            } else {
-                focused + other.shuffled(CryptoUtils.secureRandom)
-            }
+            focused + other
         } else {
-            sampledTasks.take(batchSize).shuffled(CryptoUtils.secureRandom)
+            sampledTasks.take(batchSize).shuffled(pollBatchRandom)
         }
 
         // 5. Execute batch sequentially with bounded timeouts and intra-batch jitter
@@ -4345,7 +4342,7 @@ class ChatRepository(
             // Apply intra-batch jitter between queries (bypassed in fast test mode)
             if (!isFastTestMode && i < finalTasks.size - 1 && intraBatchJitterMaxMs > 0L) {
                 val span = (intraBatchJitterMaxMs - intraBatchJitterMinMs).coerceAtLeast(1L)
-                val jitter = intraBatchJitterMinMs + (CryptoUtils.secureRandom.nextDouble() * span).toLong()
+                val jitter = intraBatchJitterMinMs + (pollBatchRandom.nextDouble() * span).toLong()
                 if (jitter > 0L) {
                     delay(jitter)
                 }

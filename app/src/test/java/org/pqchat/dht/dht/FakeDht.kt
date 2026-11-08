@@ -23,7 +23,7 @@ class FakeDht(
     var maxDelayMs: Long = 0L,
     var dropProbability: Double = 0.0,
     var defaultTtlMs: Long? = null
-) : DhtClient {
+) : DhtClient, java.io.Closeable {
 
     @Volatile
     override var replicationK: Int = 8
@@ -86,6 +86,10 @@ class FakeDht(
         scope.cancel()
         storage.clear()
         preWarmedTargets.clear()
+    }
+
+    override fun close() {
+        stop()
     }
 
     override fun getActivePeerCount(): Int = if (isRunning) 8 else 0

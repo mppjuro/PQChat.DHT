@@ -25,6 +25,7 @@ class AdaptivePollingManager(
     private var keepaliveJob: Job? = null
     @Volatile var pollBatchSize: Int = N_POLL_TARGETS
     @Volatile var isFastMode: Boolean = false
+    var random: java.util.Random = org.pqchat.dht.crypto.CryptoUtils.secureRandom
 
     constructor(
         onPollRequested: suspend (contactId: String?) -> Unit,
@@ -187,7 +188,7 @@ class AdaptivePollingManager(
      */
     fun computeJitteredInterval(baseIntervalMs: Long, customJitterRatio: Double = jitterRatio): Long {
         if (customJitterRatio <= 0.0) return baseIntervalMs
-        val factor = (1.0 - customJitterRatio) + (org.pqchat.dht.crypto.CryptoUtils.secureRandom.nextDouble() * (2.0 * customJitterRatio))
+        val factor = (1.0 - customJitterRatio) + (random.nextDouble() * (2.0 * customJitterRatio))
         return (baseIntervalMs * factor).toLong().coerceAtLeast(100L)
     }
 
@@ -444,7 +445,7 @@ class AdaptivePollingManager(
             while (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
                 // Keepalive 20-25 seconds (randomized between 20000 and 25000 ms)
                 // Preserves carrier CGNAT / LTE UDP NAT mapping tables (which timeout after 30s)
-                val delayMs = 20_000L + (org.pqchat.dht.crypto.CryptoUtils.secureRandom.nextDouble() * 5_000L).toLong()
+                val delayMs = 20_000L + (random.nextDouble() * 5_000L).toLong()
                 delay(delayMs)
                 if (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
                     try {
