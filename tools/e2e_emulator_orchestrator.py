@@ -883,11 +883,14 @@ class MultiEmulatorOrchestrator:
             self._phase_0_init_and_health_check()
             self._phase_1_handshakes()
             self._phase_2_direct_messaging_and_rekey()
-            self._phase_3_create_group()
-            self._phase_4_join_group_on_participants()
-            self._phase_5_group_multi_turn_messaging()
+            if self.args.basic and self.nodes_count < 3:
+                print("[Orchestrator] Basic two-node chat mode: skipping group phases.", flush=True)
+            else:
+                self._phase_3_create_group()
+                self._phase_4_join_group_on_participants()
+                self._phase_5_group_multi_turn_messaging()
 
-            if getattr(self.args, "full", False):
+            if getattr(self.args, "full", False) and not self.args.basic:
                 self._phase_optional_diagnostics()
 
             for dev in self.active_devices:
@@ -1199,6 +1202,13 @@ class MultiEmulatorOrchestrator:
         else:
             self.log_step("Bob -> Alice Direct ACK", "FAIL", f"Alice did not receive '{direct_ack}' within 45s", sc_alice_ack)
 
+        if self.args.basic:
+            self.log_step("Basic Direct Chat Complete", "PASS", "Two direct messages exchanged over DHT")
+            self.alice.navigate_to_contact_list()
+            self.bob.navigate_to_contact_list()
+            self.sleep(2.0 if not self.args.real_dht else 4.0)
+            return
+
         # Rekey: Alice initiates ML-KEM-512 Rekey (NO fallback_ratio!)
         print("[Alice] Initiating ML-KEM-512 Rekey...", flush=True)
         rekey_clicked = self.alice.click_element(test_tag="chat_rekey_button", content_desc="Initiate ML-KEM-512 Rekey")
@@ -1444,6 +1454,13 @@ class MultiEmulatorOrchestrator:
                 all_turns_ok = False
                 fails_count += 1
 
+        if self.args.basic:
+            if all_turns_ok:
+                self.log_step("Basic Group Chat Complete", "PASS", f"All {len(all_devices)} participants exchanged two messages in '{group_name}'")
+            else:
+                self.log_step("Basic Group Chat Complete", "FAIL", f"Basic group chat had {fails_count} failed delivery attempts")
+            return
+
         # Turn 3: Charlie sends to Group (if nodes >= 3)
         if self.charlie:
             msg3 = f"Charlie_here_group_pqc_confirmed"
@@ -1541,6 +1558,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="build/e2e-screenshots", help="Directory to save screenshots and report")
     parser.add_argument("--skip-install", action="store_true", help="Skip APK install if already deployed")
     parser.add_argument("--full", action="store_true", help="Run additional optional phases (reactions, diagnostics)")
+    parser.add_argument("--basic", action="store_true", help="Run a reduced smoke test: direct chat for 2 nodes, two-turn group chat for 3/4 nodes")
     parser.add_argument("--dry-run", action="store_true", help="Simulate execution without running ADB commands")
     parser.add_argument("--real-dht", action="store_true", help="Run against real BitTorrent Mainline DHT network instead of simulated local cluster")
     parser.add_argument("--e2e-fast-mode", action="store_true", default=True, help="Enable deterministic fast traffic & polling mode (default: True)")
