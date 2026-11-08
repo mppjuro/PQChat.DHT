@@ -28,6 +28,7 @@ on:
         default: 'all'
         options:
           - 'all'
+          - '2'
           - '3'
           - '4'
 
@@ -446,14 +447,19 @@ jobs:
             app/build/reports/tests/testDebugUnitTest/
 
   multi-emulator-dht-real-e2e:
-    name: Multi-Emulator DHT E2E (${{ matrix.nodes }} Nodes)
+    name: Multi-Emulator ${{ matrix.mode }} DHT E2E (${{ matrix.nodes }} Nodes)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 1
-      matrix:
-        nodes: ${{ (github.event_name == 'workflow_dispatch' && inputs.nodes != 'all') && fromJSON(format('["{0}"]', inputs.nodes)) || fromJSON('["3", "4"]') }}
+      matrix: >-
+        ${{ fromJSON(
+          (github.event_name == 'workflow_dispatch' && inputs.nodes == '2' && '{"include":[{"nodes":"2","mode":"real"}]}') ||
+          (github.event_name == 'workflow_dispatch' && inputs.nodes == '3' && '{"include":[{"nodes":"3","mode":"testbed"},{"nodes":"3","mode":"real"}]}') ||
+          (github.event_name == 'workflow_dispatch' && inputs.nodes == '4' && '{"include":[{"nodes":"4","mode":"testbed"},{"nodes":"4","mode":"real"}]}') ||
+          '{"include":[{"nodes":"3","mode":"testbed"},{"nodes":"4","mode":"testbed"},{"nodes":"2","mode":"real"},{"nodes":"3","mode":"real"},{"nodes":"4","mode":"real"}]}'
+        ) }}
 
     steps:
       - name: Checkout repository
@@ -733,27 +739,41 @@ jobs:
             "
           done
 
-      - name: Run Multi-Emulator E2E on Isolated DHT Testbed
+      - name: Run Multi-Emulator E2E
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
-          mkdir -p build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes
+          if [ "${{ matrix.mode }}" = "real" ]; then
+            DHT_ARGS="--real-dht --basic"
+            OUTPUT_DIR="build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes"
+          else
+            DHT_ARGS=""
+            OUTPUT_DIR="build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes"
+          fi
+
+          mkdir -p "$OUTPUT_DIR"
           python3 tools/e2e_emulator_orchestrator.py \
+            $DHT_ARGS \
             --nodes ${{ matrix.nodes }} \
             --alice emulator-5554 \
             --bob emulator-5556 \
             --charlie emulator-5558 \
             --dave emulator-5560 \
             --apk app/build/outputs/apk/debug/app-debug.apk \
-            --output-dir build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes \
-            --full
+            --output-dir "$OUTPUT_DIR" \
+            $([ "${{ matrix.mode }}" = "testbed" ] && echo "--full")
 
-      - name: Publish DHT Testbed E2E Summary to GitHub Job Summary
+      - name: Publish E2E Summary to GitHub Job Summary
         if: always()
         run: |
-          REPORT_FILE="build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes/report.md"
-          echo "## 📱 Multi-Emulator DHT Testbed Results (${{ matrix.nodes }} Nodes)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ matrix.mode }}" = "real" ]; then
+            REPORT_FILE="build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes/report.md"
+            echo "## 📱 Multi-Emulator Real Mainline DHT Smoke Results (${{ matrix.nodes }} Nodes)" >> $GITHUB_STEP_SUMMARY
+          else
+            REPORT_FILE="build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes/report.md"
+            echo "## 📱 Multi-Emulator DHT Testbed Results (${{ matrix.nodes }} Nodes)" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f "$REPORT_FILE" ]; then
             cat "$REPORT_FILE" >> $GITHUB_STEP_SUMMARY
@@ -765,9 +785,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: dht-testbed-e2e-trace-${{ matrix.nodes }}nodes
+          name: ${{ matrix.mode }}-dht-e2e-trace-${{ matrix.nodes }}nodes
           path: |
             build/e2e-screenshots-dht-testbed-${{ matrix.nodes }}nodes/
+            build/e2e-screenshots-real-dht-${{ matrix.nodes }}nodes/
             /tmp/emu_*.log
 
       - name: Stop Emulators
@@ -846,7 +867,8 @@ jobs:
             - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
             - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
-            - **Multi-Emulator DHT E2E Tests:** Passed (3 & 4 nodes full lifecycle on an isolated 20-node DHT testbed)
+            - **Multi-Emulator DHT Testbed E2E Tests:** Passed (3 & 4 nodes full lifecycle on an isolated 20-node DHT testbed)
+            - **Multi-Emulator Real DHT Smoke Tests:** Passed (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT)
 
             ### Build Metadata:
             - **Commit:** [`${{ env.SHORT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
