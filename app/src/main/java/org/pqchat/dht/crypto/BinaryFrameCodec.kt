@@ -37,6 +37,7 @@ object BinaryFrameCodec {
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
     const val GROUP_SUBTYPE_LEAVE: Byte = 0x03
+    const val GROUP_SUBTYPE_KEY_BUNDLE: Byte = 0x04
     const val GROUP_REKEY_MESSAGE_INTERVAL = 50
 
     const val POLL_SUBTYPE_CREATE: Byte = 0x01
@@ -185,6 +186,27 @@ object BinaryFrameCodec {
             override fun hashCode(): Int = 31 * memberId.contentHashCode() + memberName.hashCode()
         }
 
+        data class GroupMemberKey(
+            val memberId: ByteArray,
+            val counter: Long,
+            val chainKey: ByteArray
+        ) {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupMemberKey) return false
+                return memberId.contentEquals(other.memberId) &&
+                        counter == other.counter &&
+                        chainKey.contentEquals(other.chainKey)
+            }
+
+            override fun hashCode(): Int {
+                var result = memberId.contentHashCode()
+                result = 31 * result + counter.hashCode()
+                result = 31 * result + chainKey.contentHashCode()
+                return result
+            }
+        }
+
         data class GroupControl(
             val controlSubType: Byte,
             val groupId: ByteArray,
@@ -193,7 +215,8 @@ object BinaryFrameCodec {
             val senderGroupChainKey: ByteArray,
             val currentCounter: Long,
             val groupName: String,
-            val members: List<GroupMemberSummary> = emptyList()
+            val members: List<GroupMemberSummary> = emptyList(),
+            val memberKeys: List<GroupMemberKey> = emptyList()
         ) : DecodedPayload() {
             override fun equals(other: Any?): Boolean {
                 if (this === other) return true
@@ -205,7 +228,8 @@ object BinaryFrameCodec {
                         senderGroupChainKey.contentEquals(other.senderGroupChainKey) &&
                         currentCounter == other.currentCounter &&
                         groupName == other.groupName &&
-                        members == other.members
+                        members == other.members &&
+                        memberKeys == other.memberKeys
             }
             override fun hashCode(): Int {
                 var result = controlSubType.toInt()
@@ -216,6 +240,7 @@ object BinaryFrameCodec {
                 result = 31 * result + currentCounter.hashCode()
                 result = 31 * result + groupName.hashCode()
                 result = 31 * result + members.hashCode()
+                result = 31 * result + memberKeys.hashCode()
                 return result
             }
         }
@@ -640,6 +665,49 @@ object BinaryFrameCodec {
         members = emptyList()
     )
 
+    fun encodeGroupKeysBundle(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        groupId: ByteArray,
+        groupEpoch: Long,
+        senderMemberId: ByteArray,
+        memberKeys: List<DecodedPayload.GroupMemberKey>,
+        groupName: String = ""
+    ): ByteArray {
+        require(groupId.size == 16) { "groupId must be 16 bytes" }
+        require(senderMemberId.size == 16) { "senderMemberId must be 16 bytes" }
+
+        val nameBytes = truncateUtf8ToMaxBytes(groupName, 64)
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(GROUP_SUBTYPE_KEY_BUNDLE)
+        buffer.put(groupId)
+        buffer.putInt(groupEpoch.toInt())
+        buffer.put(senderMemberId)
+        buffer.put(ByteArray(64))
+        buffer.putInt(0)
+        buffer.putShort(nameBytes.size.toShort())
+        buffer.put(nameBytes)
+
+        val count = memberKeys.size.coerceAtMost(9)
+        buffer.putShort(count.toShort())
+        for (i in 0 until count) {
+            val mk = memberKeys[i]
+            val mId = if (mk.memberId.size == 16) mk.memberId else mk.memberId.copyOf(16)
+            buffer.put(mId)
+            buffer.putInt(mk.counter.toInt())
+            val cKey = if (mk.chainKey.size == 64) mk.chainKey else mk.chainKey.copyOf(64)
+            buffer.put(cKey)
+        }
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
+    }
+
     fun encodeReaction(
         seqNum: Int,
         ackNum: Int,
@@ -1013,29 +1081,55 @@ object BinaryFrameCodec {
                     val nameBytes = ByteArray(nameLen)
                     buffer.get(nameBytes)
                     val gName = String(nameBytes, Charsets.UTF_8)
-                    val mCount = buffer.short.toInt() and 0xFFFF
-                    require(mCount <= 64) { "Member count $mCount exceeds maximum allowed 64" }
-                    val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()
-                    for (i in 0 until mCount) {
-                        if (buffer.remaining() < 17) break
-                        val mId = ByteArray(16)
-                        buffer.get(mId)
-                        val mNameLen = buffer.get().toInt() and 0xFF
-                        if (mNameLen > 32 || buffer.remaining() < mNameLen) break
-                        val mNameBytes = ByteArray(mNameLen)
-                        buffer.get(mNameBytes)
-                        memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
+                    if (subType == GROUP_SUBTYPE_KEY_BUNDLE) {
+                        val keyCount = buffer.short.toInt() and 0xFFFF
+                        val memberKeysList = mutableListOf<DecodedPayload.GroupMemberKey>()
+                        for (i in 0 until keyCount) {
+                            if (buffer.remaining() < 16 + 4 + 64) break
+                            val mId = ByteArray(16)
+                            buffer.get(mId)
+                            val cnt = buffer.int.toLong() and 0xFFFFFFFFL
+                            val cKey = ByteArray(64)
+                            buffer.get(cKey)
+                            memberKeysList.add(DecodedPayload.GroupMemberKey(mId, cnt, cKey))
+                        }
+                        DecodedPayload.GroupControl(
+                            controlSubType = subType,
+                            groupId = gId,
+                            groupEpoch = epoch,
+                            senderMemberId = sMemberId,
+                            senderGroupChainKey = sChainKey,
+                            currentCounter = curCounter,
+                            groupName = gName,
+                            members = emptyList(),
+                            memberKeys = memberKeysList
+                        )
+                    } else {
+                        val mCount = buffer.short.toInt() and 0xFFFF
+                        require(mCount <= 64) { "Member count $mCount exceeds maximum allowed 64" }
+                        val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()
+                        for (i in 0 until mCount) {
+                            if (buffer.remaining() < 17) break
+                            val mId = ByteArray(16)
+                            buffer.get(mId)
+                            val mNameLen = buffer.get().toInt() and 0xFF
+                            if (mNameLen > 32 || buffer.remaining() < mNameLen) break
+                            val mNameBytes = ByteArray(mNameLen)
+                            buffer.get(mNameBytes)
+                            memberList.add(DecodedPayload.GroupMemberSummary(mId, String(mNameBytes, Charsets.UTF_8)))
+                        }
+                        DecodedPayload.GroupControl(
+                            controlSubType = subType,
+                            groupId = gId,
+                            groupEpoch = epoch,
+                            senderMemberId = sMemberId,
+                            senderGroupChainKey = sChainKey,
+                            currentCounter = curCounter,
+                            groupName = gName,
+                            members = memberList,
+                            memberKeys = emptyList()
+                        )
                     }
-                    DecodedPayload.GroupControl(
-                        controlSubType = subType,
-                        groupId = gId,
-                        groupEpoch = epoch,
-                        senderMemberId = sMemberId,
-                        senderGroupChainKey = sChainKey,
-                        currentCounter = curCounter,
-                        groupName = gName,
-                        members = memberList
-                    )
                 }
                 TYPE_REACTION -> {
                     require(buffer.remaining() >= 7) { "Malformed reaction payload: expected at least 7 bytes" }

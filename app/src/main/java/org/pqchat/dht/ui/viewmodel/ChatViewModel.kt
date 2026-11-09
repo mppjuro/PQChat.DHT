@@ -469,6 +469,12 @@ class ChatViewModel @JvmOverloads constructor(
             pollingManager.onChatOpened(selectedId)
         }
         pollingManager.triggerImmediatePoll()
+        viewModelScope.launch {
+            try {
+                repository.republishUnacknowledgedMessages()
+                repository.retransmitUnconfirmedGroupControls()
+            } catch (_: Exception) {}
+        }
     }
 
     fun sendMessage(text: String, targetContactId: String? = null) {

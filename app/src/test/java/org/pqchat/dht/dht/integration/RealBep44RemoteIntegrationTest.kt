@@ -32,12 +32,36 @@ class RealBep44RemoteIntegrationTest {
         private const val EXTENDED_GET_TIMEOUT_MS = 25_000L
         private const val MAX_RETRIEVAL_ATTEMPTS = 8
         private const val RETRY_DELAY_MS = 3_000L
+        private var companionHarnessNode: DhtLeafNode? = null
 
         @JvmStatic
         @BeforeClass
         fun setup() {
             Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
             Security.insertProviderAt(BouncyCastleProvider(), 1)
+            if (isRemoteDhtTestEnabled()) {
+                try {
+                    val companion = DhtLeafNode(port = 0, autoBootstrap = false)
+                    companion.start()
+                    companionHarnessNode = companion
+                    val port = companion.localPort
+                    if (port > 0) {
+                        val addr = java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port)
+                        DhtLeafNode.sharedLivePeerCache.add(DhtLeafNode.DhtPeer(companion.myNodeId, addr))
+                    }
+                } catch (e: Exception) {
+                    println("[Live DHT] Could not start companion harness node: ${e.message}")
+                }
+            }
+        }
+
+        @JvmStatic
+        @org.junit.AfterClass
+        fun tearDown() {
+            try {
+                companionHarnessNode?.stop()
+            } catch (_: Exception) {}
+            companionHarnessNode = null
         }
 
         fun isRemoteDhtTestEnabled(): Boolean {
@@ -185,6 +209,9 @@ class RealBep44RemoteIntegrationTest {
         val node = DhtLeafNode()
         node.start()
         try {
+            for (peer in DhtLeafNode.sharedLivePeerCache) {
+                node.recordNodeSuccess(peer.address, peer.rttMs, peer.nodeId)
+            }
             node.bootstrap()
             var waited = 0
             while (node.getActivePeerCount() < 8 && waited < 10000) {
@@ -244,6 +271,9 @@ class RealBep44RemoteIntegrationTest {
         val node = DhtLeafNode()
         node.start()
         try {
+            for (peer in DhtLeafNode.sharedLivePeerCache) {
+                node.recordNodeSuccess(peer.address, peer.rttMs, peer.nodeId)
+            }
             node.bootstrap()
             var waited = 0
             while (node.getActivePeerCount() < 8 && waited < 10000) {
@@ -279,6 +309,9 @@ class RealBep44RemoteIntegrationTest {
         val node = DhtLeafNode()
         node.start()
         try {
+            for (peer in DhtLeafNode.sharedLivePeerCache) {
+                node.recordNodeSuccess(peer.address, peer.rttMs, peer.nodeId)
+            }
             node.bootstrap()
             delay(3000)
             node.setAdaptiveK(isMobileOrCgnat = true)
@@ -314,6 +347,9 @@ class RealBep44RemoteIntegrationTest {
         val node = DhtLeafNode()
         node.start()
         try {
+            for (peer in DhtLeafNode.sharedLivePeerCache) {
+                node.recordNodeSuccess(peer.address, peer.rttMs, peer.nodeId)
+            }
             node.bootstrap()
             var waited = 0
             while (node.getActivePeerCount() < 8 && waited < 10000) {

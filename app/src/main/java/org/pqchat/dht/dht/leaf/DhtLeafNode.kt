@@ -848,6 +848,16 @@ open class DhtLeafNode(
     }
 
     fun getLocalPeers(): List<DhtPeer> {
+        if (!isLocalTestbedActive()) {
+            return customBootstrapEndpoints.mapNotNull { (ipStr, p) ->
+                try {
+                    val addr = InetAddress.getByName(ipStr)
+                    if (addr is java.net.Inet4Address) DhtPeer(ByteArray(20), InetSocketAddress(addr, p)) else null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
         val baseEndpoints = listOf(
             Pair("10.0.2.2", DEFAULT_DHT_PORT),
             Pair("10.0.2.2", 49161),
@@ -860,11 +870,7 @@ open class DhtLeafNode(
             Pair("10.0.2.17", DEFAULT_DHT_PORT)
         )
         val localEndpoints = if (customBootstrapEndpoints.isNotEmpty()) {
-            if (isLocalTestbedActive()) {
-                customBootstrapEndpoints
-            } else {
-                customBootstrapEndpoints + baseEndpoints
-            }
+            customBootstrapEndpoints
         } else {
             baseEndpoints
         }
@@ -879,12 +885,12 @@ open class DhtLeafNode(
 
     suspend fun resolveBootstrapNodes(hosts: List<Pair<String, Int>> = BOOTSTRAP_HOSTS): List<InetSocketAddress> = withContext(Dispatchers.IO) {
         val list = mutableListOf<InetSocketAddress>()
-        if (torProxyConfig?.enabled != true) {
-            for (peer in getLocalPeers()) {
-                list.add(peer.address)
-            }
-        }
         if (isLocalTestbedActive()) {
+            if (torProxyConfig?.enabled != true) {
+                for (peer in getLocalPeers()) {
+                    list.add(peer.address)
+                }
+            }
             return@withContext list
         }
         if (torProxyConfig?.enabled == true) {
@@ -893,12 +899,17 @@ open class DhtLeafNode(
                 list.add(InetSocketAddress.createUnresolved(host, port))
             }
         } else {
+            for (p in sharedLivePeerCache) {
+                if (p.address.address is java.net.Inet4Address || p.address.isUnresolved) {
+                    list.add(p.address)
+                }
+            }
             val deferreds = hosts.map { (host, port) ->
                 async {
                     try {
                         withTimeoutOrNull(2000L) {
                             val ips = InetAddress.getAllByName(host)
-                            ips.map { ip ->
+                            ips.filterIsInstance<java.net.Inet4Address>().map { ip ->
                                 ip.hostAddress?.let { bootstrapRouterIps.add(it) }
                                 InetSocketAddress(ip, port)
                             }
@@ -1405,13 +1416,15 @@ open class DhtLeafNode(
         }
 
         val isLocalMode = isLocalTestbedActive()
-        val allCandidates = (storedPeers + remoteCandidates)
+        val allCandidates = (storedPeers + remoteCandidates + (if (!isLocalMode) sharedLivePeerCache else emptyList()))
             .distinctBy { it.address }
-            .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
+            .filter { !isBootstrapRouter(it.address) }
+            .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
+            .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
         val candidatePool = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
         allCandidates.forEach { candidatePool[it.address] = it }
         if (candidatePool.isEmpty()) {
-            if (localPeers.isNotEmpty()) {
+            if (isLocalMode && localPeers.isNotEmpty()) {
                 localPeers.forEach { candidatePool[it.address] = it }
             } else if (autoBootstrap && !isLocalMode) {
                 resolveBootstrapNodes().forEach {
@@ -1706,13 +1719,14 @@ open class DhtLeafNode(
         // 1. Initial candidates population
         val isLocalMode = isLocalTestbedActive()
         val cachedRoute = targetRouteCache[target] ?: emptyList()
-        val routingPeers = findClosestNodes(target, count = 24)
+        val routingPeers = findClosestNodes(target, count = 32)
         val fastestNodes = getCachedFastestNodes()
         val localPeers = getLocalPeers()
 
-        (cachedRoute + routingPeers + fastestNodes + localPeers)
+        (cachedRoute + routingPeers + fastestNodes + (if (isLocalMode) localPeers else sharedLivePeerCache))
             .filter { !isBootstrapRouter(it.address) }
-            .filter { !isLocalMode || isLoopbackOrLocal(it.address) }
+            .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
+            .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
             .distinctBy { it.address }
             .forEach { candidatePool[it.address] = it }
 
@@ -1866,34 +1880,49 @@ open class DhtLeafNode(
             }
         }
 
-        // 4. Fallback if tokens == 0: Query closest responding nodes with "q": "get_peers"
-        if (tokenMap.isEmpty() && peersWithoutToken.isNotEmpty()) {
-            logInfo(TAG, "[PQChat] tokenMap empty after lookup. Executing get_peers fallback to 8 closest responding nodes...")
-            val fallbackPeers = peersWithoutToken.values
+        // 4. Token Acquisition via BEP 5 get_peers fallback if tokenMap.size < 4
+        if (tokenMap.size < 4) {
+            val potentialPeers = (peersWithoutToken.values + routingTable + candidatePool.values)
+                .filter { it.address !in tokenMap.keys && !isBootstrapRouter(it.address) }
+                .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
+                .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
+                .distinctBy { it.address }
                 .sortedWith { a, b ->
                     val distA = xorDistance(a.nodeId, target)
                     val distB = xorDistance(b.nodeId, target)
                     compareBytes(distA, distB)
                 }
-                .take(8)
+                .take(16)
 
-            coroutineScope {
-                fallbackPeers.map { peer ->
-                    launch {
-                        try {
-                            queriesSent.incrementAndGet()
-                            val getPeersQuery = KrpcMessage.createGetPeersQuery(myNodeId, target)
-                            val res = sendQueryWithResult(peer.address, getPeersQuery, timeoutMs = 2500L)
-                            if (res is QueryResult.Success) {
-                                responsesReceived.incrementAndGet()
-                                val token = res.response.responseData["token"] as? ByteArray
-                                if (token != null && token.isNotEmpty()) {
-                                    tokenMap[peer.address] = token
+            if (potentialPeers.isNotEmpty()) {
+                coroutineScope {
+                    potentialPeers.map { peer ->
+                        launch {
+                            try {
+                                queriesSent.incrementAndGet()
+                                val getPeersQuery = KrpcMessage.createGetPeersQuery(myNodeId, target)
+                                val res = sendQueryWithResult(peer.address, getPeersQuery, timeoutMs = queryTimeoutMs)
+                                if (res is QueryResult.Success) {
+                                    responsesReceived.incrementAndGet()
+                                    val token = res.response.responseData["token"] as? ByteArray
+                                    if (token != null && token.isNotEmpty()) {
+                                        tokenMap[peer.address] = token
+                                        candidatePool.putIfAbsent(peer.address, peer)
+                                    }
+                                    val nodesBytes = res.response.responseData["nodes"] as? ByteArray
+                                    if (nodesBytes != null) {
+                                        val discovered = parseCompactNodesList(nodesBytes)
+                                        discovered.forEach { node ->
+                                            if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
+                                                candidatePool.putIfAbsent(node.address, node)
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                        } catch (_: Exception) {}
-                    }
-                }.joinAll()
+                            } catch (_: Exception) {}
+                        }
+                    }.joinAll()
+                }
             }
         }
 

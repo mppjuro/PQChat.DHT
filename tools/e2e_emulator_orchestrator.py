@@ -1318,7 +1318,8 @@ class MultiEmulatorOrchestrator:
 
         # Bob receives direct message
         print(f"[Bob] Waiting for direct message '{direct_msg}'...", flush=True)
-        rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=dm_timeout, sync_chip_tag="chat_sync_chip")
+        alice_dm_tick = lambda: self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+        rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=dm_timeout, sync_chip_tag="chat_sync_chip", on_tick=alice_dm_tick)
         sc_bob_rcv = self.bob.screencap("02_bob_rcv_direct_msg")
         if rcv_ok:
             self.log_step("Alice -> Bob Direct Message", "PASS", f"Bob received '{direct_msg}' via DHT", sc_bob_rcv)
@@ -1336,7 +1337,8 @@ class MultiEmulatorOrchestrator:
 
         # Alice receives direct ACK
         print(f"[Alice] Waiting for direct reply '{direct_ack}'...", flush=True)
-        ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=dm_timeout, sync_chip_tag="chat_sync_chip")
+        bob_ack_tick = lambda: self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+        ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=dm_timeout, sync_chip_tag="chat_sync_chip", on_tick=bob_ack_tick)
         sc_alice_ack = self.alice.screencap("02_alice_rcv_direct_ack")
         if ack_ok:
             self.log_step("Bob -> Alice Direct ACK", "PASS", f"Alice received '{direct_ack}' via DHT", sc_alice_ack)
@@ -1483,6 +1485,7 @@ class MultiEmulatorOrchestrator:
                 sync_delay = 18.0 if self.args.real_dht else 12.0
                 if (time.time() - last_sync_chip) >= sync_delay:
                     dev.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
+                    self.alice.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
                     last_sync_chip = time.time()
 
                 if elapsed > 20.0 and int(elapsed) % 15 == 0:
@@ -1689,6 +1692,12 @@ class MultiEmulatorOrchestrator:
                 targets = [self.alice, self.bob]
                 if self.dave:
                     targets.append(self.dave)
+                last_charlie_sync = [0.0]
+                def charlie_sync_tick():
+                    now = time.time()
+                    if now - last_charlie_sync[0] >= 15.0:
+                        self.charlie.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                        last_charlie_sync[0] = now
                 for dev in targets:
                     if not ensure_in_group(dev):
                         self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} is not in group chat")
@@ -1696,7 +1705,7 @@ class MultiEmulatorOrchestrator:
                         fails_count += 1
                         continue
                     print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                    rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                    rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=charlie_sync_tick)
                     sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
                     if rcv3:
                         self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
@@ -1721,6 +1730,12 @@ class MultiEmulatorOrchestrator:
                 self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
                 self.sleep(send_settle)
 
+                last_dave_sync = [0.0]
+                def dave_sync_tick():
+                    now = time.time()
+                    if now - last_dave_sync[0] >= 15.0:
+                        self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                        last_dave_sync[0] = now
                 for dev in [self.alice, self.bob, self.charlie]:
                     if not ensure_in_group(dev):
                         self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} is not in group chat")
@@ -1728,7 +1743,7 @@ class MultiEmulatorOrchestrator:
                         fails_count += 1
                         continue
                     print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                    rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                    rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=dave_sync_tick)
                     if not rcv4:
                         dev.ensure_app_foreground()
                         for retry in range(2):
