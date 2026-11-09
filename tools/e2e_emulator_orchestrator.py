@@ -31,7 +31,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
