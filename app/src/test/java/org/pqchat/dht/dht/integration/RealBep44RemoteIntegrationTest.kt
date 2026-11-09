@@ -62,6 +62,7 @@ class RealBep44RemoteIntegrationTest {
                 companionHarnessNode?.stop()
             } catch (_: Exception) {}
             companionHarnessNode = null
+            DhtLeafNode.sharedLivePeerCache.clear()
         }
 
         fun isRemoteDhtTestEnabled(): Boolean {

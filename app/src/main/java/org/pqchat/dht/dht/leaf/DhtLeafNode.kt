@@ -848,27 +848,23 @@ open class DhtLeafNode(
     }
 
     fun getLocalPeers(): List<DhtPeer> {
-        if (!isLocalTestbedActive()) {
-            return customBootstrapEndpoints.mapNotNull { (ipStr, p) ->
-                try {
-                    val addr = InetAddress.getByName(ipStr)
-                    if (addr is java.net.Inet4Address) DhtPeer(ByteArray(20), InetSocketAddress(addr, p)) else null
-                } catch (_: Exception) {
-                    null
-                }
-            }
+        val baseEndpoints = if (isLocalTestbedActive()) {
+            listOf(
+                Pair("10.0.2.2", DEFAULT_DHT_PORT),
+                Pair("10.0.2.2", 49161),
+                Pair("10.0.2.2", 49162),
+                Pair("127.0.0.1", DEFAULT_DHT_PORT),
+                Pair("127.0.0.1", 49161),
+                Pair("127.0.0.1", 49162),
+                Pair("10.0.2.15", DEFAULT_DHT_PORT),
+                Pair("10.0.2.16", DEFAULT_DHT_PORT),
+                Pair("10.0.2.17", DEFAULT_DHT_PORT)
+            )
+        } else {
+            listOf(
+                Pair("127.0.0.1", DEFAULT_DHT_PORT)
+            )
         }
-        val baseEndpoints = listOf(
-            Pair("10.0.2.2", DEFAULT_DHT_PORT),
-            Pair("10.0.2.2", 49161),
-            Pair("10.0.2.2", 49162),
-            Pair("127.0.0.1", DEFAULT_DHT_PORT),
-            Pair("127.0.0.1", 49161),
-            Pair("127.0.0.1", 49162),
-            Pair("10.0.2.15", DEFAULT_DHT_PORT),
-            Pair("10.0.2.16", DEFAULT_DHT_PORT),
-            Pair("10.0.2.17", DEFAULT_DHT_PORT)
-        )
         val localEndpoints = if (customBootstrapEndpoints.isNotEmpty()) {
             customBootstrapEndpoints
         } else {
@@ -876,7 +872,8 @@ open class DhtLeafNode(
         }
         return localEndpoints.mapNotNull { (ipStr, p) ->
             try {
-                DhtPeer(ByteArray(20), InetSocketAddress(InetAddress.getByName(ipStr), p))
+                val addr = InetAddress.getByName(ipStr)
+                if (addr is java.net.Inet4Address) DhtPeer(ByteArray(20), InetSocketAddress(addr, p)) else null
             } catch (_: Exception) {
                 null
             }
@@ -885,12 +882,12 @@ open class DhtLeafNode(
 
     suspend fun resolveBootstrapNodes(hosts: List<Pair<String, Int>> = BOOTSTRAP_HOSTS): List<InetSocketAddress> = withContext(Dispatchers.IO) {
         val list = mutableListOf<InetSocketAddress>()
-        if (isLocalTestbedActive()) {
-            if (torProxyConfig?.enabled != true) {
-                for (peer in getLocalPeers()) {
-                    list.add(peer.address)
-                }
+        if (torProxyConfig?.enabled != true) {
+            for (peer in getLocalPeers()) {
+                list.add(peer.address)
             }
+        }
+        if (isLocalTestbedActive()) {
             return@withContext list
         }
         if (torProxyConfig?.enabled == true) {
@@ -899,11 +896,6 @@ open class DhtLeafNode(
                 list.add(InetSocketAddress.createUnresolved(host, port))
             }
         } else {
-            for (p in sharedLivePeerCache) {
-                if (p.address.address is java.net.Inet4Address || p.address.isUnresolved) {
-                    list.add(p.address)
-                }
-            }
             val deferreds = hosts.map { (host, port) ->
                 async {
                     try {
@@ -1416,7 +1408,7 @@ open class DhtLeafNode(
         }
 
         val isLocalMode = isLocalTestbedActive()
-        val allCandidates = (storedPeers + remoteCandidates + (if (!isLocalMode) sharedLivePeerCache else emptyList()))
+        val allCandidates = (storedPeers + remoteCandidates)
             .distinctBy { it.address }
             .filter { !isBootstrapRouter(it.address) }
             .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
@@ -1723,7 +1715,7 @@ open class DhtLeafNode(
         val fastestNodes = getCachedFastestNodes()
         val localPeers = getLocalPeers()
 
-        (cachedRoute + routingPeers + fastestNodes + (if (isLocalMode) localPeers else sharedLivePeerCache))
+        (cachedRoute + routingPeers + fastestNodes + (if (isLocalMode) localPeers else emptyList()))
             .filter { !isBootstrapRouter(it.address) }
             .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
             .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
