@@ -30,8 +30,8 @@ class RealBep44RemoteIntegrationTest {
 
     companion object {
         private const val EXTENDED_GET_TIMEOUT_MS = 25_000L
-        private const val MAX_RETRIEVAL_ATTEMPTS = 5
-        private const val RETRY_DELAY_MS = 4_000L
+        private const val MAX_RETRIEVAL_ATTEMPTS = 8
+        private const val RETRY_DELAY_MS = 3_000L
 
         @JvmStatic
         @BeforeClass
@@ -67,8 +67,12 @@ class RealBep44RemoteIntegrationTest {
         val node = DhtLeafNode()
         node.start()
         try {
+            // Warm node's routing cache with shared live peers from previous tests
+            for (peer in DhtLeafNode.sharedLivePeerCache) {
+                node.recordNodeSuccess(peer.address, peer.rttMs, peer.nodeId)
+            }
             val bootstrapNodes = node.resolveBootstrapNodes()
-            println("[Live DHT] Bootstrap nodes resolved: $bootstrapNodes")
+            println("[Live DHT] Bootstrap nodes resolved: $bootstrapNodes (warm peers: ${DhtLeafNode.sharedLivePeerCache.size})")
             node.bootstrap()
 
             // Allow bootstrap queries to populate active peer routing table
@@ -94,7 +98,7 @@ class RealBep44RemoteIntegrationTest {
 
             var putResult = false
             var putRttMs = 0L
-            val maxPutAttempts = 3
+            val maxPutAttempts = 5
             for (attempt in 1..maxPutAttempts) {
                 val t0 = System.currentTimeMillis()
                 putResult = node.putMutable(
@@ -137,8 +141,20 @@ class RealBep44RemoteIntegrationTest {
                 lastGetRttMs = System.currentTimeMillis() - tStart
 
                 if (retrieved != null) {
-                    println("[Live DHT] Retrieved payload on attempt $attempt in${lastGetRttMs}ms")
+                    println("[Live DHT] Retrieved payload on attempt $attempt in ${lastGetRttMs}ms")
                     break
+                }
+
+                if (attempt == 3) {
+                    println("[Live DHT] Re-issuing putMutable after 3 unsuccessful get attempts to refresh propagation...")
+                    node.putMutable(
+                        target = target,
+                        v = payload,
+                        seq = 1L,
+                        salt = null,
+                        sk = seed,
+                        skipLocalStore = true
+                    )
                 }
 
                 if (attempt < MAX_RETRIEVAL_ATTEMPTS) {

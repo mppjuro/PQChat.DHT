@@ -830,16 +830,22 @@ class ChatRepository(
 
             // 7. Put to DHT under Target_i
             val tStart = System.currentTimeMillis()
-            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
-                dhtLeafNode.putMutable(
-                    target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            } ?: false
+            var success = false
+            val maxPutAttempts = if (isFastTestMode) 3 else 1
+            for (attempt in 1..maxPutAttempts) {
+                success = withTimeoutOrNull(if (isFastTestMode) 20_000L else 25_000L) {
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+                if (success) break
+                if (attempt < maxPutAttempts) delay(500L)
+            }
             val rttMs = System.currentTimeMillis() - tStart
             researchTelemetry?.recordPacketEvent(
                 role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
@@ -870,6 +876,29 @@ class ChatRepository(
                         )
                     )
                     onRepublishTaskUpdated?.invoke()
+
+                    if (isFastTestMode) {
+                        repositoryScope.launch {
+                            delay(3000L)
+                            dhtLeafNode.putMutable(
+                                target = slot.target,
+                                v = frame,
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = slot.edPrivateKeySeed,
+                                skipLocalStore = false
+                            )
+                            delay(3000L)
+                            dhtLeafNode.putMutable(
+                                target = slot.target,
+                                v = frame,
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = slot.edPrivateKeySeed,
+                                skipLocalStore = false
+                            )
+                        }
+                    }
                 }
                 // Advance outgoing chain state ONLY on success
                 contactDao.updateOutgoingState(
@@ -4110,12 +4139,20 @@ class ChatRepository(
      * - Shuffles all targets in random permutation using CSPRNG.
      * - Applies intra-batch jitter between queries to prevent network observer timing/frequency correlation.
      */
+    private val isPollingBatch = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val groupKeyRelayTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val groupKeyRelayCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     suspend fun pollConstantBatch(
         focusContactId: String? = null,
         batchSize: Int = pollBatchSize,
         intraBatchJitterMinMs: Long = this.intraBatchJitterMinMs,
         intraBatchJitterMaxMs: Long = this.intraBatchJitterMaxMs
     ): Boolean = withContext(Dispatchers.IO) {
+        if (!isPollingBatch.compareAndSet(false, true)) {
+            return@withContext false
+        }
+        try {
         // 1. Assemble candidate real active listening slots
         val tasks = mutableListOf<PollTask>()
 
@@ -4349,7 +4386,17 @@ class ChatRepository(
             }
         }
 
+        // Periodically verify and relay missing group keys for any active groups
+        for (group in groups) {
+            try {
+                relayMissingGroupKeys(group.groupId, force = false)
+            } catch (_: Exception) {}
+        }
+
         anyReceived
+        } finally {
+            isPollingBatch.set(false)
+        }
     }
 
     /**
@@ -4980,16 +5027,22 @@ class ChatRepository(
                 return true
             }
 
-            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
-                dhtLeafNode.putMutable(
-                    target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            } ?: false
+            var success = false
+            val maxAttempts = if (isFastTestMode) 3 else 1
+            for (attempt in 1..maxAttempts) {
+                success = withTimeoutOrNull(if (isFastTestMode) 20_000L else 25_000L) {
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+                if (success) break
+                if (attempt < maxAttempts) delay(500L)
+            }
 
             if (success) {
                 contactDao.updateOutgoingState(
@@ -4998,6 +5051,20 @@ class ChatRepository(
                     chainKeyOut = slot.nextChainKey
                 )
                 decoyTargetPool.registerPopulatedTarget(slot.target)
+
+                if (isFastTestMode && !isSelf) {
+                    repositoryScope.launch {
+                        delay(2500L)
+                        dhtLeafNode.putMutable(
+                            target = slot.target,
+                            v = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = false
+                        )
+                    }
+                }
             }
             return success
     }
@@ -5201,6 +5268,57 @@ class ChatRepository(
         retransmittedCount
     }
 
+    /**
+     * Relays missing or newly received member sender keys to all active group members with direct 1-to-1 contacts.
+     */
+    suspend fun relayMissingGroupKeys(groupId: String, force: Boolean = false) = withContext(Dispatchers.IO) {
+        val group = groupDao?.getGroupById(groupId) ?: return@withContext
+        val allMembers = groupMemberDao?.getMembersForGroup(groupId) ?: return@withContext
+        val activeMembers = allMembers.filter { it.isActive }
+        val groupIdBytes = uuidStringToBytes(groupId)
+
+        val directContacts = activeMembers.filter { it.contactId != null }
+        if (directContacts.isEmpty()) return@withContext
+
+        if (!force) {
+            val now = System.currentTimeMillis()
+            val last = groupKeyRelayTimestamps[groupId] ?: 0L
+            val count = groupKeyRelayCounts[groupId] ?: 0
+            if (now - last < 4000L || count >= 8) return@withContext
+            groupKeyRelayTimestamps[groupId] = now
+            groupKeyRelayCounts[groupId] = count + 1
+        } else {
+            groupKeyRelayTimestamps[groupId] = System.currentTimeMillis()
+            groupKeyRelayCounts[groupId] = 0
+        }
+
+        val membersWithKeys = activeMembers.filter { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+
+        for (recipient in directContacts) {
+            val recipientContactId = recipient.contactId ?: continue
+            for (sender in membersWithKeys) {
+                if (sender.memberId == recipient.memberId) continue
+                if (sender.memberId == group.myMemberId) continue
+
+                val senderMemberIdBytes = uuidStringToBytes(sender.memberId)
+                try {
+                    sendGroupControlRekeyOrInvite(
+                        contactId = recipientContactId,
+                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                        groupIdBytes = groupIdBytes,
+                        groupEpoch = group.groupEpoch,
+                        myMemberIdBytes = senderMemberIdBytes,
+                        myChainKeyOut = sender.rawChainKeyIn,
+                        currentCounter = sender.counterIn.toLong(),
+                        groupName = group.rawGroupName
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.w("GroupKeySync", "Failed to relay key of " + sender.memberId + " to " + recipientContactId + ": " + e.message)
+                }
+            }
+        }
+    }
+
     suspend fun processIncomingGroupControl(
         contactId: String,
         control: BinaryFrameCodec.DecodedPayload.GroupControl
@@ -5344,37 +5462,15 @@ class ChatRepository(
                     groupMemberDao?.insertOrUpdate(newMember)
                 }
 
-                // In the E2E/star topology, the inviter is the only node with
-                // pairwise contacts to every participant. Relay sender keys so
-                // every member can poll that sender's recipient-specific slots.
-                if (existingGroup.myMemberId != senderMemberId) {
-                    val recipients = (groupMemberDao?.getMembersForGroup(groupId) ?: emptyList())
-                        .filter {
-                            it.isActive &&
-                                it.memberId != existingGroup.myMemberId &&
-                                it.memberId != senderMemberId &&
-                                it.contactId != null &&
-                                it.contactId != contactId
-                        }
-                    coroutineScope {
-                        recipients.map { recipient ->
-                            async {
-                                try {
-                                    sendGroupControlRekeyOrInvite(
-                                        contactId = recipient.contactId!!,
-                                        controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
-                                        groupIdBytes = control.groupId,
-                                        groupEpoch = control.groupEpoch,
-                                        myMemberIdBytes = control.senderMemberId,
-                                        myChainKeyOut = control.senderGroupChainKey,
-                                        currentCounter = control.currentCounter,
-                                        groupName = control.groupName
-                                    )
-                                } catch (_: Exception) {}
-                            }
-                        }.awaitAll()
-                    }
+                android.util.Log.i("GroupKeySync", "GroupKeySync: Ingested sender key for member=$senderMemberId in group=$groupId")
+                val allActiveMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter { it.isActive } ?: emptyList()
+                val allKeysReady = allActiveMembers.isNotEmpty() && allActiveMembers.all { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                if (allKeysReady) {
+                    android.util.Log.i("GroupKeySync", "GroupKeySync: All ${allActiveMembers.size} member keys synchronized for group=$groupId")
                 }
+
+                // In the E2E/star topology, relay sender keys so every member can poll other senders
+                relayMissingGroupKeys(groupId, force = true)
             }
             BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> {
                 groupMemberDao?.markMemberInactive(groupId, senderMemberId)

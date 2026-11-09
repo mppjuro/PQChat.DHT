@@ -44,7 +44,13 @@ open class DhtLeafNode(
         const val K = DEFAULT_K
         const val TIMEOUT_MS = 3000L
         const val FAST_GET_TIMEOUT_MS = 600L
-        const val BOOTSTRAP_TIMEOUT_MS = 6000L
+        const val BOOTSTRAP_TIMEOUT_MS = 2500L
+
+        /**
+         * Global in-process cache of active, responsive DHT peers across node instances and test runs.
+         * Prevents cold bootstrap failure and rate-limiting on CI runners (e.g. Azure).
+         */
+        val sharedLivePeerCache = java.util.concurrent.CopyOnWriteArrayList<DhtPeer>()
 
         /**
          * Test-safe loopback mode flag.
@@ -595,6 +601,19 @@ open class DhtLeafNode(
         fastestNodesCache.clear()
         fastestNodesCache.addAll(sorted.take(MAX_CACHED_NODES))
 
+        // Populate shared live peer cache for cross-node / cross-test reuse
+        if (peer.nodeId.any { it != 0.toByte() } || peer.address.port > 0) {
+            val existing = sharedLivePeerCache.indexOfFirst { it.address == peer.address }
+            if (existing >= 0) {
+                sharedLivePeerCache[existing] = peer
+            } else {
+                if (sharedLivePeerCache.size >= 64) {
+                    sharedLivePeerCache.removeAt(0)
+                }
+                sharedLivePeerCache.add(peer)
+            }
+        }
+
         if (persistToDb && nodeCacheDao != null) {
             val hostStr = peer.address.address?.hostAddress ?: peer.address.hostString
             val entity = org.pqchat.dht.data.db.DhtNodeCacheEntity(
@@ -927,7 +946,9 @@ open class DhtLeafNode(
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
         if (isTestLoopbackMode) return@withContext
         val isLocal = isLocalTestbedActive()
-        val cached = getCachedFastestNodes()
+        val cached = (getCachedFastestNodes() + (if (!isLocal) sharedLivePeerCache.take(16) else emptyList()))
+            .filter { !isLocal || isLoopbackOrLocal(it.address) }
+            .distinctBy { it.address }
         val randomTarget = CryptoUtils.secureRandomBytes(20)
 
         // Probe local LAN / emulator subnet neighbors in parallel

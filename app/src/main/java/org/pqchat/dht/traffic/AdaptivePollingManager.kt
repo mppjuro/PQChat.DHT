@@ -134,7 +134,7 @@ class AdaptivePollingManager(
     private var forceImmediatePoll = false
 
     @Volatile
-    var immediatePollTimeoutMs: Long = 15_000L
+    var immediatePollTimeoutMs: Long = 35_000L
 
     /** Signal the polling loop to fire a poll immediately (resets the countdown). */
     fun triggerImmediatePoll() {
@@ -381,7 +381,7 @@ class AdaptivePollingManager(
             val myJob = coroutineContext.job
             while (isActive) {
                 _isSyncing.value = true
-                val cycleTimeout = if (isFastMode) 10_000L else 30_000L
+                val cycleTimeout = if (isFastMode) 35_000L else 45_000L
                 try {
                     withTimeoutOrNull(cycleTimeout) {
                         onPollRequested(activeChatContactId)

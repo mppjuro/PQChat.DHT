@@ -9,6 +9,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.pqchat.dht.crypto.CryptoUtils
 import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.db.ContactEntity
@@ -638,6 +641,7 @@ class ChatViewModel @JvmOverloads constructor(
     private var aliceHandshakeJob: Job? = null
     private var bobHandshakeJob: Job? = null
     private var bobRepublishJob: Job? = null
+    private val handshakeRepublishScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
      * Alice initiates Handshake:
@@ -656,14 +660,15 @@ class ChatViewModel @JvmOverloads constructor(
         aliceHandshakeJob = viewModelScope.launch(Dispatchers.IO) {
             _statusNotification.value = "Waiting for partner to scan QR and PUT to DHT..."
             var attempts = 0
-            val maxAttempts = 200 // 200 * 3000ms = 600s = 10 minutes
+            val maxAttempts = 300 // Extended handshake polling window
             while (_isHandshaking.value && attempts < maxAttempts) {
-                delay(3000L)
+                val delayMs = if (org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) 1500L else 2500L
+                delay(delayMs)
                 attempts++
-                if (attempts % 4 == 0) {
+                if (attempts % 2 == 0) {
                     dhtLeafNode.targetRouteCache.remove(aliceInit.target0)
                 }
-                val item = dhtLeafNode.getMutable(aliceInit.target0)
+                val item = dhtLeafNode.getMutable(target = aliceInit.target0, skipLocalStore = true)
                 if (item != null) {
                     try {
                         val session = HandshakeManager.aliceFinalize(
@@ -872,28 +877,33 @@ class ChatViewModel @JvmOverloads constructor(
                     // Copy sensitive material for 3x 10s background republishes before wiping bobResult
                     if (!org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode) {
                         val target0Copy = bobResult.target0.copyOf()
-                    val frameCopy = bobResult.frame.copyOf()
-                    val edPrivateKeySeedCopy = bobResult.edPrivateKeySeed.copyOf()
-                    bobRepublishJob?.cancel()
-                    bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
-                        try {
-                            for (extraAttempt in 1..3) {
-                                delay(10_000L)
-                                val extraSeq = DhtClient.DEFAULT_MUTABLE_SEQ + extraAttempt.toLong()
-                                dhtLeafNode.putMutable(
-                                    target = target0Copy,
-                                    v = frameCopy,
-                                    seq = extraSeq,
-                                    salt = null,
-                                    sk = edPrivateKeySeedCopy,
-                                    skipLocalStore = true
-                                )
-                                android.util.Log.i("BobHandshake", "Background extra republish #$extraAttempt sent")
+                        val frameCopy = bobResult.frame.copyOf()
+                        val edPrivateKeySeedCopy = bobResult.edPrivateKeySeed.copyOf()
+                        bobRepublishJob?.cancel()
+                        bobRepublishJob = handshakeRepublishScope.launch {
+                            try {
+                                val delays = if (org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) {
+                                    listOf(3000L, 6000L, 10000L, 16000L)
+                                } else {
+                                    listOf(5000L, 10000L, 20000L, 30000L)
+                                }
+                                for ((idx, delayMs) in delays.withIndex()) {
+                                    delay(delayMs)
+                                    val extraSeq = DhtClient.DEFAULT_MUTABLE_SEQ + (idx + 1).toLong()
+                                    dhtLeafNode.putMutable(
+                                        target = target0Copy,
+                                        v = frameCopy,
+                                        seq = extraSeq,
+                                        salt = null,
+                                        sk = edPrivateKeySeedCopy,
+                                        skipLocalStore = true
+                                    )
+                                    android.util.Log.i("BobHandshake", "Background extra republish #${idx + 1} sent")
+                                }
+                            } catch (_: Exception) {
+                            } finally {
+                                java.util.Arrays.fill(edPrivateKeySeedCopy, 0.toByte())
                             }
-                        } catch (_: Exception) {
-                        } finally {
-                            java.util.Arrays.fill(edPrivateKeySeedCopy, 0.toByte())
-                        }
                         }
                     }
 
@@ -928,7 +938,7 @@ class ChatViewModel @JvmOverloads constructor(
         intervalMs: Long = 15_000L
     ) {
         bobRepublishJob?.cancel()
-        bobRepublishJob = viewModelScope.launch(Dispatchers.IO) {
+        bobRepublishJob = handshakeRepublishScope.launch {
             try {
                 var republishCount = 0
                 while (isActive && republishCount < 40) {
@@ -1058,8 +1068,7 @@ class ChatViewModel @JvmOverloads constructor(
         aliceHandshakeJob = null
         bobHandshakeJob?.cancel()
         bobHandshakeJob = null
-        bobRepublishJob?.cancel()
-        bobRepublishJob = null
+        // bobRepublishJob is preserved across resetHandshakeState to complete background republishes to DHT
         isBobHandshakeProcessing.set(false)
         _bobHandshakeDetail.value = null
         setBobHandshakeStatus(BobHandshakeStatus.IDLE)
@@ -1204,6 +1213,7 @@ class ChatViewModel @JvmOverloads constructor(
         voiceRecorder.cancel()
         voicePlayer.stop()
         bobRepublishJob?.cancel()
+        handshakeRepublishScope.cancel()
         resetHandshakeState()
         if (app == null) {
             dhtLeafNode.stop()
