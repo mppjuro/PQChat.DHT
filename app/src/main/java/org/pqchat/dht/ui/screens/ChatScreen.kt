@@ -405,8 +405,8 @@ fun ChatScreen(
                         val ttlLabel = when (ephemeralTtlSeconds) {
                             60L -> "1 min"
                             900L -> "15 min"
-                            3600L -> "1 godzina"
-                            86400L -> "24 godziny"
+                            3600L -> "1 hour"
+                            86400L -> "24 hours"
                             else -> "${ephemeralTtlSeconds}s"
                         }
                         Surface(
@@ -847,7 +847,7 @@ fun ChatScreen(
             val listState = rememberLazyListState()
             LaunchedEffect(messages.size) {
                 if (messages.isNotEmpty()) {
-                    listState.animateScrollToItem(messages.size - 1)
+                    listState.scrollToItem(messages.size - 1)
                 }
             }
 

@@ -471,6 +471,17 @@ class ChatViewModel @JvmOverloads constructor(
         pollingManager.triggerImmediatePoll()
         viewModelScope.launch {
             try {
+                if (selectedId != null) {
+                    val group = repository.getGroup(selectedId)
+                    if (group != null) {
+                        repository.relayMissingGroupKeys(group.groupId, force = true)
+                        repository.republishRecentGroupMessages(group.groupId)
+                        repository.pollGroupIncoming(group.groupId)
+                    } else {
+                        repository.pollContactIncoming(selectedId)
+                    }
+                }
+                repository.flushOutboundPoissonQueue()
                 repository.republishUnacknowledgedMessages()
                 repository.retransmitUnconfirmedGroupControls()
             } catch (_: Exception) {}

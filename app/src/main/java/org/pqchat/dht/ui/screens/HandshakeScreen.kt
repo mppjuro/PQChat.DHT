@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -61,7 +62,8 @@ fun HandshakeScreen(
     SecureScreenEffect()
 
     val context = LocalContext.current
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
     var selectedTab by remember(initialTabIsBob) { mutableIntStateOf(if (initialTabIsBob) 1 else 0) }
     var contactName by remember { mutableStateOf("") }
     var qrBase64Input by remember { mutableStateOf("") }
@@ -599,24 +601,27 @@ fun HandshakeScreen(
 
                     OutlinedButton(
                         onClick = {
-                            val clipText = clipboardManager.getText()?.text
-                            if (!clipText.isNullOrBlank()) {
-                                qrBase64Input = clipText.trim()
-                                galleryScanError = null
-                            } else {
-                                try {
-                                    val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
-                                    val txtFiles = picturesDir.listFiles { f -> f.extension.equals("txt", ignoreCase = true) }
-                                        ?.sortedByDescending { it.lastModified() }
-                                    val txtContent = txtFiles?.firstOrNull()?.readText()?.trim()
-                                    if (!txtContent.isNullOrBlank() && txtContent.length >= 1000) {
-                                        qrBase64Input = txtContent
-                                        galleryScanError = null
-                                    } else {
-                                        galleryScanError = "Clipboard is empty and no key file was found."
+                            coroutineScope.launch {
+                                val clipEntry = clipboard.getClipEntry()
+                                val clipText = clipEntry?.clipData?.getItemAt(0)?.text?.toString()
+                                if (!clipText.isNullOrBlank()) {
+                                    qrBase64Input = clipText.trim()
+                                    galleryScanError = null
+                                } else {
+                                    try {
+                                        val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
+                                        val txtFiles = picturesDir.listFiles { f -> f.extension.equals("txt", ignoreCase = true) }
+                                            ?.sortedByDescending { it.lastModified() }
+                                        val txtContent = txtFiles?.firstOrNull()?.readText()?.trim()
+                                        if (!txtContent.isNullOrBlank() && txtContent.length >= 1000) {
+                                            qrBase64Input = txtContent
+                                            galleryScanError = null
+                                        } else {
+                                            galleryScanError = "Clipboard is empty and no key file was found."
+                                        }
+                                    } catch (_: Exception) {
+                                        galleryScanError = "Clipboard is empty or does not contain valid text."
                                     }
-                                } catch (_: Exception) {
-                                    galleryScanError = "Clipboard is empty or does not contain valid text."
                                 }
                             }
                         },

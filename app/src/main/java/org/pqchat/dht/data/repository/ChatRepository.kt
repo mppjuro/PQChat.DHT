@@ -541,7 +541,8 @@ class ChatRepository(
         frame: ByteArray,
         signingKey: ByteArray
     ): Boolean {
-        repeat(GROUP_PUT_MAX_ATTEMPTS) { attempt ->
+        val attempts = if (isFastTestMode) 5 else GROUP_PUT_MAX_ATTEMPTS
+        repeat(attempts) { attempt ->
             if (dhtLeafNode.putMutable(
                     target = target,
                     v = frame,
@@ -553,8 +554,8 @@ class ChatRepository(
             ) {
                 return true
             }
-            if (attempt < GROUP_PUT_MAX_ATTEMPTS - 1) {
-                delay(GROUP_PUT_RETRY_DELAY_MS * (attempt + 1))
+            if (attempt < attempts - 1) {
+                delay((if (isFastTestMode) 50L else GROUP_PUT_RETRY_DELAY_MS) * (attempt + 1))
             }
         }
         return false
@@ -574,7 +575,7 @@ class ChatRepository(
             contactDao.insertOrUpdate(
                 ContactEntity(
                     id = SELF_CONTACT_ID,
-                    name = "🔒 Moje Notatki (Test DHT)",
+                    name = "🔒 My Notes (Test DHT)",
                     chainKeyOut = symmetricSeed,
                     counterOut = 0,
                     chainKeyIn = symmetricSeed,
@@ -4050,7 +4051,7 @@ class ChatRepository(
                 }
                 val result = mutableListOf<PollTask>()
                 if (focusedCurrent.isNotEmpty() && focusQuota > 0) {
-                    val guaranteed = focusedCurrent.take(focusQuota)
+                    val guaranteed = if (isFastTestMode) focusedCurrent else focusedCurrent.take(focusQuota)
                     result.addAll(guaranteed)
                     val remainingFocusPool = focusedPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
                     val remainingFocusQuota = focusQuota - guaranteed.size
@@ -4155,9 +4156,55 @@ class ChatRepository(
      * - Shuffles all targets in random permutation using CSPRNG.
      * - Applies intra-batch jitter between queries to prevent network observer timing/frequency correlation.
      */
+    data class CachedGroupOutboundFrame(
+        val target: ByteArray,
+        val frame: ByteArray,
+        val signingKey: ByteArray,
+        val timestamp: Long
+    )
+
     private val isPollingBatch = java.util.concurrent.atomic.AtomicBoolean(false)
     private val groupKeyRelayTimestamps = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val groupKeyRelayCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val recentGroupOutboundFrames = java.util.concurrent.ConcurrentHashMap<String, MutableList<CachedGroupOutboundFrame>>()
+
+    suspend fun flushOutboundPoissonQueue(): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        while (true) {
+            val frame = outboundPoissonQueue.poll() ?: break
+            val ok = dhtLeafNode.putMutable(
+                target = frame.target,
+                v = frame.payload,
+                seq = frame.seq,
+                salt = frame.salt,
+                sk = frame.sk,
+                skipLocalStore = frame.skipLocalStore
+            )
+            count++
+            if (ok) {
+                decoyTargetPool.registerPopulatedTarget(frame.target)
+            }
+            try {
+                frame.onSent?.invoke(ok)
+            } catch (_: Throwable) {}
+        }
+        count
+    }
+
+    suspend fun republishRecentGroupMessages(groupId: String): Int = withContext(Dispatchers.IO) {
+        val list = recentGroupOutboundFrames[groupId] ?: return@withContext 0
+        val framesToRepublish = synchronized(list) { list.toList() }
+        var republishCount = 0
+        for (item in framesToRepublish) {
+            val ok = putGroupFrameWithRetries(
+                target = item.target,
+                frame = item.frame,
+                signingKey = item.signingKey
+            )
+            if (ok) republishCount++
+        }
+        republishCount
+    }
 
     suspend fun pollConstantBatch(
         focusContactId: String? = null,
@@ -4166,7 +4213,14 @@ class ChatRepository(
         intraBatchJitterMaxMs: Long = this.intraBatchJitterMaxMs
     ): Boolean = withContext(Dispatchers.IO) {
         if (!isPollingBatch.compareAndSet(false, true)) {
-            return@withContext false
+            if (isFastTestMode) {
+                delay(80L)
+                if (!isPollingBatch.compareAndSet(false, true)) {
+                    return@withContext false
+                }
+            } else {
+                return@withContext false
+            }
         }
         try {
         // 1. Assemble candidate real active listening slots
@@ -5518,7 +5572,7 @@ class ChatRepository(
         val directContacts = activeMembers.filter { it.contactId != null }
         if (directContacts.isEmpty()) return@withContext
 
-        if (!force) {
+        if (!force && !isFastTestMode) {
             val now = System.currentTimeMillis()
             val last = groupKeyRelayTimestamps[groupId] ?: 0L
             val count = groupKeyRelayCounts[groupId] ?: 0
@@ -5865,7 +5919,7 @@ class ChatRepository(
                     textContent = text,
                     status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
                     senderMemberId = currentGroup.myMemberId,
-                    senderName = "Ja",
+                    senderName = "You",
                     ephemeralTtlSeconds = ephemeralTtlSeconds,
                     expiresAtTimestamp = expiresAt
                 )
@@ -5879,18 +5933,30 @@ class ChatRepository(
                 lastActive = System.currentTimeMillis()
             )
 
+            val cachedFrames = targetSlots.map { slot ->
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                CachedGroupOutboundFrame(slot.target, frame, slot.edPrivateKeySeed, System.currentTimeMillis())
+            }
+            val cachedList = recentGroupOutboundFrames.getOrPut(groupId) { java.util.Collections.synchronizedList(mutableListOf()) }
+            synchronized(cachedList) {
+                cachedList.addAll(cachedFrames)
+                while (cachedList.size > 30) {
+                    cachedList.removeAt(0)
+                }
+            }
+
             val framesRemaining = java.util.concurrent.atomic.AtomicInteger(targetSlots.size)
             val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
 
             if (isStrictPoissonShaping()) {
-                val outboundFrames = targetSlots.map { slot ->
-                    val frame = BinaryFrameCodec.packGroupAeadFrame(
-                        key = slot.msgKey,
-                        plaintext = plaintext,
-                        target = slot.target,
-                        groupId = groupIdBytes,
-                        senderMemberId = myMemberIdBytes
-                    )
+                val outboundFrames = targetSlots.mapIndexed { idx, slot ->
+                    val frame = cachedFrames[idx].frame
                     org.pqchat.dht.traffic.OutboundPoissonFrame(
                         target = slot.target,
                         payload = frame,
@@ -5920,25 +5986,18 @@ class ChatRepository(
             }
 
             var overallSuccess = false
-            for ((idx, slot) in targetSlots.withIndex()) {
+            for ((idx, cached) in cachedFrames.withIndex()) {
                 if (idx > 0) {
-                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    val jitterMs = if (isFastTestMode) 20L else (40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F))
                     kotlinx.coroutines.delay(jitterMs)
                 }
-                val frame = BinaryFrameCodec.packGroupAeadFrame(
-                    key = slot.msgKey,
-                    plaintext = plaintext,
-                    target = slot.target,
-                    groupId = groupIdBytes,
-                    senderMemberId = myMemberIdBytes
-                )
                 val success = putGroupFrameWithRetries(
-                    target = slot.target,
-                    frame = frame,
-                    signingKey = slot.edPrivateKeySeed
+                    target = cached.target,
+                    frame = cached.frame,
+                    signingKey = cached.signingKey
                 )
                 if (success) {
-                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    decoyTargetPool.registerPopulatedTarget(cached.target)
                     overallSuccess = true
                 }
             }

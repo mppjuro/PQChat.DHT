@@ -71,9 +71,9 @@ class TrafficThreatModelStatisticalTest {
         testName: String,
         criticalValue: Double,
         degenerateThreshold: Double = 50.0,
-        sampler: () -> Double
+        sampler: (stage: Int) -> Double
     ) {
-        val statStage1 = sampler()
+        val statStage1 = sampler(1)
         println("[$testName] Stage 1 statistic: $statStage1 (critical = $criticalValue, degenerate = $degenerateThreshold)")
         if (statStage1 <= criticalValue) {
             return
@@ -82,13 +82,20 @@ class TrafficThreatModelStatisticalTest {
             fail("[$testName] Catastrophic failure: statistic ($statStage1) exceeded degenerate threshold ($degenerateThreshold). Distribution is broken or deterministic!")
         }
         println("[$testName] Borderline Type-I rejection in Stage 1 ($statStage1 > $criticalValue). Running Stage 2 confirmation...")
-        val statStage2 = sampler()
+        val statStage2 = sampler(2)
         println("[$testName] Stage 2 statistic: $statStage2 (critical = $criticalValue)")
         assertTrue(
             "[$testName] Stage 2 failed: statistic ($statStage2) must be <= critical ($criticalValue) after Stage 1 borderline ($statStage1)",
             statStage2 <= criticalValue
         )
     }
+
+    private inline fun assertStatisticalHypothesisWithTwoStageRetry(
+        testName: String,
+        criticalValue: Double,
+        degenerateThreshold: Double = 50.0,
+        crossinline sampler: () -> Double
+    ) = assertStatisticalHypothesisWithTwoStageRetry(testName, criticalValue, degenerateThreshold) { _ -> sampler() }
 
     @Test
     fun testPoissonIntervalDistribution_ExponentialPropertiesAndGoodnessOfFit() {
@@ -380,63 +387,81 @@ class TrafficThreatModelStatisticalTest {
 
         // 2. Active chatting state under Strict Poisson Shaping:
         // User heavily sending messages queued into OutboundPoissonQueue
-        val fakeDhtActive = register(FakeDht())
-        val outboundQueue = OutboundPoissonQueue()
-        val ackQueue = PendingAckQueue()
-        val republishPool = BlindRepublishPool()
-        val generatorActive = register(PoissonTrafficGenerator(
-            dhtLeafNode = fakeDhtActive,
-            pendingAckQueue = ackQueue,
-            blindRepublishPool = republishPool,
-            outboundPoissonQueue = outboundQueue,
-            lambda = lambda
-        ))
+        val testRandom = java.util.Random()
+        val runSimulation = { stage: Int ->
+            runBlocking {
+                val fakeDhtActive = register(FakeDht())
+                val outboundQueue = OutboundPoissonQueue()
+                val ackQueue = PendingAckQueue()
+                val republishPool = BlindRepublishPool()
+                val generatorActive = register(PoissonTrafficGenerator(
+                    dhtLeafNode = fakeDhtActive,
+                    pendingAckQueue = ackQueue,
+                    blindRepublishPool = republishPool,
+                    outboundPoissonQueue = outboundQueue,
+                    lambda = lambda,
+                    random = testRandom
+                ))
 
-        // Pre-enqueue batches of user messages (simulating intense conversation bursts)
-        for (i in 0 until 50) {
-            outboundQueue.enqueue(
-                OutboundPoissonFrame(
-                    target = CryptoUtils.secureRandomBytes(20),
-                    payload = ByteArray(900) { (it % 256).toByte() },
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = CryptoUtils.secureRandomBytes(32),
-                    seqNum = i,
-                    messageId = i.toLong(),
-                    contactId = "peer"
-                )
-            )
-        }
-
-        val intervalsActive = DoubleArray(n)
-        for (i in 0 until n) {
-            intervalsActive[i] = generatorActive.computeNextIntervalMs().toDouble()
-            // Replenish bursts periodically to simulate persistent user typing
-            if (i % 30 == 0) {
-                outboundQueue.enqueue(
-                    OutboundPoissonFrame(
-                        target = CryptoUtils.secureRandomBytes(20),
-                        payload = ByteArray(900) { 0x55 },
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = CryptoUtils.secureRandomBytes(32),
-                        seqNum = i,
-                        messageId = (1000 + i).toLong(),
-                        contactId = "peer"
+                // Pre-enqueue batches of user messages (simulating intense conversation bursts)
+                for (i in 0 until 50) {
+                    outboundQueue.enqueue(
+                        OutboundPoissonFrame(
+                            target = CryptoUtils.secureRandomBytes(20),
+                            payload = ByteArray(900) { (it % 256).toByte() },
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = CryptoUtils.secureRandomBytes(32),
+                            seqNum = i,
+                            messageId = i.toLong(),
+                            contactId = "peer"
+                        )
                     )
-                )
+                }
+
+                val intervals = DoubleArray(n)
+                for (i in 0 until n) {
+                    intervals[i] = generatorActive.computeNextIntervalMs().toDouble()
+                    // Replenish bursts periodically to simulate persistent user typing
+                    if (i % 30 == 0) {
+                        outboundQueue.enqueue(
+                            OutboundPoissonFrame(
+                                target = CryptoUtils.secureRandomBytes(20),
+                                payload = ByteArray(900) { 0x55 },
+                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                salt = null,
+                                sk = CryptoUtils.secureRandomBytes(32),
+                                seqNum = i,
+                                messageId = (1000 + i).toLong(),
+                                contactId = "peer"
+                            )
+                        )
+                    }
+                    // Execute tick
+                    val event = generatorActive.processCoverTrafficTick(delayMs = intervals[i].toLong())
+                    assertNotNull(event)
+                    // Verify all emitted frames have strictly uniform 900-byte payload
+                    assertEquals("Every emitted packet must be exactly 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
+                }
+                intervals
             }
-            // Execute tick
-            val event = generatorActive.processCoverTrafficTick(delayMs = intervalsActive[i].toLong())
-            assertNotNull(event)
-            // Verify all emitted frames have strictly uniform 900-byte payload
-            assertEquals("Every emitted packet must be exactly 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
         }
+
+        var intervalsActive = runSimulation(1)
 
         // --- STATISTICAL TEST 1: Chi-Square Goodness-of-Fit against theoretical exponential distribution ---
         val kBins = 10
         val expectedPerBin = n.toDouble() / kBins
-        val computeChiSquare = {
+
+        // Critical value for chi-square with 9 degrees of freedom at alpha=0.01 is 21.67
+        assertStatisticalHypothesisWithTwoStageRetry(
+            testName = "Strict Poisson traffic shaping active chatting goodness of fit",
+            criticalValue = 21.67,
+            degenerateThreshold = 55.0
+        ) { stage ->
+            if (stage > 1) {
+                intervalsActive = runSimulation(stage)
+            }
             val binCounts = IntArray(kBins)
             for (x in intervalsActive) {
                 val u = 1.0 - exp(-lambda * (x / 1000.0))
@@ -451,14 +476,6 @@ class TrafficThreatModelStatisticalTest {
             }
             chiSquare
         }
-
-        // Critical value for chi-square with 9 degrees of freedom at alpha=0.01 is 21.67
-        assertStatisticalHypothesisWithTwoStageRetry(
-            testName = "Strict Poisson traffic shaping active chatting goodness of fit",
-            criticalValue = 21.67,
-            degenerateThreshold = 55.0,
-            sampler = computeChiSquare
-        )
 
         // --- STATISTICAL TEST 2: Two-Sample Kolmogorov-Smirnov Test between Active and Idle distributions ---
         // Null Hypothesis H0: The inter-arrival distributions of PUT packets in active chatting and idle resting states are identical.

@@ -365,10 +365,13 @@ logcat -c
         return "mInputShown=true" in out or "mIsInputViewShown=true" in out
 
     def close_keyboard(self):
-        """Safely requests InputMethodManagerService to hide soft input without injecting KeyEvents."""
+        """Safely requests InputMethodManagerService to hide soft input without injecting back KeyEvents."""
         if self.dry_run:
             return
         self.shell("cmd input_method hide-soft-input")
+        if self.is_keyboard_open():
+            # KEYCODE_ESCAPE (111) safely dismisses soft keyboard without popping back activity/screen
+            self.shell("input keyevent 111")
         self.invalidate_ui_cache()
 
     def screencap(self, filename: str) -> Optional[Path]:
@@ -657,6 +660,14 @@ logcat -c
                 return True
 
             elapsed = time.time() - start
+            # If soft keyboard is open, dismiss it to reveal messages below viewport
+            if self.is_keyboard_open():
+                self.close_keyboard()
+
+            # If waiting in chat, periodically scroll down in case message arrived below fold
+            if elapsed > 8.0 and int(elapsed) % 12 == 0:
+                self.scroll_down()
+
             # If sync_chip_tag is specified, tap it periodically to trigger immediate DHT polling
             sync_cadence = 18.0 if self.real_dht else 12.0
             if sync_chip_tag and (time.time() - last_sync_time) >= sync_cadence:
@@ -676,9 +687,43 @@ logcat -c
 
             self.sleep(1.5)
 
+        # Before giving up, close keyboard and scroll down for a final check
+        if self.is_keyboard_open():
+            self.close_keyboard()
+        self.scroll_down()
+        final_bounds = self.find_node(
+            text=text,
+            content_desc=content_desc,
+            resource_id=resource_id,
+            test_tag=test_tag,
+            allow_substring=allow_substring
+        )
+        if final_bounds:
+            print(f"[{self.name}] Found '{desc}' on final scroll check!", flush=True)
+            return True
+
         print(f"[{self.name}] Timeout waiting for '{desc}'", flush=True)
         safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
         self.screencap(f"failure_timeout_{safe_desc}")
+        return False
+
+    def wait_for_contact_list_ready(self, timeout: float = 25.0) -> bool:
+        """Waits for ContactListScreen to be fully rendered and ready without destructive scrolling."""
+        if self.dry_run:
+            return True
+        start = time.time()
+        print(f"[{self.name}] Waiting for ContactListScreen readiness (timeout={timeout}s)...", flush=True)
+        while time.time() - start < timeout:
+            if self.is_on_contact_list():
+                if (
+                    self.find_node(test_tag="new_chat_fab")
+                    or self.find_node(test_tag="contact_list_diagnostics_button")
+                    or self.find_node(test_tag="contact_list_sync_chip")
+                ):
+                    print(f"[{self.name}] ContactListScreen is ready.", flush=True)
+                    return True
+            self.sleep(1.0)
+        print(f"[{self.name}] ContactListScreen readiness timeout.", flush=True)
         return False
 
     def is_on_contact_list(self) -> bool:
@@ -1005,9 +1050,10 @@ class MultiEmulatorOrchestrator:
             self.sleep(1.0)
             dev.grant_app_permissions()
 
-        self.sleep(3.0)
+        self.sleep(2.0)
         for dev in self.active_devices:
             dev.ensure_app_foreground()
+            dev.wait_for_contact_list_ready(timeout=25.0)
             sc = dev.screencap(f"00_{dev.name.lower()}_started")
             self.log_step(f"Init {dev.name}", "PASS", f"{dev.name} clean install & launch verified", sc)
 
@@ -1023,25 +1069,30 @@ class MultiEmulatorOrchestrator:
         try:
             # 1. Initiator: Tap "New Chat (Alice)" if not already on HandshakeScreen
             if not initiator.find_node(test_tag="handshake_alice_name_input"):
-                initiator.navigate_to_contact_list()
-                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
+                initiator.wait_for_contact_list_ready(timeout=15.0)
+                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", auto_scroll=False)
                 self.sleep(1.5)
 
-            if not initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10):
+            if not initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=12):
                 print(f"[{initiator.name}] HandshakeScreen did not appear. Retrying foreground restore and FAB click...", flush=True)
                 initiator.ensure_app_foreground()
                 initiator.navigate_to_contact_list()
-                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)")
-                initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=10)
+                initiator.wait_for_contact_list_ready(timeout=10.0)
+                initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", auto_scroll=False)
+                initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=12)
+
+            if not initiator.find_node(test_tag="handshake_alice_name_input"):
+                print(f"[{initiator.name}] HandshakeScreen not reached after retries. Aborting attempt cleanly for retry...", flush=True)
+                return False
 
             # Initiator: Enter contact name
-            initiator.click_element(test_tag="handshake_alice_name_input")
+            initiator.click_element(test_tag="handshake_alice_name_input", auto_scroll=False)
             initiator.clear_focused_text()
             initiator.type_text(responder.name, clear_first=True)
             self.sleep(0.5)
 
             # Initiator: Tap "Generate ML-KEM-512 QR Code"
-            initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512")
+            initiator.click_element(test_tag="handshake_generate_qr_button", text="Generate ML-KEM-512", auto_scroll=False)
             qr_gen_ok = (
                 initiator.wait_for_element(test_tag="handshake_qr_code_card", timeout=20)
                 or initiator.wait_for_element(text="Rendezvous Target_0", timeout=5)
@@ -1604,6 +1655,7 @@ class MultiEmulatorOrchestrator:
             self.alice.type_text(msg1)
             self.sleep(0.5)
             self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
+            self.alice.close_keyboard()
             self.sleep(send_settle)
 
             for dev in all_devices[1:]:
@@ -1635,6 +1687,7 @@ class MultiEmulatorOrchestrator:
             self.bob.type_text(msg2)
             self.sleep(0.5)
             self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
+            self.bob.close_keyboard()
             self.sleep(send_settle)
 
             last_alice_sync = [0.0]
@@ -1687,6 +1740,7 @@ class MultiEmulatorOrchestrator:
                 self.charlie.type_text(msg3)
                 self.sleep(0.5)
                 self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
+                self.charlie.close_keyboard()
                 self.sleep(send_settle)
 
                 targets = [self.alice, self.bob]
@@ -1728,6 +1782,7 @@ class MultiEmulatorOrchestrator:
                 self.dave.type_text(msg4)
                 self.sleep(0.5)
                 self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
+                self.dave.close_keyboard()
                 self.sleep(send_settle)
 
                 last_dave_sync = [0.0]
@@ -1742,17 +1797,24 @@ class MultiEmulatorOrchestrator:
                         all_turns_ok = False
                         fails_count += 1
                         continue
+                    dev.close_keyboard()
                     print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
                     rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=dave_sync_tick)
                     if not rcv4:
                         dev.ensure_app_foreground()
+                        dev.close_keyboard()
+                        dev.scroll_down()
                         for retry in range(2):
                             print(
                                 f"[{dev.name}] Retrying Dave's group message poll "
                                 f"({retry + 1}/2)...",
                                 flush=True,
                             )
+                            self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                            self.sleep(0.5)
                             dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                            dev.close_keyboard()
+                            dev.scroll_down()
                             if dev.wait_for_element(
                                 text=msg4,
                                 timeout=20,
