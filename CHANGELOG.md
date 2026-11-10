@@ -75,6 +75,9 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`690e07d`](https://github.com/mppjuro/PQChat.DHT/commit/690e07d345357a1fbeddafa5417cb4021bc9beac) (2026-11-10) — **ci**: fix statistical test two-stage sampler and 4-node E2E group sync orchestration
+- [`79cba51`](https://github.com/mppjuro/PQChat.DHT/commit/79cba51c7eda660f40275a23e960c13d7e6acd38) (2026-11-09) — **dht**: isolate local loopback resolution and clear shared live peer cache after integration tests
+- [`ca724df`](https://github.com/mppjuro/PQChat.DHT/commit/ca724df5af57513330ce798b2474cf6557860932) (2026-11-09) — **e2e,dht,repo**: resolve nightly test suite failures across DHT, group key sync, and integration suites
 - [`7d653d8`](https://github.com/mppjuro/PQChat.DHT/commit/7d653d85278be76f6e0256f5a4b3bba30678da28) (2026-11-09) — **e2e**: import Callable from typing in e2e_emulator_orchestrator.py
 - [`ef886ff`](https://github.com/mppjuro/PQChat.DHT/commit/ef886ffaea455bd5ee18da763c82ca077ed1e543) (2026-11-09) — integration and multi-emulator E2E test failures on real DHT
 - [`30aa77d`](https://github.com/mppjuro/PQChat.DHT/commit/30aa77d193364c474d6361fedb79c927cee4e0a4) (2026-11-08) — **test**: resolve flaky TrafficThreatModelStatisticalTest and Chi-Square = 5600.0 bug
