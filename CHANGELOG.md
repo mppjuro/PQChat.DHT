@@ -177,6 +177,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`c41f46f`](https://github.com/mppjuro/PQChat.DHT/commit/c41f46febeefa14c3920fda4d92e60ba6855b48a) (2026-11-09) — **deps**: bump gradle-wrapper from 9.8.2 to 9.9.0
 - [`b453515`](https://github.com/mppjuro/PQChat.DHT/commit/b453515dc9716d853e279fe6fdece6e765e7db37) (2026-11-08) — add real dht emulator smoke tests
 - [`3bcce3a`](https://github.com/mppjuro/PQChat.DHT/commit/3bcce3a09b90a1a229b9d0b1e144c8240a1d1b9b) (2026-11-08) — stabilize multi-emulator nightly e2e
 - [`0e32a57`](https://github.com/mppjuro/PQChat.DHT/commit/0e32a576490878a7eebc3494d767a591cfec7e3e) (2026-11-05) — separate commit tests on simulated DHT from nightly tests on real DHT
@@ -243,6 +244,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`67ef777`](https://github.com/mppjuro/PQChat.DHT/commit/67ef777d70f234f152fa470092b85c25d26d0ffa) (2026-11-09) — **deps**: bump com.android.application from 9.5.0 to 9.5.1
+- [`195ad43`](https://github.com/mppjuro/PQChat.DHT/commit/195ad433dfc513ab11173ccfb965e459bbc590e4) (2026-11-09) — **deps**: bump the androidx-and-compose group with 2 updates
 - [`e1be294`](https://github.com/mppjuro/PQChat.DHT/commit/e1be294e9c88d2eb36557ea7be90fe4b8c97df67) (2026-11-04) — plan
 - [`ff03da6`](https://github.com/mppjuro/PQChat.DHT/commit/ff03da63363f28d45dff6e0f9232e8325ac339e8) (2026-11-02) — **deps**: bump com.google.devtools.ksp from 2.3.12 to 2.3.13
 - [`3cf7e8d`](https://github.com/mppjuro/PQChat.DHT/commit/3cf7e8d942771a03fcde6e97fef817a6d26da686) (2026-11-02) — **deps**: bump com.android.application from 9.4.1 to 9.5.0
