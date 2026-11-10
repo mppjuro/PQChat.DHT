@@ -214,7 +214,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.4")
 
     // Biometric Authentication (Optional App Lock)
-    implementation("androidx.biometric:biometric:1.4.0-alpha07")
+    implementation("androidx.biometric:biometric:1.4.0-beta01")
 
 
     // CameraX (16 KB page-size aligned since 1.4.0+)
@@ -241,7 +241,7 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.1")
 }
 
 ksp {
