@@ -416,7 +416,7 @@ open class DhtLeafNode(
                 torUdpAssociation = assoc
                 torTransportMode = TorTransportMode.SOCKS5_UDP
                 startTorRelayListener(assoc)
-                torDiagnosticMessage = "Tor SOCKS5 UDP ASSOCIATE aktywny (${config.socksHost}:${config.socksPort})"
+                torDiagnosticMessage = "Tor SOCKS5 UDP ASSOCIATE active (${config.socksHost}:${config.socksPort})"
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             } catch (e: Socks5CommandNotSupportedException) {
                 // Standard Tor daemon: UDP ASSOCIATE is rejected (CMD 0x03 not supported)

@@ -314,9 +314,10 @@ logcat -c
         self.invalidate_ui_cache()
 
     def scroll_down(self, duration_ms: int = 300):
+        self.close_keyboard()
         cx = self.screen_width // 2
-        y1 = int(self.screen_height * 0.75)
-        y2 = int(self.screen_height * 0.25)
+        y1 = int(self.screen_height * 0.65)
+        y2 = int(self.screen_height * 0.20)
         self.swipe(cx, y1, cx, y2, duration_ms)
         self.sleep(0.5)
 
@@ -372,6 +373,9 @@ logcat -c
         if self.is_keyboard_open():
             # KEYCODE_ESCAPE (111) safely dismisses soft keyboard without popping back activity/screen
             self.shell("input keyevent 111")
+        if self.is_keyboard_open():
+            # Fallback to KEYCODE_BACK (4) if keyboard remains visible
+            self.shell("input keyevent 4")
         self.invalidate_ui_cache()
 
     def screencap(self, filename: str) -> Optional[Path]:
@@ -1610,7 +1614,7 @@ class MultiEmulatorOrchestrator:
             self.sleep(6.0 if not self.args.real_dht else 12.0)
 
         self.alice.ensure_app_foreground()
-        self.sleep(1.0)
+        self.sleep(3.0 if not self.args.real_dht else 6.0)
         sc_sync = self.alice.screencap("04_group_keys_synchronized")
         if keys_synced:
             self.log_step("Group Key Exchange Sync", "PASS", f"Member sender keys exchanged and verified synchronized across {expected_sync_count} nodes", sc_sync)
@@ -1656,7 +1660,15 @@ class MultiEmulatorOrchestrator:
             self.sleep(0.5)
             self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
             self.alice.close_keyboard()
+            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(send_settle)
+
+            last_alice_sync = [0.0]
+            def alice_sync_tick():
+                now = time.time()
+                if now - last_alice_sync[0] >= 15.0:
+                    self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                    last_alice_sync[0] = now
 
             for dev in all_devices[1:]:
                 if not ensure_in_group(dev):
@@ -1664,8 +1676,9 @@ class MultiEmulatorOrchestrator:
                     all_turns_ok = False
                     fails_count += 1
                     continue
+                dev.close_keyboard()
                 print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-                rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip")
+                rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=alice_sync_tick)
                 sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
                 if rcv1:
                     self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
@@ -1688,15 +1701,16 @@ class MultiEmulatorOrchestrator:
             self.sleep(0.5)
             self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
             self.bob.close_keyboard()
+            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(send_settle)
 
-            last_alice_sync = [0.0]
-            def alice_sync_tick():
+            last_bob_sync = [0.0]
+            def bob_sync_tick():
                 now = time.time()
-                if now - last_alice_sync[0] >= 15.0:
-                    print("[Alice] Triggering background sync on Alice during Turn 2...", flush=True)
-                    self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                    last_alice_sync[0] = now
+                if now - last_bob_sync[0] >= 15.0:
+                    print("[Bob] Triggering background sync on Bob during Turn 2...", flush=True)
+                    self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                    last_bob_sync[0] = now
 
             for dev in [self.alice] + all_devices[2:]:
                 if not ensure_in_group(dev):
@@ -1704,12 +1718,13 @@ class MultiEmulatorOrchestrator:
                     all_turns_ok = False
                     fails_count += 1
                     continue
+                dev.close_keyboard()
                 print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
                 rcv2 = dev.wait_for_element(
                     text=msg2,
                     timeout=msg_timeout,
                     sync_chip_tag="chat_sync_chip",
-                    on_tick=alice_sync_tick if dev != self.alice else None
+                    on_tick=bob_sync_tick
                 )
                 sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
                 if rcv2:
@@ -1741,6 +1756,7 @@ class MultiEmulatorOrchestrator:
                 self.sleep(0.5)
                 self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
                 self.charlie.close_keyboard()
+                self.charlie.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
                 self.sleep(send_settle)
 
                 targets = [self.alice, self.bob]
@@ -1758,6 +1774,7 @@ class MultiEmulatorOrchestrator:
                         all_turns_ok = False
                         fails_count += 1
                         continue
+                    dev.close_keyboard()
                     print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
                     rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=charlie_sync_tick)
                     sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
@@ -1783,6 +1800,7 @@ class MultiEmulatorOrchestrator:
                 self.sleep(0.5)
                 self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
                 self.dave.close_keyboard()
+                self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
                 self.sleep(send_settle)
 
                 last_dave_sync = [0.0]

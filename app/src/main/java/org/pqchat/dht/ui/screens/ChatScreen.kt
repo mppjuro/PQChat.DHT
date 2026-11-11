@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -75,6 +76,7 @@ fun ChatScreen(
     SecureScreenEffect()
 
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val appColors = LocalAppColors.current
 
     val contacts by viewModel.contacts.collectAsState()
@@ -743,6 +745,7 @@ fun ChatScreen(
                                         if (textInput.isNotBlank()) {
                                             viewModel.sendMessage(textInput, targetContactId = contactId)
                                             textInput = ""
+                                            focusManager.clearFocus()
                                         }
                                     },
                                     modifier = Modifier
@@ -845,7 +848,7 @@ fun ChatScreen(
             }
 
             val listState = rememberLazyListState()
-            LaunchedEffect(messages.size) {
+            LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
                 if (messages.isNotEmpty()) {
                     listState.scrollToItem(messages.size - 1)
                 }

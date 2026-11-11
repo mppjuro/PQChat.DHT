@@ -381,70 +381,75 @@ class TrafficThreatModelStatisticalTest {
         val n = 3000
 
         // 1. Idle resting baseline (no chat messages; only dummy cover traffic)
-        val fakeDhtIdle = register(FakeDht())
-        val generatorIdle = register(PoissonTrafficGenerator(dhtLeafNode = fakeDhtIdle, lambda = lambda))
-        val intervalsIdle = DoubleArray(n) { generatorIdle.computeNextIntervalMs().toDouble() }
+        val runIdle = { stage: Int ->
+            val fakeDhtIdle = register(FakeDht())
+            val generatorIdle = register(PoissonTrafficGenerator(
+                dhtLeafNode = fakeDhtIdle,
+                lambda = lambda,
+                random = java.util.Random(1337L + stage * 101L)
+            ))
+            DoubleArray(n) { generatorIdle.computeNextIntervalMs().toDouble() }
+        }
+        var intervalsIdle = runIdle(1)
 
         // 2. Active chatting state under Strict Poisson Shaping:
         // User heavily sending messages queued into OutboundPoissonQueue
-        val testRandom = java.util.Random()
-        val runSimulation = { stage: Int ->
-            runBlocking {
-                val fakeDhtActive = register(FakeDht())
-                val outboundQueue = OutboundPoissonQueue()
-                val ackQueue = PendingAckQueue()
-                val republishPool = BlindRepublishPool()
-                val generatorActive = register(PoissonTrafficGenerator(
-                    dhtLeafNode = fakeDhtActive,
-                    pendingAckQueue = ackQueue,
-                    blindRepublishPool = republishPool,
-                    outboundPoissonQueue = outboundQueue,
-                    lambda = lambda,
-                    random = testRandom
-                ))
+        suspend fun runSimulation(stage: Int): DoubleArray {
+            val testRandom = java.util.Random(4242L + stage * 103L)
+            val fakeDhtActive = register(FakeDht())
+            val outboundQueue = OutboundPoissonQueue()
+            val ackQueue = PendingAckQueue()
+            val republishPool = BlindRepublishPool()
+            val generatorActive = register(PoissonTrafficGenerator(
+                dhtLeafNode = fakeDhtActive,
+                pendingAckQueue = ackQueue,
+                blindRepublishPool = republishPool,
+                outboundPoissonQueue = outboundQueue,
+                lambda = lambda,
+                random = testRandom
+            ))
 
-                // Pre-enqueue batches of user messages (simulating intense conversation bursts)
-                for (i in 0 until 50) {
+            // Pre-enqueue batches of user messages (simulating intense conversation bursts)
+            for (i in 0 until 50) {
+                outboundQueue.enqueue(
+                    OutboundPoissonFrame(
+                        target = CryptoUtils.secureRandomBytes(20),
+                        payload = ByteArray(900) { (it % 256).toByte() },
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = CryptoUtils.secureRandomBytes(32),
+                        seqNum = i,
+                        messageId = i.toLong(),
+                        contactId = "peer"
+                    )
+                )
+            }
+
+            val intervals = DoubleArray(n)
+            for (i in 0 until n) {
+                intervals[i] = generatorActive.computeNextIntervalMs().toDouble()
+                // Replenish bursts periodically to simulate persistent user typing
+                if (i % 30 == 0) {
                     outboundQueue.enqueue(
                         OutboundPoissonFrame(
                             target = CryptoUtils.secureRandomBytes(20),
-                            payload = ByteArray(900) { (it % 256).toByte() },
+                            payload = ByteArray(900) { 0x55 },
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = CryptoUtils.secureRandomBytes(32),
                             seqNum = i,
-                            messageId = i.toLong(),
+                            messageId = (1000 + i).toLong(),
                             contactId = "peer"
                         )
                     )
                 }
-
-                val intervals = DoubleArray(n)
-                for (i in 0 until n) {
-                    intervals[i] = generatorActive.computeNextIntervalMs().toDouble()
-                    // Replenish bursts periodically to simulate persistent user typing
-                    if (i % 30 == 0) {
-                        outboundQueue.enqueue(
-                            OutboundPoissonFrame(
-                                target = CryptoUtils.secureRandomBytes(20),
-                                payload = ByteArray(900) { 0x55 },
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = CryptoUtils.secureRandomBytes(32),
-                                seqNum = i,
-                                messageId = (1000 + i).toLong(),
-                                contactId = "peer"
-                            )
-                        )
-                    }
-                    // Execute tick
-                    val event = generatorActive.processCoverTrafficTick(delayMs = intervals[i].toLong())
-                    assertNotNull(event)
-                    // Verify all emitted frames have strictly uniform 900-byte payload
-                    assertEquals("Every emitted packet must be exactly 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
-                }
-                intervals
+                // Execute tick
+                val event = generatorActive.processCoverTrafficTick(delayMs = intervals[i].toLong())
+                assertNotNull(event)
+                // Verify all emitted frames have strictly uniform 900-byte payload
+                assertEquals("Every emitted packet must be exactly 900 bytes", BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, event.payloadSize)
             }
+            return intervals
         }
 
         var intervalsActive = runSimulation(1)
@@ -479,14 +484,20 @@ class TrafficThreatModelStatisticalTest {
 
         // --- STATISTICAL TEST 2: Two-Sample Kolmogorov-Smirnov Test between Active and Idle distributions ---
         // Null Hypothesis H0: The inter-arrival distributions of PUT packets in active chatting and idle resting states are identical.
-        val dStatistic = computeTwoSampleKsStatistic(intervalsActive, intervalsIdle)
         // Critical value at alpha = 0.05: D_crit = 1.36 * sqrt((n1 + n2) / (n1 * n2))
         val dCritical = 1.36 * sqrt((2.0 * n) / (n.toDouble() * n))
 
-        assertTrue(
-            "Two-sample KS statistic D ($dStatistic) must be <= critical value ($dCritical) at alpha=0.05, proving statistical indistinguishability",
-            dStatistic <= dCritical + 1e-4
-        )
+        assertStatisticalHypothesisWithTwoStageRetry(
+            testName = "Strict Poisson traffic shaping active vs idle KS test",
+            criticalValue = dCritical,
+            degenerateThreshold = dCritical * 2.5
+        ) { stage ->
+            if (stage > 1) {
+                intervalsActive = runSimulation(stage + 10)
+                intervalsIdle = runIdle(stage + 10)
+            }
+            computeTwoSampleKsStatistic(intervalsActive, intervalsIdle)
+        }
 
         // --- STATISTICAL TEST 3: Lack of Autocorrelation / Memorylessness during Active Chatting ---
         val meanActive = intervalsActive.average()

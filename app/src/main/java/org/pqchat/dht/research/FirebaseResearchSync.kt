@@ -38,7 +38,7 @@ class FirebaseResearchSync(
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val _syncStatus = MutableStateFlow("Lokalny zapis aktywny")
+    private val _syncStatus = MutableStateFlow("Local storage active")
     val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
 
     private val isAuthenticating = AtomicBoolean(false)
@@ -110,13 +110,13 @@ class FirebaseResearchSync(
     suspend fun ensureAuthenticated(): Boolean = withContext(Dispatchers.IO) {
         if (isAuthenticated) return@withContext true
         val auth = getAuth() ?: run {
-            _syncStatus.value = "Firebase nieskonfigurowany (zapis lokalny)"
+            _syncStatus.value = "Firebase not configured (local storage)"
             return@withContext false
         }
 
         if (auth.currentUser != null) {
             isAuthenticated = true
-            _syncStatus.value = "Uwierzytelniono anonimowo"
+            _syncStatus.value = "Authenticated anonymously"
             return@withContext true
         }
 
@@ -124,7 +124,7 @@ class FirebaseResearchSync(
             try {
                 auth.signInAnonymously().await()
                 isAuthenticated = true
-                _syncStatus.value = "Uwierzytelniono anonimowo w Firebase"
+                _syncStatus.value = "Authenticated anonymously with Firebase"
                 return@withContext true
             } catch (e: Exception) {
                 _syncStatus.value = "Firebase login error: ${e.message}"
@@ -180,7 +180,7 @@ class FirebaseResearchSync(
         isManual: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
         if (!isFirebaseConfigured()) {
-            _syncStatus.value = "Zapis lokalny aktywny (brak konfiguracji Firebase)"
+            _syncStatus.value = "Local storage active (Firebase not configured)"
             return@withContext false
         }
 
@@ -207,7 +207,7 @@ class FirebaseResearchSync(
         }
 
         try {
-            _syncStatus.value = "Zapisywanie metryk w Cloud Firestore..."
+            _syncStatus.value = "Saving metrics to Cloud Firestore..."
             val documentData = mapOf(
                 "sessionId" to sessionId,
                 "timestamp" to now,
