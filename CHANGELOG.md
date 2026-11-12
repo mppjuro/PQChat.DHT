@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`bb6de3f`](https://github.com/mppjuro/PQChat.DHT/commit/bb6de3fbc18babe5495dad62ecdbd143aa0cd364) (2026-11-12) — **test**: isolate loopback sockets in TargetPreWarmingTest by disabling autoBootstrap
+- [`da19581`](https://github.com/mppjuro/PQChat.DHT/commit/da1958141e31adb1888e27cadafe5d804c6772c6) (2026-11-11) — **test**: resolve KS statistical test flakiness and multi-node group E2E sync timeouts
 - [`690e07d`](https://github.com/mppjuro/PQChat.DHT/commit/690e07d345357a1fbeddafa5417cb4021bc9beac) (2026-11-10) — **ci**: fix statistical test two-stage sampler and 4-node E2E group sync orchestration
 - [`79cba51`](https://github.com/mppjuro/PQChat.DHT/commit/79cba51c7eda660f40275a23e960c13d7e6acd38) (2026-11-09) — **dht**: isolate local loopback resolution and clear shared live peer cache after integration tests
 - [`ca724df`](https://github.com/mppjuro/PQChat.DHT/commit/ca724df5af57513330ce798b2474cf6557860932) (2026-11-09) — **e2e,dht,repo**: resolve nightly test suite failures across DHT, group key sync, and integration suites
