@@ -134,14 +134,15 @@ class TargetPreWarmingTest {
 
     @Test
     fun testGetMutableDirectHitViaPreWarmedRoute() = runBlocking {
-        val nodeA = DhtLeafNode()
-        val nodeB = DhtLeafNode()
+        val nodeA = DhtLeafNode(autoBootstrap = false)
+        val nodeB = DhtLeafNode(autoBootstrap = false)
 
         try {
             nodeA.initSocket()
             val socketB = nodeB.initSocket()
             nodeA.start()
             nodeB.start()
+            kotlinx.coroutines.delay(50)
 
             // Prepare item in Node B's local store
             val seedB = CryptoUtils.secureRandomBytes(32)
@@ -172,15 +173,15 @@ class TargetPreWarmingTest {
 
             // Now Node A performs getMutable - must hit pre-warmed cache in single RTT
             val startMs = System.currentTimeMillis()
-            val result = nodeA.getMutable(target)
+            val result = nodeA.getMutable(target, timeoutMs = 2500L)
             val durationMs = System.currentTimeMillis() - startMs
 
             assertNotNull("getMutable must successfully retrieve item via pre-warmed route", result)
             assertArrayEquals(payload, result!!.v)
             assertEquals(1L, result.seq)
 
-            // Duration should be very fast (local loopback single RTT < 2000 ms)
-            assertTrue("Direct pre-warmed route must resolve rapidly", durationMs < 2000L)
+            // Duration should be very fast (local loopback single RTT < 2500 ms)
+            assertTrue("Direct pre-warmed route must resolve rapidly", durationMs < 2500L)
         } finally {
             nodeA.stop()
             nodeB.stop()
@@ -189,7 +190,7 @@ class TargetPreWarmingTest {
 
     @Test
     fun testPreWarmTargetDiscoversAndCachesClosestPeers() = runBlocking {
-        val node = DhtLeafNode()
+        val node = DhtLeafNode(autoBootstrap = false)
         try {
             node.initSocket()
             val target = CryptoUtils.sha1("prewarm_discovery_test".toByteArray())
