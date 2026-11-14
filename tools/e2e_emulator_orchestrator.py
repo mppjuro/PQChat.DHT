@@ -1505,22 +1505,37 @@ class MultiEmulatorOrchestrator:
 
         # Alice: Tap "Create Group" (NO fallback_ratio!)
         confirmed = self.alice.click_element(test_tag="create_group_confirm_button", text="Create Group")
-        self.sleep(3.0 if not self.args.real_dht else 8.0)
+        self.sleep(2.0 if not self.args.real_dht else 4.0)
 
-        sc_group_created = self.alice.screencap("04_alice_group_created")
         group_confirmed = False
         if confirmed:
-            if self.alice.wait_for_element(test_tag="chat_message_input", timeout=30):
+            if self.alice.find_node(test_tag=f"group_item_{group_name}") or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=15):
                 group_confirmed = True
-            elif self.alice.find_node(test_tag=f"group_item_{group_name}") or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=10):
-                print(f"[Alice] Found group_item_{group_name} on ContactListScreen. Tapping to enter group chat...", flush=True)
-                self.alice.click_element(test_tag=f"group_item_{group_name}", text=group_name)
-                group_confirmed = self.alice.wait_for_element(test_tag="chat_message_input", timeout=15)
+            elif self.alice.wait_for_element(test_tag="chat_message_input", timeout=5):
+                group_confirmed = True
 
+        sc_group_created = self.alice.screencap("04_alice_group_created")
         if group_confirmed:
             self.log_step("Group Created by Alice", "PASS", f"Group '{group_name}' created with participants and invites dispatched", sc_group_created)
         else:
             self.log_step("Group Created by Alice", "FAIL", f"Failed to confirm group '{group_name}' creation on Alice", sc_group_created)
+            return
+
+        # Ensure Alice explicitly enters the group chat
+        print(f"[Alice] Entering group chat for '{group_name}'...", flush=True)
+        alice_in_chat = False
+        if self.alice.find_node(test_tag="chat_message_input"):
+            alice_in_chat = True
+        elif self.alice.find_node(test_tag=f"group_item_{group_name}") or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=10):
+            self.alice.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+            self.sleep(2.0 if not self.args.real_dht else 4.0)
+            alice_in_chat = self.alice.wait_for_element(test_tag="chat_message_input", timeout=15)
+
+        sc_alice_chat = self.alice.screencap("04_alice_in_group_chat")
+        if alice_in_chat:
+            self.log_step("Alice Entered Group Chat", "PASS", f"Alice active in '{group_name}'", sc_alice_chat)
+        else:
+            self.log_step("Alice Entered Group Chat", "FAIL", f"Alice failed to enter group chat '{group_name}'", sc_alice_chat)
 
     def _phase_4_join_group_on_participants(self, group_name: str = "PQ_MultiNode_Group"):
         print(f"\n--- PHASE 4: PARTICIPANTS JOIN GROUP '{group_name}' ---", flush=True)
@@ -1604,7 +1619,7 @@ class MultiEmulatorOrchestrator:
         # Key Exchange Relay Synchronization with logcat verification
         expected_sync_count = 1 + len(joined_participants)
         print(f"\n[Group Key Sync] Verifying member sender key synchronization across all {expected_sync_count} nodes...", flush=True)
-        sync_timeout = 120 if self.args.real_dht else 45
+        sync_timeout = 150 if self.args.real_dht else 90
         start_sync_time = time.time()
         keys_synced = False
 

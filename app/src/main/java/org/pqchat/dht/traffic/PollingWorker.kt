@@ -119,6 +119,8 @@ class PollingWorker(
             var count = 0
             val tasks = republishTasks.values.toList()
             for (task in tasks) {
+                // Group control frames (Invites, Rekeys, Bundles) use negative task IDs and are handled by repository.retransmitUnconfirmedGroupControls
+                if (task.messageId < 0) continue
                 val age = (currentTimeMs - task.initialSentTimestamp).coerceAtLeast(0L)
                 if (policy.isExpired(age)) {
                     republishTasks.remove(task.messageId)

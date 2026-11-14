@@ -165,9 +165,18 @@ async def run_cluster_server(host: str = "0.0.0.0", base_port: int = 30000, num_
     transports = []
     print(f"[DHT Cluster] Starting UDP cluster with {num_nodes} nodes on {host}:{base_port}..{base_port+num_nodes-1} (advertised: {advertised_ip})", flush=True)
     for node in cluster.nodes:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)
+        except Exception:
+            pass
+        sock.bind((host, node.port))
+        sock.setblocking(False)
         transport, _ = await loop.create_datagram_endpoint(
             lambda p=node.port: UdpClusterServerProtocol(cluster, p),
-            local_addr=(host, node.port)
+            sock=sock
         )
         transports.append(transport)
     print(f"[DHT Cluster] Primary bootstrap node: {advertised_ip}:{base_port}. Cluster fully operational.", flush=True)

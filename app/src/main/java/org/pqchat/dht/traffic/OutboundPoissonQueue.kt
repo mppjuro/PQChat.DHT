@@ -151,9 +151,11 @@ class OutboundPoissonQueue {
         if (frames.isEmpty()) return
         val effectiveDummyFactory = if (isFastMode) null else dummyFactory
         synchronized(this) {
-            val targetQueue = classQueues[PacketClass.GROUP_MESSAGE]!!
+            val isUrgent = frames.all { it.packetClass == PacketClass.URGENT_CONTROL }
+            val targetClass = if (isUrgent) PacketClass.URGENT_CONTROL else PacketClass.GROUP_MESSAGE
+            val targetQueue = classQueues[targetClass]!!
             if (frames.size == 1 && effectiveDummyFactory == null) {
-                targetQueue.addLast(frames[0].copy(packetClass = PacketClass.GROUP_MESSAGE))
+                targetQueue.addLast(frames[0].copy(packetClass = targetClass))
                 return
             }
 
@@ -171,7 +173,7 @@ class OutboundPoissonQueue {
                     if (i > 0 && effectiveDummyFactory != null) {
                         interleaved.add(effectiveDummyFactory.invoke())
                     }
-                    interleaved.add(frames[i].copy(packetClass = PacketClass.GROUP_MESSAGE))
+                    interleaved.add(frames[i].copy(packetClass = targetClass))
                 }
             } else {
                 // Interleave frames across existing queue items with deterministic stride
@@ -189,7 +191,7 @@ class OutboundPoissonQueue {
                         if (effectiveDummyFactory != null && lastWasGroupFrame) {
                             interleaved.add(effectiveDummyFactory.invoke())
                         }
-                        interleaved.add(frames[frameIdx++].copy(packetClass = PacketClass.GROUP_MESSAGE))
+                        interleaved.add(frames[frameIdx++].copy(packetClass = targetClass))
                         lastWasGroupFrame = true
                     } else if (existingIdx < existing.size) {
                         interleaved.add(existing[existingIdx++])
@@ -201,7 +203,7 @@ class OutboundPoissonQueue {
                     if (effectiveDummyFactory != null && lastWasGroupFrame) {
                         interleaved.add(effectiveDummyFactory.invoke())
                     }
-                    interleaved.add(frames[frameIdx++].copy(packetClass = PacketClass.GROUP_MESSAGE))
+                    interleaved.add(frames[frameIdx++].copy(packetClass = targetClass))
                     lastWasGroupFrame = true
                 }
 

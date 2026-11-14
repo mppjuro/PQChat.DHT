@@ -50,6 +50,7 @@ open class DhtLeafNode(
          * Global in-process cache of active, responsive DHT peers across node instances and test runs.
          * Prevents cold bootstrap failure and rate-limiting on CI runners (e.g. Azure).
          */
+        val sharedCacheLock = Any()
         val sharedLivePeerCache = java.util.concurrent.CopyOnWriteArrayList<DhtPeer>()
 
         /**
@@ -315,7 +316,7 @@ open class DhtLeafNode(
         }
     }
 
-    private val fastestNodesCache = CopyOnWriteArrayList<DhtPeer>()
+    private val fastestNodesMap = java.util.concurrent.ConcurrentHashMap<InetSocketAddress, DhtPeer>()
     private val _totalGetCalls = java.util.concurrent.atomic.AtomicLong(0L)
     override val totalGetCalls: Long get() = _totalGetCalls.get()
 
@@ -471,13 +472,31 @@ open class DhtLeafNode(
         }
         val s = try {
             if (localPort > 0) {
-                DatagramSocket(localPort).apply { reuseAddress = true }
+                DatagramSocket(localPort).apply {
+                    reuseAddress = true
+                    try {
+                        receiveBufferSize = 1024 * 1024
+                        sendBufferSize = 1024 * 1024
+                    } catch (_: Exception) {}
+                }
             } else {
-                DatagramSocket(0).apply { reuseAddress = true }
+                DatagramSocket(0).apply {
+                    reuseAddress = true
+                    try {
+                        receiveBufferSize = 1024 * 1024
+                        sendBufferSize = 1024 * 1024
+                    } catch (_: Exception) {}
+                }
             }
         } catch (e: Exception) {
             println("[PQChat] initSocket bind error for port $localPort: $e, falling back to random free system port")
-            DatagramSocket(0).apply { reuseAddress = true }
+            DatagramSocket(0).apply {
+                reuseAddress = true
+                try {
+                    receiveBufferSize = 1024 * 1024
+                    sendBufferSize = 1024 * 1024
+                } catch (_: Exception) {}
+            }
         }
         localPort = s.localPort
         socket = s
@@ -519,13 +538,13 @@ open class DhtLeafNode(
         scope.cancel()
         pendingTransactions.clear()
         routingTable.clear()
-        fastestNodesCache.clear()
+        fastestNodesMap.clear()
     }
 
     override fun getActivePeerCount(): Int = if (isTestLoopbackMode) routingTable.size.coerceAtLeast(8) else routingTable.size
 
     fun getCachedFastestNodes(): List<DhtPeer> {
-        val list = fastestNodesCache.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
+        val list = fastestNodesMap.values.sortedBy { it.rttMs }.take(MAX_CACHED_NODES)
         return if (isLocalTestbedActive()) {
             list.filter { isLoopbackOrLocal(it.address) }
         } else {
@@ -558,7 +577,7 @@ open class DhtLeafNode(
                 )
                 recordNodeSuccessInternal(peer, persistToDb = false)
             }
-            println("[PQChat] Loaded ${fastestNodesCache.size} fastest DHT nodes from persistent cache")
+            println("[PQChat] Loaded ${fastestNodesMap.size} fastest DHT nodes from persistent cache")
         } catch (_: Exception) {
         }
     }
@@ -581,36 +600,38 @@ open class DhtLeafNode(
         recordNodeSuccessInternal(peer, persistToDb = true)
     }
 
-    @Synchronized
     private fun recordNodeSuccessInternal(peer: DhtPeer, persistToDb: Boolean) {
         addPeer(peer.nodeId, peer.address)
 
-        val existingIndex = fastestNodesCache.indexOfFirst { it.address == peer.address }
-        if (existingIndex >= 0) {
-            val existing = fastestNodesCache[existingIndex]
-            existing.lastSeen = peer.lastSeen
-            existing.rttMs = if (existing.rttMs == Long.MAX_VALUE) peer.rttMs else (existing.rttMs + peer.rttMs) / 2
-            if (peer.nodeId.any { it != 0.toByte() }) {
-                System.arraycopy(peer.nodeId, 0, existing.nodeId, 0, minOf(peer.nodeId.size, existing.nodeId.size))
+        fastestNodesMap.compute(peer.address) { _, existing ->
+            if (existing != null) {
+                existing.lastSeen = peer.lastSeen
+                existing.rttMs = if (existing.rttMs == Long.MAX_VALUE) peer.rttMs else (existing.rttMs + peer.rttMs) / 2
+                if (peer.nodeId.any { it != 0.toByte() }) {
+                    System.arraycopy(peer.nodeId, 0, existing.nodeId, 0, minOf(peer.nodeId.size, existing.nodeId.size))
+                }
+                existing
+            } else {
+                peer
             }
-        } else {
-            fastestNodesCache.add(peer)
         }
-
-        val sorted = fastestNodesCache.sortedBy { it.rttMs }
-        fastestNodesCache.clear()
-        fastestNodesCache.addAll(sorted.take(MAX_CACHED_NODES))
+        if (fastestNodesMap.size > MAX_CACHED_NODES * 2) {
+            val toKeep = fastestNodesMap.values.sortedBy { it.rttMs }.take(MAX_CACHED_NODES).map { it.address }.toSet()
+            fastestNodesMap.keys.retainAll(toKeep)
+        }
 
         // Populate shared live peer cache for cross-node / cross-test reuse
         if (peer.nodeId.any { it != 0.toByte() } || peer.address.port > 0) {
-            val existing = sharedLivePeerCache.indexOfFirst { it.address == peer.address }
-            if (existing >= 0) {
-                sharedLivePeerCache[existing] = peer
-            } else {
-                if (sharedLivePeerCache.size >= 64) {
-                    sharedLivePeerCache.removeAt(0)
+            synchronized(sharedCacheLock) {
+                val existing = sharedLivePeerCache.indexOfFirst { it.address == peer.address }
+                if (existing >= 0) {
+                    sharedLivePeerCache[existing] = peer
+                } else {
+                    if (sharedLivePeerCache.size >= 64) {
+                        sharedLivePeerCache.removeAt(0)
+                    }
+                    sharedLivePeerCache.add(peer)
                 }
-                sharedLivePeerCache.add(peer)
             }
         }
 
@@ -925,7 +946,7 @@ open class DhtLeafNode(
             isLocalTestbedMode = true
         }
         routingTable.clear()
-        fastestNodesCache.clear()
+        fastestNodesMap.clear()
         targetRouteCache.clear()
         startBootstrapWithRetry()
     }

@@ -3200,7 +3200,7 @@ class ChatRepository(
         val slotEdSeed: ByteArray,
         val payload: ByteArray,
         val timestamp: Long = System.currentTimeMillis(),
-        var lastRepublishedTimestamp: Long = 0L,
+        var lastRepublishedTimestamp: Long = timestamp,
         var currentAttempts: Int = 0
     )
 
@@ -4065,7 +4065,11 @@ class ChatRepository(
                 }
                 val result = mutableListOf<PollTask>()
                 if (focusedCurrent.isNotEmpty() && focusQuota > 0) {
-                    val guaranteed = if (isFastTestMode) focusedCurrent else focusedCurrent.take(focusQuota)
+                    val guaranteed = if (isFastTestMode || focusedCurrent.size <= focusQuota) {
+                        focusedCurrent
+                    } else {
+                        selectCurrentFairly(focusedCurrent, focusQuota)
+                    }
                     result.addAll(guaranteed)
                     val remainingFocusPool = focusedPool.filter { t -> guaranteed.none { it.target.contentEquals(t.target) } }
                     val remainingFocusQuota = focusQuota - guaranteed.size
@@ -5337,7 +5341,7 @@ class ChatRepository(
             val isSelf = memberContactId == SELF_CONTACT_ID
             var allSuccess = true
             for (task in previousTasks) {
-                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + task.currentAttempts.toLong()
+                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + (task.currentAttempts + 1).toLong()
                 val ok = if (isStrictPoissonShaping()) {
                     val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
                         target = task.slotTarget,
@@ -5407,7 +5411,7 @@ class ChatRepository(
             val isSelf = memberContactId == SELF_CONTACT_ID
             var allSuccess = true
             for (task in previousTasks) {
-                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + task.currentAttempts.toLong()
+                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + (task.currentAttempts + 1).toLong()
                 val ok = if (isStrictPoissonShaping()) {
                     val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
                         target = task.slotTarget,
@@ -5470,7 +5474,7 @@ class ChatRepository(
             val isSelf = memberContactId == SELF_CONTACT_ID
             var allSuccess = true
             for (task in previousTasks) {
-                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + task.currentAttempts.toLong()
+                val retransmitSeq = DhtClient.DEFAULT_MUTABLE_SEQ + (task.currentAttempts + 1).toLong()
                 val ok = if (isStrictPoissonShaping()) {
                     val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
                         target = task.slotTarget,
@@ -5632,7 +5636,6 @@ class ChatRepository(
             val newlyRelayedMemberIds = mutableSetOf<String>()
             for (sender in membersWithKeys) {
                 if (sender.memberId == recipient.memberId) continue
-                if (sender.memberId == group.myMemberId) continue
                 if (alreadyRelayed.contains(sender.memberId) && !force) continue
 
                 val senderMemberIdBytes = uuidStringToBytes(sender.memberId)
@@ -5648,7 +5651,7 @@ class ChatRepository(
 
             if (keysToRelay.isNotEmpty()) {
                 try {
-                    if (recipientContactId == currentLockedContactId) {
+                    val sentOk = if (recipientContactId == currentLockedContactId) {
                         sendGroupControlKeysBundleInternal(
                             contactId = recipientContactId,
                             groupIdBytes = groupIdBytes,
@@ -5667,7 +5670,9 @@ class ChatRepository(
                             groupName = group.rawGroupName
                         )
                     }
-                    relayedGroupMemberKeys[relayCacheKey] = alreadyRelayed + newlyRelayedMemberIds
+                    if (sentOk) {
+                        relayedGroupMemberKeys[relayCacheKey] = alreadyRelayed + newlyRelayedMemberIds
+                    }
                 } catch (e: Exception) {
                     logW("GroupKeySync", "Failed to relay key bundle to " + recipientContactId + ": " + e.message)
                 }
@@ -6847,7 +6852,26 @@ class ChatRepository(
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
         withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
             val group = groupDao?.getGroupById(groupId) ?: return@withTimeoutOrNull false
-            val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
+            val initialMembers = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
+
+            // Poll direct 1-to-1 contacts in the group to pull any incoming REKEY or KEY_BUNDLE frames
+            for (m in initialMembers) {
+                val cId = m.contactId
+                if (cId != null) {
+                    try {
+                        pollContactIncoming(cId)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            // Check if all active members now have sender keys and log for E2E sync verification
+            val members = groupMemberDao.getMembersForGroup(groupId)
+            val allActiveMembers = members.filter { it.isActive }
+            val allKeysReady = allActiveMembers.isNotEmpty() && allActiveMembers.all { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+            if (allKeysReady) {
+                logI("GroupKeySync", "GroupKeySync: All ${allActiveMembers.size} member keys synchronized for group=$groupId")
+            }
+
             val missingKeys = members.any { it.memberId != group.myMemberId && it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
             if (missingKeys) {
                 relayMissingGroupKeys(groupId, force = true)

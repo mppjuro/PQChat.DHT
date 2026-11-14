@@ -6,7 +6,10 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 object CryptoUtils {
-    val secureRandom: SecureRandom = SecureRandom()
+    private val threadLocalSecureRandom = ThreadLocal.withInitial { SecureRandom() }
+
+    val secureRandom: SecureRandom
+        get() = threadLocalSecureRandom.get() ?: SecureRandom()
 
     fun secureRandomBytes(length: Int): ByteArray {
         val bytes = ByteArray(length)

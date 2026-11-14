@@ -359,4 +359,196 @@ class ThreeNodeGroupTest {
         assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
         assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
     }
+
+    @Test
+    fun testFourNodeGroupStarTopologyFullSyncAndMessaging() = runBlocking {
+        val dhtNode = FakeDht()
+
+        // Alice Repo
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceChunkDao = FakeChunkDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = aliceChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        // Bob Repo
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobChunkDao = FakeChunkDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = bobChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        )
+
+        // Charlie Repo
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieChunkDao = FakeChunkDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = charlieChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        )
+
+        // Dave Repo
+        val daveContactDao = FakeContactDao()
+        val daveMessageDao = FakeMessageDao()
+        val daveChunkDao = FakeChunkDao()
+        val daveGroupDao = FakeGroupDao()
+        val daveGroupMemberDao = FakeGroupMemberDao()
+        val daveRepo = ChatRepository(
+            contactDao = daveContactDao,
+            messageDao = daveMessageDao,
+            chunkDao = daveChunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = daveGroupDao,
+            groupMemberDao = daveGroupMemberDao
+        )
+
+        // Star topology channels:
+        // Alice <-> Bob
+        val abKey = CryptoUtils.secureRandomBytes(64)
+        val baKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "bob", name = "Bob", chainKeyOut = abKey, chainKeyIn = baKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        bobContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = baKey, chainKeyIn = abKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        // Alice <-> Charlie
+        val acKey = CryptoUtils.secureRandomBytes(64)
+        val caKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "charlie", name = "Charlie", chainKeyOut = acKey, chainKeyIn = caKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        charlieContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = caKey, chainKeyIn = acKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        // Alice <-> Dave
+        val adKey = CryptoUtils.secureRandomBytes(64)
+        val daKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "dave", name = "Dave", chainKeyOut = adKey, chainKeyIn = daKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        daveContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = daKey, chainKeyIn = adKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        // Note: Bob, Charlie, and Dave have NO direct contacts with each other (Pure Star Topology).
+
+        // Step 1: Alice creates group with Bob, Charlie, and Dave
+        val group = aliceRepo.createGroup("PQ_MultiNode_Group", listOf("bob", "charlie", "dave"))
+        val groupId = group.groupId
+        assertEquals(4, aliceGroupMemberDao.getMembersForGroup(groupId).size)
+
+        // Step 2: Participants poll incoming invite from Alice on their 1-on-1 channels
+        assertTrue("Bob must receive group invite from Alice", bobRepo.pollContactIncoming("alice"))
+        assertNotNull("Bob must have group created", bobGroupDao.getGroupById(groupId))
+
+        assertTrue("Charlie must receive group invite from Alice", charlieRepo.pollContactIncoming("alice"))
+        assertNotNull("Charlie must have group created", charlieGroupDao.getGroupById(groupId))
+
+        assertTrue("Dave must receive group invite from Alice", daveRepo.pollContactIncoming("alice"))
+        assertNotNull("Dave must have group created", daveGroupDao.getGroupById(groupId))
+
+        // Step 3: Alice polls incoming 1-on-1 channels (or via pollGroupIncoming) to receive REKEYs from Bob, Charlie, Dave
+        var aliceAttempts = 0
+        while (aliceAttempts < 5 && aliceGroupMemberDao.getMembersForGroup(groupId).any { it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }) {
+            aliceRepo.pollGroupIncoming(groupId)
+            aliceAttempts++
+        }
+        val aliceMembers = aliceGroupMemberDao.getMembersForGroup(groupId)
+        assertTrue("All 4 Alice group members must have keys after rekey polling",
+            aliceMembers.size == 4 && aliceMembers.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
+
+        // Alice relays keys to Bob, Charlie, and Dave
+        aliceRepo.relayMissingGroupKeys(groupId, force = true)
+
+        // Step 4: Bob, Charlie, and Dave poll to ingest relayed keys from Alice
+        for (i in 0 until 3) {
+            bobRepo.pollGroupIncoming(groupId)
+            charlieRepo.pollGroupIncoming(groupId)
+            daveRepo.pollGroupIncoming(groupId)
+        }
+
+        val bobMembers = bobGroupMemberDao.getMembersForGroup(groupId)
+        val charlieMembers = charlieGroupMemberDao.getMembersForGroup(groupId)
+        val daveMembers = daveGroupMemberDao.getMembersForGroup(groupId)
+
+        assertTrue("All 4 Bob group members must have keys after relay",
+            bobMembers.size == 4 && bobMembers.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
+        assertTrue("All 4 Charlie group members must have keys after relay",
+            charlieMembers.size == 4 && charlieMembers.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
+        assertTrue("All 4 Dave group members must have keys after relay",
+            daveMembers.size == 4 && daveMembers.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
+
+        // Turn 1: Alice sends message -> Bob, Charlie, Dave receive
+        val aliceSent1 = aliceRepo.sendGroupMessage(groupId, "Hello_Group_from_Alice_all_4_nodes")
+        assertTrue("Alice must succeed sending Turn 1 group message", aliceSent1)
+
+        assertTrue("Bob must receive Alice's Turn 1 msg", bobRepo.pollGroupIncoming(groupId))
+        assertTrue("Charlie must receive Alice's Turn 1 msg", charlieRepo.pollGroupIncoming(groupId))
+        assertTrue("Dave must receive Alice's Turn 1 msg", daveRepo.pollGroupIncoming(groupId))
+
+        assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Hello_Group_from_Alice_all_4_nodes" && !it.isOutgoing })
+        assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Hello_Group_from_Alice_all_4_nodes" && !it.isOutgoing })
+        assertEquals(1, daveMessageDao.messages.count { it.textContent?.raw == "Hello_Group_from_Alice_all_4_nodes" && !it.isOutgoing })
+
+        // Turn 2: Bob sends message -> Alice, Charlie, Dave receive
+        val bobSent2 = bobRepo.sendGroupMessage(groupId, "Bob_reporting_in_PQ_MultiNode_Group")
+        assertTrue("Bob must succeed sending Turn 2 group message", bobSent2)
+
+        assertTrue("Alice must receive Bob's Turn 2 msg", aliceRepo.pollGroupIncoming(groupId))
+        assertTrue("Charlie must receive Bob's Turn 2 msg", charlieRepo.pollGroupIncoming(groupId))
+        assertTrue("Dave must receive Bob's Turn 2 msg", daveRepo.pollGroupIncoming(groupId))
+
+        assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Bob_reporting_in_PQ_MultiNode_Group" && !it.isOutgoing })
+        assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Bob_reporting_in_PQ_MultiNode_Group" && !it.isOutgoing })
+        assertEquals(1, daveMessageDao.messages.count { it.textContent?.raw == "Bob_reporting_in_PQ_MultiNode_Group" && !it.isOutgoing })
+
+        // Turn 3: Charlie sends message -> Alice, Bob, Dave receive
+        val charlieSent3 = charlieRepo.sendGroupMessage(groupId, "Charlie_here_group_pqc_confirmed")
+        assertTrue("Charlie must succeed sending Turn 3 group message", charlieSent3)
+
+        assertTrue("Alice must receive Charlie's Turn 3 msg", aliceRepo.pollGroupIncoming(groupId))
+        assertTrue("Bob must receive Charlie's Turn 3 msg", bobRepo.pollGroupIncoming(groupId))
+        assertTrue("Dave must receive Charlie's Turn 3 msg", daveRepo.pollGroupIncoming(groupId))
+
+        assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
+        assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
+        assertEquals(1, daveMessageDao.messages.count { it.textContent?.raw == "Charlie_here_group_pqc_confirmed" && !it.isOutgoing })
+
+        // Turn 4: Dave sends message -> Alice, Bob, Charlie receive
+        val daveSent4 = daveRepo.sendGroupMessage(groupId, "Dave_standing_by_for_pqc_mesh")
+        assertTrue("Dave must succeed sending Turn 4 group message", daveSent4)
+
+        assertTrue("Alice must receive Dave's Turn 4 msg", aliceRepo.pollGroupIncoming(groupId))
+        assertTrue("Bob must receive Dave's Turn 4 msg", bobRepo.pollGroupIncoming(groupId))
+        assertTrue("Charlie must receive Dave's Turn 4 msg", charlieRepo.pollGroupIncoming(groupId))
+
+        assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Dave_standing_by_for_pqc_mesh" && !it.isOutgoing })
+        assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Dave_standing_by_for_pqc_mesh" && !it.isOutgoing })
+        assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Dave_standing_by_for_pqc_mesh" && !it.isOutgoing })
+    }
 }

@@ -497,6 +497,14 @@ class ChatViewModel @JvmOverloads constructor(
                             val group = repository.getGroup(currentSelectedId)
                             if (group != null) {
                                 val members = repository.getGroupMembers(group.groupId)
+                                for (m in members) {
+                                    val cId = m.contactId
+                                    if (cId != null) {
+                                        try {
+                                            repository.pollContactIncoming(cId)
+                                        } catch (_: Exception) {}
+                                    }
+                                }
                                 val hasMissingKeys = members.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
                                 if (hasMissingKeys) {
                                     repository.relayMissingGroupKeys(group.groupId, force = true)
