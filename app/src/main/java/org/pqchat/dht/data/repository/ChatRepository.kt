@@ -526,6 +526,7 @@ class ChatRepository(
     }
 
     companion object {
+        private const val TAG = "ChatRepository"
         const val N_POLL_TARGETS = 8
         const val DEFAULT_POLL_BATCH_SIZE = N_POLL_TARGETS
         const val SELF_CONTACT_ID = "self_notes_loopback"
@@ -2889,6 +2890,7 @@ class ChatRepository(
                 else -> false
             }
         } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to decrypt/process incoming frame at target=${CryptoUtils.toHex(slot.target)} counter=${slot.counter}: ${e.message}", e)
             researchTelemetry?.recordAdversarialEvent(
                 anomalyType = "BAD_AEAD_TAG",
                 target = slot.target,

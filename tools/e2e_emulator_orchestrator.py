@@ -130,7 +130,7 @@ class LocalDhtClusterManager:
 class AdbDevice:
     """Controls an Android emulator instance via physical ADB commands."""
 
-    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False, real_dht: bool = False, fast_mode: bool = True, skip_debloat: bool = False):
+    def __init__(self, serial: str, name: str, output_dir: Path, dry_run: bool = False, real_dht: bool = False, fast_mode: bool = True, skip_debloat: bool = False, nodes_count: int = 2):
         self.serial = serial
         self.name = name
         self.output_dir = output_dir
@@ -138,12 +138,12 @@ class AdbDevice:
         self.real_dht = real_dht
         self.fast_mode = fast_mode
         self.skip_debloat = skip_debloat
+        self.nodes_count = nodes_count
         self.screen_width = 1080
         self.screen_height = 2400
         self._cached_ui: Optional[ET.Element] = None
         self._last_dump_time: float = 0.0
         self._is_debloated: bool = False
-        self.nodes_count: int = 2
         self._detect_screen_size()
 
     def get_app_start_flags(self) -> str:
@@ -910,10 +910,10 @@ class MultiEmulatorOrchestrator:
         fast_mode = getattr(args, "e2e_fast_mode", True)
         skip_debloat = getattr(args, "skip_debloat", False)
 
-        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat)
-        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat)
-        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat) if self.nodes_count >= 3 else None
-        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat) if self.nodes_count >= 4 else None
+        self.alice = AdbDevice(args.alice, "Alice", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat, nodes_count=self.nodes_count)
+        self.bob = AdbDevice(args.bob, "Bob", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat, nodes_count=self.nodes_count)
+        self.charlie = AdbDevice(args.charlie, "Charlie", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat, nodes_count=self.nodes_count) if self.nodes_count >= 3 else None
+        self.dave = AdbDevice(args.dave, "Dave", self.output_dir, args.dry_run, real_dht=real_dht, fast_mode=fast_mode, skip_debloat=skip_debloat, nodes_count=self.nodes_count) if self.nodes_count >= 4 else None
 
         self.active_devices = [self.alice, self.bob]
         if self.charlie:
@@ -1373,7 +1373,8 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.0)
         self.bob.screencap("02_bob_direct_chat")
 
-        dm_timeout = 120 if self.args.real_dht else (75 if self.args.nodes >= 4 else 45)
+        dm_timeout = 120 if self.args.real_dht else (75 if self.args.nodes >= 3 else 45)
+        send_settle = 2.0 if not self.args.real_dht else 6.0
 
         # Turn 1: Alice sends direct message to Bob
         direct_msg = "Hello_Bob_PQ_Direct_Message"
@@ -1382,9 +1383,12 @@ class MultiEmulatorOrchestrator:
         self.alice.type_text(direct_msg)
         self.sleep(0.5)
         self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(2.0)
+        self.alice.close_keyboard()
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+        self.sleep(send_settle)
 
         # Bob receives direct message
+        self.bob.close_keyboard()
         print(f"[Bob] Waiting for direct message '{direct_msg}'...", flush=True)
         alice_dm_tick = lambda: self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
         rcv_ok = self.bob.wait_for_element(text=direct_msg, timeout=dm_timeout, sync_chip_tag="chat_sync_chip", on_tick=alice_dm_tick)
@@ -1401,9 +1405,12 @@ class MultiEmulatorOrchestrator:
         self.bob.type_text(direct_ack)
         self.sleep(0.5)
         self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
-        self.sleep(2.0)
+        self.bob.close_keyboard()
+        self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+        self.sleep(send_settle)
 
         # Alice receives direct ACK
+        self.alice.close_keyboard()
         print(f"[Alice] Waiting for direct reply '{direct_ack}'...", flush=True)
         bob_ack_tick = lambda: self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
         ack_ok = self.alice.wait_for_element(text=direct_ack, timeout=dm_timeout, sync_chip_tag="chat_sync_chip", on_tick=bob_ack_tick)
