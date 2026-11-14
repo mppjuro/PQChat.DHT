@@ -130,13 +130,15 @@ interface DhtClient {
      * Returns null if not found, timeout or verification failure.
      * When [probeAllReplicas] is true, queries all closest swarm nodes without early cancellation
      * to measure empirical multi-point replica retention/decay (nodesResponded).
+     * When [minSeq] >= 0, responses with seq <= minSeq are treated as stale and do NOT trigger fast-termination.
      */
     suspend fun getMutable(
         target: ByteArray,
         salt: ByteArray? = null,
         skipLocalStore: Boolean = false,
         timeoutMs: Long = DhtLeafNode.FAST_GET_TIMEOUT_MS,
-        probeAllReplicas: Boolean = false
+        probeAllReplicas: Boolean = false,
+        minSeq: Long = -1L
     ): DhtLeafNode.MutableItem?
 
     companion object {

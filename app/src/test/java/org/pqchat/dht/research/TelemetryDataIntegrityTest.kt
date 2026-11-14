@@ -36,7 +36,7 @@ class TelemetryDataIntegrityTest {
         override fun getActivePeerCount(): Int = 8
         override suspend fun preWarmTarget(target: ByteArray): List<DhtLeafNode.DhtPeer> = emptyList()
         override fun preWarmTargetAsync(target: ByteArray): kotlinx.coroutines.Job = kotlinx.coroutines.Job()
-        override suspend fun getMutable(target: ByteArray, salt: ByteArray?, skipLocalStore: Boolean, timeoutMs: Long, probeAllReplicas: Boolean): DhtLeafNode.MutableItem? = null
+        override suspend fun getMutable(target: ByteArray, salt: ByteArray?, skipLocalStore: Boolean, timeoutMs: Long, probeAllReplicas: Boolean, minSeq: Long): DhtLeafNode.MutableItem? = null
         override suspend fun putMutable(target: ByteArray, v: ByteArray, seq: Long, salt: ByteArray?, sk: ByteArray, skipLocalStore: Boolean): Boolean = true
         override suspend fun putMutablePreSigned(target: ByteArray, v: ByteArray, seq: Long, salt: ByteArray?, pk: ByteArray, sig: ByteArray, skipLocalStore: Boolean): Boolean = true
         override suspend fun sendCoverTrafficDummy(): ByteArray? = CryptoUtils.secureRandomBytes(20)

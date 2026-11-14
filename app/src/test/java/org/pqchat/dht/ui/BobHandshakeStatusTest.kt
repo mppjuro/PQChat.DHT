@@ -110,7 +110,8 @@ class BobHandshakeStatusTest {
             salt: ByteArray?,
             skipLocalStore: Boolean,
             timeoutMs: Long,
-            probeAllReplicas: Boolean
+            probeAllReplicas: Boolean,
+            minSeq: Long
         ): MutableItem? {
             getCallCount++
             val targetHex = CryptoUtils.toHex(target)

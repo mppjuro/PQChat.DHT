@@ -35,7 +35,8 @@ class ResearchTelemetryManagerTest {
             salt: ByteArray?,
             skipLocalStore: Boolean,
             timeoutMs: Long,
-            probeAllReplicas: Boolean
+            probeAllReplicas: Boolean,
+            minSeq: Long
         ): DhtLeafNode.MutableItem? {
             return storedItems[CryptoUtils.toHex(target)]
         }

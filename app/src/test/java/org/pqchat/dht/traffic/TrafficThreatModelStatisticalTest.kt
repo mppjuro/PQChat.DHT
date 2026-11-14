@@ -614,13 +614,14 @@ class TrafficThreatModelStatisticalTest {
                 salt: ByteArray?,
                 skipLocalStore: Boolean,
                 timeoutMs: Long,
-                probeAllReplicas: Boolean
+                probeAllReplicas: Boolean,
+                minSeq: Long
             ): DhtLeafNode.MutableItem? {
                 val copy = target.copyOf()
                 queriedTargetsInOrder.add(copy)
                 currentCycleTargets.add(copy)
                 currentCount++
-                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas)
+                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas, minSeq)
             }
 
             override fun close() {
@@ -907,12 +908,13 @@ class TrafficThreatModelStatisticalTest {
                 salt: ByteArray?,
                 skipLocalStore: Boolean,
                 timeoutMs: Long,
-                probeAllReplicas: Boolean
+                probeAllReplicas: Boolean,
+                minSeq: Long
             ): DhtLeafNode.MutableItem? {
                 currentTimestamps.add(System.nanoTime())
                 queriedTargetsInOrder.add(target.copyOf())
                 currentCount++
-                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas)
+                return delegate.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas, minSeq)
             }
 
             override fun close() {

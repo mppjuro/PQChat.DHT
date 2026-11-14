@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -431,10 +433,18 @@ class ChatViewModel @JvmOverloads constructor(
         _ephemeralTtlSeconds.value = seconds
     }
 
+    private val isSyncRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val hasPendingSync = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun selectContact(contactId: String) {
         _selectedContactId.value = contactId
         pollingManager.onChatOpened(contactId)
         viewModelScope.launch {
+            val group = repository.getGroup(contactId)
+            if (group != null) {
+                repository.broadcastMyGroupSenderKey(group.groupId)
+                repository.relayMissingGroupKeys(group.groupId, force = true)
+            }
             repository.markIncomingMessagesAsRead(contactId)
             repository.pollConstantBatch(contactId)
         }
@@ -448,7 +458,9 @@ class ChatViewModel @JvmOverloads constructor(
     fun createGroup(groupName: String, contactIds: List<String>) {
         if (groupName.isBlank()) return
         viewModelScope.launch {
-            val group = repository.createGroup(groupName, contactIds)
+            val group = withContext(NonCancellable) {
+                repository.createGroup(groupName, contactIds)
+            }
             selectContact(group.groupId)
         }
     }
@@ -462,33 +474,48 @@ class ChatViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Trigger an immediate DHT poll (ignores current countdown). */
+    /** Trigger an immediate DHT poll (ignores current countdown). Coalesces concurrent calls to avoid socket flooding. */
     fun triggerImmediatePoll() {
         val selectedId = _selectedContactId.value
         if (selectedId != null && pollingManager.activeChatContactId != selectedId) {
             pollingManager.onChatOpened(selectedId)
         }
         pollingManager.triggerImmediatePoll()
-        viewModelScope.launch {
-            try {
-                if (selectedId != null) {
-                    val group = repository.getGroup(selectedId)
-                    if (group != null) {
-                        val members = repository.getGroupMembers(group.groupId)
-                        val hasMissingKeys = members.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
-                        if (hasMissingKeys) {
-                            repository.relayMissingGroupKeys(group.groupId, force = true)
+
+        if (!isSyncRunning.compareAndSet(false, true)) {
+            hasPendingSync.set(true)
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(NonCancellable) {
+                try {
+                    do {
+                        hasPendingSync.set(false)
+                        val currentSelectedId = _selectedContactId.value
+                        if (currentSelectedId != null) {
+                            val group = repository.getGroup(currentSelectedId)
+                            if (group != null) {
+                                val members = repository.getGroupMembers(group.groupId)
+                                val hasMissingKeys = members.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                                if (hasMissingKeys) {
+                                    repository.relayMissingGroupKeys(group.groupId, force = true)
+                                }
+                                repository.republishRecentGroupMessages(group.groupId)
+                                repository.pollGroupIncoming(group.groupId)
+                            } else {
+                                repository.pollContactIncoming(currentSelectedId)
+                            }
                         }
-                        repository.republishRecentGroupMessages(group.groupId)
-                        repository.pollGroupIncoming(group.groupId)
-                    } else {
-                        repository.pollContactIncoming(selectedId)
-                    }
+                        repository.flushOutboundPoissonQueue()
+                        repository.republishUnacknowledgedMessages()
+                        repository.retransmitUnconfirmedGroupControls()
+                    } while (hasPendingSync.get())
+                } catch (_: Exception) {
+                } finally {
+                    isSyncRunning.set(false)
                 }
-                repository.flushOutboundPoissonQueue()
-                repository.republishUnacknowledgedMessages()
-                repository.retransmitUnconfirmedGroupControls()
-            } catch (_: Exception) {}
+            }
         }
     }
 
@@ -501,11 +528,13 @@ class ChatViewModel @JvmOverloads constructor(
 
         val ttl = _ephemeralTtlSeconds.value
         viewModelScope.launch {
-            val group = repository.getGroup(contactId)
-            if (group != null) {
-                repository.sendGroupMessage(contactId, text, ttl)
-            } else {
-                repository.sendTextMessage(contactId, text, ttl)
+            withContext(NonCancellable) {
+                val group = repository.getGroup(contactId)
+                if (group != null) {
+                    repository.sendGroupMessage(contactId, text, ttl)
+                } else {
+                    repository.sendTextMessage(contactId, text, ttl)
+                }
             }
         }
     }

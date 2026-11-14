@@ -97,7 +97,8 @@ class HistoricalTtlSamplerTest {
                 salt: ByteArray?,
                 skipLocalStore: Boolean,
                 timeoutMs: Long,
-                probeAllReplicas: Boolean
+                probeAllReplicas: Boolean,
+                minSeq: Long
             ): DhtLeafNode.MutableItem? {
                 recordedProbeAllReplicas = probeAllReplicas
                 if (currentRespondedCount <= 0) return null

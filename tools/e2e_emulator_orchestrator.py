@@ -221,7 +221,7 @@ input keyevent 224
 wm dismiss-keyguard
 input keyevent 82
 am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS
-for pkg in com.google.android.inputmethod.latin com.android.inputmethod.latin com.google.android.settings.intelligence com.android.settings.intelligence com.google.android.dialer com.android.dialer com.google.android.apps.wellbeing com.google.android.googlequicksearchbox com.google.android.as com.google.android.as.oss com.google.android.gms com.google.android.gsf com.google.android.apps.messaging com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.google.android.contacts; do
+for pkg in com.google.android.inputmethod.latin com.android.inputmethod.latin com.google.android.settings.intelligence com.android.settings.intelligence com.google.android.dialer com.android.dialer com.google.android.apps.wellbeing com.google.android.googlequicksearchbox com.google.android.as com.google.android.as.oss com.google.android.apps.messaging com.google.android.apps.youtube.music com.google.android.youtube com.google.android.gm com.google.android.apps.maps com.google.android.apps.photos com.android.vending com.android.chrome com.google.android.configupdater com.google.android.tts com.google.android.contacts; do
   pm disable-user --user 0 $pkg 2>/dev/null || true
   am force-stop $pkg 2>/dev/null || true
 done
@@ -651,6 +651,8 @@ logcat -c
         start = time.time()
         print(f"[{self.name}] Waiting for element '{desc}' (timeout={effective_timeout}s)...", flush=True)
         last_sync_time = start
+        last_on_tick_time = start
+        sync_cadence = 20.0 if self.real_dht else 12.0
         while time.time() - start < effective_timeout:
             bounds = self.find_node(
                 text=text,
@@ -663,30 +665,30 @@ logcat -c
                 print(f"[{self.name}] Found '{desc}'!", flush=True)
                 return True
 
-            elapsed = time.time() - start
+            elapsed = time.time()
             # If soft keyboard is open, dismiss it to reveal messages below viewport
             if self.is_keyboard_open():
                 self.close_keyboard()
 
             # If waiting in chat, periodically scroll down in case message arrived below fold
-            if elapsed > 8.0 and int(elapsed) % 12 == 0:
+            if (elapsed - start) > 8.0 and int(elapsed - start) % 12 == 0:
                 self.scroll_down()
 
             # If sync_chip_tag is specified, tap it periodically to trigger immediate DHT polling
-            sync_cadence = 18.0 if self.real_dht else 12.0
             if sync_chip_tag and (time.time() - last_sync_time) >= sync_cadence:
                 print(f"[{self.name}] Triggering {sync_chip_tag} while waiting for '{desc}'...", flush=True)
                 self.click_element(test_tag=sync_chip_tag, auto_scroll=False, capture_on_fail=False)
                 last_sync_time = time.time()
 
-            if on_tick:
+            if on_tick and (time.time() - last_on_tick_time) >= sync_cadence:
                 try:
                     on_tick()
+                    last_on_tick_time = time.time()
                 except Exception:
                     pass
 
             # Periodically ensure app focus
-            if elapsed > 5.0 and int(elapsed) % 10 == 0:
+            if (elapsed - start) > 5.0 and int(elapsed - start) % 10 == 0:
                 self.ensure_app_foreground()
 
             self.sleep(1.5)
@@ -709,6 +711,16 @@ logcat -c
         print(f"[{self.name}] Timeout waiting for '{desc}'", flush=True)
         safe_desc = re.sub(r'[^a-zA-Z0-9_]', '_', desc)[:24]
         self.screencap(f"failure_timeout_{safe_desc}")
+        return False
+
+    def trigger_sync(self) -> bool:
+        """Taps the appropriate sync chip (chat_sync_chip or contact_list_sync_chip) based on visible screen."""
+        if self.dry_run:
+            return True
+        if self.find_node(test_tag="chat_sync_chip"):
+            return self.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        elif self.find_node(test_tag="contact_list_sync_chip"):
+            return self.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False, auto_scroll=False)
         return False
 
     def wait_for_contact_list_ready(self, timeout: float = 25.0) -> bool:
@@ -1058,6 +1070,7 @@ class MultiEmulatorOrchestrator:
         for dev in self.active_devices:
             dev.ensure_app_foreground()
             dev.wait_for_contact_list_ready(timeout=25.0)
+            dev.shell("logcat -G 16M && logcat -c")
             sc = dev.screencap(f"00_{dev.name.lower()}_started")
             self.log_step(f"Init {dev.name}", "PASS", f"{dev.name} clean install & launch verified", sc)
 
@@ -1524,51 +1537,61 @@ class MultiEmulatorOrchestrator:
 
         for dev in participants:
             dev.ensure_app_foreground()
-            print(f"[{dev.name}] Waiting for group '{group_name}' invite to arrive via DHT (timeout={invite_timeout}s)...", flush=True)
+            print(f"[{dev.name}] Preparing to wait for group '{group_name}' invite via DHT...", flush=True)
             dev.navigate_to_contact_list()
 
-            start_wait = time.time()
-            rcv_grp = False
-            last_sync_chip = 0.0
-            if self.args.dry_run:
-                rcv_grp = True
-            while time.time() - start_wait < invite_timeout and not rcv_grp:
+        start_wait = time.time()
+        last_sync_chip = 0.0
+        joined_devs = set()
+        received_devs = set()
+        if self.args.dry_run:
+            joined_devs = set(participants)
+            received_devs = set(participants)
+
+        while time.time() - start_wait < invite_timeout and len(joined_devs) < len(participants):
+            elapsed = time.time() - start_wait
+            sync_delay = 18.0 if self.args.real_dht else 12.0
+            if (time.time() - last_sync_chip) >= sync_delay:
+                self.alice.trigger_sync()
+                for dev in participants:
+                    if dev not in joined_devs:
+                        dev.trigger_sync()
+                last_sync_chip = time.time()
+
+            for dev in participants:
+                if dev in joined_devs:
+                    continue
                 if dev.find_node(test_tag=f"group_item_{group_name}", text=group_name):
-                    rcv_grp = True
-                    break
-                elapsed = time.time() - start_wait
-                sync_delay = 18.0 if self.args.real_dht else 12.0
-                if (time.time() - last_sync_chip) >= sync_delay:
-                    dev.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
-                    self.alice.click_element(test_tag="contact_list_sync_chip", capture_on_fail=False)
-                    last_sync_chip = time.time()
+                    if dev not in received_devs:
+                        received_devs.add(dev)
+                        sc_group_list = dev.screencap(f"04_{dev.name.lower()}_group_appeared")
+                        self.log_step(f"Group Received on {dev.name}", "PASS", f"Received group invite frame for '{group_name}'", sc_group_list)
+                    clicked = dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+                    self.sleep(2.0 if not self.args.real_dht else 4.0)
+                    in_chat = clicked and dev.wait_for_element(test_tag="chat_message_input", timeout=15)
+                    sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
+                    if in_chat:
+                        self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
+                        joined_devs.add(dev)
+                    else:
+                        print(f"[{dev.name}] Clicked group item but chat_message_input did not appear yet", flush=True)
 
-                if elapsed > 20.0 and int(elapsed) % 15 == 0:
-                    print(f"[{dev.name}] Group invite delayed ({int(elapsed)}s). Triggering inviter Alice to retransmit...", flush=True)
-                    self.alice.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
-                    dev.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
+            if elapsed > 20.0 and int(elapsed) % 15 == 0:
+                self.alice.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
+                for dev in participants:
+                    if dev not in joined_devs:
+                        dev.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
 
-                dev.sleep(1.5)
+            self.sleep(1.5)
 
-            sc_group_list = dev.screencap(f"04_{dev.name.lower()}_group_appeared")
-            if rcv_grp:
-                self.log_step(f"Group Received on {dev.name}", "PASS", f"Received group invite frame for '{group_name}'", sc_group_list)
-                # Click group item to enter group chat (strictly without fallback_ratio!)
-                clicked = dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
-                self.sleep(2.0 if not self.args.real_dht else 4.0)
-                in_chat = clicked and dev.wait_for_element(test_tag="chat_message_input", timeout=15)
-                sc_group_chat = dev.screencap(f"04_{dev.name.lower()}_in_group_chat")
-                if in_chat:
-                    self.log_step(f"{dev.name} Entered Group Chat", "PASS", f"{dev.name} active in '{group_name}'", sc_group_chat)
-                else:
-                    self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} failed to open group chat '{group_name}'", sc_group_chat)
-                    all_participants_joined = False
-                    missing_participants.append(dev.name)
-            else:
-                self.log_step(f"Group Received on {dev.name}", "FAIL", f"Did not receive group invite frame for '{group_name}' within {invite_timeout}s", sc_group_list)
-                self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} cannot enter group chat because invite was never received")
+        for dev in participants:
+            if dev not in joined_devs:
                 all_participants_joined = False
                 missing_participants.append(dev.name)
+                sc_fail = dev.screencap(f"04_{dev.name.lower()}_group_timeout")
+                if dev not in received_devs:
+                    self.log_step(f"Group Received on {dev.name}", "FAIL", f"Did not receive group invite frame for '{group_name}' within {invite_timeout}s", sc_fail)
+                self.log_step(f"{dev.name} Entered Group Chat", "FAIL", f"{dev.name} cannot enter group chat because invite was never received", sc_fail)
 
         joined_participants = [dev for dev in participants if dev.name not in missing_participants]
         if not all_participants_joined:
@@ -1606,10 +1629,10 @@ class MultiEmulatorOrchestrator:
 
             # Trigger DHT sync on Alice (to ingest REKEY and relay) and on joined participants
             self.alice.ensure_app_foreground()
-            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+            self.alice.trigger_sync()
             for dev in joined_participants:
                 dev.ensure_app_foreground()
-                dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                dev.trigger_sync()
 
             self.sleep(6.0 if not self.args.real_dht else 12.0)
 
@@ -1637,8 +1660,13 @@ class MultiEmulatorOrchestrator:
                 return True
             if dev.find_node(test_tag=f"group_item_{group_name}") or dev.find_node(text=group_name):
                 print(f"[{dev.name}] Not in group chat, tapping group_item_{group_name}...", flush=True)
-                dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
-                return dev.wait_for_element(test_tag="chat_message_input", timeout=10)
+                clicked = dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+                entered = clicked and dev.wait_for_element(test_tag="chat_message_input", timeout=15)
+                if entered:
+                    self.sleep(2.0 if not self.args.real_dht else 4.0)
+                    dev.trigger_sync()
+                    self.alice.trigger_sync()
+                return entered
             return False
 
         all_turns_ok = True

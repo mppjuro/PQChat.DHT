@@ -83,6 +83,14 @@ class PollingWorker(
         private val republishTasks = java.util.concurrent.ConcurrentHashMap<Long, RepublishTask>()
 
         fun registerRepublishTask(task: RepublishTask) {
+            // Remove any older republish task for the same contact targeting the exact same DHT slot to prevent self-clobbering
+            val iterator = republishTasks.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value.contactId == task.contactId && entry.value.target.contentEquals(task.target) && entry.key != task.messageId) {
+                    iterator.remove()
+                }
+            }
             republishTasks[task.messageId] = task
         }
 

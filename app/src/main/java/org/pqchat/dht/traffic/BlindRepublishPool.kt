@@ -53,6 +53,9 @@ class BlindRepublishPool(
     val maxCapacity: Int = DEFAULT_MAX_CAPACITY,
     val ttlMs: Long = DEFAULT_TTL_MS
 ) {
+    @Volatile
+    var isEnabled: Boolean = true
+
     private val lock = Any()
 
     // Access-ordered LinkedHashMap for true LRU eviction (accessOrder = true)
@@ -77,6 +80,7 @@ class BlindRepublishPool(
         salt: ByteArray? = null,
         now: Long = System.currentTimeMillis()
     ): Boolean {
+        if (!isEnabled) return false
         // 1. Structural validation
         if (target.size != 20 || publicKey.size != 32 || sig.size != 64 || v.isEmpty() || v.size > 1000) {
             return false
@@ -140,6 +144,7 @@ class BlindRepublishPool(
      * Returns null if pool is empty or all items expired.
      */
     fun sampleRandomEntry(now: Long = System.currentTimeMillis()): BlindRepublishEntry? {
+        if (!isEnabled) return null
         synchronized(lock) {
             pruneExpiredLocked(now)
             if (storage.isEmpty()) return null

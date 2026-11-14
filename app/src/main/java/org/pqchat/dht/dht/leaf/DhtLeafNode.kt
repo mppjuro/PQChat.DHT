@@ -1341,6 +1341,7 @@ open class DhtLeafNode(
      * Implements Fast Termination: if the first 3 nodes with the smallest XOR distance
      * return a response without field 'v' and do not indicate closer nodes to target,
      * immediately aborts search and returns null (verifying empty slots in < 600 ms).
+     * When minSeq >= 0, responses with seq <= minSeq are treated as stale and do NOT trigger fast termination.
      * Validates that Target == SHA-1(k) and Ed25519 signature is authentic.
      */
     override suspend fun getMutable(
@@ -1348,18 +1349,24 @@ open class DhtLeafNode(
         salt: ByteArray?,
         skipLocalStore: Boolean,
         timeoutMs: Long,
-        probeAllReplicas: Boolean
+        probeAllReplicas: Boolean,
+        minSeq: Long
     ): MutableItem? = withContext(Dispatchers.IO) {
         _totalGetCalls.incrementAndGet()
         val targetHex = CryptoUtils.toHex(target)
 
         if (isTestLoopbackMode) {
             val localItem = localMutableStore[targetHex]
-            if (localItem != null) {
+            if (localItem != null && (minSeq < 0L || localItem.seq > minSeq)) {
                 val metrics = DhtOpMetrics(nodesQueried = 1, nodesResponded = 1, lookupHops = 1, tokensReceived = 1, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
                 _lastOperationMetrics.set(metrics)
                 logInfo(TAG, "[PQChat] Loopback GET target=$targetHex found=true")
                 return@withContext localItem.copy(nodesQueried = 1, nodesResponded = 1, lookupHops = 1)
+            } else if (localItem != null && minSeq >= 0L && localItem.seq <= minSeq) {
+                val metrics = DhtOpMetrics(nodesQueried = 1, nodesResponded = 1, lookupHops = 1, tokensReceived = 1, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
+                _lastOperationMetrics.set(metrics)
+                logInfo(TAG, "[PQChat] Loopback GET target=$targetHex found=false (stale seq ${localItem.seq} <= minSeq $minSeq)")
+                return@withContext null
             } else {
                 val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
                 _lastOperationMetrics.set(metrics)
@@ -1370,7 +1377,7 @@ open class DhtLeafNode(
 
         if (!skipLocalStore) {
             val localItem = localMutableStore[targetHex]
-            if (localItem != null) {
+            if (localItem != null && (minSeq < 0L || localItem.seq > minSeq)) {
                 val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 1, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
                 _lastOperationMetrics.set(metrics)
                 return@withContext localItem.copy(nodesQueried = 0, nodesResponded = 1, lookupHops = 0)
@@ -1486,6 +1493,16 @@ open class DhtLeafNode(
                                 tokensReceived.incrementAndGet()
                             }
 
+                            val nodesBytes = resp.responseData["nodes"] as? ByteArray
+                            if (nodesBytes != null) {
+                                val discovered = parseCompactNodesList(nodesBytes)
+                                discovered.forEach { node ->
+                                    if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
+                                        candidatePool.putIfAbsent(node.address, node)
+                                    }
+                                }
+                            }
+
                             val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
                             if (verified != null) {
                                 verifiedResponses.incrementAndGet()
@@ -1502,7 +1519,8 @@ open class DhtLeafNode(
                                     }
                                 }
 
-                                if (!probeAllReplicas) {
+                                val isFresh = minSeq < 0L || verified.seq > minSeq
+                                if (!probeAllReplicas && isFresh) {
                                     val currBest = foundItem.get()
                                     val currSeq = currBest?.seq ?: 0L
                                     val minQuorum = minOf(3, currentHopNodes.size)
@@ -1519,18 +1537,10 @@ open class DhtLeafNode(
                                 }
                             } else {
                                 emptyResponses.add(peer.address)
-                                val nodesBytes = resp.responseData["nodes"] as? ByteArray
-                                if (nodesBytes != null) {
-                                    val discovered = parseCompactNodesList(nodesBytes)
-                                    discovered.forEach { node ->
-                                        if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
-                                            candidatePool.putIfAbsent(node.address, node)
-                                        }
-                                    }
-                                }
 
-                                // In-batch Fast Termination check only if we've reached minHops
-                                if (!probeAllReplicas && hop >= minHops) {
+                                // In-batch Fast Termination check only if we've reached minHops and no fresh item found
+                                val hasFreshItem = foundItem.get() != null && (minSeq < 0L || foundItem.get()!!.seq > minSeq)
+                                if (!probeAllReplicas && hop >= minHops && !hasFreshItem && foundItem.get() == null) {
                                     val eligible = candidatePool.values.filter { !isBootstrapRouter(it.address) }
                                     val top3 = eligible.sortedWith { a, b ->
                                         val distA = xorDistance(a.nodeId, target)
@@ -1555,8 +1565,9 @@ open class DhtLeafNode(
                 queryJobs.joinAll()
             }
 
-            // If we found a verified item and probeAllReplicas is false, finish search immediately
-            if (foundItem.get() != null && !probeAllReplicas) {
+            // If we found a verified fresh item and probeAllReplicas is false, finish search immediately
+            val currFound = foundItem.get()
+            if (currFound != null && !probeAllReplicas && (minSeq < 0L || currFound.seq > minSeq)) {
                 break
             }
 
@@ -1660,6 +1671,17 @@ open class DhtLeafNode(
         pk: ByteArray,
         sig: ByteArray,
         skipLocalStore: Boolean
+    ): Boolean = putMutableInternal(target, v, seq, salt, pk, sig, skipLocalStore, sk = null)
+
+    private suspend fun putMutableInternal(
+        target: ByteArray,
+        v: ByteArray,
+        seq: Long,
+        salt: ByteArray?,
+        pk: ByteArray,
+        sig: ByteArray,
+        skipLocalStore: Boolean,
+        sk: ByteArray? = null
     ): Boolean = withContext(Dispatchers.IO) {
         val tStart = System.currentTimeMillis()
         _totalPutCalls.incrementAndGet()
@@ -1680,15 +1702,6 @@ open class DhtLeafNode(
             return@withContext true
         }
 
-        // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
-        if (!skipLocalStore) {
-            val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
-            val existing = localMutableStore[targetHex]
-            if (existing == null || seq >= existing.seq) {
-                localMutableStore[targetHex] = localItem
-            }
-        }
-
         if (torTransportMode == TorTransportMode.BLOCKED_ERROR) {
             logInfo(TAG, "[PQChat] putMutablePreSigned blocked: Tor Fail-Closed active")
             val failMetrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = "Tor blocked")
@@ -1700,6 +1713,7 @@ open class DhtLeafNode(
         // Local tracking counters for this specific operation (avoids concurrent background poll interference)
         val queriesSent = java.util.concurrent.atomic.AtomicInteger(0)
         val responsesReceived = java.util.concurrent.atomic.AtomicInteger(0)
+        val highestNetworkSeq = java.util.concurrent.atomic.AtomicLong(localMutableStore[targetHex]?.seq ?: 0L)
         var hopsExecuted = 0
         var lastOpError: String? = null
 
@@ -1711,11 +1725,14 @@ open class DhtLeafNode(
         // 1. Initial candidates population
         val isLocalMode = isLocalTestbedActive()
         val cachedRoute = targetRouteCache[target] ?: emptyList()
+        val storedPeers = remoteStoredPeers[targetHex]?.mapNotNull { addr ->
+            (cachedRoute + routingTable).firstOrNull { it.address == addr } ?: DhtPeer(target, addr)
+        } ?: emptyList()
         val routingPeers = findClosestNodes(target, count = 32)
         val fastestNodes = getCachedFastestNodes()
         val localPeers = getLocalPeers()
 
-        (cachedRoute + routingPeers + fastestNodes + (if (isLocalMode) localPeers else emptyList()))
+        (storedPeers + cachedRoute + routingPeers + fastestNodes + (if (isLocalMode) localPeers else emptyList()))
             .filter { !isBootstrapRouter(it.address) }
             .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
             .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
@@ -1737,6 +1754,7 @@ open class DhtLeafNode(
         for (hop in 1..maxLookupHops) {
             if (queriesSent.get() >= maxLookupQueries) break
             if (isLocalMode && tokenMap.size >= 8 && hop >= 2) break
+            if (!isLocalMode && tokenMap.size >= 12 && hop >= 3) break
 
             val unqueried = candidatePool.values
                 .filter { it.address !in queriedAddresses && (candidatePool.size <= 3 || !isBootstrapRouter(it.address)) }
@@ -1778,6 +1796,10 @@ open class DhtLeafNode(
                                         val verifiedPeer = DhtPeer(respId, peer.address)
                                         candidatePool[peer.address] = verifiedPeer
                                         addPeer(respId, peer.address)
+                                    }
+                                    val respSeq = resp.responseData["seq"] as? Long
+                                    if (respSeq != null) {
+                                        highestNetworkSeq.updateAndGet { cur -> maxOf(cur, respSeq) }
                                     }
                                     val token = resp.responseData["token"] as? ByteArray
                                     if (token != null && token.isNotEmpty()) {
@@ -1839,6 +1861,10 @@ open class DhtLeafNode(
                                             val verifiedPeer = DhtPeer(respId, peer.address)
                                             candidatePool[peer.address] = verifiedPeer
                                             addPeer(respId, peer.address)
+                                        }
+                                        val respSeq = resp.responseData["seq"] as? Long
+                                        if (respSeq != null) {
+                                            highestNetworkSeq.updateAndGet { cur -> maxOf(cur, respSeq) }
                                         }
                                         val token = resp.responseData["token"] as? ByteArray
                                         if (token != null && token.isNotEmpty()) {
@@ -1918,6 +1944,28 @@ open class DhtLeafNode(
             }
         }
 
+        // Compute monotonic sequence number if sk is provided
+        var seqToPut = seq
+        var sigToPut = sig
+        if (sk != null) {
+            val netSeq = highestNetworkSeq.get()
+            val finalSeq = maxOf(seq, netSeq + 1L)
+            if (finalSeq > seq) {
+                seqToPut = finalSeq
+                val newSignData = Bencode.encodeBep44SignData(v, finalSeq, salt)
+                sigToPut = Ed25519Engine.sign(sk, newSignData)
+            }
+        }
+
+        // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
+        if (!skipLocalStore) {
+            val localItem = MutableItem(v, seqToPut, pk, sigToPut, salt, null, null)
+            val existing = localMutableStore[targetHex]
+            if (existing == null || seqToPut >= existing.seq) {
+                localMutableStore[targetHex] = localItem
+            }
+        }
+
         // If storing locally and no remote peers are reachable/tokenMap is empty
         if (tokenMap.isEmpty()) {
             val finalMetrics = DhtOpMetrics(
@@ -1947,11 +1995,11 @@ open class DhtLeafNode(
             compareBytes(distA, distB)
         }
 
-        val targetPutNodes = peersWithToken.take(16)
+        val targetPutNodes = peersWithToken.take(maxOf(12, minOf(16, replicationK)))
         val putNodesAttemptedCount = targetPutNodes.size
         val putAcks = java.util.concurrent.atomic.AtomicInteger(0)
 
-        // 6. Send "q": "put" in parallel to up to 16 closest peers with token
+        // 6. Send "q": "put" in parallel to closest peers with token
         coroutineScope {
             var putJobs: List<Job> = emptyList()
             putJobs = targetPutNodes.map { peer ->
@@ -1963,8 +2011,8 @@ open class DhtLeafNode(
                             token = token,
                             v = v,
                             k = pk,
-                            sig = sig,
-                            seq = seq,
+                            sig = sigToPut,
+                            seq = seqToPut,
                             salt = salt,
                             readOnly = false
                         )
@@ -1992,12 +2040,9 @@ open class DhtLeafNode(
 
             val startPut = System.currentTimeMillis()
             val maxPutWait = if (isLocalMode) 1000L else 3500L
-            // Wait until we reach 5 ACKs or all target nodes reply or maxPutWait timeout
-            while (putAcks.get() < minOf(5, targetPutNodes.size) && (System.currentTimeMillis() - startPut) < maxPutWait) {
-                if (putAcks.get() >= 3 && (System.currentTimeMillis() - startPut) > (if (isLocalMode) 150L else 1500L)) {
-                    putJobs.forEach { it.cancel() }
-                    break
-                }
+            val requiredAcks = if (isLocalMode) minOf(3, targetPutNodes.size) else minOf(8, targetPutNodes.size)
+            // Wait until we reach required ACKs or all target nodes reply or maxPutWait timeout
+            while (putAcks.get() < requiredAcks && (System.currentTimeMillis() - startPut) < maxPutWait) {
                 delay(10)
             }
             putJobs.forEach { it.cancel() }
@@ -2037,7 +2082,7 @@ open class DhtLeafNode(
 
     /**
      * BEP 44 put query to store mutable item.
-     * Signs v using Ed25519 sk and delegates to putMutablePreSigned.
+     * Signs v using Ed25519 sk and delegates to putMutableInternal with sk for strict monotonicity.
      */
     override suspend fun putMutable(
         target: ByteArray,
@@ -2053,7 +2098,7 @@ open class DhtLeafNode(
         val signData = Bencode.encodeBep44SignData(v, seq, salt)
         val sig = Ed25519Engine.sign(sk, signData)
         val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
-        return putMutablePreSigned(target, v, seq, salt, pk, sig, skipLocalStore)
+        return putMutableInternal(target, v, seq, salt, pk, sig, skipLocalStore, sk = sk)
     }
 
     /**

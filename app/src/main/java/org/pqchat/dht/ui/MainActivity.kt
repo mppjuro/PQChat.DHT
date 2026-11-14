@@ -37,7 +37,8 @@ class MainActivity : FragmentActivity() {
 
     private fun applyCustomBootstrap(intent: android.content.Intent?) {
         val useRealDht = intent?.getBooleanExtra("use_real_dht", false) == true
-        if (useRealDht) {
+        val isTestbedExplicit = intent?.getBooleanExtra("is_local_testbed", false) == true
+        if (useRealDht || (intent?.hasExtra("is_local_testbed") == true && !isTestbedExplicit)) {
             org.pqchat.dht.dht.leaf.DhtLeafNode.customBootstrapEndpoints = emptyList()
             org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedMode = false
             (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
@@ -45,7 +46,6 @@ class MainActivity : FragmentActivity() {
             }
         } else {
             val bootstrapPort = intent?.getIntExtra("dht_bootstrap_port", -1) ?: -1
-            val isTestbedExplicit = intent?.getBooleanExtra("is_local_testbed", false) == true
             if (bootstrapPort > 0 || isTestbedExplicit) {
                 val port = if (bootstrapPort > 0) bootstrapPort else 30000
                 val host = intent?.getStringExtra("dht_bootstrap_host") ?: "10.0.2.2"
@@ -84,6 +84,12 @@ class MainActivity : FragmentActivity() {
                 app.repository.blindRepublishPool.clear()
                 app.repository.delayedPutMaxMs = 0L
                 app.repository.decoyPutSlotsCount = 0
+
+                if (useRealDht) {
+                    app.repository.decoyTargetPool.isEnabled = false
+                    app.trafficGenerator.decoyTargetPool.isEnabled = false
+                    app.repository.blindRepublishPool.isEnabled = false
+                }
             }
         }
     }

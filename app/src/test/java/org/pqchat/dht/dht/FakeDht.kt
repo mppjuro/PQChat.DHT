@@ -118,7 +118,8 @@ class FakeDht(
         salt: ByteArray?,
         skipLocalStore: Boolean,
         timeoutMs: Long,
-        probeAllReplicas: Boolean
+        probeAllReplicas: Boolean,
+        minSeq: Long
     ): DhtLeafNode.MutableItem? {
         getCalls.incrementAndGet()
         bytesSent.addAndGet(100L)
@@ -126,7 +127,7 @@ class FakeDht(
 
         val targetHex = CryptoUtils.toHex(target)
         val entry = storage[targetHex]
-        if (entry == null || entry.isExpired()) {
+        if (entry == null || entry.isExpired() || (minSeq >= 0L && entry.item.seq <= minSeq)) {
             if (entry != null && entry.isExpired()) storage.remove(targetHex)
             val metrics = org.pqchat.dht.dht.leaf.DhtOpMetrics(
                 nodesQueried = replicationK * 2,

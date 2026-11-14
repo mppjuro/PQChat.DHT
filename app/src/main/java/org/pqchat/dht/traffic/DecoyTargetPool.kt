@@ -16,6 +16,9 @@ class DecoyTargetPool(
     private val maxCapacity: Int = 100,
     var random: java.util.Random = CryptoUtils.secureRandom
 ) {
+    @Volatile
+    var isEnabled: Boolean = true
+
     private val pool = ConcurrentLinkedDeque<ByteArray>()
 
     /**
@@ -51,7 +54,7 @@ class DecoyTargetPool(
         count: Int,
         fallbackProvider: (() -> List<ByteArray>)? = null
     ): List<ByteArray> {
-        if (count <= 0) return emptyList()
+        if (!isEnabled || count <= 0) return emptyList()
         val targets = mutableListOf<ByteArray>()
         val snapshot = pool.toList()
 

@@ -153,6 +153,7 @@ class ChatRepository(
     var intraBatchJitterMaxMs: Long = 80L
 
     private val repositoryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    val targetLastSeenSeq = ConcurrentHashMap<String, Long>()
     private val contactMutexes = ConcurrentHashMap<String, Mutex>()
     private val _rekeyInProgressContacts = MutableStateFlow<Set<String>>(emptySet())
     val rekeyInProgressContacts: StateFlow<Set<String>> = _rekeyInProgressContacts.asStateFlow()
@@ -853,19 +854,21 @@ class ChatRepository(
             val tStart = System.currentTimeMillis()
             var success = false
             val maxPutAttempts = if (isFastTestMode) 3 else 1
-            for (attempt in 1..maxPutAttempts) {
-                success = withTimeoutOrNull(if (isFastTestMode) 20_000L else 25_000L) {
-                    dhtLeafNode.putMutable(
-                        target = slot.target,
-                        v = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
-                    )
-                } ?: false
-                if (success) break
-                if (attempt < maxPutAttempts) delay(500L)
+            withContext(NonCancellable) {
+                for (attempt in 1..maxPutAttempts) {
+                    success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 20_000L else 25_000L) {
+                        dhtLeafNode.putMutable(
+                            target = slot.target,
+                            v = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = isSelf
+                        )
+                    } ?: false
+                    if (success) break
+                    if (attempt < maxPutAttempts) delay(500L)
+                }
             }
             val rttMs = System.currentTimeMillis() - tStart
             researchTelemetry?.recordPacketEvent(
@@ -2232,10 +2235,13 @@ class ChatRepository(
         // 2. Process all available consecutive messages starting at counterIn
         while (true) {
             val currentSlot = RatchetChain.deriveSlot(contact.chainKeyIn, contact.counterIn)
+            val currentTargetHex = CryptoUtils.toHex(currentSlot.target)
+            val minExpectedSeq = targetLastSeenSeq[currentTargetHex] ?: -1L
             val tStart = System.currentTimeMillis()
-            var item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf)
+            var item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf, minSeq = minExpectedSeq)
             val rttMs = System.currentTimeMillis() - tStart
             if (item != null) {
+                targetLastSeenSeq[currentTargetHex] = maxOf(targetLastSeenSeq[currentTargetHex] ?: 0L, item.seq)
                 researchTelemetry?.recordPacketEvent(
                     role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
                     target = currentSlot.target,
@@ -2366,7 +2372,10 @@ class ChatRepository(
 
             for (idx in lookaheadSlots.indices) {
                 val slot = lookaheadSlots[idx]
-                val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf) ?: continue
+                val slotHex = CryptoUtils.toHex(slot.target)
+                val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
+                val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf, minSeq = minExpectedSeq) ?: continue
+                targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
 
                 // If slot.counter > currentContact.counterIn, preserve skipped slots n..k-1
                 if (slot.counter > currentContact.counterIn) {
@@ -4429,11 +4438,14 @@ class ChatRepository(
             val task = finalTasks[i]
             try {
                 val tStart = System.currentTimeMillis()
+                val taskTargetHex = CryptoUtils.toHex(task.target)
+                val minExpectedSeq = targetLastSeenSeq[taskTargetHex] ?: -1L
                 val item = withTimeoutOrNull(taskTimeout) {
-                    dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf)
+                    dhtLeafNode.getMutable(task.target, skipLocalStore = task.isSelf, minSeq = minExpectedSeq)
                 }
                 val rttMs = System.currentTimeMillis() - tStart
                 if (item != null) {
+                    targetLastSeenSeq[taskTargetHex] = maxOf(targetLastSeenSeq[taskTargetHex] ?: 0L, item.seq)
                     researchTelemetry?.recordPacketEvent(
                         role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
                         target = task.target,
@@ -4935,23 +4947,26 @@ class ChatRepository(
                 return@withLock true
             }
 
-            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
-                dhtLeafNode.putMutable(
-                    target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            } ?: false
+            val success = withContext(NonCancellable) {
+                withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 8_000L else 20_000L) {
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+            }
 
+            // Always advance local counter_out and ratchet chain_out so subsequent messages get next sequence slot
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
             if (success) {
-                contactDao.updateOutgoingState(
-                    id = contactId,
-                    counterOut = contact.counterOut + 1,
-                    chainKeyOut = slot.nextChainKey
-                )
                 decoyTargetPool.registerPopulatedTarget(slot.target)
             }
             success
@@ -5103,27 +5118,31 @@ class ChatRepository(
 
             var success = false
             val maxAttempts = if (isFastTestMode) 3 else 1
-            for (attempt in 1..maxAttempts) {
-                success = withTimeoutOrNull(if (isFastTestMode) 20_000L else 25_000L) {
-                    dhtLeafNode.putMutable(
-                        target = slot.target,
-                        v = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
-                    )
-                } ?: false
-                if (success) break
-                if (attempt < maxAttempts) delay(500L)
+            withContext(NonCancellable) {
+                for (attempt in 1..maxAttempts) {
+                    success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 20_000L else 25_000L) {
+                        dhtLeafNode.putMutable(
+                            target = slot.target,
+                            v = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = isSelf
+                        )
+                    } ?: false
+                    if (success) break
+                    if (attempt < maxAttempts) delay(500L)
+                }
             }
 
+            // Always advance local counter_out and ratchet chain_out
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+
             if (success) {
-                contactDao.updateOutgoingState(
-                    id = contactId,
-                    counterOut = contact.counterOut + 1,
-                    chainKeyOut = slot.nextChainKey
-                )
                 decoyTargetPool.registerPopulatedTarget(slot.target)
 
                 if (isFastTestMode && !isSelf) {
@@ -5257,27 +5276,31 @@ class ChatRepository(
 
         var success = false
         val maxAttempts = if (isFastTestMode) 3 else 1
-        for (attempt in 1..maxAttempts) {
-            success = withTimeoutOrNull(if (isFastTestMode) 20_000L else 25_000L) {
-                dhtLeafNode.putMutable(
-                    target = slot.target,
-                    v = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
-                )
-            } ?: false
-            if (success) break
-            if (attempt < maxAttempts) delay(500L)
+        withContext(NonCancellable) {
+            for (attempt in 1..maxAttempts) {
+                success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 20_000L else 25_000L) {
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+                if (success) break
+                if (attempt < maxAttempts) delay(500L)
+            }
         }
 
+        // Always advance local counter_out and ratchet chain_out
+        contactDao.updateOutgoingState(
+            id = contactId,
+            counterOut = contact.counterOut + 1,
+            chainKeyOut = slot.nextChainKey
+        )
+
         if (success) {
-            contactDao.updateOutgoingState(
-                id = contactId,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
             decoyTargetPool.registerPopulatedTarget(slot.target)
 
             if (isFastTestMode && !isSelf) {
@@ -6005,19 +6028,21 @@ class ChatRepository(
             }
 
             var overallSuccess = false
-            for ((idx, cached) in cachedFrames.withIndex()) {
-                if (idx > 0) {
-                    val jitterMs = if (isFastTestMode) 20L else (40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F))
-                    kotlinx.coroutines.delay(jitterMs)
-                }
-                val success = putGroupFrameWithRetries(
-                    target = cached.target,
-                    frame = cached.frame,
-                    signingKey = cached.signingKey
-                )
-                if (success) {
-                    decoyTargetPool.registerPopulatedTarget(cached.target)
-                    overallSuccess = true
+            withContext(NonCancellable) {
+                for ((idx, cached) in cachedFrames.withIndex()) {
+                    if (idx > 0) {
+                        val jitterMs = if (isFastTestMode) 20L else (40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F))
+                        kotlinx.coroutines.delay(jitterMs)
+                    }
+                    val success = putGroupFrameWithRetries(
+                        target = cached.target,
+                        frame = cached.frame,
+                        signingKey = cached.signingKey
+                    )
+                    if (success) {
+                        decoyTargetPool.registerPopulatedTarget(cached.target)
+                        overallSuccess = true
+                    }
                 }
             }
 
@@ -6814,6 +6839,10 @@ class ChatRepository(
         withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
             val group = groupDao?.getGroupById(groupId) ?: return@withTimeoutOrNull false
             val members = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
+            val missingKeys = members.any { it.memberId != group.myMemberId && it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+            if (missingKeys) {
+                relayMissingGroupKeys(groupId, force = true)
+            }
             val groupIdBytes = uuidStringToBytes(groupId)
             val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
             var anyReceived = false
@@ -6836,7 +6865,10 @@ class ChatRepository(
                     )
 
                     // Execute network DHT query OUTSIDE the mutex lock to prevent lock contention
-                    val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false) ?: break
+                    val slotHex = CryptoUtils.toHex(individualSlot.target)
+                    val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
+                    val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false, minSeq = minExpectedSeq) ?: break
+                    targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
                     val activeSlot = individualSlot
                     val isIndividualSlot = true
 
@@ -7050,10 +7082,12 @@ class ChatRepository(
                     // Other group members have their own distinct derived slots so their messages remain intact.
                     if (isIndividualSlot) {
                         try {
+                            val tombSeq = item.seq + 1
+                            targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] = maxOf(targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] ?: 0L, tombSeq)
                             dhtLeafNode.putMutable(
                                 target = activeSlot.target,
                                 v = BinaryFrameCodec.createTombstonePayload(),
-                                seq = item.seq + 1,
+                                seq = tombSeq,
                                 salt = null,
                                 sk = activeSlot.edPrivateKeySeed,
                                 skipLocalStore = false
@@ -7075,6 +7109,33 @@ class ChatRepository(
                 pollGroupIncoming(group.groupId)
             }
         }.awaitAll()
+    }
+
+    /**
+     * Broadcasts the local user's Group Sender Key to all group participants who have a direct contact record.
+     * Ensures late-joining members immediately establish decryption capabilities with existing members.
+     */
+    suspend fun broadcastMyGroupSenderKey(groupId: String) = withContext(Dispatchers.IO) {
+        val group = groupDao?.getGroupById(groupId) ?: return@withContext
+        if (!group.isActive) return@withContext
+        val members = groupMemberDao?.getMembersForGroup(groupId)?.filter { it.isActive && it.contactId != null } ?: emptyList()
+        val groupIdBytes = uuidStringToBytes(groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+        for (member in members) {
+            val contactId = member.contactId ?: continue
+            try {
+                sendGroupControlRekeyOrInvite(
+                    contactId = contactId,
+                    controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupIdBytes = groupIdBytes,
+                    groupEpoch = group.groupEpoch,
+                    myMemberIdBytes = myMemberIdBytes,
+                    myChainKeyOut = group.rawMyChainKeyOut,
+                    currentCounter = group.myCounterOut.toLong(),
+                    groupName = group.rawGroupName
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     /**
