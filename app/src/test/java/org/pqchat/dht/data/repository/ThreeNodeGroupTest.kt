@@ -296,21 +296,35 @@ class ThreeNodeGroupTest {
 
         // Alice polls incoming: receives Bob's REKEY and Charlie's REKEY
         println("Alice running pollConstantBatch(groupId)...")
-        aliceRepo.pollConstantBatch(groupId)
-        aliceRepo.pollConstantBatch(groupId)
+        var aliceAttempts = 0
+        while (aliceAttempts < 5 && aliceGroupMemberDao.getMembersForGroup(groupId).any { it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }) {
+            aliceRepo.pollConstantBatch(groupId)
+            aliceAttempts++
+        }
 
         val aliceMembersAfterRekey = aliceGroupMemberDao.getMembersForGroup(groupId)
         println("Alice members after rekeys: ${aliceMembersAfterRekey.map { it.rawMemberName + " (" + it.memberId + ", contact=" + it.contactId + ", active=" + it.isActive + ", hasKey=" + it.rawChainKeyIn.any { b -> b != 0.toByte() } + ")" }}")
+        assertTrue("All Alice group members must have keys after rekey polling", aliceMembersAfterRekey.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
 
         // Does Bob receive Charlie's rekey relayed by Alice?
-        bobRepo.pollContactIncoming("alice")
+        var bobAttempts = 0
+        while (bobAttempts < 3 && bobGroupMemberDao.getMembersForGroup(groupId).any { it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }) {
+            bobRepo.pollContactIncoming("alice")
+            bobAttempts++
+        }
         val bobMembersAfterRelay = bobGroupMemberDao.getMembersForGroup(groupId)
         println("Bob members after relay: ${bobMembersAfterRelay.map { it.rawMemberName + " (" + it.memberId + ", hasKey=" + it.rawChainKeyIn.any { b -> b != 0.toByte() } + ")" }}")
+        assertTrue("All Bob group members must have keys after relay", bobMembersAfterRelay.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
 
         // Does Charlie receive Bob's rekey relayed by Alice?
-        charlieRepo.pollContactIncoming("alice")
+        var charlieAttempts = 0
+        while (charlieAttempts < 3 && charlieGroupMemberDao.getMembersForGroup(groupId).any { it.isActive && it.rawChainKeyIn.all { b -> b == 0.toByte() } }) {
+            charlieRepo.pollContactIncoming("alice")
+            charlieAttempts++
+        }
         val charlieMembersAfterRelay = charlieGroupMemberDao.getMembersForGroup(groupId)
         println("Charlie members after relay: ${charlieMembersAfterRelay.map { it.rawMemberName + " (" + it.memberId + ", hasKey=" + it.rawChainKeyIn.any { b -> b != 0.toByte() } + ")" }}")
+        assertTrue("All Charlie group members must have keys after relay", charlieMembersAfterRelay.all { !it.isActive || it.rawChainKeyIn.any { b -> b != 0.toByte() } })
 
         // Turn 1: Alice sends group message
         val aliceSent1 = aliceRepo.sendGroupMessage(groupId, "Hello_Group_from_Alice_all_3_nodes")

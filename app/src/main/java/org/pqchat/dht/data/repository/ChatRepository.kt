@@ -2241,7 +2241,6 @@ class ChatRepository(
             var item = dhtLeafNode.getMutable(currentSlot.target, skipLocalStore = isSelf, minSeq = minExpectedSeq)
             val rttMs = System.currentTimeMillis() - tStart
             if (item != null) {
-                targetLastSeenSeq[currentTargetHex] = maxOf(targetLastSeenSeq[currentTargetHex] ?: 0L, item.seq)
                 researchTelemetry?.recordPacketEvent(
                     role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
                     target = currentSlot.target,
@@ -2313,6 +2312,7 @@ class ChatRepository(
                     isSelf = isSelf,
                     contact = contact
                 )
+                targetLastSeenSeq[currentTargetHex] = maxOf(targetLastSeenSeq[currentTargetHex] ?: 0L, item.seq)
                 anyProcessed = true
                 if (!completed) {
                     break
@@ -2323,6 +2323,7 @@ class ChatRepository(
                     harvestUndecryptableItem(currentSlot.target, item)
                     break
                 }
+                targetLastSeenSeq[currentTargetHex] = maxOf(targetLastSeenSeq[currentTargetHex] ?: 0L, item.seq)
                 anyProcessed = true
             }
             contact = contactDao.getContactById(contactId) ?: break
@@ -2375,7 +2376,6 @@ class ChatRepository(
                 val slotHex = CryptoUtils.toHex(slot.target)
                 val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
                 val item = dhtLeafNode.getMutable(slot.target, skipLocalStore = isSelf, minSeq = minExpectedSeq) ?: continue
-                targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
 
                 // If slot.counter > currentContact.counterIn, preserve skipped slots n..k-1
                 if (slot.counter > currentContact.counterIn) {
@@ -2404,6 +2404,7 @@ class ChatRepository(
 
                 val success = processIncomingItem(contactId, slot, item, isSelf)
                 if (success) {
+                    targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
                     val updated = contactDao.getContactById(contactId)
                     if (updated != null && updated.counterIn > currentContact.counterIn) {
                         currentContact = updated
@@ -4242,9 +4243,15 @@ class ChatRepository(
 
         // 1a. Gather 1-on-1 contact listening slots (current slot, lookahead window, skipped keys)
         val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+        val focusedGroup = if (focusContactId != null) groupDao?.getGroupById(focusContactId) else null
+        val focusedMemberContactIds = if (focusedGroup != null) {
+            groupMemberDao?.getMembersForGroup(focusedGroup.groupId)?.mapNotNull { it.contactId }?.toSet() ?: emptySet()
+        } else {
+            emptySet()
+        }
         for (contact in contacts) {
             val isSelf = contact.id == SELF_CONTACT_ID
-            val isFocusedContact = (contact.id == focusContactId)
+            val isFocusedContact = (contact.id == focusContactId) || (contact.id in focusedMemberContactIds)
 
             val skipped = skippedKeyDao?.getSkippedKeysForContact(contact.id) ?: emptyList()
             for (sk in skipped) {
@@ -4445,7 +4452,6 @@ class ChatRepository(
                 }
                 val rttMs = System.currentTimeMillis() - tStart
                 if (item != null) {
-                    targetLastSeenSeq[taskTargetHex] = maxOf(targetLastSeenSeq[taskTargetHex] ?: 0L, item.seq)
                     researchTelemetry?.recordPacketEvent(
                         role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
                         target = task.target,
@@ -4459,6 +4465,9 @@ class ChatRepository(
                     )
                 }
                 if (task.execute(item)) {
+                    if (item != null) {
+                        targetLastSeenSeq[taskTargetHex] = maxOf(targetLastSeenSeq[taskTargetHex] ?: 0L, item.seq)
+                    }
                     anyReceived = true
                 }
             } catch (_: Exception) {}
@@ -6868,7 +6877,6 @@ class ChatRepository(
                     val slotHex = CryptoUtils.toHex(individualSlot.target)
                     val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
                     val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false, minSeq = minExpectedSeq) ?: break
-                    targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
                     val activeSlot = individualSlot
                     val isIndividualSlot = true
 
@@ -7077,6 +7085,7 @@ class ChatRepository(
                     if (!processed) {
                         break
                     }
+                    targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
 
                     // For individual recipient slot: safe to overwrite with 900B CSPRNG noise tombstone!
                     // Other group members have their own distinct derived slots so their messages remain intact.

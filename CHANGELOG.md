@@ -75,7 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
-- (2026-11-14) — **dht,e2e**: resolve real-DHT multi-emulator E2E failures, prevent getMutable fast-termination on stale seq, and eliminate sync chip contention
+- (2026-11-14) — **dht,repo,test**: prioritize active group member slots in pollConstantBatch, ensure targetLastSeenSeq only records consumed items, and stabilize ThreeNodeGroupTest key sync
+- [`f111614`](https://github.com/mppjuro/PQChat.DHT/commit/f1116146c8e3a246985cb967bbce0721262d1cfa) (2026-11-14) — **dht,e2e**: resolve real-DHT multi-emulator E2E failures, prevent getMutable fast-termination on stale seq, and eliminate sync chip contention
 - [`bb6de3f`](https://github.com/mppjuro/PQChat.DHT/commit/bb6de3fbc18babe5495dad62ecdbd143aa0cd364) (2026-11-12) — **test**: isolate loopback sockets in TargetPreWarmingTest by disabling autoBootstrap
 - [`da19581`](https://github.com/mppjuro/PQChat.DHT/commit/da1958141e31adb1888e27cadafe5d804c6772c6) (2026-11-11) — **test**: resolve KS statistical test flakiness and multi-node group E2E sync timeouts
 - [`690e07d`](https://github.com/mppjuro/PQChat.DHT/commit/690e07d345357a1fbeddafa5417cb4021bc9beac) (2026-11-10) — **ci**: fix statistical test two-stage sampler and 4-node E2E group sync orchestration

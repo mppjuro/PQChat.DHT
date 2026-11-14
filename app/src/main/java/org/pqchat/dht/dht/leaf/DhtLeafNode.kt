@@ -1656,6 +1656,10 @@ open class DhtLeafNode(
         val vFoundSize = finalBestItem?.v?.size ?: 0
         val sigValid = finalBestItem != null
         logInfo(TAG, "[PQChat] getMutable target=$targetHex, skipLocal=$skipLocalStore, candidates=$totalQueried, responded=$totalResponded, hops=$hops, found=${finalBestItem != null}, vFoundSize=$vFoundSize, sigValid=$sigValid")
+        if (finalBestItem != null && minSeq >= 0L && finalBestItem.seq <= minSeq) {
+            logInfo(TAG, "[PQChat] getMutable target=$targetHex returning null because best seq ${finalBestItem.seq} <= minSeq $minSeq")
+            return@withContext null
+        }
         finalBestItem
     }
 
