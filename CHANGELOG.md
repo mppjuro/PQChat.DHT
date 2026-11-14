@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`7fa0ade`](https://github.com/mppjuro/PQChat.DHT/commit/7fa0ade69ebea500b36acc0e25210f7308373634) (2026-11-14) — **e2e**: enhance direct messaging reliability, keyboard handling, and logging in phase 2
 - [`d4705eb`](https://github.com/mppjuro/PQChat.DHT/commit/d4705ebb1c24649c352f47a50f1a8b9c697053b7) (2026-11-14) — **group**: ensure deterministic per-member sender chains and multi-turn polling in star topology
 - [`b769c8c`](https://github.com/mppjuro/PQChat.DHT/commit/b769c8ca2c2877f5e178576a62c0db09ac7d0dab) (2026-11-14) — star-topology group key exchange, DHT lock contention, and E2E orchestrator flow
 - [`40db67d`](https://github.com/mppjuro/PQChat.DHT/commit/40db67d1c75a5366831967caf394232ff84a7044) (2026-11-14) — **repo,dht,test**: prioritize group member slots, fix targetLastSeenSeq semantics, and stabilize ThreeNodeGroupTest key sync
