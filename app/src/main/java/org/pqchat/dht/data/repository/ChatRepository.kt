@@ -2432,29 +2432,6 @@ class ChatRepository(
     ): Boolean = withContext(Dispatchers.IO) {
         val contact = contactDao.getContactById(contactId) ?: return@withContext false
 
-        // 1. BEP 44 Sequence Rollback & Tombstone Defense:
-        // If the record has seq > DEFAULT_MUTABLE_SEQ (e.g. seq = 2 tombstone),
-        // the slot was already consumed and cleaned by receiver or sender.
-        // Mark as received in sliding window and advance counter past this slot to avoid stalling outbox.
-        if (item.seq > DhtClient.DEFAULT_MUTABLE_SEQ) {
-            val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
-            bitmap.markReceived(slot.counter)
-            contactDao.updateIncomingStateWithBitmap(
-                id = contactId,
-                counterIn = maxOf(contact.counterIn, slot.counter + 1),
-                chainKeyIn = slot.nextChainKey,
-                bitmapBase = bitmap.windowBase,
-                bitmap = bitmap.toByteArray()
-            )
-            researchTelemetry?.recordAdversarialEvent(
-                anomalyType = "TOMBSTONE_SLOT_DETECTED",
-                target = slot.target,
-                details = "Slot counter=${slot.counter} tombstoned with seq=${item.seq}",
-                mitigated = true
-            )
-            return@withContext true
-        }
-
         try {
             val frameMsg = BinaryFrameCodec.unpackAeadFrame(
                 key = slot.msgKey,
@@ -2890,6 +2867,29 @@ class ChatRepository(
                 else -> false
             }
         } catch (e: Exception) {
+            // BEP 44 Sequence Rollback & Tombstone Defense:
+            // If the record failed AEAD decryption AND has seq > DEFAULT_MUTABLE_SEQ (e.g. seq = 2 tombstone),
+            // the slot was already consumed and overwritten with 900B CSPRNG noise tombstone.
+            // Mark as received in sliding window and advance counter past this slot to avoid stalling.
+            if (item.seq > DhtClient.DEFAULT_MUTABLE_SEQ) {
+                val bitmap = SlidingWindowBitmap(contact.receivedBitmapBase, 1024, contact.receivedBitmap)
+                bitmap.markReceived(slot.counter)
+                contactDao.updateIncomingStateWithBitmap(
+                    id = contactId,
+                    counterIn = maxOf(contact.counterIn, slot.counter + 1),
+                    chainKeyIn = slot.nextChainKey,
+                    bitmapBase = bitmap.windowBase,
+                    bitmap = bitmap.toByteArray()
+                )
+                researchTelemetry?.recordAdversarialEvent(
+                    anomalyType = "TOMBSTONE_SLOT_DETECTED",
+                    target = slot.target,
+                    details = "Slot counter=${slot.counter} tombstoned with seq=${item.seq}",
+                    mitigated = true
+                )
+                return@withContext true
+            }
+
             android.util.Log.w(TAG, "Failed to decrypt/process incoming frame at target=${CryptoUtils.toHex(slot.target)} counter=${slot.counter}: ${e.message}", e)
             researchTelemetry?.recordAdversarialEvent(
                 anomalyType = "BAD_AEAD_TAG",
