@@ -352,6 +352,38 @@ object RatchetChain {
     ): ByteArray = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId).target
 
     /**
+     * Deterministically derives a per-member 64-byte Sender ChainKey from the root group seed
+     * and member ID within a group.
+     *
+     * In decentralized star-topology groups where participants might not all have pairwise
+     * 1-on-1 contact channels with each other (e.g. Alice invited Bob and Charlie, but Bob and Charlie
+     * have no direct pairwise channel), this allows all group members to immediately and deterministically
+     * pre-populate the Sender Keys and RatchetChains for all participants upon group creation or
+     * invite processing, eliminating any race conditions or multi-hop relay dependencies.
+     */
+    fun deriveGroupMemberSenderKey(
+        groupSeed: ByteArray,
+        groupId: ByteArray,
+        memberId: ByteArray
+    ): ByteArray {
+        require(groupSeed.size == CHAIN_KEY_SIZE) {
+            "Invalid groupSeed size: ${groupSeed.size}, expected $CHAIN_KEY_SIZE"
+        }
+        val info = "group_member_sender_key:".toByteArray(Charsets.UTF_8) + groupId + memberId
+        return HkdfSha512.expand(groupSeed, info, CHAIN_KEY_SIZE)
+    }
+
+    fun deriveGroupMemberSenderKey(
+        groupSeed: ByteArray,
+        groupId: String,
+        memberId: String
+    ): ByteArray = deriveGroupMemberSenderKey(
+        groupSeed,
+        uuidStringToBytes(groupId),
+        uuidStringToBytes(memberId)
+    )
+
+    /**
      * Computes group slots in a lookahead window [fromCounter, fromCounter + windowSize] for a given recipient.
      * Useful for checking out-of-order slots on receiver side in group chats.
      */

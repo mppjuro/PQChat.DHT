@@ -3702,6 +3702,15 @@ class ChatRepository(
                         groupId = groupIdBytes,
                         senderMemberId = memberIdBytes
                     )
+                    org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                        contactId = groupId,
+                        target = slot.target,
+                        seq = item.seq,
+                        senderEdPublicKey = item.k,
+                        senderSignature = item.sig,
+                        frame = item.v,
+                        frameMsg = frameMsg
+                    )
                     val bitmap = SlidingWindowBitmap(member.receivedBitmapBase, 1024, member.receivedBitmap)
                     if (!bitmap.isReceived(slot.counter)) {
                         bitmap.markReceived(slot.counter)
@@ -4764,7 +4773,8 @@ class ChatRepository(
     ): GroupEntity = withContext(Dispatchers.IO) {
         val groupId = UUID.randomUUID().toString()
         val myMemberId = UUID.randomUUID().toString()
-        val myChainKeyOut = CryptoUtils.secureRandomBytes(64)
+        val groupSeed = CryptoUtils.secureRandomBytes(64)
+        val myChainKeyOut = groupSeed
         val group = GroupEntity(
             groupId = groupId,
             groupName = groupName,
@@ -4803,13 +4813,14 @@ class ChatRepository(
             val memberIdBytes = uuidStringToBytes(memberId)
             val memberName = contact.rawName
             membersSummary.add(BinaryFrameCodec.DecodedPayload.GroupMemberSummary(memberIdBytes, memberName))
+            val memberSenderKey = RatchetChain.deriveGroupMemberSenderKey(groupSeed, groupIdBytes, memberIdBytes)
             memberEntities.add(
                 GroupMemberEntity(
                     groupId = groupId,
                     memberId = memberId,
                     contactId = contactId,
                     memberName = memberName,
-                    chainKeyIn = ByteArray(64),
+                    chainKeyIn = memberSenderKey,
                     counterIn = 0,
                     joinedAt = System.currentTimeMillis(),
                     isActive = true
@@ -4818,6 +4829,12 @@ class ChatRepository(
         }
         if (memberEntities.isNotEmpty()) {
             groupMemberDao?.insertOrUpdateAll(memberEntities)
+        }
+
+        val allActiveMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter { it.isActive } ?: emptyList()
+        val allKeysReady = allActiveMembers.isNotEmpty() && allActiveMembers.all { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+        if (allKeysReady) {
+            logI("GroupKeySync", "GroupKeySync: All ${allActiveMembers.size} member keys synchronized for group=$groupId")
         }
 
         // Dispatch Group Control invite (Type 0x06, subType = INVITE) to each invited contact with bounded concurrency and interleaved queuing
@@ -5751,6 +5768,7 @@ class ChatRepository(
             }
             BinaryFrameCodec.GROUP_SUBTYPE_INVITE -> {
                 var existingGroup = groupDao?.getGroupById(groupId)
+                val groupSeed = control.senderGroupChainKey
                 if (existingGroup == null) {
                     // The inviter assigns stable member IDs and places this
                     // invitee immediately after the sender in the summary.
@@ -5759,7 +5777,8 @@ class ChatRepository(
                         ?.memberId
                     val myMemberId = assignedMemberId?.let(::bytesToUuidString)
                         ?: UUID.randomUUID().toString()
-                    val myChainKeyOut = CryptoUtils.secureRandomBytes(64)
+                    val myMemberIdBytes = uuidStringToBytes(myMemberId)
+                    val myChainKeyOut = RatchetChain.deriveGroupMemberSenderKey(groupSeed, control.groupId, myMemberIdBytes)
                     val newGroup = GroupEntity(
                         groupId = groupId,
                         groupName = control.groupName,
@@ -5800,6 +5819,7 @@ class ChatRepository(
                     for (m in control.members) {
                         val mId = bytesToUuidString(m.memberId)
                         if (mId != senderMemberId && mId != myMemberId) {
+                            val mSenderKey = RatchetChain.deriveGroupMemberSenderKey(groupSeed, control.groupId, m.memberId)
                             val existing = groupMemberDao?.getMember(groupId, mId)
                             if (existing == null) {
                                 groupMemberDao?.insertOrUpdate(
@@ -5808,18 +5828,29 @@ class ChatRepository(
                                         memberId = mId,
                                         contactId = null,
                                         memberName = m.memberName,
-                                        chainKeyIn = ByteArray(64),
+                                        chainKeyIn = mSenderKey,
                                         counterIn = 0,
                                         joinedAt = System.currentTimeMillis(),
                                         isActive = true
+                                    )
+                                )
+                            } else if (existing.rawChainKeyIn.all { b -> b == 0.toByte() }) {
+                                groupMemberDao.insertOrUpdate(
+                                    existing.copy(
+                                        chainKeyIn = EncryptedBlob(mSenderKey, "group_members", "${groupId}_${mId}", "chainKeyIn")
                                     )
                                 )
                             }
                         }
                     }
 
+                    val allActiveMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter { it.isActive } ?: emptyList()
+                    val allKeysReady = allActiveMembers.isNotEmpty() && allActiveMembers.all { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                    if (allKeysReady) {
+                        logI("GroupKeySync", "GroupKeySync: All ${allActiveMembers.size} member keys synchronized for group=$groupId")
+                    }
+
                     // Respond back with our own Sender Key so inviter can receive our group messages
-                    val myMemberIdBytes = uuidStringToBytes(myMemberId)
                     val groupIdBytes = control.groupId
                     sendGroupControlRekeyOrInviteInternal(
                         contactId = contactId,
@@ -5843,6 +5874,40 @@ class ChatRepository(
                         isActive = true
                     )
                     groupMemberDao?.insertOrUpdate(member)
+
+                    for (m in control.members) {
+                        val mId = bytesToUuidString(m.memberId)
+                        if (mId != senderMemberId && mId != existingGroup.myMemberId) {
+                            val mSenderKey = RatchetChain.deriveGroupMemberSenderKey(groupSeed, control.groupId, m.memberId)
+                            val existing = groupMemberDao?.getMember(groupId, mId)
+                            if (existing == null) {
+                                groupMemberDao?.insertOrUpdate(
+                                    GroupMemberEntity(
+                                        groupId = groupId,
+                                        memberId = mId,
+                                        contactId = null,
+                                        memberName = m.memberName,
+                                        chainKeyIn = mSenderKey,
+                                        counterIn = 0,
+                                        joinedAt = System.currentTimeMillis(),
+                                        isActive = true
+                                    )
+                                )
+                            } else if (existing.rawChainKeyIn.all { b -> b == 0.toByte() }) {
+                                groupMemberDao.insertOrUpdate(
+                                    existing.copy(
+                                        chainKeyIn = EncryptedBlob(mSenderKey, "group_members", "${groupId}_${mId}", "chainKeyIn")
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    val allActiveMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter { it.isActive } ?: emptyList()
+                    val allKeysReady = allActiveMembers.isNotEmpty() && allActiveMembers.all { !it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                    if (allKeysReady) {
+                        logI("GroupKeySync", "GroupKeySync: All ${allActiveMembers.size} member keys synchronized for group=$groupId")
+                    }
                 }
             }
             BinaryFrameCodec.GROUP_SUBTYPE_REKEY -> {
@@ -5996,6 +6061,14 @@ class ChatRepository(
                     target = slot.target,
                     groupId = groupIdBytes,
                     senderMemberId = myMemberIdBytes
+                )
+                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingTextMessage(
+                    contactId = groupId,
+                    textLength = text.toByteArray(Charsets.UTF_8).size,
+                    slot = slot,
+                    seqNum = currentGroup.myCounterOut,
+                    ackNum = 0,
+                    frame = frame
                 )
                 CachedGroupOutboundFrame(slot.target, frame, slot.edPrivateKeySeed, System.currentTimeMillis())
             }
@@ -6917,6 +6990,15 @@ class ChatRepository(
                                 target = activeSlot.target,
                                 groupId = groupIdBytes,
                                 senderMemberId = memberIdBytes
+                            )
+                            org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                                contactId = groupId,
+                                target = activeSlot.target,
+                                seq = item.seq,
+                                senderEdPublicKey = item.k,
+                                senderSignature = item.sig,
+                                frame = item.v,
+                                frameMsg = frameMsg
                             )
 
                             val bitmap = SlidingWindowBitmap(freshMember.receivedBitmapBase, 1024, freshMember.receivedBitmap)
