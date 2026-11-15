@@ -1,0 +1,19 @@
+# Room database schema dumps (7.json - 16.json)
+app/schemas/**
+
+# Benchmark, simulation & telemetry datasets
+docs/measurements/**
+docs/*.csv
+tools/**/*.csv
+
+# ProVerif formal verification raw output & generated charts
+docs/formal/report.txt
+docs/*.png
+
+# Gradle wrapper & build outputs
+gradle/**
+gradlew
+gradlew.bat
+.gradle/**
+build/**
+**/build/**

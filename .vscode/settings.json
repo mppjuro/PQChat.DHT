@@ -1,3 +1,27 @@
 {
-    "java.configuration.updateBuildConfiguration": "automatic"
+    "java.configuration.updateBuildConfiguration": "automatic",
+    "search.exclude": {
+        "app/schemas/**": true,
+        "docs/measurements/**": true,
+        "docs/*.csv": true,
+        "tools/**/*.csv": true,
+        "docs/formal/report.txt": true,
+        "docs/*.png": true,
+        "gradle/**": true,
+        ".gradle/**": true,
+        "build/**": true,
+        "**/build/**": true
+    },
+    "files.watcherExclude": {
+        "app/schemas/**": true,
+        "docs/measurements/**": true,
+        "docs/*.csv": true,
+        "tools/**/*.csv": true,
+        "docs/formal/report.txt": true,
+        "docs/*.png": true,
+        "gradle/**": true,
+        ".gradle/**": true,
+        "build/**": true,
+        "**/build/**": true
+    }
 }
