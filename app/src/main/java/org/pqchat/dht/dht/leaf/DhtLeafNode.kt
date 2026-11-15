@@ -39,6 +39,7 @@ open class DhtLeafNode(
         const val TAG = "PQChat"
         const val DEFAULT_DHT_PORT = 49160
         const val MAX_CACHED_NODES = 40
+        const val MIN_HEALTHY_ROUTING_TABLE_SIZE = 16
         const val DEFAULT_K = 8 // Default replication / closest nodes factor
         const val CGNAT_LTE_K = 16 // Adaptive replication factor under LTE / Restrictive NAT / CGNAT
         const val K = DEFAULT_K
@@ -951,6 +952,28 @@ open class DhtLeafNode(
         startBootstrapWithRetry()
     }
 
+    private val isBootstrapping = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val lastBootstrapTime = java.util.concurrent.atomic.AtomicLong(0L)
+
+    override suspend fun rebootstrap(force: Boolean): Boolean = withContext(Dispatchers.IO) {
+        if (isTestLoopbackMode) return@withContext true
+        val now = System.currentTimeMillis()
+        if (!force && routingTable.size >= MIN_HEALTHY_ROUTING_TABLE_SIZE && (now - lastBootstrapTime.get()) < 20_000L) {
+            return@withContext true
+        }
+        if (!isBootstrapping.compareAndSet(false, true)) {
+            return@withContext false
+        }
+        try {
+            logInfo(TAG, "[PQChat] rebootstrap triggered (force=$force, routingTableSize=${routingTable.size}, fastestNodes=${fastestNodesMap.size})")
+            bootstrap()
+            lastBootstrapTime.set(System.currentTimeMillis())
+            routingTable.size >= MIN_HEALTHY_ROUTING_TABLE_SIZE
+        } finally {
+            isBootstrapping.set(false)
+        }
+    }
+
     /**
      * Emulator and mobile network interfaces can become routable shortly after the
      * process starts. Retry initial discovery so a transient ENETUNREACH does not
@@ -959,10 +982,10 @@ open class DhtLeafNode(
     private fun startBootstrapWithRetry() {
         bootstrapJob?.cancel()
         bootstrapJob = scope.launch {
-            repeat(6) { attempt ->
+            repeat(8) { attempt ->
                 bootstrap()
-                if (routingTable.isNotEmpty() || !isActive) return@launch
-                if (attempt < 5) delay(1000L)
+                if (routingTable.size >= MIN_HEALTHY_ROUTING_TABLE_SIZE || !isActive) return@launch
+                if (attempt < 7) delay(1200L)
             }
         }
     }
@@ -1021,10 +1044,24 @@ open class DhtLeafNode(
         queried.addAll(localNodes)
 
         var rounds = 0
-        while (routingTable.size < 16 && rounds < 2) {
+        while (routingTable.size < MIN_HEALTHY_ROUTING_TABLE_SIZE && rounds < 4) {
             rounds++
             val peersToQuery = routingTable.filter { it.address !in queried && !isBootstrapRouter(it.address) }.take(16)
-            if (peersToQuery.isEmpty()) break
+            if (peersToQuery.isEmpty()) {
+                if (!isLocal && bootstrapNodes.isNotEmpty() && rounds < 3) {
+                    val secondTarget = CryptoUtils.secureRandomBytes(20)
+                    val extraJobs = bootstrapNodes.map { node ->
+                        launch {
+                            try {
+                                val query = KrpcMessage.createFindNodeQuery(myNodeId, secondTarget)
+                                sendQuery(node, query, BOOTSTRAP_TIMEOUT_MS)
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    extraJobs.joinAll()
+                }
+                break
+            }
             peersToQuery.forEach { queried.add(it.address) }
             val waveJobs = peersToQuery.map { peer ->
                 launch {
@@ -1482,7 +1519,7 @@ open class DhtLeafNode(
 
             if (unqueried.isEmpty()) break
 
-            val batchCount = if (hop == 1) 20 else 8
+            val batchCount = if (hop == 1) minOf(20, unqueried.size) else minOf(8, unqueried.size)
             val currentHopNodes = if (isLiveNetwork) {
                 diversifyCandidatesBySubnet(unqueried, count = batchCount, maxPerSubnet = 2)
             } else {
@@ -1650,9 +1687,15 @@ open class DhtLeafNode(
             tokensReceived = tokensReceived.get(),
             putNodesAttempted = 0,
             putNodesSucceeded = 0,
-            dhtError = _lastDhtError.get()
+            dhtError = _lastDhtError.get(),
+            isLiveNetwork = isLiveNetwork
         )
         _lastOperationMetrics.set(metrics)
+
+        if (isLiveNetwork && (totalResponded <= 2 || hops <= 1 || totalQueried < 10) && autoBootstrap) {
+            logInfo(TAG, "[PQChat] getMutable shallow traversal detected (candidates=$totalQueried, responded=$totalResponded, hops=$hops), triggering background rebootstrap")
+            scope.launch { rebootstrap(force = true) }
+        }
 
         val bestItem = foundItem.get()
         val finalBestItem = bestItem?.copy(
@@ -1764,7 +1807,7 @@ open class DhtLeafNode(
             .distinctBy { it.address }
             .forEach { candidatePool[it.address] = it }
 
-        if (candidatePool.size < 4 && autoBootstrap && !isLocalMode) {
+        if ((candidatePool.size < 16 || candidatePool.values.count { !isBootstrapRouter(it.address) } < 8) && autoBootstrap && !isLocalMode) {
             resolveBootstrapNodes().forEach {
                 candidatePool[it] = DhtPeer(CryptoUtils.secureRandomBytes(20), it)
             }
@@ -1790,7 +1833,18 @@ open class DhtLeafNode(
                     compareBytes(distA, distB)
                 }
 
-            if (unqueried.isEmpty()) break
+            if (unqueried.isEmpty()) {
+                if (tokenMap.size < 3 && queriesSent.get() < maxLookupQueries && !isLocalMode && autoBootstrap) {
+                    val freshBootstrap = resolveBootstrapNodes().filter { it !in queriedAddresses }
+                    if (freshBootstrap.isNotEmpty()) {
+                        freshBootstrap.forEach { addr ->
+                            candidatePool.putIfAbsent(addr, DhtPeer(CryptoUtils.secureRandomBytes(20), addr))
+                        }
+                        continue
+                    }
+                }
+                break
+            }
 
             val remainingBudget = maxLookupQueries - queriesSent.get()
             val batchCount = if (hop == 1) minOf(16, remainingBudget) else minOf(8, remainingBudget)
@@ -2000,7 +2054,8 @@ open class DhtLeafNode(
                 tokensReceived = 0,
                 putNodesAttempted = 0,
                 putNodesSucceeded = 0,
-                dhtError = lastOpError ?: _lastDhtError.get()
+                dhtError = lastOpError ?: _lastDhtError.get(),
+                isLiveNetwork = isLiveNetwork
             )
             _lastOperationMetrics.set(finalMetrics)
             if (finalMetrics.dhtError != null) {
@@ -2088,11 +2143,17 @@ open class DhtLeafNode(
             tokensReceived = tokenMap.size,
             putNodesAttempted = putNodesAttemptedCount,
             putNodesSucceeded = putOkCount,
-            dhtError = if (putOkCount > 0) null else (lastOpError ?: _lastDhtError.get())
+            dhtError = if (putOkCount > 0) null else (lastOpError ?: _lastDhtError.get()),
+            isLiveNetwork = isLiveNetwork
         )
         _lastOperationMetrics.set(finalMetrics)
         if (finalMetrics.dhtError != null) {
             _lastDhtError.set(finalMetrics.dhtError)
+        }
+
+        if (isLiveNetwork && putOkCount < 2 && autoBootstrap) {
+            logInfo(TAG, "[PQChat] PUT weakly replicated: putAcks=$putOkCount (queried=${queriesSent.get()}, responded=${responsesReceived.get()}), triggering rebootstrap")
+            scope.launch { rebootstrap(force = true) }
         }
 
         if (!putSuccess && skipLocalStore) {

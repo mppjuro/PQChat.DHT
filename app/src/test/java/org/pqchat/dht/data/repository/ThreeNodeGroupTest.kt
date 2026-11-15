@@ -677,4 +677,134 @@ class ThreeNodeGroupTest {
         assertEquals(1, bobMessageDao.messages.count { it.textContent?.raw == "Dave_standing_by_for_pqc_mesh" && !it.isOutgoing })
         assertEquals(1, charlieMessageDao.messages.count { it.textContent?.raw == "Dave_standing_by_for_pqc_mesh" && !it.isOutgoing })
     }
+
+    private fun testUuidStringToBytes(uuidStr: String): ByteArray {
+        return try {
+            val u = java.util.UUID.fromString(uuidStr)
+            val bb = java.nio.ByteBuffer.allocate(16)
+            bb.putLong(u.mostSignificantBits)
+            bb.putLong(u.leastSignificantBits)
+            bb.array()
+        } catch (_: Exception) {
+            val hash = CryptoUtils.sha256(uuidStr.toByteArray(Charsets.UTF_8))
+            hash.copyOf(16)
+        }
+    }
+
+    @Test
+    fun testEarlyRekeyBufferedAndReplayedUponInviteArrival() = runBlocking {
+        val dhtNode = FakeDht()
+
+        val aliceContactDao = FakeContactDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val charlieContactDao = FakeContactDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        )
+
+        val acKey = CryptoUtils.secureRandomBytes(64)
+        val caKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "charlie", name = "Charlie", chainKeyOut = acKey, chainKeyIn = caKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        charlieContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = caKey, chainKeyIn = acKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        // Alice creates group
+        val group = aliceRepo.createGroup("TestEarlyRekeyGroup", listOf("charlie"))
+        val groupId = group.groupId
+        val groupIdBytes = testUuidStringToBytes(groupId)
+
+        // Simulate an early REKEY arriving at Charlie BEFORE Charlie processes the invite
+        val bobMemberId = java.util.UUID.randomUUID().toString()
+        val bobMemberIdBytes = testUuidStringToBytes(bobMemberId)
+        val bobSenderKey = CryptoUtils.secureRandomBytes(64)
+        val earlyRekeyControl = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+            controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+            groupId = groupIdBytes,
+            groupEpoch = 1L,
+            senderMemberId = bobMemberIdBytes,
+            senderGroupChainKey = bobSenderKey,
+            currentCounter = 0L,
+            groupName = "TestEarlyRekeyGroup",
+            members = emptyList(),
+            memberKeys = emptyList()
+        )
+
+        // Charlie receives REKEY before invite: group does not exist yet in charlieGroupDao
+        assertNull("Charlie group must not exist yet", charlieGroupDao.getGroupById(groupId))
+        charlieRepo.processIncomingGroupControl("alice", earlyRekeyControl)
+        assertNull("Charlie group still null after early rekey", charlieGroupDao.getGroupById(groupId))
+
+        // Now Charlie receives INVITE
+        assertTrue("Charlie polls and receives group invite", charlieRepo.pollContactIncoming("alice"))
+        assertNotNull("Charlie group created after invite", charlieGroupDao.getGroupById(groupId))
+
+        // Verify Bob's early rekey was replayed from buffer and Bob's sender key is present on Charlie
+        val charlieMembers = charlieGroupMemberDao.getMembersForGroup(groupId)
+        val bobMemberOnCharlie = charlieMembers.firstOrNull { it.memberId == bobMemberId }
+        assertNotNull("Bob member must be registered on Charlie from replayed early control", bobMemberOnCharlie)
+        assertArrayEquals("Bob's sender key must match replayed key", bobSenderKey, bobMemberOnCharlie!!.rawChainKeyIn)
+    }
+
+    @Test
+    fun testBroadcastMyGroupSenderKeySkipsMembersWithPendingInvite() = runBlocking {
+        val dhtNode = FakeDht()
+        val aliceContactDao = FakeContactDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        )
+
+        val acKey = CryptoUtils.secureRandomBytes(64)
+        val caKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "charlie", name = "Charlie", chainKeyOut = acKey, chainKeyIn = caKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+
+        // Alice creates group with Charlie
+        val group = aliceRepo.createGroup("TestPendingInviteSkip", listOf("charlie"))
+        val charlieContactBefore = aliceContactDao.getContactById("charlie")!!
+        val counterOutAfterInvite = charlieContactBefore.counterOut
+
+        // Invite is pending in pendingGroupControls for Charlie
+        val pendingInvites = aliceRepo.getPendingGroupControls().filter {
+            it.groupId == group.groupId && it.contactId == "charlie" && it.controlSubType == org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_INVITE
+        }
+        assertTrue("Invite must be registered in pendingGroupControls", pendingInvites.isNotEmpty())
+
+        // Alice invokes broadcastMyGroupSenderKey
+        aliceRepo.broadcastMyGroupSenderKey(group.groupId)
+
+        // Charlie's contact counterOut must NOT advance because REKEY was skipped while invite was pending
+        val charlieContactAfter = aliceContactDao.getContactById("charlie")!!
+        assertEquals("counterOut must not advance because rekey was skipped for pending invite", counterOutAfterInvite, charlieContactAfter.counterOut)
+    }
 }

@@ -34,7 +34,8 @@ data class DhtOpMetrics(
     val tokensReceived: Int = 0,
     val putNodesAttempted: Int = 0,
     val putNodesSucceeded: Int = 0,
-    val dhtError: String? = null
+    val dhtError: String? = null,
+    val isLiveNetwork: Boolean = false
 )
 
 /**
@@ -79,6 +80,7 @@ interface DhtClient {
     val lastPutNodesAttempted: Int get() = lastOperationMetrics.putNodesAttempted
     val lastPutNodesSucceeded: Int get() = lastOperationMetrics.putNodesSucceeded
     val lastDhtError: String? get() = lastOperationMetrics.dhtError
+    val isLastOperationOnLiveNetwork: Boolean get() = lastOperationMetrics.isLiveNetwork
 
     /**
      * Empirical telemetry: cumulative count of BEP 44 GET queries executed.
@@ -114,6 +116,11 @@ interface DhtClient {
      * Returns count of active discovered peers in routing table / swarm.
      */
     fun getActivePeerCount(): Int
+
+    /**
+     * Forces or triggers re-bootstrapping when routing table is starved or shallow.
+     */
+    suspend fun rebootstrap(force: Boolean = false): Boolean = true
 
     /**
      * Asynchronously pre-warms routes/nodes closest to target.

@@ -861,13 +861,22 @@ class ChatViewModel @JvmOverloads constructor(
                         republishAttempt = 0
                     )
 
+                    val isLive = (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.isLastOperationOnLiveNetwork == true
+                    val putAck = dhtLeafNode.lastPutNodesSucceeded
+                    val nodesResponded = dhtLeafNode.lastNodesResponded
+                    val lookupHops = dhtLeafNode.lastLookupHops
+                    val isWeakPut = isLive && (putAck <= 1 || nodesResponded <= 2 || lookupHops <= 1)
+                    if (isWeakPut) {
+                        android.util.Log.w("BobHandshake", "Initial PUT weakly replicated: putAck=$putAck, responded=$nodesResponded, hops=$lookupHops. Refreshing routing table...")
+                        (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.rebootstrap(force = true)
+                    }
+
                     if (!success) {
                         val q = dhtLeafNode.lastNodesQueried
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
                         val tokens = dhtLeafNode.lastTokensReceived
                         val putSent = dhtLeafNode.lastPutNodesAttempted
-                        val putAck = dhtLeafNode.lastPutNodesSucceeded
                         val lastErr = dhtLeafNode.lastDhtError
                         val tor = settingsManager.isTorEnabled.value
                         _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
@@ -888,18 +897,28 @@ class ChatViewModel @JvmOverloads constructor(
                         timeoutMs = 8_000L
                     )
 
-                    if (verified == null) {
+                    val isGetLive = (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.isLastOperationOnLiveNetwork == true
+                    val isShallowFalsePositive = isGetLive &&
+                        verified != null &&
+                        (verified.lookupHops <= 1 || dhtLeafNode.lastLookupHops <= 1) &&
+                        (verified.nodesResponded <= 1 || dhtLeafNode.lastNodesResponded <= 1) &&
+                        putAck <= 1
+
+                    if (verified == null || isShallowFalsePositive) {
+                        if (isShallowFalsePositive) {
+                            android.util.Log.w("BobHandshake", "GET verified only on 1 shallow hop (hops=${dhtLeafNode.lastLookupHops}, responded=${dhtLeafNode.lastNodesResponded}, putAck=$putAck) - treating as unpropagated and continuing republish loop")
+                            (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.rebootstrap(force = true)
+                        }
                         val q = dhtLeafNode.lastNodesQueried
                         val r = dhtLeafNode.lastNodesResponded
                         val h = dhtLeafNode.lastLookupHops
                         val tokens = dhtLeafNode.lastTokensReceived
                         val putSent = dhtLeafNode.lastPutNodesAttempted
-                        val putAck = dhtLeafNode.lastPutNodesSucceeded
                         val lastErr = dhtLeafNode.lastDhtError
                         val tor = settingsManager.isTorEnabled.value
-                        _bobHandshakeDetail.value = "Put failed - retrying (attempt 1) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
+                        _bobHandshakeDetail.value = "Put weakly replicated - retrying (attempt 1) [Q:$q R:$r H:$h T:$tokens P:$putSent A:$putAck Err:${lastErr ?: "none"} Tor:$tor]"
                         setBobHandshakeStatus(BobHandshakeStatus.PUT_FAILED_RETRYING)
-                        _statusNotification.value = "Record not yet found in DHT, retrying in background..."
+                        _statusNotification.value = "Record not yet well-replicated in DHT, retrying in background..."
                         _isHandshaking.value = false
                         startBobRepublishLoop(bobResult, contactName, intervalMs)
                         return@withTimeoutOrNull true
@@ -941,9 +960,9 @@ class ChatViewModel @JvmOverloads constructor(
                         bobRepublishJob = handshakeRepublishScope.launch {
                             try {
                                 val delays = if (org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) {
-                                    listOf(3000L, 6000L, 10000L, 16000L)
+                                    listOf(2000L, 5000L, 9000L, 14000L, 20000L, 30000L)
                                 } else {
-                                    listOf(5000L, 10000L, 20000L, 30000L)
+                                    listOf(3000L, 8000L, 15000L, 25000L, 40000L, 60000L)
                                 }
                                 for ((idx, delayMs) in delays.withIndex()) {
                                     delay(delayMs)
@@ -1003,6 +1022,9 @@ class ChatViewModel @JvmOverloads constructor(
                     delay(intervalMs)
                     if (!isActive) break
                     republishCount++
+                    if ((dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.getActivePeerCount() ?: 0 < 16) {
+                        (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.rebootstrap(force = true)
+                    }
                     val tRepubStart = System.currentTimeMillis()
                     val repSeq = DhtClient.DEFAULT_MUTABLE_SEQ + republishCount.toLong()
                     val repOk = dhtLeafNode.putMutable(
@@ -1035,7 +1057,19 @@ class ChatViewModel @JvmOverloads constructor(
                     )
                     android.util.Log.i("BobHandshake", "attempt=$republishCount put=$repOk visibleInNetwork=${visible != null}")
 
-                    if (visible != null) {
+                    val isRepubGetLive = (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.isLastOperationOnLiveNetwork == true
+                    val isRepubShallow = isRepubGetLive &&
+                        visible != null &&
+                        (visible.lookupHops <= 1 || dhtLeafNode.lastLookupHops <= 1) &&
+                        (visible.nodesResponded <= 1 || dhtLeafNode.lastNodesResponded <= 1) &&
+                        dhtLeafNode.lastPutNodesSucceeded <= 1
+
+                    if (isRepubShallow) {
+                        android.util.Log.w("BobHandshake", "Republish attempt=$republishCount visible only on 1 shallow hop, continuing republish")
+                        (dhtLeafNode as? org.pqchat.dht.dht.leaf.DhtLeafNode)?.rebootstrap(force = true)
+                    }
+
+                    if (visible != null && !isRepubShallow) {
                         _bobHandshakeDetail.value = null
                         setBobHandshakeStatus(BobHandshakeStatus.PLACED_IN_DHT)
                         val newContactId = UUID.randomUUID().toString()

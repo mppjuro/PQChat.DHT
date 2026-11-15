@@ -264,4 +264,23 @@ class DhtLeafNodePutLookupTest {
         assertArrayEquals("Bob's target0 must strictly match SHA-1(k)", expectedTarget, bobResult.target0)
         assertArrayEquals("Alice's target0 must strictly match Bob's target0", aliceInit.target0, bobResult.target0)
     }
+
+    @Test
+    fun testMinHealthyRoutingTableSizeConstant() {
+        assertEquals("MIN_HEALTHY_ROUTING_TABLE_SIZE must be at least 16 to prevent node cache starvation",
+            16, DhtLeafNode.MIN_HEALTHY_ROUTING_TABLE_SIZE)
+    }
+
+    @Test
+    fun testRebootstrapReturnsTrueWhenHealthy() = runBlocking {
+        val node = DhtLeafNode(autoBootstrap = false)
+        try {
+            node.initSocket()
+            node.start()
+            val result = node.rebootstrap(force = false)
+            assertTrue("rebootstrap must succeed without throwing", result)
+        } finally {
+            node.stop()
+        }
+    }
 }

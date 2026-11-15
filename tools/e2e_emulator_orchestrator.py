@@ -1063,10 +1063,10 @@ class MultiEmulatorOrchestrator:
             dev.clear_data()
             dev.grant_app_permissions()
             dev.start_app()
-            self.sleep(1.0)
+            self.sleep(2.0 if self.args.real_dht else 1.0)
             dev.grant_app_permissions()
 
-        self.sleep(2.0)
+        self.sleep(3.0 if self.args.real_dht else 2.0)
         for dev in self.active_devices:
             dev.ensure_app_foreground()
             dev.wait_for_contact_list_ready(timeout=25.0)
@@ -1512,7 +1512,7 @@ class MultiEmulatorOrchestrator:
 
         # Alice: Tap "Create Group" (NO fallback_ratio!)
         confirmed = self.alice.click_element(test_tag="create_group_confirm_button", text="Create Group")
-        self.sleep(2.0 if not self.args.real_dht else 4.0)
+        self.sleep(2.0 if not self.args.real_dht else 6.0)
 
         group_confirmed = False
         if confirmed:
@@ -1572,7 +1572,7 @@ class MultiEmulatorOrchestrator:
 
         while time.time() - start_wait < invite_timeout and len(joined_devs) < len(participants):
             elapsed = time.time() - start_wait
-            sync_delay = 18.0 if self.args.real_dht else 12.0
+            sync_delay = 12.0 if self.args.real_dht else 8.0
             if (time.time() - last_sync_chip) >= sync_delay:
                 self.alice.trigger_sync()
                 for dev in participants:
