@@ -1526,7 +1526,7 @@ class ResearchTelemetryManager(
             type = "application/zip"
             putExtra(Intent.EXTRA_STREAM, uri)
             putExtra(Intent.EXTRA_SUBJECT, "PQChat Research Telemetry Bundle ($sessionId)")
-            putExtra(Intent.EXTRA_TEXT, "Paczka badawcza PQChat DHT (sesja: $sessionId)")
+            putExtra(Intent.EXTRA_TEXT, "PQChat DHT Research Telemetry Bundle (session: $sessionId)")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

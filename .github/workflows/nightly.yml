@@ -41,6 +41,9 @@ env:
   ANDROID_PREFS_ROOT: /home/runner
   ANDROID_SDK_HOME: /home/runner
   ANDROID_AVD_HOME: /home/runner/.android/avd
+  FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+  FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+  FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
 
 jobs:
   fast-unit-tests:
@@ -62,16 +65,31 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Lint
         run: ./gradlew lintDebug
 
       - name: Run Fast Unit Tests
         run: ./gradlew testDebugUnitTest
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Verify Firebase Research Telemetry Schema & Live Sync
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: python3 scripts/verify_firebase_telemetry_ci.py
 
       - name: Verify Room Schema Consistency
         run: |
@@ -115,10 +133,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Slow Repository & Rekey Tests
         run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true --tests "org.pqchat.dht.data.repository.*"
@@ -155,10 +178,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Slow Statistical, Tor & Measurement Tests
         run: ./gradlew testDebugUnitTest -DrunSlowTests=true -DrunNightlyTests=true --tests "org.pqchat.dht.traffic.TrafficThreatModelStatisticalTest" --tests "org.pqchat.dht.network.tor.DhtClientTorIntegrationTest" --tests "org.pqchat.dht.debug.LoopbackMeasurementHarnessTest"
@@ -192,10 +220,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Real BEP 44 Remote Integration Tests (with retry)
         uses: nick-fields/retry@v4
@@ -239,10 +272,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Real DHT Measurements
         run: |
@@ -354,10 +392,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Two Devices End-to-End Test
         run: |
@@ -413,10 +456,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run JUnit Adversarial Security Tests
         run: ./gradlew testDebugUnitTest --tests "org.pqchat.dht.dht.AdversarialDhtSecurityTest"
@@ -481,10 +529,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Enable KVM hardware acceleration
         run: |
@@ -834,10 +887,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug

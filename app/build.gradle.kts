@@ -102,6 +102,10 @@ android {
                 }
                 it.systemProperty("junit.jupiter.execution.timeout.default", "5m")
                 it.systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
+                it.systemProperty(
+                    "jazzer.instrument",
+                    "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+                )
                 it.testLogging {
                     events("passed", "skipped", "failed", "standardOut", "standardError")
                     showExceptions = true
@@ -132,6 +136,10 @@ tasks.withType<Test>().configureEach {
     }
     systemProperty("junit.jupiter.execution.timeout.default", "5m")
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
+    systemProperty(
+        "jazzer.instrument",
+        "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+    )
     testLogging {
         events("passed", "skipped", "failed", "standardOut", "standardError")
         showExceptions = true

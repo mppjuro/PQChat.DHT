@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Numer wersji wydania (np. 0.0.1)'
+        description: 'Release version number (e.g. 0.0.1)'
         required: true
         type: string
         default: '0.0.1'
@@ -16,6 +16,11 @@ on:
 
 permissions:
   contents: write
+
+env:
+  FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+  FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+  FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
 
 jobs:
   build-and-release:
@@ -35,10 +40,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Google Services JSON (Optional)
-        if: ${{ env.GOOGLE_SERVICES_JSON_BASE64 != '' }}
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
 
       - name: Run Quality Verification (Lint & Tests)
         run: |
@@ -77,7 +87,7 @@ jobs:
 
             Official release of **PQChat.DHT** — decentralized P2P messenger with post-quantum cryptography (ML-KEM-512) and traffic shaping over BitTorrent Mainline DHT.
 
-            - **Wersja:** `v${{ env.VERSION }}`
+            - **Version:** `v${{ env.VERSION }}`
             - **Commit:** [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
             - **Included APK package:** `${{ env.APK_NAME }}`
 
