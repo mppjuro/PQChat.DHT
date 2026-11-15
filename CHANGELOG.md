@@ -247,6 +247,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📚 Documentation
 
+- [`5d81524`](https://github.com/mppjuro/PQChat.DHT/commit/5d81524e49328b086d33d3b245ac0ac67f0a2c45) (2026-11-15) — **ci**: add automated Dokka and pydoctor code documentation workflow
+- [`cfc46dd`](https://github.com/mppjuro/PQChat.DHT/commit/cfc46dd19771e0461fb2526cc22028ee5621f97e) (2026-11-15) — **agents**: add AI context ignore rules and refactor AGENTS.md routing index
 - [`dfaea3f`](https://github.com/mppjuro/PQChat.DHT/commit/dfaea3fedcfd12d8874d1d94c0fac67b93eb6d49) (2026-10-22) — **formal**: synchronize technical specs, threat model, and formal proofs to 32 ProVerif lemmas
 - [`47bc9af`](https://github.com/mppjuro/PQChat.DHT/commit/47bc9af3da943a0a548beae57bb3781c76b187ea) (2026-10-21) — clean changelog automation, add group proverif docs, and harden lint and room schema CI
 - [`c093b39`](https://github.com/mppjuro/PQChat.DHT/commit/c093b39f16686d71986e27bf095b8c94a1d53acf) (2026-10-12) — README with project details and instructions
