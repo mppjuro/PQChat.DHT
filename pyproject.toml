@@ -1,0 +1,21 @@
+[tool.pydoctor]
+project-name = "PQChat.DHT Python Tooling"
+project-url = "https://github.com/mppjuro/PQChat.DHT"
+project-base-dir = "."
+html-output = "build/docs/python"
+html-viewsource-base = "https://github.com/mppjuro/PQChat.DHT/tree/main"
+docformat = "plaintext"
+theme = "readthedocs"
+make-html = true
+warnings-as-errors = true
+privacy = [
+    "HIDDEN:**.__pycache__",
+    "HIDDEN:**.__pycache__.**",
+]
+add-package = [
+    "scripts",
+    "tools",
+]
+add-module = [
+    "docs/formal/verify_lemmas.py",
+]

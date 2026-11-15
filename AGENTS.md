@@ -162,3 +162,17 @@ Use the routing table and detailed subsystem flows below to navigate directly to
   ./gradlew testDebugUnitTest --tests "org.pqchat.dht.e2e.TwoDevicesE2EIntegrationTest"
   python tools/e2e_emulator_orchestrator.py
   ```
+
+---
+
+## 4. Automated Code Documentation (Dokka & pydoctor)
+
+1. **Kotlin API Docs (`Dokka 2.3.0`):** Configured in `build.gradle.kts` and `app/build.gradle.kts` (`org.jetbrains.dokka` with `android-documentation-plugin`, compatible with AGP 9.x built-in Kotlin). Outputs HTML to `build/docs/kotlin/`.
+   ```bash
+   ./gradlew :app:dokkaGenerateHtml   # or ./gradlew generateKotlinDocs
+   ```
+2. **Python Tooling Docs (`pydoctor`):** Configured in `pyproject.toml` (`[tool.pydoctor]`, static AST parser, `docformat = "plaintext"`, `warnings-as-errors = true`, dependencies in `scripts/requirements-docs.txt`). Covers `scripts/`, `tools/`, and `docs/formal/verify_lemmas.py` without executing code or requiring `__init__.py` / `matplotlib` / `numpy` at doc-build time. Outputs HTML to `build/docs/python/`.
+   ```bash
+   pip install -r scripts/requirements-docs.txt && python -m pydoctor
+   ```
+3. **Unified Build & CI:** `./gradlew generateDocs` builds both Kotlin and Python docs locally; GitHub Actions automates generation and artifact publishing in `.github/workflows/docs.yml`. Keep all KDoc and Python docstrings 100% in English (`scripts/check_language_unification.py`).

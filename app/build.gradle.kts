@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
+    id("org.jetbrains.dokka")
 }
 
 if (file("google-services.json").exists()) {
@@ -242,6 +243,33 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.1")
+
+    // Documentation (Dokka Android rendering)
+    dokkaPlugin("org.jetbrains.dokka:android-documentation-plugin:2.3.0")
+}
+
+dokka {
+    moduleName.set("PQChat.DHT")
+    dokkaPublications.html {
+        outputDirectory.set(rootProject.layout.buildDirectory.dir("docs/kotlin"))
+        failOnWarning.set(false)
+        suppressInheritedMembers.set(false)
+    }
+    dokkaSourceSets.configureEach {
+        skipEmptyPackages.set(true)
+        reportUndocumented.set(false)
+        skipDeprecated.set(false)
+        documentedVisibilities(
+            org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier.Public,
+            org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier.Protected,
+            org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier.Internal
+        )
+        sourceLink {
+            localDirectory.set(file("src/main/java"))
+            remoteUrl("https://github.com/mppjuro/PQChat.DHT/tree/main/app/src/main/java")
+            remoteLineSuffix.set("#L")
+        }
+    }
 }
 
 ksp {
