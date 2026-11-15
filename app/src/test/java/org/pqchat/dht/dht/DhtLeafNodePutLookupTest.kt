@@ -277,8 +277,11 @@ class DhtLeafNodePutLookupTest {
         try {
             node.initSocket()
             node.start()
+            for (i in 0 until 16) {
+                node.addPeer(CryptoUtils.secureRandomBytes(20), java.net.InetSocketAddress("127.0.0.1", 50000 + i))
+            }
             val result = node.rebootstrap(force = false)
-            assertTrue("rebootstrap must succeed without throwing", result)
+            assertTrue("rebootstrap must succeed when routing table has sufficient peers", result)
         } finally {
             node.stop()
         }

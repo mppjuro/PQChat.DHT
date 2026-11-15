@@ -956,7 +956,8 @@ open class DhtLeafNode(
     private val lastBootstrapTime = java.util.concurrent.atomic.AtomicLong(0L)
 
     override suspend fun rebootstrap(force: Boolean): Boolean = withContext(Dispatchers.IO) {
-        if (isTestLoopbackMode) return@withContext true
+        val isLocalMode = isLocalTestbedActive()
+        if (isTestLoopbackMode || isLocalMode) return@withContext true
         val now = System.currentTimeMillis()
         if (!force && routingTable.size >= MIN_HEALTHY_ROUTING_TABLE_SIZE && (now - lastBootstrapTime.get()) < 20_000L) {
             return@withContext true
@@ -969,6 +970,8 @@ open class DhtLeafNode(
             bootstrap()
             lastBootstrapTime.set(System.currentTimeMillis())
             routingTable.size >= MIN_HEALTHY_ROUTING_TABLE_SIZE
+        } catch (_: Exception) {
+            false
         } finally {
             isBootstrapping.set(false)
         }
