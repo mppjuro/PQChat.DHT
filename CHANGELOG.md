@@ -75,6 +75,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`89fbd95`](https://github.com/mppjuro/PQChat.DHT/commit/89fbd95cc0578bc7d34358dc1a44328ba08b0ec5) (2026-11-15) — **dht**: handle local mode and catch exceptions in rebootstrap, fix unit test assertion
+- [`0d64c9f`](https://github.com/mppjuro/PQChat.DHT/commit/0d64c9f18c9f4918b4813ff19d213cabfc663394) (2026-11-15) — **dht,group**: prevent routing table starvation and harden group invite delivery in multi-node real DHT
 - [`67ada76`](https://github.com/mppjuro/PQChat.DHT/commit/67ada7679c3803429d4f88e7bd12b24e1fc7dbd9) (2026-11-14) — **dht**: allow retransmitted frames with seq > DEFAULT_MUTABLE_SEQ to decrypt before tombstone fallback
 - [`7fa0ade`](https://github.com/mppjuro/PQChat.DHT/commit/7fa0ade69ebea500b36acc0e25210f7308373634) (2026-11-14) — **e2e**: enhance direct messaging reliability, keyboard handling, and logging in phase 2
 - [`d4705eb`](https://github.com/mppjuro/PQChat.DHT/commit/d4705ebb1c24649c352f47a50f1a8b9c697053b7) (2026-11-14) — **group**: ensure deterministic per-member sender chains and multi-turn polling in star topology
