@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`f676d35`](https://github.com/mppjuro/PQChat.DHT/commit/f676d359286826ae2bb6b754481ddb72014cea1a) (2026-11-15) — **ci,research**: fix Firebase secrets injection in workflows and add E2E Firestore telemetry verification
 - [`89fbd95`](https://github.com/mppjuro/PQChat.DHT/commit/89fbd95cc0578bc7d34358dc1a44328ba08b0ec5) (2026-11-15) — **dht**: handle local mode and catch exceptions in rebootstrap, fix unit test assertion
 - [`0d64c9f`](https://github.com/mppjuro/PQChat.DHT/commit/0d64c9f18c9f4918b4813ff19d213cabfc663394) (2026-11-15) — **dht,group**: prevent routing table starvation and harden group invite delivery in multi-node real DHT
 - [`67ada76`](https://github.com/mppjuro/PQChat.DHT/commit/67ada7679c3803429d4f88e7bd12b24e1fc7dbd9) (2026-11-14) — **dht**: allow retransmitted frames with seq > DEFAULT_MUTABLE_SEQ to decrypt before tombstone fallback
