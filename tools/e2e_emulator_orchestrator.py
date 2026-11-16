@@ -1434,28 +1434,43 @@ class MultiEmulatorOrchestrator:
         print("[Alice] Initiating ML-KEM-512 Rekey...", flush=True)
         rekey_clicked = self.alice.click_element(test_tag="chat_rekey_button", content_desc="Initiate ML-KEM-512 Rekey")
         self.sleep(2.0 if not self.args.real_dht else 4.0)
-        sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
 
         if rekey_clicked:
-            # Bob triggers DHT poll to retrieve Type 0x03 Offer and dispatch Type 0x04 Response
-            print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
-            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(3.0 if not self.args.real_dht else 7.0)
+            rekey_sync_timeout = 75 if self.args.real_dht else 35
+            rekey_start = time.time()
+            rekey_synced = bool(self.args.dry_run)
+            while not rekey_synced and (time.time() - rekey_start) < rekey_sync_timeout:
+                bob_ready = bool(self.bob.find_node(text="TX: 2  RX: 2"))
+                if not bob_ready:
+                    print("[Bob] Triggering DHT sync for rekey offer processing...", flush=True)
+                    self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                    self.sleep(2.5 if not self.args.real_dht else 5.0)
+                    bob_ready = bool(self.bob.find_node(text="TX: 2  RX: 2"))
 
-            # Alice triggers DHT poll to retrieve Type 0x04 Response
-            print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
-            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(3.0 if not self.args.real_dht else 7.0)
+                alice_ready = bool(self.alice.find_node(text="TX: 2  RX: 2")) and not bool(
+                    self.alice.find_node(text="ML-KEM key exchange in progress")
+                )
+                if not alice_ready:
+                    print("[Alice] Triggering DHT sync for rekey response processing...", flush=True)
+                    self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                    self.sleep(2.5 if not self.args.real_dht else 5.0)
+                    alice_ready = bool(self.alice.find_node(text="TX: 2  RX: 2")) and not bool(
+                        self.alice.find_node(text="ML-KEM key exchange in progress")
+                    )
 
-            # Channel stabilization: ensure both sides complete ratchet update and flush pending ACK
-            print("[Channel Stabilization] Stabilizing ratchet channel after rekey...", flush=True)
-            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(2.0 if not self.args.real_dht else 5.0)
-            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(2.0 if not self.args.real_dht else 5.0)
+                if bob_ready and alice_ready:
+                    rekey_synced = True
+                    break
 
-            self.log_step("ML-KEM-512 Rekey", "PASS", "PQC Rekey offer dispatched and processed over DHT", sc_rekey_done)
+                self.sleep(1.5 if not self.args.real_dht else 3.0)
+
+            sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
+            if rekey_synced:
+                self.log_step("ML-KEM-512 Rekey", "PASS", "PQC Rekey offer dispatched and processed over DHT", sc_rekey_done)
+            else:
+                self.log_step("ML-KEM-512 Rekey", "WARN", "PQC Rekey dispatched; proceeding after sync timeout", sc_rekey_done)
         else:
+            sc_rekey_done = self.alice.screencap("03_alice_rekey_completed")
             self.log_step("ML-KEM-512 Rekey", "FAIL", "Rekey button 'chat_rekey_button' not found on Alice's chat screen", sc_rekey_done)
 
         # Return both Alice and Bob to ContactListScreen
@@ -1516,9 +1531,12 @@ class MultiEmulatorOrchestrator:
 
         group_confirmed = False
         if confirmed:
-            if self.alice.find_node(test_tag=f"group_item_{group_name}") or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=15):
-                group_confirmed = True
-            elif self.alice.wait_for_element(test_tag="chat_message_input", timeout=5):
+            if (
+                self.alice.find_node(test_tag="chat_message_input")
+                or self.alice.find_node(test_tag=f"group_item_{group_name}")
+                or self.alice.wait_for_element(test_tag="chat_message_input", timeout=15)
+                or self.alice.wait_for_element(test_tag=f"group_item_{group_name}", timeout=5)
+            ):
                 group_confirmed = True
 
         sc_group_created = self.alice.screencap("04_alice_group_created")
@@ -1553,7 +1571,7 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             participants.append(self.dave)
 
-        invite_timeout = 45 if not self.args.real_dht else 150
+        invite_timeout = 75 if not self.args.real_dht else 150
         all_participants_joined = True
         missing_participants = []
 

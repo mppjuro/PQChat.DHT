@@ -505,15 +505,16 @@ class ChatViewModel @JvmOverloads constructor(
                                         } catch (_: Exception) {}
                                     }
                                 }
-                                val hasMissingKeys = members.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
-                                if (hasMissingKeys) {
-                                    repository.relayMissingGroupKeys(group.groupId, force = true)
-                                }
+                                val updatedMembers = repository.getGroupMembers(group.groupId)
+                                val hasMissingKeys = updatedMembers.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                                repository.relayMissingGroupKeys(group.groupId, force = hasMissingKeys)
                                 repository.republishRecentGroupMessages(group.groupId)
                                 repository.pollGroupIncoming(group.groupId)
                             } else {
                                 repository.pollContactIncoming(currentSelectedId)
                             }
+                        } else {
+                            repository.pollAllContactsIncoming()
                         }
                         repository.flushOutboundPoissonQueue()
                         repository.republishUnacknowledgedMessages()

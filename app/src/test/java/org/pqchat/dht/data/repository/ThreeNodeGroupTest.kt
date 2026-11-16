@@ -2,6 +2,7 @@ package org.pqchat.dht.data.repository
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.*
@@ -104,6 +105,23 @@ class ThreeNodeGroupTest {
 
     private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
+
+    private class FakePendingRekeyOfferDao : PendingRekeyOfferDao {
+        val offers = java.util.concurrent.ConcurrentHashMap<String, PendingRekeyOfferEntity>()
+        val offersFlow = MutableStateFlow<Map<String, PendingRekeyOfferEntity>>(emptyMap())
+
+        override suspend fun getPendingOffer(contactId: String): PendingRekeyOfferEntity? = offers[contactId]
+        override fun getPendingOfferFlow(contactId: String): Flow<PendingRekeyOfferEntity?> = offersFlow.map { it[contactId] }
+        override fun isRekeyPendingFlow(contactId: String): Flow<Boolean> = offersFlow.map { it.containsKey(contactId) }
+        override suspend fun insertOrUpdate(offer: PendingRekeyOfferEntity) {
+            offers[offer.contactId] = offer
+            offersFlow.value = HashMap(offers)
+        }
+        override suspend fun deletePendingOffer(contactId: String) {
+            offers.remove(contactId)
+            offersFlow.value = HashMap(offers)
+        }
+    }
 
     private class FakeGroupDao : GroupDao {
         val groups = mutableMapOf<String, GroupEntity>()
@@ -806,5 +824,219 @@ class ThreeNodeGroupTest {
         // Charlie's contact counterOut must NOT advance because REKEY was skipped while invite was pending
         val charlieContactAfter = aliceContactDao.getContactById("charlie")!!
         assertEquals("counterOut must not advance because rekey was skipped for pending invite", counterOutAfterInvite, charlieContactAfter.counterOut)
+    }
+
+    private data class ThreeNodeFixture(
+        val aliceContactDao: FakeContactDao,
+        val aliceMessageDao: FakeMessageDao,
+        val aliceGroupDao: FakeGroupDao,
+        val aliceGroupMemberDao: FakeGroupMemberDao,
+        val aliceRekeyDao: FakePendingRekeyOfferDao,
+        val aliceRepo: ChatRepository,
+        val bobContactDao: FakeContactDao,
+        val bobMessageDao: FakeMessageDao,
+        val bobGroupDao: FakeGroupDao,
+        val bobGroupMemberDao: FakeGroupMemberDao,
+        val bobRekeyDao: FakePendingRekeyOfferDao,
+        val bobRepo: ChatRepository,
+        val charlieContactDao: FakeContactDao,
+        val charlieMessageDao: FakeMessageDao,
+        val charlieGroupDao: FakeGroupDao,
+        val charlieGroupMemberDao: FakeGroupMemberDao,
+        val charlieRekeyDao: FakePendingRekeyOfferDao,
+        val charlieRepo: ChatRepository
+    )
+
+    private suspend fun createThreeNodeFixture(dhtNode: FakeDht): ThreeNodeFixture {
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceRekeyDao = FakePendingRekeyOfferDao()
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = aliceRekeyDao,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        ).apply {
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobRekeyDao = FakePendingRekeyOfferDao()
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = bobRekeyDao,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        ).apply {
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieRekeyDao = FakePendingRekeyOfferDao()
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = charlieRekeyDao,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        ).apply {
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val abKey = CryptoUtils.secureRandomBytes(64)
+        val baKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "bob", name = "Bob", chainKeyOut = abKey, chainKeyIn = baKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        bobContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = baKey, chainKeyIn = abKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        val acKey = CryptoUtils.secureRandomBytes(64)
+        val caKey = CryptoUtils.secureRandomBytes(64)
+        aliceContactDao.insertOrUpdate(ContactEntity(id = "charlie", name = "Charlie", chainKeyOut = acKey, chainKeyIn = caKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true))
+        charlieContactDao.insertOrUpdate(ContactEntity(id = "alice", name = "Alice", chainKeyOut = caKey, chainKeyIn = acKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true))
+
+        return ThreeNodeFixture(
+            aliceContactDao, aliceMessageDao, aliceGroupDao, aliceGroupMemberDao, aliceRekeyDao, aliceRepo,
+            bobContactDao, bobMessageDao, bobGroupDao, bobGroupMemberDao, bobRekeyDao, bobRepo,
+            charlieContactDao, charlieMessageDao, charlieGroupDao, charlieGroupMemberDao, charlieRekeyDao, charlieRepo
+        )
+    }
+
+    @Test
+    fun testThreeNodeGroupInviteAfterPqcRekeyAndPendingRekey() = runBlocking {
+        // Case A: Alice initiates rekey (0x03), Bob processes 0x03 and publishes 0x04,
+        // and Alice calls createGroup before polling 0x04.
+        val dhtA = FakeDht(minDelayMs = 0L, maxDelayMs = 0L)
+        dhtA.start()
+        val fA = createThreeNodeFixture(dhtA)
+        try {
+            assertTrue(fA.aliceRepo.sendTextMessage("bob", "DM_Alice_to_Bob"))
+            assertTrue(fA.bobRepo.pollContactIncoming("alice"))
+            assertTrue(fA.bobRepo.sendTextMessage("alice", "DM_Bob_to_Alice"))
+            assertTrue(fA.aliceRepo.pollContactIncoming("bob"))
+
+            assertTrue("Alice must initiate rekey", fA.aliceRepo.initiateRekey("bob"))
+            assertNotNull("Pending rekey offer must exist on Alice", fA.aliceRekeyDao.getPendingOffer("bob"))
+
+            assertTrue("Bob must process 0x03 offer", fA.bobRepo.pollContactIncoming("alice"))
+            assertEquals(1L, fA.bobRepo.getContact("alice")!!.rekeyEpoch)
+
+            // Alice has not polled 0x04 yet, and creates the group
+            assertEquals(0L, fA.aliceRepo.getContact("bob")!!.rekeyEpoch)
+            val groupA = fA.aliceRepo.createGroup("PQ_Group_CaseA", listOf("bob", "charlie"))
+
+            assertEquals("Alice must auto-poll 0x04 and reach epoch 1 before sending invite", 1L, fA.aliceRepo.getContact("bob")!!.rekeyEpoch)
+            assertNull("Pending rekey offer must be cleared", fA.aliceRekeyDao.getPendingOffer("bob"))
+
+            assertTrue("Bob must receive group invite on post-rekey chain", fA.bobRepo.pollContactIncoming("alice"))
+            assertTrue("Charlie must receive group invite", fA.charlieRepo.pollContactIncoming("alice"))
+            assertNotNull("Bob group must be created", fA.bobGroupDao.getGroupById(groupA.groupId))
+            assertNotNull("Charlie group must be created", fA.charlieGroupDao.getGroupById(groupA.groupId))
+
+            assertTrue(fA.aliceRepo.sendGroupMessage(groupA.groupId, "CaseA_Alice_Msg"))
+            assertTrue(fA.bobRepo.pollGroupIncoming(groupA.groupId))
+            assertTrue(fA.charlieRepo.pollGroupIncoming(groupA.groupId))
+            assertEquals(1, fA.bobMessageDao.messages.count { it.textContent?.raw == "CaseA_Alice_Msg" && !it.isOutgoing })
+            assertEquals(1, fA.charlieMessageDao.messages.count { it.textContent?.raw == "CaseA_Alice_Msg" && !it.isOutgoing })
+
+            assertTrue(fA.bobRepo.sendGroupMessage(groupA.groupId, "CaseA_Bob_Msg"))
+            assertTrue(fA.aliceRepo.pollGroupIncoming(groupA.groupId))
+            assertTrue(fA.charlieRepo.pollGroupIncoming(groupA.groupId))
+            assertEquals(1, fA.aliceMessageDao.messages.count { it.textContent?.raw == "CaseA_Bob_Msg" && !it.isOutgoing })
+            assertEquals(1, fA.charlieMessageDao.messages.count { it.textContent?.raw == "CaseA_Bob_Msg" && !it.isOutgoing })
+        } finally {
+            fA.aliceRepo.close()
+            fA.bobRepo.close()
+            fA.charlieRepo.close()
+            dhtA.stop()
+        }
+
+        // Case B: Alice initiates rekey (0x03) with Bob and immediately calls createGroup
+        // BEFORE Bob has even polled 0x03.
+        val dhtB = FakeDht(minDelayMs = 0L, maxDelayMs = 0L)
+        dhtB.start()
+        val fB = createThreeNodeFixture(dhtB)
+        try {
+            assertTrue(fB.aliceRepo.sendTextMessage("bob", "DM_CaseB_1"))
+            assertTrue(fB.bobRepo.pollContactIncoming("alice"))
+            assertTrue(fB.bobRepo.sendTextMessage("alice", "DM_CaseB_2"))
+            assertTrue(fB.aliceRepo.pollContactIncoming("bob"))
+
+            assertTrue("Alice must initiate rekey", fB.aliceRepo.initiateRekey("bob"))
+            val aliceBobCounterOutAfterOffer = fB.aliceRepo.getContact("bob")!!.counterOut
+
+            // Bob has NOT polled 0x03 yet when Alice creates the group
+            val groupB = fB.aliceRepo.createGroup("PQ_Group_CaseB", listOf("bob", "charlie"))
+
+            // Bob's invite was deferred; counterOut for Bob must NOT have advanced on pre-rekey chain
+            assertEquals("Bob's counterOut must not advance while rekey is pending", aliceBobCounterOutAfterOffer, fB.aliceRepo.getContact("bob")!!.counterOut)
+            assertTrue("Charlie must still receive group invite immediately", fB.charlieRepo.pollContactIncoming("alice"))
+            assertNotNull("Charlie group must be created", fB.charlieGroupDao.getGroupById(groupB.groupId))
+            assertNull("Bob group must not exist yet", fB.bobGroupDao.getGroupById(groupB.groupId))
+
+            // Bob now polls 0x03 and responds with 0x04
+            assertTrue("Bob must process 0x03 offer", fB.bobRepo.pollContactIncoming("alice"))
+            assertEquals(1L, fB.bobRepo.getContact("alice")!!.rekeyEpoch)
+
+            // Alice polls 0x04, completes rekey, and automatically drains the deferred group invite
+            assertTrue("Alice must process 0x04 response", fB.aliceRepo.pollContactIncoming("bob"))
+            assertEquals(1L, fB.aliceRepo.getContact("bob")!!.rekeyEpoch)
+            assertNull("Pending rekey offer must be cleared", fB.aliceRekeyDao.getPendingOffer("bob"))
+            assertTrue("Alice counterOut for Bob must advance after deferred invite drain", fB.aliceRepo.getContact("bob")!!.counterOut > aliceBobCounterOutAfterOffer)
+
+            // Bob polls Alice and receives the deferred group invite on the post-rekey chain
+            assertTrue("Bob must receive deferred group invite after rekey", fB.bobRepo.pollContactIncoming("alice"))
+            assertNotNull("Bob group must be created after deferred invite", fB.bobGroupDao.getGroupById(groupB.groupId))
+
+            // Group messaging across all 3 nodes succeeds
+            assertTrue(fB.aliceRepo.sendGroupMessage(groupB.groupId, "CaseB_Alice_Msg"))
+            assertTrue(fB.bobRepo.pollGroupIncoming(groupB.groupId))
+            assertTrue(fB.charlieRepo.pollGroupIncoming(groupB.groupId))
+            assertEquals(1, fB.bobMessageDao.messages.count { it.textContent?.raw == "CaseB_Alice_Msg" && !it.isOutgoing })
+            assertEquals(1, fB.charlieMessageDao.messages.count { it.textContent?.raw == "CaseB_Alice_Msg" && !it.isOutgoing })
+
+            assertTrue(fB.bobRepo.sendGroupMessage(groupB.groupId, "CaseB_Bob_Msg"))
+            assertTrue(fB.aliceRepo.pollGroupIncoming(groupB.groupId))
+            assertTrue(fB.charlieRepo.pollGroupIncoming(groupB.groupId))
+            assertEquals(1, fB.aliceMessageDao.messages.count { it.textContent?.raw == "CaseB_Bob_Msg" && !it.isOutgoing })
+            assertEquals(1, fB.charlieMessageDao.messages.count { it.textContent?.raw == "CaseB_Bob_Msg" && !it.isOutgoing })
+        } finally {
+            fB.aliceRepo.close()
+            fB.bobRepo.close()
+            fB.charlieRepo.close()
+            dhtB.stop()
+        }
     }
 }

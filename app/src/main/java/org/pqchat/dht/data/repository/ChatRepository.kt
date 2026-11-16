@@ -489,7 +489,7 @@ class ChatRepository(
      * (from Poisson cover traffic, decoy PUT slots, or past contact slots) to survive 0-PUT filtering.
      */
     suspend fun executeDecoyGets(contactId: String? = null): Int = withContext(Dispatchers.IO) {
-        if (!enableDecoyGets) return@withContext 0
+        if (isFastTestMode || !enableDecoyGets) return@withContext 0
         val count = computeDecoyGetCount(decoyGetRatio)
         if (count <= 0) return@withContext 0
 
@@ -870,68 +870,72 @@ class ChatRepository(
                     if (success) break
                     if (attempt < maxPutAttempts) delay(500L)
                 }
-            }
-            val rttMs = System.currentTimeMillis() - tStart
-            researchTelemetry?.recordPacketEvent(
-                role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
-                target = slot.target,
-                seqNum = contact.counterOut.toLong(),
-                payloadBytes = frame.size,
-                rttMs = rttMs,
-                nodesQueried = dhtLeafNode.lastNodesQueried,
-                nodesResponded = dhtLeafNode.lastNodesResponded,
-                lookupHops = dhtLeafNode.lastLookupHops,
-                success = success,
-                republishAttempt = 0
-            )
-
-            if (success) {
-                decoyTargetPool.registerPopulatedTarget(slot.target)
-                val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
-                messageDao.updateStatus(msgId, newStatus)
-                if (!isSelf) {
-                    org.pqchat.dht.service.DhtWorker.registerRepublishTask(
-                        org.pqchat.dht.traffic.PollingWorker.RepublishTask(
-                            messageId = msgId,
-                            contactId = contactId,
-                            target = slot.target,
-                            payload = frame,
-                            edPrivateKeySeed = slot.edPrivateKeySeed,
-                            initialSentTimestamp = System.currentTimeMillis()
-                        )
-                    )
-                    onRepublishTaskUpdated?.invoke()
-
-                    if (isFastTestMode) {
-                        repositoryScope.launch {
-                            delay(3000L)
-                            dhtLeafNode.putMutable(
-                                target = slot.target,
-                                v = frame,
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = slot.edPrivateKeySeed,
-                                skipLocalStore = false
-                            )
-                            delay(3000L)
-                            dhtLeafNode.putMutable(
-                                target = slot.target,
-                                v = frame,
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = slot.edPrivateKeySeed,
-                                skipLocalStore = false
-                            )
-                        }
-                    }
-                }
-                // Advance outgoing chain state ONLY on success
-                contactDao.updateOutgoingState(
-                    id = contactId,
-                    counterOut = contact.counterOut + 1,
-                    chainKeyOut = slot.nextChainKey
+                val rttMs = System.currentTimeMillis() - tStart
+                researchTelemetry?.recordPacketEvent(
+                    role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    target = slot.target,
+                    seqNum = contact.counterOut.toLong(),
+                    payloadBytes = frame.size,
+                    rttMs = rttMs,
+                    nodesQueried = dhtLeafNode.lastNodesQueried,
+                    nodesResponded = dhtLeafNode.lastNodesResponded,
+                    lookupHops = dhtLeafNode.lastLookupHops,
+                    success = success,
+                    republishAttempt = 0
                 )
 
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    val newStatus = if (isSelf) "SENT_DHT" else "PENDING_DELIVERY"
+                    messageDao.updateStatus(msgId, newStatus)
+                    if (!isSelf) {
+                        org.pqchat.dht.service.DhtWorker.registerRepublishTask(
+                            org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                                messageId = msgId,
+                                contactId = contactId,
+                                target = slot.target,
+                                payload = frame,
+                                edPrivateKeySeed = slot.edPrivateKeySeed,
+                                initialSentTimestamp = System.currentTimeMillis()
+                            )
+                        )
+                        onRepublishTaskUpdated?.invoke()
+
+                        if (isFastTestMode) {
+                            repositoryScope.launch {
+                                delay(3000L)
+                                dhtLeafNode.putMutable(
+                                    target = slot.target,
+                                    v = frame,
+                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                    salt = null,
+                                    sk = slot.edPrivateKeySeed,
+                                    skipLocalStore = false
+                                )
+                                delay(3000L)
+                                dhtLeafNode.putMutable(
+                                    target = slot.target,
+                                    v = frame,
+                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                    salt = null,
+                                    sk = slot.edPrivateKeySeed,
+                                    skipLocalStore = false
+                                )
+                            }
+                        }
+                    }
+                    // Advance outgoing chain state ONLY on success
+                    contactDao.updateOutgoingState(
+                        id = contactId,
+                        counterOut = contact.counterOut + 1,
+                        chainKeyOut = slot.nextChainKey
+                    )
+                } else {
+                    messageDao.updateMessageRetry(msgId, "QUEUED", retryCount = 1, timestamp = System.currentTimeMillis())
+                }
+            }
+
+            if (success) {
                 if (isSelf) {
                     delay(2000L)
                     pollContactIncomingInternal(contactId)
@@ -943,7 +947,6 @@ class ChatRepository(
                 }
                 true
             } else {
-                messageDao.updateMessageRetry(msgId, "QUEUED", retryCount = 1, timestamp = System.currentTimeMillis())
                 false
             }
         }
@@ -1872,6 +1875,12 @@ class ChatRepository(
 
         val isSelf = contact.id == SELF_CONTACT_ID
         if (isStrictPoissonShaping()) {
+            val offerFrameRecord = PendingRekeyOfferFrame(
+                target = nextTarget,
+                frame = offerFrame,
+                edSeed = slot.edPrivateKeySeed.copyOf()
+            )
+            pendingRekeyOfferFrames.put(contact.id, offerFrameRecord)?.edSeed?.fill(0)
             contactDao.updateOutgoingState(
                 id = contact.id,
                 counterOut = contact.counterOut + 1,
@@ -1893,6 +1902,7 @@ class ChatRepository(
                             decoyTargetPool.registerPopulatedTarget(nextTarget)
                         } else {
                             pendingRekeyOfferDao?.deletePendingOffer(contact.id)
+                            pendingRekeyOfferFrames.remove(contact.id)?.edSeed?.fill(0)
                             _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contact.id
                         }
                     }
@@ -1901,24 +1911,65 @@ class ChatRepository(
             return true
         }
 
-        val success = dhtLeafNode.putMutable(
-            target = nextTarget,
-            v = offerFrame,
-            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-            salt = null,
-            sk = slot.edPrivateKeySeed,
-            skipLocalStore = isSelf
-        )
+        var success = false
+        val maxAttempts = if (isFastTestMode) 3 else 1
+        withContext(NonCancellable) {
+            for (attempt in 1..maxAttempts) {
+                success = withTimeoutOrNull(if (isFastTestMode) 15_000L else 25_000L) {
+                    dhtLeafNode.putMutable(
+                        target = nextTarget,
+                        v = offerFrame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+                if (success) break
+                if (attempt < maxAttempts) delay(400L)
+            }
 
-        if (success) {
-            contactDao.updateOutgoingState(
-                id = contact.id,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
-        } else {
-            pendingRekeyOfferDao?.deletePendingOffer(contact.id)
-            _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contact.id
+            if (success) {
+                decoyTargetPool.registerPopulatedTarget(nextTarget)
+                val offerFrameRecord = PendingRekeyOfferFrame(
+                    target = nextTarget,
+                    frame = offerFrame,
+                    edSeed = slot.edPrivateKeySeed.copyOf()
+                )
+                pendingRekeyOfferFrames.put(contact.id, offerFrameRecord)?.edSeed?.fill(0)
+                contactDao.updateOutgoingState(
+                    id = contact.id,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+            } else {
+                pendingRekeyOfferDao?.deletePendingOffer(contact.id)
+                pendingRekeyOfferFrames.remove(contact.id)?.edSeed?.fill(0)
+                _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contact.id
+            }
+        }
+        if (success && isFastTestMode && !isSelf) {
+            val contactId = contact.id
+            val edSeedCopy = slot.edPrivateKeySeed.copyOf()
+            repositoryScope.launch {
+                try {
+                    for (delayMs in listOf(1500L, 4000L)) {
+                        delay(delayMs)
+                        if (pendingRekeyOfferDao?.getPendingOffer(contactId) == null) break
+                        dhtLeafNode.putMutable(
+                            target = nextTarget,
+                            v = offerFrame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = edSeedCopy,
+                            skipLocalStore = false
+                        )
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    edSeedCopy.fill(0)
+                }
+            }
         }
         return success
     }
@@ -1929,7 +1980,7 @@ class ChatRepository(
      * then queries the current slot counterIn.
      */
     suspend fun pollContactIncoming(contactId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+        withTimeoutOrNull(if (isFastTestMode) 15_000L else 20_000L) {
             getContactMutex(contactId).withLock {
                 pollContactIncomingInternal(contactId)
             }
@@ -2332,7 +2383,10 @@ class ChatRepository(
 
         if (anyProcessed) {
             drainOutboxInternal(contactId, force = true)
+            drainDeferredGroupControlsInternal(contactId)
             triggerLookaheadWindowAsync(contactId)
+        } else if (deferredGroupControls[contactId]?.isNotEmpty() == true) {
+            drainDeferredGroupControlsInternal(contactId)
         }
 
         return anyProcessed
@@ -2419,6 +2473,7 @@ class ChatRepository(
         }
 
         drainOutboxInternal(contactId, force = true)
+        drainDeferredGroupControlsInternal(contactId)
     }
 
     /**
@@ -2552,92 +2607,157 @@ class ChatRepository(
                         direction = currentContact.outboundDirection
                     )
 
-                    // 2. Inject SS_rekey into receiver's chainKeyIn
-                    val rekeyedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
-                    contactDao.updateIncomingStateAndEpochWithBitmap(
-                        id = contactId,
-                        counterIn = slot.counter + 1,
-                        chainKeyIn = rekeyedChainIn,
-                        rekeyEpoch = offerPayload.rekeyEpoch,
-                        bitmapBase = bitmap.windowBase,
-                        bitmap = bitmap.toByteArray()
-                    )
-                    preWarmNextIncomingTarget(rekeyedChainIn, slot.counter + 1)
+                    val putOk = try {
+                        val rekeyedChainIn = RatchetChain.injectRekeySecret(slot.nextChainKey, ssRekey)
+                        if (isStrictPoissonShaping()) {
+                            withContext(NonCancellable) {
+                                contactDao.updateIncomingStateAndEpochWithBitmap(
+                                    id = contactId,
+                                    counterIn = slot.counter + 1,
+                                    chainKeyIn = rekeyedChainIn,
+                                    rekeyEpoch = offerPayload.rekeyEpoch,
+                                    bitmapBase = bitmap.windowBase,
+                                    bitmap = bitmap.toByteArray()
+                                )
+                                preWarmNextIncomingTarget(rekeyedChainIn, slot.counter + 1)
 
-                    org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
-                        contactId = contactId,
-                        epoch = offerPayload.rekeyEpoch,
-                        slot = outSlot,
-                        seqNum = currentContact.counterOut,
-                        ackNum = frameMsg.seqNum,
-                        frame = respFrame
-                    )
+                                org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
+                                    contactId = contactId,
+                                    epoch = offerPayload.rekeyEpoch,
+                                    slot = outSlot,
+                                    seqNum = currentContact.counterOut,
+                                    ackNum = frameMsg.seqNum,
+                                    frame = respFrame
+                                )
 
-                    // 3. Publish Type 0x04 Response on receiver's outgoing channel (reverse direction)
-                    contactDao.updateOutgoingState(contactId, currentContact.counterOut + 1, outSlot.nextChainKey)
-                    if (isStrictPoissonShaping()) {
-                        outboundPoissonQueue.enqueue(
-                            org.pqchat.dht.traffic.OutboundPoissonFrame(
-                                target = outSlot.target,
-                                payload = respFrame,
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = outSlot.edPrivateKeySeed,
-                                skipLocalStore = isSelf,
-                                seqNum = currentContact.counterOut,
-                                contactId = contactId,
-                                packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
-                                onSent = { success ->
-                                    if (success) {
-                                        decoyTargetPool.registerPopulatedTarget(outSlot.target)
+                                contactDao.updateOutgoingState(contactId, currentContact.counterOut + 1, outSlot.nextChainKey)
+                                outboundPoissonQueue.enqueue(
+                                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                                        target = outSlot.target,
+                                        payload = respFrame,
+                                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                        salt = null,
+                                        sk = outSlot.edPrivateKeySeed,
+                                        skipLocalStore = isSelf,
+                                        seqNum = currentContact.counterOut,
+                                        contactId = contactId,
+                                        packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
+                                        onSent = { success ->
+                                            if (success) {
+                                                decoyTargetPool.registerPopulatedTarget(outSlot.target)
+                                            }
+                                        }
+                                    )
+                                )
+                            }
+                            true
+                        } else {
+                            var sent = false
+                            val maxAttempts = if (isFastTestMode) 3 else 1
+                            withContext(NonCancellable) {
+                                for (attempt in 1..maxAttempts) {
+                                    sent = withTimeoutOrNull(if (isFastTestMode) 15_000L else 25_000L) {
+                                        dhtLeafNode.putMutable(
+                                            target = outSlot.target,
+                                            v = respFrame,
+                                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                            sk = outSlot.edPrivateKeySeed,
+                                            skipLocalStore = isSelf
+                                        )
+                                    } ?: false
+                                    if (sent) break
+                                    if (attempt < maxAttempts) delay(400L)
+                                }
+
+                                if (sent) {
+                                    decoyTargetPool.registerPopulatedTarget(outSlot.target)
+                                    contactDao.updateIncomingStateAndEpochWithBitmap(
+                                        id = contactId,
+                                        counterIn = slot.counter + 1,
+                                        chainKeyIn = rekeyedChainIn,
+                                        rekeyEpoch = offerPayload.rekeyEpoch,
+                                        bitmapBase = bitmap.windowBase,
+                                        bitmap = bitmap.toByteArray()
+                                    )
+                                    preWarmNextIncomingTarget(rekeyedChainIn, slot.counter + 1)
+
+                                    org.pqchat.dht.debug.MessageDebugLogger.logOutgoingRekeyResponse(
+                                        contactId = contactId,
+                                        epoch = offerPayload.rekeyEpoch,
+                                        slot = outSlot,
+                                        seqNum = currentContact.counterOut,
+                                        ackNum = frameMsg.seqNum,
+                                        frame = respFrame
+                                    )
+
+                                    contactDao.updateOutgoingState(contactId, currentContact.counterOut + 1, outSlot.nextChainKey)
+                                }
+                            }
+                            if (sent && isFastTestMode && !isSelf) {
+                                val edSeedCopy = outSlot.edPrivateKeySeed.copyOf()
+                                repositoryScope.launch {
+                                    try {
+                                        for (delayMs in listOf(1500L, 4000L)) {
+                                            delay(delayMs)
+                                            dhtLeafNode.putMutable(
+                                                target = outSlot.target,
+                                                v = respFrame,
+                                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                                salt = null,
+                                                sk = edSeedCopy,
+                                                skipLocalStore = false
+                                            )
+                                        }
+                                    } catch (_: Exception) {
+                                    } finally {
+                                        edSeedCopy.fill(0)
                                     }
                                 }
-                            )
-                        )
-                    } else {
-                        dhtLeafNode.putMutable(
-                            target = outSlot.target,
-                            v = respFrame,
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                            sk = outSlot.edPrivateKeySeed,
-                            skipLocalStore = isSelf
-                        )
+                            }
+                            sent
+                        }
+                    } finally {
+                        ssRekey.fill(0)
                     }
-
-                    ssRekey.fill(0)
-                    true
+                    putOk
                 }
 
                 BinaryFrameCodec.TYPE_REKEY_RESPONSE -> {
                     val respPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyResponse
-                    val pendingOfferEntity = pendingRekeyOfferDao?.getPendingOffer(contactId)
                     bitmap.markReceived(slot.counter)
 
-                    if (pendingOfferEntity != null && pendingOfferEntity.epoch == respPayload.rekeyEpoch) {
-                        val pendingOffer = RekeyCoordinator.PendingRekeyOffer(
-                            epoch = pendingOfferEntity.epoch,
-                            skNew = pendingOfferEntity.rawSkNew,
-                            pkNew = pendingOfferEntity.pkNew
+                    withContext(NonCancellable) {
+                        val pendingOfferEntity = pendingRekeyOfferDao?.getPendingOffer(contactId)
+                        if (pendingOfferEntity != null && pendingOfferEntity.epoch == respPayload.rekeyEpoch) {
+                            val pendingOffer = RekeyCoordinator.PendingRekeyOffer(
+                                epoch = pendingOfferEntity.epoch,
+                                skNew = pendingOfferEntity.rawSkNew,
+                                pkNew = pendingOfferEntity.pkNew
+                            )
+                            val ssRekey = RekeyCoordinator.processResponse(respPayload, pendingOffer)
+                            try {
+                                pendingOfferEntity.destroy()
+                                pendingRekeyOfferDao.deletePendingOffer(contactId)
+                                pendingRekeyOfferFrames.remove(contactId)?.edSeed?.fill(0)
+                                _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contactId
+
+                                val latestContact = contactDao.getContactById(contactId) ?: contact
+                                val rekeyedChainOut = RatchetChain.injectRekeySecret(latestContact.chainKeyOut, ssRekey)
+                                contactDao.updateOutgoingStateAndEpoch(contactId, latestContact.counterOut, rekeyedChainOut, respPayload.rekeyEpoch)
+                            } finally {
+                                ssRekey.fill(0)
+                            }
+                        }
+
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = slot.nextChainKey,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
                         )
-                        val ssRekey = RekeyCoordinator.processResponse(respPayload, pendingOffer)
-                        pendingOfferEntity.destroy()
-                        pendingRekeyOfferDao.deletePendingOffer(contactId)
-                        _rekeyInProgressContacts.value = _rekeyInProgressContacts.value - contactId
-
-                        val latestContact = contactDao.getContactById(contactId) ?: contact
-                        val rekeyedChainOut = RatchetChain.injectRekeySecret(latestContact.chainKeyOut, ssRekey)
-                        contactDao.updateOutgoingStateAndEpoch(contactId, latestContact.counterOut, rekeyedChainOut, respPayload.rekeyEpoch)
-                        ssRekey.fill(0)
+                        preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                     }
-
-                    contactDao.updateIncomingStateWithBitmap(
-                        id = contactId,
-                        counterIn = slot.counter + 1,
-                        chainKeyIn = slot.nextChainKey,
-                        bitmapBase = bitmap.windowBase,
-                        bitmap = bitmap.toByteArray()
-                    )
-                    preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
                     true
                 }
 
@@ -3206,7 +3326,50 @@ class ChatRepository(
         var currentAttempts: Int = 0
     )
 
+    private data class PendingRekeyOfferFrame(
+        val target: ByteArray,
+        val frame: ByteArray,
+        val edSeed: ByteArray
+    )
+
+    private sealed class DeferredGroupControlAction {
+        abstract val groupId: String
+
+        data class Invite(
+            override val groupId: String,
+            val groupIdBytes: ByteArray,
+            val groupEpoch: Long,
+            val myMemberIdBytes: ByteArray,
+            val myChainKeyOut: ByteArray,
+            val currentCounter: Long,
+            val groupName: String,
+            val membersSummary: List<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>
+        ) : DeferredGroupControlAction()
+
+        data class RekeyOrControl(
+            override val groupId: String,
+            val controlSubType: Byte,
+            val groupIdBytes: ByteArray,
+            val groupEpoch: Long,
+            val myMemberIdBytes: ByteArray,
+            val myChainKeyOut: ByteArray,
+            val currentCounter: Long,
+            val groupName: String
+        ) : DeferredGroupControlAction()
+
+        data class KeysBundle(
+            override val groupId: String,
+            val groupIdBytes: ByteArray,
+            val groupEpoch: Long,
+            val myMemberIdBytes: ByteArray,
+            val memberKeys: List<BinaryFrameCodec.DecodedPayload.GroupMemberKey>,
+            val groupName: String
+        ) : DeferredGroupControlAction()
+    }
+
     private val pendingGroupControls = ConcurrentHashMap<Long, PendingGroupControlRecord>()
+    private val pendingRekeyOfferFrames = ConcurrentHashMap<String, PendingRekeyOfferFrame>()
+    private val deferredGroupControls = ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<DeferredGroupControlAction>>()
     private val activeGroupCreations = ConcurrentHashMap.newKeySet<String>()
     private val pendingEarlyGroupControls = ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<BinaryFrameCodec.DecodedPayload.GroupControl>>()
     private val nextControlTaskId = java.util.concurrent.atomic.AtomicLong(-1000L)
@@ -3471,7 +3634,8 @@ class ChatRepository(
         override val isSelf: Boolean,
         override val seqNum: Long,
         override val isFocused: Boolean = false,
-        val lookaheadDistance: Int = 0
+        val lookaheadDistance: Int = 0,
+        val expectedRekeyEpoch: Long = 0L
     ) : PollTask {
         override val entityId: String get() = contactId
         override val priorityWeight: Double
@@ -3481,6 +3645,9 @@ class ChatRepository(
             if (item == null) return false
             return getContactMutex(contactId).withLock {
                 val contact = contactDao.getContactById(contactId) ?: return@withLock false
+                if (contact.rekeyEpoch != expectedRekeyEpoch || slot.counter < contact.counterIn) {
+                    return@withLock false
+                }
                 if (slot.counter > contact.counterIn) {
                     val intermediateSlots = RatchetChain.computeLookaheadSlots(
                         startChainKey = contact.chainKeyIn,
@@ -3516,6 +3683,7 @@ class ChatRepository(
                     false
                 } else {
                     drainOutboxInternal(contactId, force = true)
+                    drainDeferredGroupControlsInternal(contactId)
                     triggerLookaheadWindowAsync(contactId)
                     true
                 }
@@ -3662,6 +3830,88 @@ class ChatRepository(
                             )
                             skippedKey.destroy()
                             skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            true
+                        }
+                        BinaryFrameCodec.TYPE_GROUP_CONTROL -> {
+                            val controlPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.GroupControl
+                            processIncomingGroupControl(contactId, controlPayload)
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            val rawRatchetKey = skippedKey.rawMsgKey.copyOf()
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            if (!isSelf) {
+                                pendingAckQueue.enqueue(
+                                    org.pqchat.dht.traffic.PendingAck(
+                                        contactId = contactId,
+                                        messageId = "${skippedKey.slotIndex}",
+                                        ratchetKey = rawRatchetKey,
+                                        seqNum = skippedKey.slotIndex
+                                    )
+                                )
+                            }
+                            true
+                        }
+                        BinaryFrameCodec.TYPE_SAFETY_CANARY -> {
+                            val canaryPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.SafetyCanary
+                            val seqEpoch = skippedKey.slotIndex / 65536
+                            if (!messageDao.existsMessageWithEpoch(contactId, seqEpoch, skippedKey.slotIndex, false)) {
+                                val reasonStr = when (canaryPayload.triggerReason) {
+                                    BinaryFrameCodec.CANARY_REASON_DEAD_MAN_TIMEOUT -> "Dead Man's Switch timeout"
+                                    BinaryFrameCodec.CANARY_REASON_DURESS_PIN -> "Duress PIN emergency"
+                                    BinaryFrameCodec.CANARY_REASON_MANUAL_SOS -> "Manual SOS trigger"
+                                    else -> "Emergency trigger"
+                                }
+                                val locPart = if (canaryPayload.latitude != 0.0 || canaryPayload.longitude != 0.0) {
+                                    " Location: %.5f, %.5f.".format(java.util.Locale.US, canaryPayload.latitude, canaryPayload.longitude)
+                                } else ""
+                                val alertText = "[SAFETY CANARY ALERT] Reason: $reasonStr.$locPart Note: ${canaryPayload.note}"
+                                val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(skippedKey.rawMsgKey, "${skippedKey.slotIndex}")
+                                messageDao.insertMessage(
+                                    MessageEntity(
+                                        contactId = contactId,
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = skippedKey.slotIndex,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = alertText,
+                                        status = "DELIVERED",
+                                        ackTarget = targetAck,
+                                        ackRatchetKey = skippedKey.rawMsgKey,
+                                        slotTarget = skippedKey.target,
+                                        slotEdSeed = skippedKey.rawEdPrivateKeySeed
+                                    )
+                                )
+                                onIncomingMessageDelivered?.invoke(contactId, alertText, true)
+                            }
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            val rawRatchetKey = skippedKey.rawMsgKey.copyOf()
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            if (!isSelf) {
+                                pendingAckQueue.enqueue(
+                                    org.pqchat.dht.traffic.PendingAck(
+                                        contactId = contactId,
+                                        messageId = "${skippedKey.slotIndex}",
+                                        ratchetKey = rawRatchetKey,
+                                        seqNum = skippedKey.slotIndex
+                                    )
+                                )
+                            }
                             true
                         }
                         else -> {
@@ -4293,7 +4543,8 @@ class ChatRepository(
                     isSelf = isSelf,
                     seqNum = contact.counterIn.toLong(),
                     isFocused = isFocusedContact,
-                    lookaheadDistance = 0
+                    lookaheadDistance = 0,
+                    expectedRekeyEpoch = contact.rekeyEpoch
                 )
             )
 
@@ -4313,7 +4564,8 @@ class ChatRepository(
                             isSelf = isSelf,
                             seqNum = laSlot.counter.toLong(),
                             isFocused = isFocusedContact,
-                            lookaheadDistance = k
+                            lookaheadDistance = k,
+                            expectedRekeyEpoch = contact.rekeyEpoch
                         )
                     )
                 }
@@ -4891,6 +5143,90 @@ class ChatRepository(
         }
     }
 
+    private suspend fun resolvePendingRekeyBeforeControlSendInternal(contactId: String): Boolean {
+        if (pendingRekeyOfferDao?.getPendingOffer(contactId) == null) return true
+        val attempts = if (isFastTestMode) 4 else 1
+        repeat(attempts) { attempt ->
+            try {
+                pollContactIncomingInternal(contactId)
+            } catch (_: Exception) {}
+            if (pendingRekeyOfferDao.getPendingOffer(contactId) == null) {
+                return true
+            }
+            if (attempt < attempts - 1) {
+                pendingRekeyOfferFrames[contactId]?.let { offer ->
+                    try {
+                        dhtLeafNode.putMutable(
+                            target = offer.target,
+                            v = offer.frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = offer.edSeed,
+                            skipLocalStore = contactId == SELF_CONTACT_ID
+                        )
+                    } catch (_: Exception) {}
+                }
+                delay(400L)
+            }
+        }
+        return pendingRekeyOfferDao.getPendingOffer(contactId) == null
+    }
+
+    private suspend fun drainDeferredGroupControlsInternal(contactId: String) {
+        if (pendingRekeyOfferDao?.getPendingOffer(contactId) != null) return
+        val actions = deferredGroupControls.remove(contactId) ?: return
+        if (actions.isEmpty()) return
+
+        for (idx in actions.indices) {
+            if (pendingRekeyOfferDao?.getPendingOffer(contactId) != null) {
+                val remaining = deferredGroupControls.computeIfAbsent(contactId) {
+                    java.util.concurrent.CopyOnWriteArrayList()
+                }
+                remaining.addAll(0, actions.subList(idx, actions.size))
+                break
+            }
+            when (val action = actions[idx]) {
+                is DeferredGroupControlAction.Invite -> {
+                    sendGroupControlInviteInternal(
+                        contactId = contactId,
+                        groupIdBytes = action.groupIdBytes,
+                        groupEpoch = action.groupEpoch,
+                        myMemberIdBytes = action.myMemberIdBytes,
+                        myChainKeyOut = action.myChainKeyOut,
+                        currentCounter = action.currentCounter,
+                        groupName = action.groupName,
+                        membersSummary = action.membersSummary,
+                        outboundCollector = null
+                    )
+                }
+                is DeferredGroupControlAction.RekeyOrControl -> {
+                    sendGroupControlRekeyOrInviteInternal(
+                        contactId = contactId,
+                        controlSubType = action.controlSubType,
+                        groupIdBytes = action.groupIdBytes,
+                        groupEpoch = action.groupEpoch,
+                        myMemberIdBytes = action.myMemberIdBytes,
+                        myChainKeyOut = action.myChainKeyOut,
+                        currentCounter = action.currentCounter,
+                        groupName = action.groupName,
+                        outboundCollector = null
+                    )
+                }
+                is DeferredGroupControlAction.KeysBundle -> {
+                    sendGroupControlKeysBundleInternal(
+                        contactId = contactId,
+                        groupIdBytes = action.groupIdBytes,
+                        groupEpoch = action.groupEpoch,
+                        myMemberIdBytes = action.myMemberIdBytes,
+                        memberKeys = action.memberKeys,
+                        groupName = action.groupName,
+                        outboundCollector = null
+                    )
+                }
+            }
+        }
+    }
+
     private suspend fun sendGroupControlInvite(
         contactId: String,
         groupIdBytes: ByteArray,
@@ -4903,107 +5239,151 @@ class ChatRepository(
         outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
     ): Boolean {
         return getContactMutex(contactId).withLock {
-            val contact = contactDao.getContactById(contactId) ?: return@withLock false
-            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
-
-            val plaintext = BinaryFrameCodec.encodeGroupControl(
-                seqNum = contact.counterOut and 0xFFFF,
-                ackNum = contact.counterIn and 0xFFFF,
-                timestampUTC = System.currentTimeMillis(),
-                controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
-                groupId = groupIdBytes,
+            sendGroupControlInviteInternal(
+                contactId = contactId,
+                groupIdBytes = groupIdBytes,
                 groupEpoch = groupEpoch,
-                senderMemberId = myMemberIdBytes,
-                senderGroupChainKey = myChainKeyOut,
+                myMemberIdBytes = myMemberIdBytes,
+                myChainKeyOut = myChainKeyOut,
                 currentCounter = currentCounter,
                 groupName = groupName,
-                members = membersSummary
+                membersSummary = membersSummary,
+                outboundCollector = outboundCollector
             )
+        }
+    }
 
-            val frame = BinaryFrameCodec.packAeadFrame(
-                key = slot.msgKey,
-                plaintext = plaintext,
-                target = slot.target,
-                direction = contact.outboundDirection
-            )
-
-            val isSelf = contactId == SELF_CONTACT_ID
-            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
-            val controlTaskId = nextControlTaskId.decrementAndGet()
-
-            if (!isSelf) {
-                val republishTask = org.pqchat.dht.traffic.PollingWorker.RepublishTask(
-                    messageId = controlTaskId,
-                    contactId = contactId,
-                    target = slot.target,
-                    payload = frame,
-                    edPrivateKeySeed = slot.edPrivateKeySeed,
-                    initialSentTimestamp = System.currentTimeMillis()
-                )
-                org.pqchat.dht.service.DhtWorker.registerRepublishTask(republishTask)
-                pendingGroupControls[controlTaskId] = PendingGroupControlRecord(
-                    taskId = controlTaskId,
+    private suspend fun sendGroupControlInviteInternal(
+        contactId: String,
+        groupIdBytes: ByteArray,
+        groupEpoch: Long,
+        myMemberIdBytes: ByteArray,
+        myChainKeyOut: ByteArray,
+        currentCounter: Long,
+        groupName: String,
+        membersSummary: List<BinaryFrameCodec.DecodedPayload.GroupMemberSummary>,
+        outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
+    ): Boolean {
+        if (!resolvePendingRekeyBeforeControlSendInternal(contactId)) {
+            deferredGroupControls.computeIfAbsent(contactId) {
+                java.util.concurrent.CopyOnWriteArrayList()
+            }.add(
+                DeferredGroupControlAction.Invite(
                     groupId = bytesToUuidString(groupIdBytes),
-                    contactId = contactId,
-                    controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+                    groupIdBytes = groupIdBytes,
                     groupEpoch = groupEpoch,
-                    targetAck = targetAck,
-                    ackRatchetKey = slot.msgKey,
-                    seqNum = contact.counterOut,
-                    slotTarget = slot.target,
-                    slotEdSeed = slot.edPrivateKeySeed,
-                    payload = frame
+                    myMemberIdBytes = myMemberIdBytes,
+                    myChainKeyOut = myChainKeyOut,
+                    currentCounter = currentCounter,
+                    groupName = groupName,
+                    membersSummary = membersSummary
                 )
-                onRepublishTaskUpdated?.invoke()
-            }
+            )
+            return true
+        }
 
-            if (isStrictPoissonShaping()) {
+        val contact = contactDao.getContactById(contactId) ?: return false
+        val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+
+        val plaintext = BinaryFrameCodec.encodeGroupControl(
+            seqNum = contact.counterOut and 0xFFFF,
+            ackNum = contact.counterIn and 0xFFFF,
+            timestampUTC = System.currentTimeMillis(),
+            controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+            groupId = groupIdBytes,
+            groupEpoch = groupEpoch,
+            senderMemberId = myMemberIdBytes,
+            senderGroupChainKey = myChainKeyOut,
+            currentCounter = currentCounter,
+            groupName = groupName,
+            members = membersSummary
+        )
+
+        val frame = BinaryFrameCodec.packAeadFrame(
+            key = slot.msgKey,
+            plaintext = plaintext,
+            target = slot.target,
+            direction = contact.outboundDirection
+        )
+
+        val isSelf = contactId == SELF_CONTACT_ID
+        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+        val controlTaskId = nextControlTaskId.decrementAndGet()
+
+        if (!isSelf) {
+            val republishTask = org.pqchat.dht.traffic.PollingWorker.RepublishTask(
+                messageId = controlTaskId,
+                contactId = contactId,
+                target = slot.target,
+                payload = frame,
+                edPrivateKeySeed = slot.edPrivateKeySeed,
+                initialSentTimestamp = System.currentTimeMillis()
+            )
+            org.pqchat.dht.service.DhtWorker.registerRepublishTask(republishTask)
+            pendingGroupControls[controlTaskId] = PendingGroupControlRecord(
+                taskId = controlTaskId,
+                groupId = bytesToUuidString(groupIdBytes),
+                contactId = contactId,
+                controlSubType = BinaryFrameCodec.GROUP_SUBTYPE_INVITE,
+                groupEpoch = groupEpoch,
+                targetAck = targetAck,
+                ackRatchetKey = slot.msgKey,
+                seqNum = contact.counterOut,
+                slotTarget = slot.target,
+                slotEdSeed = slot.edPrivateKeySeed,
+                payload = frame
+            )
+            onRepublishTaskUpdated?.invoke()
+        }
+
+        if (isStrictPoissonShaping()) {
+            withContext(NonCancellable) {
                 contactDao.updateOutgoingState(
                     id = contactId,
                     counterOut = contact.counterOut + 1,
                     chainKeyOut = slot.nextChainKey
                 )
-                val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
-                    target = slot.target,
-                    payload = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf,
-                    seqNum = contact.counterOut,
-                    contactId = contactId,
-                    packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
-                    onSent = { success ->
-                        if (success) {
-                            decoyTargetPool.registerPopulatedTarget(slot.target)
-                        }
-                    }
-                )
-                if (outboundCollector != null) {
-                    outboundCollector.add(outboundFrame)
-                } else {
-                    outboundPoissonQueue.enqueue(outboundFrame)
-                }
-                return@withLock true
             }
-
-            var success = false
-            val maxAttempts = if (isFastTestMode) 3 else 1
-            withContext(NonCancellable) {
-                for (attempt in 1..maxAttempts) {
-                    success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 10_000L else 20_000L) {
-                        dhtLeafNode.putMutable(
-                            target = slot.target,
-                            v = frame,
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                            salt = null,
-                            sk = slot.edPrivateKeySeed,
-                            skipLocalStore = isSelf
-                        )
-                    } ?: false
-                    if (success) break
-                    if (attempt < maxAttempts) delay(500L)
+            val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
+                target = slot.target,
+                payload = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = isSelf,
+                seqNum = contact.counterOut,
+                contactId = contactId,
+                packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
+                onSent = { success ->
+                    if (success) {
+                        decoyTargetPool.registerPopulatedTarget(slot.target)
+                    }
                 }
+            )
+            if (outboundCollector != null) {
+                outboundCollector.add(outboundFrame)
+            } else {
+                outboundPoissonQueue.enqueue(outboundFrame)
+            }
+            return true
+        }
+
+        var success = false
+        val maxAttempts = if (isFastTestMode) 3 else 1
+        withContext(NonCancellable) {
+            for (attempt in 1..maxAttempts) {
+                success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 10_000L else 20_000L) {
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = isSelf
+                    )
+                } ?: false
+                if (success) break
+                if (attempt < maxAttempts) delay(500L)
             }
 
             // Always advance local counter_out and ratchet chain_out so subsequent messages get next sequence slot
@@ -5015,33 +5395,33 @@ class ChatRepository(
             if (success) {
                 decoyTargetPool.registerPopulatedTarget(slot.target)
             }
+        }
 
-            if (!isSelf) {
-                // Background extra republishes for high reliability under UDP packet drops
-                repositoryScope.launch {
-                    val intervals = if (isFastTestMode) {
-                        listOf(1500L, 4000L, 8000L, 14000L)
-                    } else {
-                        listOf(3000L, 8000L, 18000L)
-                    }
-                    for (intv in intervals) {
-                        delay(intv)
-                        if (!pendingGroupControls.containsKey(controlTaskId)) break
-                        try {
-                            dhtLeafNode.putMutable(
-                                target = slot.target,
-                                v = frame,
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                salt = null,
-                                sk = slot.edPrivateKeySeed,
-                                skipLocalStore = false
-                            )
-                        } catch (_: Exception) {}
-                    }
+        if (!isSelf) {
+            // Background extra republishes for high reliability under UDP packet drops
+            repositoryScope.launch {
+                val intervals = if (isFastTestMode) {
+                    listOf(1500L, 4000L, 8000L, 14000L)
+                } else {
+                    listOf(3000L, 8000L, 18000L)
+                }
+                for (intv in intervals) {
+                    delay(intv)
+                    if (!pendingGroupControls.containsKey(controlTaskId)) break
+                    try {
+                        dhtLeafNode.putMutable(
+                            target = slot.target,
+                            v = frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = slot.edPrivateKeySeed,
+                            skipLocalStore = false
+                        )
+                    } catch (_: Exception) {}
                 }
             }
-            success
         }
+        return success
     }
 
     private suspend fun sendGroupControlRekeyOrInvite(
@@ -5081,6 +5461,24 @@ class ChatRepository(
         groupName: String,
         outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
     ): Boolean {
+        if (!resolvePendingRekeyBeforeControlSendInternal(contactId)) {
+            deferredGroupControls.computeIfAbsent(contactId) {
+                java.util.concurrent.CopyOnWriteArrayList()
+            }.add(
+                DeferredGroupControlAction.RekeyOrControl(
+                    groupId = bytesToUuidString(groupIdBytes),
+                    controlSubType = controlSubType,
+                    groupIdBytes = groupIdBytes,
+                    groupEpoch = groupEpoch,
+                    myMemberIdBytes = myMemberIdBytes,
+                    myChainKeyOut = myChainKeyOut,
+                    currentCounter = currentCounter,
+                    groupName = groupName
+                )
+            )
+            return true
+        }
+
         val contact = contactDao.getContactById(contactId) ?: return false
         val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
@@ -5158,11 +5556,13 @@ class ChatRepository(
             }
 
             if (isStrictPoissonShaping()) {
-                contactDao.updateOutgoingState(
-                    id = contactId,
-                    counterOut = contact.counterOut + 1,
-                    chainKeyOut = slot.nextChainKey
-                )
+                withContext(NonCancellable) {
+                    contactDao.updateOutgoingState(
+                        id = contactId,
+                        counterOut = contact.counterOut + 1,
+                        chainKeyOut = slot.nextChainKey
+                    )
+                }
                 val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
                     target = slot.target,
                     payload = frame,
@@ -5204,30 +5604,30 @@ class ChatRepository(
                     if (success) break
                     if (attempt < maxAttempts) delay(500L)
                 }
+
+                // Always advance local counter_out and ratchet chain_out
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                }
             }
 
-            // Always advance local counter_out and ratchet chain_out
-            contactDao.updateOutgoingState(
-                id = contactId,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
-
-            if (success) {
-                decoyTargetPool.registerPopulatedTarget(slot.target)
-
-                if (isFastTestMode && !isSelf) {
-                    repositoryScope.launch {
-                        delay(2500L)
-                        dhtLeafNode.putMutable(
-                            target = slot.target,
-                            v = frame,
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                            salt = null,
-                            sk = slot.edPrivateKeySeed,
-                            skipLocalStore = false
-                        )
-                    }
+            if (success && isFastTestMode && !isSelf) {
+                repositoryScope.launch {
+                    delay(2500L)
+                    dhtLeafNode.putMutable(
+                        target = slot.target,
+                        v = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed,
+                        skipLocalStore = false
+                    )
                 }
             }
             return success
@@ -5264,6 +5664,22 @@ class ChatRepository(
         groupName: String,
         outboundCollector: MutableList<org.pqchat.dht.traffic.OutboundPoissonFrame>? = null
     ): Boolean {
+        if (!resolvePendingRekeyBeforeControlSendInternal(contactId)) {
+            deferredGroupControls.computeIfAbsent(contactId) {
+                java.util.concurrent.CopyOnWriteArrayList()
+            }.add(
+                DeferredGroupControlAction.KeysBundle(
+                    groupId = bytesToUuidString(groupIdBytes),
+                    groupIdBytes = groupIdBytes,
+                    groupEpoch = groupEpoch,
+                    myMemberIdBytes = myMemberIdBytes,
+                    memberKeys = memberKeys,
+                    groupName = groupName
+                )
+            )
+            return true
+        }
+
         val contact = contactDao.getContactById(contactId) ?: return false
         val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
 
@@ -5316,11 +5732,13 @@ class ChatRepository(
         }
 
         if (isStrictPoissonShaping()) {
-            contactDao.updateOutgoingState(
-                id = contactId,
-                counterOut = contact.counterOut + 1,
-                chainKeyOut = slot.nextChainKey
-            )
+            withContext(NonCancellable) {
+                contactDao.updateOutgoingState(
+                    id = contactId,
+                    counterOut = contact.counterOut + 1,
+                    chainKeyOut = slot.nextChainKey
+                )
+            }
             val outboundFrame = org.pqchat.dht.traffic.OutboundPoissonFrame(
                 target = slot.target,
                 payload = frame,
@@ -5362,30 +5780,30 @@ class ChatRepository(
                 if (success) break
                 if (attempt < maxAttempts) delay(500L)
             }
+
+            // Always advance local counter_out and ratchet chain_out
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+
+            if (success) {
+                decoyTargetPool.registerPopulatedTarget(slot.target)
+            }
         }
 
-        // Always advance local counter_out and ratchet chain_out
-        contactDao.updateOutgoingState(
-            id = contactId,
-            counterOut = contact.counterOut + 1,
-            chainKeyOut = slot.nextChainKey
-        )
-
-        if (success) {
-            decoyTargetPool.registerPopulatedTarget(slot.target)
-
-            if (isFastTestMode && !isSelf) {
-                repositoryScope.launch {
-                    delay(2500L)
-                    dhtLeafNode.putMutable(
-                        target = slot.target,
-                        v = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false
-                    )
-                }
+        if (success && isFastTestMode && !isSelf) {
+            repositoryScope.launch {
+                delay(2500L)
+                dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = false
+                )
             }
         }
         return success
@@ -5589,6 +6007,38 @@ class ChatRepository(
         policy: org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(),
         currentTimeMs: Long = System.currentTimeMillis()
     ): Int = withContext(Dispatchers.IO) {
+        var retransmittedCount = 0
+        val deferredContactIds = (deferredGroupControls.keys + pendingRekeyOfferFrames.keys).toSet()
+        for (contactId in deferredContactIds) {
+            val hasDeferred = deferredGroupControls[contactId]?.isNotEmpty() == true
+            val pendingOffer = pendingRekeyOfferDao?.getPendingOffer(contactId)
+            if (pendingOffer != null) {
+                pendingRekeyOfferFrames[contactId]?.let { offerFrame ->
+                    try {
+                        val ok = dhtLeafNode.putMutable(
+                            target = offerFrame.target,
+                            v = offerFrame.frame,
+                            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                            salt = null,
+                            sk = offerFrame.edSeed,
+                            skipLocalStore = contactId == SELF_CONTACT_ID
+                        )
+                        if (ok) retransmittedCount++
+                    } catch (_: Exception) {}
+                }
+                if (hasDeferred) {
+                    try {
+                        pollContactIncoming(contactId)
+                    } catch (_: Exception) {}
+                }
+            } else if (hasDeferred) {
+                getContactMutex(contactId).withLock {
+                    drainDeferredGroupControlsInternal(contactId)
+                }
+                retransmittedCount++
+            }
+        }
+
         val effectivePolicy = if ((isFastTestMode || org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) && policy == org.pqchat.dht.traffic.RepublishPolicy()) {
             org.pqchat.dht.traffic.RepublishPolicy(
                 tier1IntervalMs = 8_000L,
@@ -5602,9 +6052,8 @@ class ChatRepository(
             policy
         }
         val unconfirmed = pendingGroupControls.values.toList()
-        if (unconfirmed.isEmpty()) return@withContext 0
+        if (unconfirmed.isEmpty()) return@withContext retransmittedCount
 
-        var retransmittedCount = 0
         for (record in unconfirmed) {
             val age = (currentTimeMs - record.timestamp).coerceAtLeast(0L)
             if (effectivePolicy.isExpired(age)) {
@@ -6988,7 +7437,7 @@ class ChatRepository(
     }
 
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+        withTimeoutOrNull(if (isFastTestMode) 15_000L else 20_000L) {
             val group = groupDao?.getGroupById(groupId) ?: return@withTimeoutOrNull false
             val initialMembers = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
 
@@ -7306,7 +7755,9 @@ class ChatRepository(
             val contactId = member.contactId ?: continue
             val hasPendingInvite = pendingGroupControls.values.any {
                 it.groupId == groupId && it.contactId == contactId && it.controlSubType == BinaryFrameCodec.GROUP_SUBTYPE_INVITE
-            }
+            } || deferredGroupControls[contactId]?.any {
+                it is DeferredGroupControlAction.Invite && it.groupId == groupId
+            } == true
             if (hasPendingInvite) {
                 logI("GroupKeySync", "Skipping broadcastMyGroupSenderKey to $contactId: invite still pending")
                 continue
@@ -7404,6 +7855,9 @@ class ChatRepository(
     }
 
     override fun close() {
+        pendingRekeyOfferFrames.values.forEach { it.edSeed.fill(0) }
+        pendingRekeyOfferFrames.clear()
+        deferredGroupControls.clear()
         repositoryScope.cancel()
     }
 }
