@@ -106,6 +106,39 @@ class ThreeNodeGroupTest {
     private class FakeMessageDao : org.pqchat.dht.test.BaseFakeMessageDao()
     private class FakeChunkDao : org.pqchat.dht.test.BaseFakeChunkDao()
 
+    private class FakeSkippedKeyDao : SkippedKeyDao {
+        private val keys = java.util.concurrent.ConcurrentHashMap<String, MutableMap<Int, SkippedKeyEntity>>()
+
+        override suspend fun getSkippedKeysForContact(contactId: String): List<SkippedKeyEntity> =
+            keys[contactId]?.values?.sortedBy { it.slotIndex } ?: emptyList()
+
+        override suspend fun getSkippedKey(contactId: String, slotIndex: Int): SkippedKeyEntity? =
+            keys[contactId]?.get(slotIndex)
+
+        override suspend fun insertOrUpdate(skippedKey: SkippedKeyEntity) {
+            keys.computeIfAbsent(skippedKey.contactId) { java.util.concurrent.ConcurrentHashMap() }[skippedKey.slotIndex] = skippedKey
+        }
+
+        override suspend fun deleteSkippedKey(contactId: String, slotIndex: Int) {
+            keys[contactId]?.remove(slotIndex)
+        }
+
+        override suspend fun deleteExpiredKeys(now: Long) {
+            keys.values.forEach { map ->
+                val expired = map.entries.filter { it.value.expiresAt < now }.map { it.key }
+                expired.forEach { map.remove(it) }
+            }
+        }
+
+        override suspend fun countSkippedKeys(contactId: String): Int =
+            keys[contactId]?.size ?: 0
+
+        override suspend fun deleteOldestSkippedKeys(contactId: String, count: Int) {
+            val map = keys[contactId] ?: return
+            map.values.sortedBy { it.createdAt }.take(count).forEach { map.remove(it.slotIndex) }
+        }
+    }
+
     private class FakePendingRekeyOfferDao : PendingRekeyOfferDao {
         val offers = java.util.concurrent.ConcurrentHashMap<String, PendingRekeyOfferEntity>()
         val offersFlow = MutableStateFlow<Map<String, PendingRekeyOfferEntity>>(emptyMap())
@@ -1037,6 +1070,257 @@ class ThreeNodeGroupTest {
             fB.bobRepo.close()
             fB.charlieRepo.close()
             dhtB.stop()
+        }
+    }
+
+    @Test
+    fun testFourNodeStarTopologyWithRepeatedBroadcastsAndPollConstantBatch() = runBlocking {
+        val dhtNode = FakeDht(minDelayMs = 0L, maxDelayMs = 0L)
+        dhtNode.start()
+
+        val aliceContactDao = FakeContactDao()
+        val aliceMessageDao = FakeMessageDao()
+        val aliceSkippedKeyDao = FakeSkippedKeyDao()
+        val aliceGroupDao = FakeGroupDao()
+        val aliceGroupMemberDao = FakeGroupMemberDao()
+        val aliceRepo = ChatRepository(
+            contactDao = aliceContactDao,
+            messageDao = aliceMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = aliceSkippedKeyDao,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = aliceGroupDao,
+            groupMemberDao = aliceGroupMemberDao
+        ).apply {
+            isFastTestMode = true
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val bobContactDao = FakeContactDao()
+        val bobMessageDao = FakeMessageDao()
+        val bobGroupDao = FakeGroupDao()
+        val bobGroupMemberDao = FakeGroupMemberDao()
+        val bobRepo = ChatRepository(
+            contactDao = bobContactDao,
+            messageDao = bobMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = bobGroupDao,
+            groupMemberDao = bobGroupMemberDao
+        ).apply {
+            isFastTestMode = true
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val charlieContactDao = FakeContactDao()
+        val charlieMessageDao = FakeMessageDao()
+        val charlieGroupDao = FakeGroupDao()
+        val charlieGroupMemberDao = FakeGroupMemberDao()
+        val charlieRepo = ChatRepository(
+            contactDao = charlieContactDao,
+            messageDao = charlieMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = charlieGroupDao,
+            groupMemberDao = charlieGroupMemberDao
+        ).apply {
+            isFastTestMode = true
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        val daveContactDao = FakeContactDao()
+        val daveMessageDao = FakeMessageDao()
+        val daveGroupDao = FakeGroupDao()
+        val daveGroupMemberDao = FakeGroupMemberDao()
+        val daveRepo = ChatRepository(
+            contactDao = daveContactDao,
+            messageDao = daveMessageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = daveGroupDao,
+            groupMemberDao = daveGroupMemberDao
+        ).apply {
+            isFastTestMode = true
+            delayedPutMaxMs = 0L
+            decoyPutSlotsCount = 0
+            enableDecoyGets = false
+            intraBatchJitterMinMs = 0L
+            intraBatchJitterMaxMs = 0L
+        }
+
+        try {
+            // Seed pre-existing skipped keys on Alice across her 3 direct contacts to verify
+            // GroupMemberSlotPollTask is never starved in pollConstantBatch when keys are present.
+            val contactNames = listOf("bob" to "Bob", "charlie" to "Charlie", "dave" to "Dave")
+            for ((cid, cname) in contactNames) {
+                val outKey = CryptoUtils.secureRandomBytes(64)
+                val inKey = CryptoUtils.secureRandomBytes(64)
+                aliceContactDao.insertOrUpdate(
+                    ContactEntity(id = cid, name = cname, chainKeyOut = outKey, chainKeyIn = inKey, counterOut = 0, counterIn = 0, isInitiator = true, isVerified = true)
+                )
+                val targetDao = when (cid) {
+                    "bob" -> bobContactDao
+                    "charlie" -> charlieContactDao
+                    else -> daveContactDao
+                }
+                targetDao.insertOrUpdate(
+                    ContactEntity(id = "alice", name = "Alice", chainKeyOut = inKey, chainKeyIn = outKey, counterOut = 0, counterIn = 0, isInitiator = false, isVerified = true)
+                )
+                for (skIdx in 1..3) {
+                    aliceSkippedKeyDao.insertOrUpdate(
+                        SkippedKeyEntity(
+                            contactId = cid,
+                            slotIndex = 100 + skIdx,
+                            msgKey = CryptoUtils.secureRandomBytes(32),
+                            target = CryptoUtils.secureRandomBytes(20),
+                            edPrivateKeySeed = CryptoUtils.secureRandomBytes(32)
+                        )
+                    )
+                }
+            }
+
+            // 1. Alice creates group and opens chat (simulating repeated UI selectContact calls)
+            val group = aliceRepo.createGroup("PQ_4Node_Broadcast_Star", listOf("bob", "charlie", "dave"))
+            val groupId = group.groupId
+            val groupIdBytes = testUuidStringToBytes(groupId)
+
+            aliceRepo.broadcastMyGroupSenderKey(groupId)
+            aliceRepo.broadcastMyGroupSenderKey(groupId)
+            aliceRepo.relayMissingGroupKeys(groupId, force = false)
+
+            // 2. Bob, Charlie, Dave receive invites and simulate repeated selectContact broadcasts
+            assertTrue(bobRepo.pollContactIncoming("alice"))
+            assertTrue(charlieRepo.pollContactIncoming("alice"))
+            assertTrue(daveRepo.pollContactIncoming("alice"))
+
+            bobRepo.broadcastMyGroupSenderKey(groupId)
+            bobRepo.broadcastMyGroupSenderKey(groupId)
+            charlieRepo.broadcastMyGroupSenderKey(groupId)
+            charlieRepo.broadcastMyGroupSenderKey(groupId)
+            daveRepo.broadcastMyGroupSenderKey(groupId)
+            daveRepo.broadcastMyGroupSenderKey(groupId)
+
+            // Alice ingests initial controls via pollGroupIncoming
+            aliceRepo.pollGroupIncoming(groupId)
+            aliceRepo.relayMissingGroupKeys(groupId, force = false)
+            bobRepo.pollGroupIncoming(groupId)
+            charlieRepo.pollGroupIncoming(groupId)
+            daveRepo.pollGroupIncoming(groupId)
+
+            // Turn 1: Alice sends to group -> Bob, Charlie, Dave receive
+            assertTrue(aliceRepo.sendGroupMessage(groupId, "Turn1_Alice"))
+            assertTrue(bobRepo.pollGroupIncoming(groupId))
+            assertTrue(charlieRepo.pollGroupIncoming(groupId))
+            assertTrue(daveRepo.pollGroupIncoming(groupId))
+
+            // Turn 2: Bob sends -> Alice receives via pollConstantBatch despite 9 skipped keys!
+            assertTrue(bobRepo.sendGroupMessage(groupId, "Turn2_Bob"))
+            assertTrue("Alice pollConstantBatch must receive Bob's Turn 2 message", aliceRepo.pollConstantBatch(groupId))
+            assertTrue(charlieRepo.pollGroupIncoming(groupId))
+            assertTrue(daveRepo.pollGroupIncoming(groupId))
+
+            // Turn 3: Charlie sends -> Alice receives via pollGroupIncoming immediately
+            assertTrue(charlieRepo.sendGroupMessage(groupId, "Turn3_Charlie"))
+            assertTrue("Alice pollGroupIncoming must receive Charlie's Turn 3 message", aliceRepo.pollGroupIncoming(groupId))
+            assertTrue(bobRepo.pollGroupIncoming(groupId))
+            assertTrue(daveRepo.pollGroupIncoming(groupId))
+
+            // Turn 4: Dave sends -> Alice receives via pollConstantBatch
+            assertTrue(daveRepo.sendGroupMessage(groupId, "Turn4_Dave"))
+            assertTrue("Alice pollConstantBatch must receive Dave's Turn 4 message", aliceRepo.pollConstantBatch(groupId))
+            assertTrue(bobRepo.pollGroupIncoming(groupId))
+            assertTrue(charlieRepo.pollGroupIncoming(groupId))
+
+            assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Turn2_Bob" && !it.isOutgoing })
+            assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Turn3_Charlie" && !it.isOutgoing })
+            assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Turn4_Dave" && !it.isOutgoing })
+
+            // Verify stale GROUP_SUBTYPE_REKEY / GROUP_SUBTYPE_KEY_BUNDLE with counter=0 does not rewind counterIn > 0
+            val bobMemberId = bobGroupDao.getGroupById(groupId)!!.myMemberId
+            val bobInitialKey = bobGroupDao.getGroupById(groupId)!!.let {
+                // Re-derive Epoch 1 counter=0 key from Alice's original seed via control or compare counterIn stays at 1
+                aliceGroupMemberDao.getMember(groupId, bobMemberId)!!
+            }
+            assertEquals(1, bobInitialKey.counterIn)
+
+            // Reconstruct Bob's initial counter=0 key using the same deterministic seed
+            val staleBobKey0 = org.pqchat.dht.protocol.RatchetChain.deriveGroupMemberSenderKey(
+                group.rawMyChainKeyOut,
+                groupIdBytes,
+                testUuidStringToBytes(bobMemberId)
+            )
+            aliceRepo.processIncomingGroupControl(
+                contactId = "bob",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupId = groupIdBytes,
+                    groupEpoch = 1L,
+                    senderMemberId = testUuidStringToBytes(bobMemberId),
+                    senderGroupChainKey = staleBobKey0,
+                    currentCounter = 0L,
+                    groupName = "PQ_4Node_Broadcast_Star",
+                    members = emptyList(),
+                    memberKeys = emptyList()
+                )
+            )
+            aliceRepo.processIncomingGroupControl(
+                contactId = "bob",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_KEY_BUNDLE,
+                    groupId = groupIdBytes,
+                    groupEpoch = 1L,
+                    senderMemberId = testUuidStringToBytes(bobMemberId),
+                    senderGroupChainKey = ByteArray(64),
+                    currentCounter = 0L,
+                    groupName = "PQ_4Node_Broadcast_Star",
+                    members = emptyList(),
+                    memberKeys = listOf(
+                        org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupMemberKey(
+                            memberId = testUuidStringToBytes(bobMemberId),
+                            counter = 0L,
+                            chainKey = staleBobKey0
+                        )
+                    )
+                )
+            )
+
+            val bobMemberAfterStale = aliceGroupMemberDao.getMember(groupId, bobMemberId)!!
+            assertEquals("Stale REKEY/KEY_BUNDLE must not rewind Alice's counterIn for Bob", 1, bobMemberAfterStale.counterIn)
+            assertArrayEquals("Stale REKEY/KEY_BUNDLE must not rewind Alice's chainKeyIn for Bob", bobInitialKey.rawChainKeyIn, bobMemberAfterStale.rawChainKeyIn)
+
+            // Bob's second group message (counter=1) must still decrypt cleanly on Alice!
+            assertTrue(bobRepo.sendGroupMessage(groupId, "Turn5_Bob_AfterStaleControl"))
+            assertTrue("Alice must decrypt Bob's counter=1 message after stale control rejection", aliceRepo.pollGroupIncoming(groupId))
+            assertEquals(1, aliceMessageDao.messages.count { it.textContent?.raw == "Turn5_Bob_AfterStaleControl" && !it.isOutgoing })
+        } finally {
+            aliceRepo.close()
+            bobRepo.close()
+            charlieRepo.close()
+            daveRepo.close()
+            dhtNode.stop()
         }
     }
 }

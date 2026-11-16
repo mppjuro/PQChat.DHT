@@ -435,15 +435,18 @@ class ChatViewModel @JvmOverloads constructor(
 
     private val isSyncRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     private val hasPendingSync = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastSelectedGroupBroadcastId: String? = null
 
     fun selectContact(contactId: String) {
+        val isFirstSelection = (lastSelectedGroupBroadcastId != contactId)
+        lastSelectedGroupBroadcastId = contactId
         _selectedContactId.value = contactId
         pollingManager.onChatOpened(contactId)
         viewModelScope.launch {
             val group = repository.getGroup(contactId)
-            if (group != null) {
+            if (group != null && isFirstSelection) {
                 repository.broadcastMyGroupSenderKey(group.groupId)
-                repository.relayMissingGroupKeys(group.groupId, force = true)
+                repository.relayMissingGroupKeys(group.groupId, force = false)
             }
             repository.markIncomingMessagesAsRead(contactId)
             repository.pollConstantBatch(contactId)
@@ -452,6 +455,7 @@ class ChatViewModel @JvmOverloads constructor(
 
     fun unselectContact() {
         _selectedContactId.value = null
+        lastSelectedGroupBroadcastId = null
         pollingManager.onChatClosed()
     }
 
@@ -496,20 +500,13 @@ class ChatViewModel @JvmOverloads constructor(
                         if (currentSelectedId != null) {
                             val group = repository.getGroup(currentSelectedId)
                             if (group != null) {
-                                val members = repository.getGroupMembers(group.groupId)
-                                for (m in members) {
-                                    val cId = m.contactId
-                                    if (cId != null) {
-                                        try {
-                                            repository.pollContactIncoming(cId)
-                                        } catch (_: Exception) {}
-                                    }
-                                }
+                                repository.pollGroupIncoming(group.groupId)
                                 val updatedMembers = repository.getGroupMembers(group.groupId)
-                                val hasMissingKeys = updatedMembers.any { it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
+                                val hasMissingKeys = updatedMembers.any {
+                                    it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() }
+                                }
                                 repository.relayMissingGroupKeys(group.groupId, force = hasMissingKeys)
                                 repository.republishRecentGroupMessages(group.groupId)
-                                repository.pollGroupIncoming(group.groupId)
                             } else {
                                 repository.pollContactIncoming(currentSelectedId)
                             }
