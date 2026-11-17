@@ -7,6 +7,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🚀 Features
 
+- [`29ef632`](https://github.com/mppjuro/PQChat.DHT/commit/29ef632a6ef24ae2b410642a9efcf625e750af8b) (2026-11-17) — **research**: expand thesis telemetry metrics, chunked Firestore bundles, and LaTeX/PDF analyzer
 - [`5f6f247`](https://github.com/mppjuro/PQChat.DHT/commit/5f6f247f1cee538b45516e7d1e53125844ac87bb) (2026-10-23) — **ui**: visible Bob handshake status indicator on HandshakeScreen
 - [`4b8c98e`](https://github.com/mppjuro/PQChat.DHT/commit/4b8c98e6787ab5e1f1bf8ed9c9e04a3838543148) (2026-10-23) — **viewmodel**: network-verified Bob republish loop
 - [`d893021`](https://github.com/mppjuro/PQChat.DHT/commit/d893021ea5e920b9da61d9648769a0557954176c) (2026-10-23) — **viewmodel**: BobHandshakeStatus state machine + network verification in processBobHandshake
