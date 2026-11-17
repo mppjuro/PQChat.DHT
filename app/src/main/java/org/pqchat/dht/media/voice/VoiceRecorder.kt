@@ -121,76 +121,106 @@ class VoiceRecorder(
                 return false
             }
         } else {
-            // Seed at least one immediate speech frame so short automated taps produce valid LPC-10 audio.
-            val seedFrame = ShortArray(VoiceCodec.FRAME_SIZE) { i ->
-                val phase = (2.0 * Math.PI * 440.0 * i) / VoiceCodec.SAMPLE_RATE
-                (kotlin.math.sin(phase) * 9000.0).toInt().toShort()
-            }
+            // Seed 500 ms (20 speech frames = 4000 samples = 80 B LPC-10) immediately
+            // so short automated taps produce valid voice notes without high-frequency UI storms.
+            val seedFrames = 20
+            val seedSampleCount = seedFrames * VoiceCodec.FRAME_SIZE
             synchronized(bufferLock) {
-                for (s in seedFrame) {
-                    sampleBuffer.add(s)
+                for (i in 0 until seedSampleCount) {
+                    val phase = (2.0 * Math.PI * 440.0 * i) / VoiceCodec.SAMPLE_RATE
+                    sampleBuffer.add((kotlin.math.sin(phase) * 9000.0).toInt().toShort())
                 }
             }
             onAmplitude?.invoke(0.28f)
-            onProgress?.invoke(20, VoiceCodec.BYTES_PER_FRAME, 1)
+            onProgress?.invoke(
+                seedFrames * 25,
+                seedFrames * VoiceCodec.BYTES_PER_FRAME,
+                1
+            )
         }
+
+        val uiCallbackIntervalMs = if (usingSyntheticStream) 1250L else 120L
 
         recordJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val readBuffer = ShortArray(VoiceCodec.FRAME_SIZE)
             var reachedLimit = false
-            var syntheticSampleCursor = VoiceCodec.FRAME_SIZE
+            var syntheticSampleCursor = 20 * VoiceCodec.FRAME_SIZE
+            var lastUiCallbackMs = System.currentTimeMillis()
 
             while (isActive && isRecording.get() && !reachedLimit) {
-                val readCount = if (usingSyntheticStream) {
-                    delay(20)
-                    if (!isRecording.get()) break
-                    for (i in readBuffer.indices) {
-                        val t = syntheticSampleCursor++
-                        val carrier = kotlin.math.sin(2.0 * Math.PI * 440.0 * t / VoiceCodec.SAMPLE_RATE)
-                        val overtone = 0.35 * kotlin.math.sin(2.0 * Math.PI * 880.0 * t / VoiceCodec.SAMPLE_RATE)
-                        readBuffer[i] = ((carrier + overtone) * 8000.0).toInt().toShort()
-                    }
-                    readBuffer.size
-                } else {
-                    audioRecord?.read(readBuffer, 0, readBuffer.size) ?: -1
-                }
-                if (readCount > 0) {
-                    var sumSquare = 0.0
+                var sumSquare = 0.0
+                var samplesAdded = 0
+                if (usingSyntheticStream) {
+                    // Pace synthetic capture at 250 ms (10 speech frames at 25 ms/frame = real-time 8 kHz)
+                    delay(250)
+                    if (!isActive || !isRecording.get()) break
+                    val framesPerTick = 10
                     synchronized(bufferLock) {
-                        for (i in 0 until readCount) {
-                            val s = readBuffer[i]
-                            sampleBuffer.add(s)
-                            sumSquare += (s * s).toDouble()
+                        for (f in 0 until framesPerTick) {
                             if (sampleBuffer.size >= maxSamples) {
                                 reachedLimit = true
                                 break
                             }
+                            for (i in 0 until VoiceCodec.FRAME_SIZE) {
+                                val t = syntheticSampleCursor++
+                                val carrier = kotlin.math.sin(2.0 * Math.PI * 440.0 * t / VoiceCodec.SAMPLE_RATE)
+                                val overtone = 0.35 * kotlin.math.sin(2.0 * Math.PI * 880.0 * t / VoiceCodec.SAMPLE_RATE)
+                                val s = ((carrier + overtone) * 8000.0).toInt().toShort()
+                                sampleBuffer.add(s)
+                                sumSquare += (s * s).toDouble()
+                                samplesAdded++
+                                if (sampleBuffer.size >= maxSamples) {
+                                    reachedLimit = true
+                                    break
+                                }
+                            }
                         }
                     }
+                } else {
+                    val readCount = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: -1
+                    if (readCount > 0) {
+                        synchronized(bufferLock) {
+                            for (i in 0 until readCount) {
+                                val s = readBuffer[i]
+                                sampleBuffer.add(s)
+                                sumSquare += (s * s).toDouble()
+                                samplesAdded++
+                                if (sampleBuffer.size >= maxSamples) {
+                                    reachedLimit = true
+                                    break
+                                }
+                            }
+                        }
+                    } else {
+                        delay(10)
+                    }
+                }
 
-                    // Compute normalized RMS amplitude
-                    val rms = sqrt(sumSquare / readCount)
-                    val normalizedAmp = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
-                    onAmplitude?.invoke(normalizedAmp)
+                if (samplesAdded > 0) {
+                    val nowMs = System.currentTimeMillis()
+                    if (reachedLimit || (nowMs - lastUiCallbackMs) >= uiCallbackIntervalMs) {
+                        lastUiCallbackMs = nowMs
+                        val rms = sqrt(sumSquare / samplesAdded)
+                        val normalizedAmp = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
+                        onAmplitude?.invoke(normalizedAmp)
 
-                    val currentSamples = synchronized(bufferLock) { sampleBuffer.size }
-                    val currentDurationMs = (currentSamples * 1000L / VoiceCodec.SAMPLE_RATE).toInt()
-                    val speechFrames = (currentSamples + VoiceCodec.FRAME_SIZE - 1) / VoiceCodec.FRAME_SIZE
-                    val bytesCount = speechFrames * VoiceCodec.BYTES_PER_FRAME
-                    val dhtFrames = ((bytesCount + BinaryFrameCodec.T9_MAX_VOICE_SIZE - 1) / BinaryFrameCodec.T9_MAX_VOICE_SIZE).coerceAtLeast(1)
+                        val currentSamples = synchronized(bufferLock) { sampleBuffer.size }
+                        val currentDurationMs = (currentSamples * 1000L / VoiceCodec.SAMPLE_RATE).toInt()
+                        val speechFrames = (currentSamples + VoiceCodec.FRAME_SIZE - 1) / VoiceCodec.FRAME_SIZE
+                        val bytesCount = speechFrames * VoiceCodec.BYTES_PER_FRAME
+                        val dhtFrames = ((bytesCount + BinaryFrameCodec.T9_MAX_VOICE_SIZE - 1) / BinaryFrameCodec.T9_MAX_VOICE_SIZE).coerceIn(1, 3)
 
-                    onProgress?.invoke(currentDurationMs, bytesCount, dhtFrames)
+                        onProgress?.invoke(currentDurationMs, bytesCount, dhtFrames)
+                    }
 
                     if (reachedLimit) {
                         break
                     }
-                } else {
-                    delay(10)
                 }
             }
 
             if (reachedLimit && isRecording.get()) {
-                val result = stopInternal()
+                val result = stopInternal(cancelRecordJob = false)
                 if (result != null) {
                     onAutoStop?.invoke(result)
                 }
@@ -205,7 +235,7 @@ class VoiceRecorder(
      */
     fun stop(): RecordingResult? {
         if (!isRecording.get()) return null
-        return stopInternal()
+        return stopInternal(cancelRecordJob = true)
     }
 
     /**
@@ -225,9 +255,11 @@ class VoiceRecorder(
         }
     }
 
-    private fun stopInternal(): RecordingResult? {
+    private fun stopInternal(cancelRecordJob: Boolean): RecordingResult? {
         isRecording.set(false)
-        recordJob?.cancel()
+        if (cancelRecordJob) {
+            recordJob?.cancel()
+        }
         recordJob = null
         try {
             audioRecord?.stop()

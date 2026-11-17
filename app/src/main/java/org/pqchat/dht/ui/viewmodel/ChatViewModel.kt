@@ -1250,8 +1250,8 @@ class ChatViewModel @JvmOverloads constructor(
                 _recordingBytesCount.value = bytes
                 _recordingFramesCount.value = frames
             },
-            onAutoStop = {
-                stopAndSendVoiceRecording(cancel = false)
+            onAutoStop = { autoResult ->
+                stopAndSendVoiceRecording(cancel = false, preStoppedResult = autoResult)
             }
         )
 
@@ -1261,9 +1261,11 @@ class ChatViewModel @JvmOverloads constructor(
         return started
     }
 
-    fun stopAndSendVoiceRecording(cancel: Boolean = false) {
-        if (!_isRecordingVoice.value) return
-        _isRecordingVoice.value = false
+    fun stopAndSendVoiceRecording(
+        cancel: Boolean = false,
+        preStoppedResult: org.pqchat.dht.media.voice.VoiceRecorder.RecordingResult? = null
+    ) {
+        if (!_isRecordingVoice.compareAndSet(true, false)) return
         _recordingAmplitude.value = 0f
 
         if (cancel) {
@@ -1272,7 +1274,7 @@ class ChatViewModel @JvmOverloads constructor(
             return
         }
 
-        val result = voiceRecorder.stop()
+        val result = preStoppedResult ?: voiceRecorder.stop()
         if (result == null || result.pcm16Samples.isEmpty()) {
             _statusNotification.value = "No audio recorded"
             return

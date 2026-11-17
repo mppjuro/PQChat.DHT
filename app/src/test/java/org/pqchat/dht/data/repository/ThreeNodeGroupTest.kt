@@ -1,5 +1,6 @@
 package org.pqchat.dht.data.repository
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -1332,7 +1333,7 @@ class ThreeNodeGroupTest {
         val repo: ChatRepository
     )
 
-    private fun createRegressionPeer(dhtNode: FakeDht): RegressionPeerHarness {
+    private fun createRegressionPeer(dhtNode: org.pqchat.dht.dht.leaf.DhtClient): RegressionPeerHarness {
         val contactDao = FakeContactDao()
         val messageDao = FakeMessageDao()
         val groupDao = FakeGroupDao()
@@ -1624,6 +1625,196 @@ class ThreeNodeGroupTest {
             assertEquals(
                 1,
                 charlie.messageDao.messages.count { it.textContent?.raw == "Epoch2_Counter0_After_50" && !it.isOutgoing }
+            )
+        } finally {
+            alice.repo.close()
+            bob.repo.close()
+            charlie.repo.close()
+            dhtNode.stop()
+        }
+    }
+
+    @Test
+    fun testPollConstantBatchDoesNotOverwriteConcurrentGroupRekeyState() = runBlocking {
+        val baseDht = FakeDht()
+        val intercepted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val fetchedInFlight = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseInFlight = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var watchedTarget: ByteArray? = null
+
+        val hookedDhtForBob = object : org.pqchat.dht.dht.leaf.DhtClient by baseDht {
+            override suspend fun getMutable(
+                target: ByteArray,
+                salt: ByteArray?,
+                skipLocalStore: Boolean,
+                timeoutMs: Long,
+                probeAllReplicas: Boolean,
+                minSeq: Long
+            ): org.pqchat.dht.dht.leaf.DhtLeafNode.MutableItem? {
+                val result = baseDht.getMutable(target, salt, skipLocalStore, timeoutMs, probeAllReplicas, minSeq)
+                val watched = watchedTarget
+                if (watched != null && target.contentEquals(watched) && result != null && intercepted.compareAndSet(false, true)) {
+                    fetchedInFlight.complete(Unit)
+                    releaseInFlight.await()
+                }
+                return result
+            }
+        }
+
+        val alice = createRegressionPeer(baseDht)
+        val bob = createRegressionPeer(hookedDhtForBob)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+            val group = alice.repo.createGroup("Concurrent_Rekey_Race_Group", listOf("bob"))
+            val groupId = group.groupId
+            val groupIdBytes = testUuidStringToBytes(groupId)
+
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            val bobGroup = bob.groupDao.getGroupById(groupId)!!
+            val aliceInBobBefore = bob.groupMemberDao.getMember(groupId, group.myMemberId)!!
+            assertEquals(0, aliceInBobBefore.counterIn)
+            val epoch1Key0 = aliceInBobBefore.rawChainKeyIn.copyOf()
+
+            // Publish Epoch 1 Counter 0 message and arm hook so pollConstantBatch stalls after fetching it
+            val slot0Target = RatchetChain.deriveGroupRecipientSlot(
+                chainKey = epoch1Key0,
+                counter = 0,
+                groupId = groupIdBytes,
+                senderMemberId = testUuidStringToBytes(group.myMemberId),
+                recipientMemberId = testUuidStringToBytes(bobGroup.myMemberId)
+            ).target
+            watchedTarget = slot0Target
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch1_InFlight_Msg0"))
+
+            val batchJob = this@runBlocking.async(kotlinx.coroutines.Dispatchers.Default) {
+                bob.repo.pollConstantBatch(groupId)
+            }
+            kotlinx.coroutines.withTimeout(10_000L) {
+                fetchedInFlight.await()
+            }
+
+            // While pollConstantBatch holds the stale Epoch 1 snapshot in-flight, advance Alice to Epoch 2
+            for (idx in 1 until org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL) {
+                assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch1_Filler_$idx"))
+            }
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch2_PostRace_Msg0"))
+            assertTrue("Bob must ingest Epoch 2 REKEY concurrently", bob.repo.pollContactIncoming("alice"))
+
+            val aliceInBobEpoch2 = bob.groupMemberDao.getMember(groupId, group.myMemberId)!!
+            assertEquals(0, aliceInBobEpoch2.counterIn)
+            val epoch2Key0 = aliceInBobEpoch2.rawChainKeyIn.copyOf()
+            assertFalse("Bob must now hold rotated Epoch 2 key", epoch2Key0.contentEquals(epoch1Key0))
+
+            // Release the stale Epoch 1 pollConstantBatch task and verify Epoch 2 state is preserved
+            releaseInFlight.complete(Unit)
+            batchJob.await()
+
+            val aliceInBobAfterBatch = bob.groupMemberDao.getMember(groupId, group.myMemberId)!!
+            assertEquals("Stale Epoch 1 task must not advance Epoch 2 counterIn", 0, aliceInBobAfterBatch.counterIn)
+            assertArrayEquals("Stale Epoch 1 task must not overwrite Epoch 2 chainKeyIn", epoch2Key0, aliceInBobAfterBatch.rawChainKeyIn)
+
+            assertTrue("Bob must decrypt Epoch 2 message cleanly", bob.repo.pollGroupIncoming(groupId))
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Epoch2_PostRace_Msg0" && !it.isOutgoing })
+            assertEquals(1, bob.groupMemberDao.getMember(groupId, group.myMemberId)!!.counterIn)
+        } finally {
+            releaseInFlight.complete(Unit)
+            alice.repo.close()
+            bob.repo.close()
+            baseDht.stop()
+        }
+    }
+
+    @Test
+    fun testGroupLookaheadGapFillSkipsTombstonedLookaheadSlotCleanly() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val bob = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+            val group = alice.repo.createGroup("Lookahead_Gap_Skip_Group", listOf("bob"))
+            val groupId = group.groupId
+            val groupIdBytes = testUuidStringToBytes(groupId)
+
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            val bobGroup = bob.groupDao.getGroupById(groupId)!!
+            val aliceInBob = bob.groupMemberDao.getMember(groupId, group.myMemberId)!!
+            val slot0TargetHex = CryptoUtils.toHex(
+                RatchetChain.deriveGroupRecipientSlot(
+                    chainKey = aliceInBob.rawChainKeyIn,
+                    counter = 0,
+                    groupId = groupIdBytes,
+                    senderMemberId = testUuidStringToBytes(group.myMemberId),
+                    recipientMemberId = testUuidStringToBytes(bobGroup.myMemberId)
+                ).target
+            )
+
+            // Alice sends 3 messages; temporarily withhold counter=0 so lookahead delivers 1 & 2 and tombstones them
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Gap_Msg_0"))
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Gap_Msg_1"))
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Gap_Msg_2"))
+
+            val withheldEntry0 = dhtNode.storage.remove(slot0TargetHex)
+            assertNotNull("Slot 0 must exist before out-of-order simulation", withheldEntry0)
+
+            assertTrue("Lookahead batch must receive counters 1 and 2", bob.repo.pollConstantBatch(groupId))
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Gap_Msg_1" && !it.isOutgoing })
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Gap_Msg_2" && !it.isOutgoing })
+            assertEquals("counterIn stays at missing slot 0", 0, bob.groupMemberDao.getMember(groupId, group.myMemberId)!!.counterIn)
+
+            // Restore slot 0; pollGroupIncoming must gap-fill 0 and skip self-tombstoned 1 & 2 directly to counter 3
+            dhtNode.storage[slot0TargetHex] = withheldEntry0!!
+            assertTrue("Bob must receive gap-filled slot 0", bob.repo.pollGroupIncoming(groupId))
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Gap_Msg_0" && !it.isOutgoing })
+            assertEquals("counterIn must jump over tombstoned lookahead slots to 3", 3, bob.groupMemberDao.getMember(groupId, group.myMemberId)!!.counterIn)
+
+            // Subsequent counter=3 message must decrypt without stalling on old tombstones
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Post_Gap_Msg_3"))
+            assertTrue("Bob must decrypt counter 3 after gap fill", bob.repo.pollGroupIncoming(groupId))
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Post_Gap_Msg_3" && !it.isOutgoing })
+            assertEquals(4, bob.groupMemberDao.getMember(groupId, group.myMemberId)!!.counterIn)
+        } finally {
+            alice.repo.close()
+            bob.repo.close()
+            dhtNode.stop()
+        }
+    }
+
+    @Test
+    fun testPollGroupIncomingIngestsEpoch2RekeyEvenDuringActiveEpoch1Burst() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val bob = createRegressionPeer(dhtNode)
+        val charlie = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+            setupRegressionPairwiseChannel(alice, charlie, "alice", "Alice", "charlie", "Charlie")
+
+            val group = alice.repo.createGroup("Burst_Rekey_Unstarved_Group", listOf("bob", "charlie"))
+            val groupId = group.groupId
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            assertTrue(charlie.repo.pollContactIncoming("alice"))
+
+            // Alice sends a 50-message Epoch 1 burst and auto-rekeys to Epoch 2 with Msg #51
+            for (idx in 0 until org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL) {
+                assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch1_Burst_$idx"))
+            }
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch2_During_Burst"))
+
+            // Bob calls ONLY pollGroupIncoming (unread Epoch 1 frames exist, so anyReceived == true),
+            // yet pollGroupIncoming must still poll 1-on-1 contacts, ingest REKEY, and decrypt Epoch 2
+            assertTrue(bob.repo.pollGroupIncoming(groupId))
+            assertEquals(
+                "Bob must ingest Epoch 2 REKEY and decrypt Epoch 2 message despite Epoch 1 burst",
+                1,
+                bob.messageDao.messages.count { it.textContent?.raw == "Epoch2_During_Burst" && !it.isOutgoing }
+            )
+            assertTrue(charlie.repo.pollGroupIncoming(groupId))
+            assertEquals(
+                1,
+                charlie.messageDao.messages.count { it.textContent?.raw == "Epoch2_During_Burst" && !it.isOutgoing }
             )
         } finally {
             alice.repo.close()

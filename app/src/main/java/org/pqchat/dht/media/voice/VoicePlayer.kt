@@ -60,9 +60,9 @@ class VoicePlayer(
             }
 
             if (isSyntheticAudioTestMode) {
-                val totalMs = ((pcmSamples.size * 1000L) / VoiceCodec.SAMPLE_RATE).coerceIn(600L, 1500L)
-                val steps = 12
-                val stepMs = (totalMs / steps).coerceAtLeast(30L)
+                val totalMs = 1500L
+                val steps = 3
+                val stepMs = totalMs / steps
                 try {
                     for (step in 1..steps) {
                         if (!isActive || !isPlayingState.get()) break

@@ -124,15 +124,21 @@ class PqChatUiAutomatorTest {
     private fun ensureActivityInForeground() {
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
-            var activity = getCurrentResumedActivity() as? MainActivity
-            if (activity != null && uiDevice.isScreenOn) {
-                return
-            }
-            if (!uiDevice.isScreenOn) {
+            val context = instrumentation.targetContext
+            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+            if (!uiDevice.isScreenOn || km?.isKeyguardLocked == true) {
                 runCatching { uiDevice.wakeUp() }
                 runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                if (km?.isKeyguardLocked == true) {
+                    runCatching { uiDevice.executeShellCommand("input keyevent 82") }
+                    Thread.sleep(150)
+                    runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                }
             }
-            val context = instrumentation.targetContext
+            var activity = getCurrentResumedActivity() as? MainActivity
+            if (activity != null && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
+                return
+            }
             val intent = android.content.Intent(context, MainActivity::class.java).apply {
                 flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
                         android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -143,14 +149,71 @@ class PqChatUiAutomatorTest {
             var attempts = 0
             while (attempts < 50) {
                 activity = getCurrentResumedActivity() as? MainActivity
-                if (activity != null) break
-                if (attempts == 15) {
+                if (activity != null && km?.isKeyguardLocked != true) break
+                if (attempts == 15 || attempts == 30) {
                     runCatching { uiDevice.wakeUp() }
                     runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                    if (km?.isKeyguardLocked == true) {
+                        runCatching { uiDevice.executeShellCommand("input keyevent 82") }
+                    }
                     context.startActivity(intent)
                 }
                 Thread.sleep(100)
                 attempts++
+            }
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Waits until MainActivity settles in a steady [Stage.RESUMED] lifecycle state with no
+     * transient [Stage.STARTED]/[Stage.CREATED]/[Stage.RESTARTED] transitions pending and the
+     * keyguard unlocked, preventing `ActivityScenario.close()` NPE ("Last stage = STARTED").
+     */
+    private fun awaitSteadyResumedMainActivity(timeoutMs: Long = 15_000L) {
+        try {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val context = instrumentation.targetContext
+            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+            val deadline = System.currentTimeMillis() + timeoutMs
+            var lastRelaunchMs = 0L
+            while (System.currentTimeMillis() < deadline) {
+                if (!uiDevice.isScreenOn || km?.isKeyguardLocked == true) {
+                    runCatching { uiDevice.wakeUp() }
+                    runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                    if (km?.isKeyguardLocked == true) {
+                        runCatching { uiDevice.executeShellCommand("input keyevent 82") }
+                    }
+                }
+                var hasResumedMain = false
+                var hasTransientStage = false
+                instrumentation.runOnMainSync {
+                    val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+                    hasResumedMain = monitor.getActivitiesInStage(Stage.RESUMED).any { it is MainActivity }
+                    val transientStages = listOf(
+                        Stage.PRE_ON_CREATE,
+                        Stage.CREATED,
+                        Stage.STARTED,
+                        Stage.RESTARTED
+                    )
+                    hasTransientStage = transientStages.any { stage ->
+                        monitor.getActivitiesInStage(stage).any { it is MainActivity }
+                    }
+                }
+                if (hasResumedMain && !hasTransientStage && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
+                    instrumentation.waitForIdleSync()
+                    return
+                }
+                val now = System.currentTimeMillis()
+                if (!hasResumedMain && !hasTransientStage && now - lastRelaunchMs >= 1_500L) {
+                    lastRelaunchMs = now
+                    val intent = android.content.Intent(context, MainActivity::class.java).apply {
+                        flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    runCatching { context.startActivity(intent) }
+                }
+                Thread.sleep(100)
             }
         } catch (_: Throwable) {}
     }
@@ -237,6 +300,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitForIdle()
 
         navigateToRootContactList()
+        awaitSteadyResumedMainActivity()
     }
 
     @After
@@ -277,6 +341,7 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitForIdle()
 
         navigateToRootContactList()
+        awaitSteadyResumedMainActivity()
     }
 
     /**
@@ -1920,6 +1985,7 @@ class PqChatUiAutomatorTest {
             }
             runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
             ensureActivityInForeground()
+            awaitSteadyResumedMainActivity()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 getCurrentResumedActivity() is MainActivity &&
                 app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER &&
@@ -1934,6 +2000,7 @@ class PqChatUiAutomatorTest {
             }
             runCatching { uiDevice.unfreezeRotation() }
             ensureActivityInForeground()
+            awaitSteadyResumedMainActivity()
         }
     }
 }
