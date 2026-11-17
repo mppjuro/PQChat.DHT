@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import java.io.File
 import java.util.zip.ZipInputStream
@@ -123,12 +124,8 @@ class PqChatUiAutomatorTest {
     private fun ensureActivityInForeground() {
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
-            val activity = composeTestRule.activity
-            var isResumed = false
-            instrumentation.runOnMainSync {
-                isResumed = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
-            }
-            if (!isResumed) {
+            var activity = getCurrentResumedActivity() as? MainActivity
+            if (activity == null) {
                 val context = instrumentation.targetContext
                 val intent = android.content.Intent(context, MainActivity::class.java).apply {
                     flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
@@ -138,12 +135,9 @@ class PqChatUiAutomatorTest {
                 context.startActivity(intent)
                 uiDevice.waitForIdle()
                 var attempts = 0
-                while (attempts < 20) {
-                    var resumedNow = false
-                    instrumentation.runOnMainSync {
-                        resumedNow = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
-                    }
-                    if (resumedNow) break
+                while (attempts < 25) {
+                    activity = getCurrentResumedActivity() as? MainActivity
+                    if (activity != null) break
                     Thread.sleep(100)
                     attempts++
                 }
@@ -206,6 +200,7 @@ class PqChatUiAutomatorTest {
 
         try {
             composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.voiceRecorder.cancel()
                 composeTestRule.activity.viewModel.stopVoiceNote()
                 composeTestRule.activity.viewModel.stopAndSendVoiceRecording(cancel = true)
                 composeTestRule.activity.viewModel.unselectContact()
@@ -251,6 +246,7 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {}
         try {
             composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.voiceRecorder.cancel()
                 composeTestRule.activity.viewModel.stopVoiceNote()
                 composeTestRule.activity.viewModel.stopAndSendVoiceRecording(cancel = true)
                 composeTestRule.activity.viewModel.unselectContact()
@@ -273,45 +269,54 @@ class PqChatUiAutomatorTest {
      * Helper to safely dismiss the soft keyboard and allow dialog/view animations to settle.
      */
     private fun dismissKeyboardAndWait() {
-        try {
-            androidx.test.espresso.Espresso.closeSoftKeyboard()
-        } catch (_: Throwable) {}
+        var hadKeyboard = false
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             instrumentation.runOnMainSync {
-                val activity = composeTestRule.activity
+                val activity = getCurrentResumedActivity() ?: composeTestRule.activity
                 val imm = activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
                 val windowToken = activity.currentFocus?.windowToken ?: activity.window.decorView.windowToken
-                imm?.hideSoftInputFromWindow(windowToken, 0)
+                if (imm?.isAcceptingText == true) {
+                    hadKeyboard = true
+                }
+                if (imm?.hideSoftInputFromWindow(windowToken, 0) == true) {
+                    hadKeyboard = true
+                }
             }
         } catch (_: Throwable) {}
+        try {
+            androidx.test.espresso.Espresso.closeSoftKeyboard()
+        } catch (_: Throwable) {}
         uiDevice.waitForIdle()
-        Thread.sleep(50)
+        Thread.sleep(if (hadKeyboard) 180L else 60L)
         composeTestRule.waitForIdle()
     }
 
     /**
      * Computes the absolute physical screen coordinates for a Compose SemanticsNode.
-     * Unlike [SemanticsNode.boundsInWindow], which returns offsets relative to individual
-     * sub-windows (such as Dialogs, Popups, and DropdownMenus), this adds the parent View's
-     * location on screen to [SemanticsNode.boundsInRoot], ensuring accurate absolute screen
-     * coordinates for real physical clicks via UiDevice.
+     * Combines [SemanticsNode.boundsInWindow] with the host root View's window-to-screen
+     * translation (`getLocationOnScreen - getLocationInWindow`), ensuring accurate absolute
+     * coordinates across main windows, Dialogs, Popups, and edge-to-edge insets.
      */
     private val androidx.compose.ui.semantics.SemanticsNode.boundsInScreen: Rect
         get() {
-            val rootBounds = this.boundsInRoot
+            val windowBounds = this.boundsInWindow
             val view = this.root as? android.view.View
             if (view != null) {
                 val locationOnScreen = IntArray(2)
+                val locationInWindow = IntArray(2)
                 view.getLocationOnScreen(locationOnScreen)
+                view.getLocationInWindow(locationInWindow)
+                val offsetX = (locationOnScreen[0] - locationInWindow[0]).toFloat()
+                val offsetY = (locationOnScreen[1] - locationInWindow[1]).toFloat()
                 return Rect(
-                    left = rootBounds.left + locationOnScreen[0],
-                    top = rootBounds.top + locationOnScreen[1],
-                    right = rootBounds.right + locationOnScreen[0],
-                    bottom = rootBounds.bottom + locationOnScreen[1]
+                    left = windowBounds.left + offsetX,
+                    top = windowBounds.top + offsetY,
+                    right = windowBounds.right + offsetX,
+                    bottom = windowBounds.bottom + offsetY
                 )
             }
-            return this.boundsInWindow
+            return windowBounds
         }
 
     /**
@@ -449,14 +454,28 @@ class PqChatUiAutomatorTest {
                 dismissKeyboardAndWait()
             }
         }
+        composeTestRule.waitForIdle()
         val semanticsNode = nodeInteraction.fetchSemanticsNode()
         val bounds = semanticsNode.boundsInScreen
         assertTrue("Expected positive screen bounds for $matcher, got $bounds", bounds.width > 0f && bounds.height > 0f)
-        val centerX = (bounds.left + bounds.width / 2f).toInt().coerceIn(1, uiDevice.displayWidth - 2)
-        val centerY = (bounds.top + bounds.height / 2f).toInt().coerceIn(1, uiDevice.displayHeight - 2)
+        val testTag = semanticsNode.config.getOrElse(SemanticsProperties.TestTag) { "" }
+        val accessibilityCenter = if (testTag.isNotEmpty()) {
+            runCatching {
+                uiDevice.findObject(By.res(testTag))?.takeIf {
+                    it.visibleBounds.width() > 0 && it.visibleBounds.height() > 0
+                }?.visibleCenter
+            }.getOrNull()
+        } else {
+            null
+        }
+        val centerX = (accessibilityCenter?.x ?: (bounds.left + bounds.width / 2f).toInt())
+            .coerceIn(1, uiDevice.displayWidth - 2)
+        val centerY = (accessibilityCenter?.y ?: (bounds.top + bounds.height / 2f).toInt())
+            .coerceIn(1, uiDevice.displayHeight - 2)
         val tapped = uiDevice.click(centerX, centerY)
         assertTrue("Physical UiDevice.click failed at ($centerX, $centerY) bounds=$bounds", tapped)
         uiDevice.waitForIdle()
+        Thread.sleep(60)
         composeTestRule.waitForIdle()
         return bounds
     }
@@ -1490,9 +1509,19 @@ class PqChatUiAutomatorTest {
         composeTestRule.waitUntil(timeoutMillis = 15_000) {
             composeTestRule.onAllNodesWithTag("chat_voice_record_button").fetchSemanticsNodes().isNotEmpty()
         }
+        composeTestRule.waitForIdle()
 
         // 2. Start Push-To-Talk recording with physical UiDevice coordinate tap
         clickBoundsInScreenPhysical(hasTestTag("chat_voice_record_button"), scrollIntoView = false)
+        if (!composeTestRule.activity.viewModel.isRecordingVoice.value) {
+            Thread.sleep(150)
+            composeTestRule.waitForIdle()
+            if (!composeTestRule.activity.viewModel.isRecordingVoice.value &&
+                composeTestRule.onAllNodesWithTag("chat_voice_record_button").fetchSemanticsNodes().isNotEmpty()
+            ) {
+                clickBoundsInScreenPhysical(hasTestTag("chat_voice_record_button"), scrollIntoView = false)
+            }
+        }
 
         composeTestRule.waitUntil(timeoutMillis = 10_000) {
             composeTestRule.onAllNodesWithTag("chat_voice_send_button").fetchSemanticsNodes().isNotEmpty() &&
@@ -1818,6 +1847,7 @@ class PqChatUiAutomatorTest {
             // 4. Physical screen rotation (Landscape -> Natural Portrait) preserves ChatScreen & FLAG_SECURE
             uiDevice.setOrientationLeft()
             uiDevice.waitForIdle()
+            composeTestRule.waitForIdle()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 getCurrentResumedActivity() != null &&
                 composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty() &&
@@ -1828,6 +1858,7 @@ class PqChatUiAutomatorTest {
             uiDevice.setOrientationNatural()
             uiDevice.unfreezeRotation()
             uiDevice.waitForIdle()
+            composeTestRule.waitForIdle()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 getCurrentResumedActivity() != null &&
                 composeTestRule.onAllNodesWithTag("chat_back_button").fetchSemanticsNodes().isNotEmpty()

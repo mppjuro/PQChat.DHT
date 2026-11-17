@@ -1556,8 +1556,10 @@ fun SettingsScreen(
     }
 
     if (showPinDialog) {
+        @OptIn(ExperimentalComposeUiApi::class)
         AlertDialog(
             onDismissRequest = { showPinDialog = false },
+            modifier = Modifier.semantics { testTagsAsResourceId = true },
             title = { Text("Set App Lock PIN") },
             text = {
                 Column {
@@ -1604,8 +1606,10 @@ fun SettingsScreen(
     }
 
     if (showDuressPinDialog) {
+        @OptIn(ExperimentalComposeUiApi::class)
         AlertDialog(
             onDismissRequest = { showDuressPinDialog = false },
+            modifier = Modifier.semantics { testTagsAsResourceId = true },
             title = { Text("Set Duress PIN") },
             text = {
                 Column {
@@ -1653,8 +1657,10 @@ fun SettingsScreen(
     }
 
     if (showResearchConsentDialog) {
+        @OptIn(ExperimentalComposeUiApi::class)
         AlertDialog(
             onDismissRequest = { showResearchConsentDialog = false },
+            modifier = Modifier.semantics { testTagsAsResourceId = true },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("🔬 ", fontSize = 20.sp)

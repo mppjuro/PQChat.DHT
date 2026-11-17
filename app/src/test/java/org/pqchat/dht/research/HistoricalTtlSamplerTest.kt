@@ -229,11 +229,15 @@ class HistoricalTtlSamplerTest {
         assertEquals(setOf(RepublishMode.NO_REPUBLISH, RepublishMode.OWN_REPUBLISH, RepublishMode.CROWD_REPUBLISH), modes)
 
         val extraTarget = CryptoUtils.secureRandomBytes(20)
+        val extraPrefix = CryptoUtils.toHex(extraTarget).take(8)
         mockDhtClient.putMutable(extraTarget, ByteArray(900), 1L, null, ByteArray(32))
         sampler.trackPacket(extraTarget, initialPutEpochMs = 1_000_000L, republishMode = RepublishMode.OWN_REPUBLISH)
         sampler.updateRepublishMode(extraTarget, RepublishMode.CROWD_REPUBLISH)
+        recordedSamples.clear()
         sampler.executeSamplingPass(1_000_000L + 3_600_000L, "sess_triplet")
-        assertEquals(RepublishMode.CROWD_REPUBLISH, recordedSamples.last().republishMode)
-        assertEquals(1.0, recordedSamples.last().replicaSurvivalRatio, 0.001)
+        val extraSample = recordedSamples.firstOrNull { it.targetPrefix == extraPrefix }
+        assertNotNull("Expected recorded sample for extra target", extraSample)
+        assertEquals(RepublishMode.CROWD_REPUBLISH, extraSample!!.republishMode)
+        assertEquals(1.0, extraSample.replicaSurvivalRatio, 0.001)
     }
 }

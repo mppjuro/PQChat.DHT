@@ -158,9 +158,18 @@ fun ChatScreen(
         viewModel.selectContact(contactId)
     }
 
+    val hostActivity = LocalContext.current.let { initialContext ->
+        var current: android.content.Context? = initialContext
+        while (current is android.content.ContextWrapper && current !is android.app.Activity) {
+            current = current.baseContext
+        }
+        current as? android.app.Activity
+    }
     DisposableEffect(Unit) {
         onDispose {
-            viewModel.unselectContact()
+            if (hostActivity?.isChangingConfigurations != true) {
+                viewModel.unselectContact()
+            }
         }
     }
 
@@ -721,7 +730,7 @@ fun ChatScreen(
                                         Manifest.permission.RECORD_AUDIO
                                     ) == PackageManager.PERMISSION_GRANTED
 
-                                    if (hasPermission) {
+                                    if (hasPermission || org.pqchat.dht.media.voice.VoiceRecorder.isSyntheticAudioTestMode) {
                                         viewModel.startVoiceRecording()
                                     } else {
                                         audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -879,8 +888,10 @@ fun ChatScreen(
         }
 
         if (showEditContactNameDialog && contact != null) {
+            @OptIn(ExperimentalComposeUiApi::class)
             AlertDialog(
                 onDismissRequest = { showEditContactNameDialog = false },
+                modifier = Modifier.semantics { testTagsAsResourceId = true },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -946,8 +957,10 @@ fun ChatScreen(
         }
 
         if (showSasDialog && contact != null) {
+            @OptIn(ExperimentalComposeUiApi::class)
             AlertDialog(
                 onDismissRequest = { showSasDialog = false },
+                modifier = Modifier.semantics { testTagsAsResourceId = true },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -1028,8 +1041,10 @@ fun ChatScreen(
         }
 
         if (showGroupMembersDialog && group != null) {
+            @OptIn(ExperimentalComposeUiApi::class)
             AlertDialog(
                 onDismissRequest = { showGroupMembersDialog = false },
+                modifier = Modifier.semantics { testTagsAsResourceId = true },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -1723,10 +1738,12 @@ fun FullscreenImageViewer(
             decorFitsSystemWindows = false
         )
     ) {
+        @OptIn(ExperimentalComposeUiApi::class)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .semantics { testTagsAsResourceId = true }
         ) {
             if (bitmap != null) {
                 Box(
@@ -1838,8 +1855,10 @@ fun LocationPinDialog(
     var accText by remember { mutableStateOf("5.0") }
     var noteText by remember { mutableStateOf("Status: Safe (Offline)") }
 
+    @OptIn(ExperimentalComposeUiApi::class)
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -2260,6 +2279,7 @@ fun GroupPollCard(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CreatePollDialog(
     groupId: String,
@@ -2274,6 +2294,7 @@ fun CreatePollDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(

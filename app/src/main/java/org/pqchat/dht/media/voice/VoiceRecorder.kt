@@ -87,19 +87,18 @@ class VoiceRecorder(
         val maxSpeechFrames = maxCompressedBytes / VoiceCodec.BYTES_PER_FRAME // 210 or 630
         val maxSamples = maxSpeechFrames * VoiceCodec.FRAME_SIZE // 42,000 or 126,000 samples
 
-        val minBufferSize = try {
-            AudioRecord.getMinBufferSize(
-                VoiceCodec.SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-        } catch (_: Throwable) {
-            AudioRecord.ERROR_BAD_VALUE
-        }
-        val bufferSize = max(minBufferSize, VoiceCodec.FRAME_SIZE * 2)
-
-        var usingSyntheticStream = isSyntheticAudioTestMode
+        val usingSyntheticStream = isSyntheticAudioTestMode
         if (!usingSyntheticStream) {
+            val minBufferSize = try {
+                AudioRecord.getMinBufferSize(
+                    VoiceCodec.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+            } catch (_: Throwable) {
+                AudioRecord.ERROR_BAD_VALUE
+            }
+            val bufferSize = max(minBufferSize, VoiceCodec.FRAME_SIZE * 2)
             try {
                 audioRecord = AudioRecord(
                     MediaRecorder.AudioSource.MIC,
@@ -136,7 +135,7 @@ class VoiceRecorder(
             onProgress?.invoke(20, VoiceCodec.BYTES_PER_FRAME, 1)
         }
 
-        recordJob = scope.launch {
+        recordJob = scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val readBuffer = ShortArray(VoiceCodec.FRAME_SIZE)
             var reachedLimit = false
             var syntheticSampleCursor = VoiceCodec.FRAME_SIZE

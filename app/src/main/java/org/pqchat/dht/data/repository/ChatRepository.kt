@@ -610,6 +610,25 @@ class ChatRepository(
     }
 
     /**
+     * Records an opt-in research telemetry probe event when sending a local Self-Notes entry.
+     */
+    private fun recordSelfNoteTelemetryIfEnabled(seqNum: Int) {
+        if (researchTelemetry?.isEnabled != true) return
+        researchTelemetry?.recordPacketEvent(
+            role = org.pqchat.dht.research.PacketRole.FIRST_SEND,
+            target = CryptoUtils.sha1("self_note:$seqNum".toByteArray()),
+            seqNum = seqNum.toLong(),
+            payloadBytes = BinaryFrameCodec.TOTAL_FRAME_SIZE,
+            rttMs = 1L,
+            nodesQueried = dhtLeafNode.lastNodesQueried,
+            nodesResponded = dhtLeafNode.lastNodesResponded,
+            lookupHops = dhtLeafNode.lastLookupHops,
+            success = true,
+            republishAttempt = 0
+        )
+    }
+
+    /**
      * Sends a text message to contact via DHT with key hopping and 900-byte frame.
      * Protected by per-contact Mutex and backed by Room outbox queue.
      */
@@ -651,6 +670,7 @@ class ChatRepository(
                         chainKeyOut = currentContact.chainKeyOut
                     )
                 }
+                recordSelfNoteTelemetryIfEnabled(seqNum)
                 return@withLock true
             }
 
@@ -1087,6 +1107,7 @@ class ChatRepository(
                         chainKeyOut = currentContact.chainKeyOut
                     )
                 }
+                recordSelfNoteTelemetryIfEnabled(seqNum)
                 return@withLock true
             }
 

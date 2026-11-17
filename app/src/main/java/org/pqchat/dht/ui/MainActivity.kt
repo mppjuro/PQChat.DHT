@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -124,7 +126,7 @@ class MainActivity : FragmentActivity() {
             val isDuressActive by viewModel.isDuressActive.collectAsState()
 
             val requiresLock = (isBiometricEnabled || isPinConfigured || isDuressConfigured) && !isDuressActive
-            var isUnlocked by remember { mutableStateOf(!requiresLock) }
+            var isUnlocked by rememberSaveable(requiresLock) { mutableStateOf(!requiresLock) }
 
             LaunchedEffect(requiresLock) {
                 if (!requiresLock) {
@@ -189,7 +191,9 @@ fun MainAppNavigation(
     onLockRequested: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.ContactList) }
+    var currentScreen by rememberSaveable(stateSaver = Screen.StateSaver) {
+        mutableStateOf<Screen>(Screen.ContactList)
+    }
 
     val selectedContactId by viewModel.selectedContactId.collectAsState()
 
@@ -328,4 +332,27 @@ sealed class Screen {
     data class Handshake(val isBob: Boolean) : Screen()
     data class Chat(val contactId: String) : Screen()
     object Diagnostics : Screen()
+
+    companion object {
+        val StateSaver: Saver<Screen, List<String>> = Saver(
+            save = { screen ->
+                when (screen) {
+                    is ContactList -> listOf("ContactList")
+                    is Settings -> listOf("Settings")
+                    is Handshake -> listOf("Handshake", screen.isBob.toString())
+                    is Chat -> listOf("Chat", screen.contactId)
+                    is Diagnostics -> listOf("Diagnostics")
+                }
+            },
+            restore = { saved ->
+                when (saved.firstOrNull()) {
+                    "Settings" -> Settings
+                    "Handshake" -> Handshake(isBob = saved.getOrNull(1)?.toBooleanStrictOrNull() ?: false)
+                    "Chat" -> saved.getOrNull(1)?.let { Chat(it) } ?: ContactList
+                    "Diagnostics" -> Diagnostics
+                    else -> ContactList
+                }
+            }
+        )
+    }
 }

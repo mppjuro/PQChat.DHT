@@ -259,7 +259,8 @@ logcat -c
             "diagnostics_back_button", "create_group_cancel_button",
             "sas_dialog_close_button", "handshake_confirm_verified_button",
             "handshake_encapsulate_button", "contact_settings_button",
-            "poll_question_input", "poll_create_confirm_button", "chat_voice_send_button"
+            "poll_question_input", "poll_create_confirm_button",
+            "poll_create_dismiss_button", "chat_voice_send_button", "chat_voice_cancel_button"
         ]
         for tag in child_tags:
             if self.find_node(test_tag=tag):
@@ -861,6 +862,19 @@ logcat -c
             if self.is_on_contact_list():
                 print(f"[{self.name}] Already on ContactListScreen.", flush=True)
                 return True
+
+            # Dismiss open modal dialogs first (CreatePollDialog blocks TopAppBar navigation)
+            if self.find_node(test_tag="poll_create_dismiss_button"):
+                print(f"[{self.name}] Dismissing CreatePollDialog via poll_create_dismiss_button", flush=True)
+                self.click_element(test_tag="poll_create_dismiss_button", capture_on_fail=False)
+                self.sleep(0.8)
+                continue
+
+            if self.find_node(test_tag="chat_voice_cancel_button"):
+                print(f"[{self.name}] Cancelling active voice HUD via chat_voice_cancel_button", flush=True)
+                self.click_element(test_tag="chat_voice_cancel_button", capture_on_fail=False)
+                self.sleep(0.6)
+                continue
 
             # Check explicit screen back buttons first
             if self.find_node(test_tag="chat_back_button"):
@@ -1978,8 +1992,12 @@ class MultiEmulatorOrchestrator:
 
         poll_question = f"MultiNode_Poll_0x0A_{len(participants) + 1}N"
         self.alice.click_element(test_tag="chat_create_poll_button", content_desc="Create Group Poll", auto_scroll=False)
+        self.sleep(0.5)
         if not self.alice.wait_for_element(test_tag="poll_question_input", timeout=12):
-            self.log_step("Group Poll Created (0x0A)", "FAIL", "CreatePollDialog did not open on Alice")
+            sc_fail = self.alice.screencap("09_alice_poll_dialog_missing")
+            self.log_step("Group Poll Created (0x0A)", "FAIL", "CreatePollDialog did not open on Alice", sc_fail)
+            self.alice.click_element(test_tag="poll_create_dismiss_button", text="Cancel", capture_on_fail=False, auto_scroll=False)
+            self.alice.close_keyboard()
             return
 
         self.alice.click_element(test_tag="poll_question_input", auto_scroll=False)
@@ -1997,6 +2015,8 @@ class MultiEmulatorOrchestrator:
         sc_poll_alice = self.alice.screencap("09_alice_poll_created")
         if not poll_created:
             self.log_step("Group Poll Created (0x0A)", "FAIL", "Poll card did not render on Alice", sc_poll_alice)
+            self.alice.click_element(test_tag="poll_create_dismiss_button", text="Cancel", capture_on_fail=False, auto_scroll=False)
+            self.alice.close_keyboard()
             return
         self.log_step("Group Poll Created (0x0A)", "PASS", f"Alice created and published poll '{poll_question}'", sc_poll_alice)
 
