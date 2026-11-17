@@ -212,9 +212,9 @@ class RowBoundEncryptionAuditTest {
         val canaryPollOption2 = "CANARY_SECRET_OPTION_BETA"
         val canaryVoterName = "CANARY_POLL_VOTER_BOB"
         val canaryMissingIdx = "7,11,13"
-        val sentinelBitmask = 536870917 // 0x20000005 distinctive marker
+        val sentinelBitmask = 1984736251 // 10-digit non-hex-colliding bitmask marker
         val sentinelVoteTs = 1794987654321L
-        val sentinelTtl = 43207L
+        val sentinelTtl = 43207984726153L // 14-digit sentinel avoids random 5-char hex ciphertext collisions
         val sentinelExpires = 1794999888777L
 
         val canaryChainOut = "CANARY_SECRET_CHAIN_OUT_32BYTES!".toByteArray(Charsets.US_ASCII)
@@ -472,6 +472,14 @@ class RowBoundEncryptionAuditTest {
             assertFalse(
                 "Raw SQLite database file on disk must NOT contain plaintext binary secret '${String(secretBytes, Charsets.US_ASCII)}'",
                 containsSubarray(diskBytes, secretBytes)
+            )
+        }
+        val forbiddenLongs = listOf(sentinelTtl, sentinelExpires, sentinelBitmask.toLong(), sentinelVoteTs)
+        for (secretLong in forbiddenLongs) {
+            val rawBeBytes = java.nio.ByteBuffer.allocate(8).putLong(secretLong).array()
+            assertFalse(
+                "Raw SQLite database file on disk must NOT contain unencrypted 64-bit integer $secretLong",
+                containsSubarray(diskBytes, rawBeBytes)
             )
         }
     }
