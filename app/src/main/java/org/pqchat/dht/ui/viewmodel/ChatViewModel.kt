@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -500,13 +502,23 @@ class ChatViewModel @JvmOverloads constructor(
                         if (currentSelectedId != null) {
                             val group = repository.getGroup(currentSelectedId)
                             if (group != null) {
-                                repository.pollGroupIncoming(group.groupId)
-                                val updatedMembers = repository.getGroupMembers(group.groupId)
-                                val hasMissingKeys = updatedMembers.any {
-                                    it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() }
+                                coroutineScope {
+                                    // Republish recent unconsumed group slots concurrently with inbound polling
+                                    // so recipients retrying via chat_sync_chip see fresh replicas promptly.
+                                    val republishJob = async {
+                                        try {
+                                            repository.republishRecentGroupMessages(group.groupId)
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                    repository.pollGroupIncoming(group.groupId)
+                                    val updatedMembers = repository.getGroupMembers(group.groupId)
+                                    val hasMissingKeys = updatedMembers.any {
+                                        it.memberId != group.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() }
+                                    }
+                                    repository.relayMissingGroupKeys(group.groupId, force = hasMissingKeys)
+                                    republishJob.await()
                                 }
-                                repository.relayMissingGroupKeys(group.groupId, force = hasMissingKeys)
-                                repository.republishRecentGroupMessages(group.groupId)
                             } else {
                                 repository.pollContactIncoming(currentSelectedId)
                             }

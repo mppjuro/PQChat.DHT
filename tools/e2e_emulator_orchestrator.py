@@ -652,7 +652,9 @@ logcat -c
         print(f"[{self.name}] Waiting for element '{desc}' (timeout={effective_timeout}s)...", flush=True)
         last_sync_time = start
         last_on_tick_time = start
-        sync_cadence = 20.0 if self.real_dht else 12.0
+        last_scroll_time = start
+        last_fg_time = start
+        sync_cadence = 15.0 if self.real_dht else 12.0
         while time.time() - start < effective_timeout:
             bounds = self.find_node(
                 text=text,
@@ -671,8 +673,9 @@ logcat -c
                 self.close_keyboard()
 
             # If waiting in chat, periodically scroll down in case message arrived below fold
-            if (elapsed - start) > 8.0 and int(elapsed - start) % 12 == 0:
+            if (elapsed - last_scroll_time) >= 12.0:
                 self.scroll_down()
+                last_scroll_time = time.time()
 
             # If sync_chip_tag is specified, tap it periodically to trigger immediate DHT polling
             if sync_chip_tag and (time.time() - last_sync_time) >= sync_cadence:
@@ -688,8 +691,9 @@ logcat -c
                     pass
 
             # Periodically ensure app focus
-            if (elapsed - start) > 5.0 and int(elapsed - start) % 10 == 0:
+            if (elapsed - last_fg_time) >= 10.0:
                 self.ensure_app_foreground()
+                last_fg_time = time.time()
 
             self.sleep(1.5)
 
@@ -1582,6 +1586,7 @@ class MultiEmulatorOrchestrator:
 
         start_wait = time.time()
         last_sync_chip = 0.0
+        last_doze_poll = start_wait
         joined_devs = set()
         received_devs = set()
         if self.args.dry_run:
@@ -1616,11 +1621,12 @@ class MultiEmulatorOrchestrator:
                     else:
                         print(f"[{dev.name}] Clicked group item but chat_message_input did not appear yet", flush=True)
 
-            if elapsed > 20.0 and int(elapsed) % 15 == 0:
+            if elapsed > 20.0 and (time.time() - last_doze_poll) >= 15.0:
                 self.alice.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
                 for dev in participants:
                     if dev not in joined_devs:
                         dev.shell("am broadcast -a org.pqchat.dht.action.DOZE_POLL")
+                last_doze_poll = time.time()
 
             self.sleep(1.5)
 
@@ -1676,6 +1682,14 @@ class MultiEmulatorOrchestrator:
 
             self.sleep(6.0 if not self.args.real_dht else 12.0)
 
+        if self.args.real_dht:
+            print("[Group Key Sync] Running final sync pass across all nodes before messaging turns...", flush=True)
+            self.alice.ensure_app_foreground()
+            self.alice.trigger_sync()
+            for dev in joined_participants:
+                dev.ensure_app_foreground()
+                dev.trigger_sync()
+
         self.alice.ensure_app_foreground()
         self.sleep(3.0 if not self.args.real_dht else 6.0)
         sc_sync = self.alice.screencap("04_group_keys_synchronized")
@@ -1709,98 +1723,130 @@ class MultiEmulatorOrchestrator:
                 return entered
             return False
 
+        def wait_for_group_message_with_retry(
+            sender: AdbDevice,
+            receiver: AdbDevice,
+            msg_text: str,
+            timeout: int,
+            on_tick,
+            label: str,
+        ) -> bool:
+            if receiver.wait_for_element(
+                text=msg_text,
+                timeout=timeout,
+                sync_chip_tag="chat_sync_chip",
+                on_tick=on_tick,
+            ):
+                return True
+            receiver.ensure_app_foreground()
+            receiver.close_keyboard()
+            receiver.scroll_down()
+            for retry in range(2):
+                print(
+                    f"[{receiver.name}] Retrying {label} poll ({retry + 1}/2)...",
+                    flush=True,
+                )
+                sender.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                self.sleep(0.5)
+                receiver.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                receiver.close_keyboard()
+                receiver.scroll_down()
+                if receiver.wait_for_element(
+                    text=msg_text,
+                    timeout=20,
+                    sync_chip_tag="chat_sync_chip",
+                    on_tick=on_tick,
+                ):
+                    return True
+            return False
+
         all_turns_ok = True
         fails_count = 0
-        msg_timeout = 45 if not self.args.real_dht else 90
+        msg_timeout = 45 if not self.args.real_dht else 105
         send_settle = 2.0 if not self.args.real_dht else 6.0
 
-        # Turn 1: Alice sends to Group
-        msg1 = f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes"
-        print(f"\n[Turn 1] Alice sending: '{msg1}'", flush=True)
-        self.alice.ensure_app_foreground()
-        if not ensure_in_group(self.alice):
-            self.log_step("Turn 1 Alice Send", "FAIL", f"Alice is not inside group chat '{group_name}'")
-            all_turns_ok = False
-            fails_count += 1
-        else:
-            self.alice.click_element(test_tag="chat_message_input")
-            self.alice.type_text(msg1)
+        def execute_group_turn(
+            turn_num: int,
+            sender: AdbDevice,
+            sender_possessive: str,
+            msg_text: str,
+            recipients,
+            screenshot_prefix: str,
+            msg_label: str,
+            log_tick: bool = False,
+        ):
+            nonlocal all_turns_ok, fails_count
+            print(f"\n[Turn {turn_num}] {sender.name} sending: '{msg_text}'", flush=True)
+            sender.ensure_app_foreground()
+            if not ensure_in_group(sender):
+                self.log_step(f"Turn {turn_num} {sender.name} Send", "FAIL", f"{sender.name} is not inside group chat '{group_name}'")
+                all_turns_ok = False
+                fails_count += 1
+                return
+
+            sender.click_element(test_tag="chat_message_input")
+            sender.type_text(msg_text)
             self.sleep(0.5)
-            self.alice.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.alice.close_keyboard()
-            self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+            sender.click_element(test_tag="chat_send_button", content_desc="Send")
+            sender.close_keyboard()
+            sender.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
             self.sleep(send_settle)
 
-            last_alice_sync = [0.0]
-            def alice_sync_tick():
+            last_sender_sync = [0.0]
+            def sender_sync_tick():
                 now = time.time()
-                if now - last_alice_sync[0] >= 15.0:
-                    self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                    last_alice_sync[0] = now
+                if now - last_sender_sync[0] >= 15.0:
+                    if log_tick:
+                        print(f"[{sender.name}] Triggering background sync on {sender.name} during Turn {turn_num}...", flush=True)
+                    sender.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
+                    last_sender_sync[0] = now
 
-            for dev in all_devices[1:]:
+            for dev in recipients:
                 if not ensure_in_group(dev):
-                    self.log_step(f"{dev.name} Received Msg 1", "FAIL", f"{dev.name} is not in group chat (invite missing)")
+                    self.log_step(f"{dev.name} Received {msg_label}", "FAIL", f"{dev.name} is not in group chat (invite missing)")
                     all_turns_ok = False
                     fails_count += 1
                     continue
                 dev.close_keyboard()
-                print(f"[{dev.name}] Waiting for Alice's group message...", flush=True)
-                rcv1 = dev.wait_for_element(text=msg1, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=alice_sync_tick)
-                sc_rcv = dev.screencap(f"05_{dev.name.lower()}_rcv_msg1")
-                if rcv1:
-                    self.log_step(f"{dev.name} Received Msg 1", "PASS", f"Received Alice's group message: '{msg1}'", sc_rcv)
+                print(f"[{dev.name}] Waiting for {sender_possessive} group message...", flush=True)
+                received = wait_for_group_message_with_retry(
+                    sender=sender,
+                    receiver=dev,
+                    msg_text=msg_text,
+                    timeout=msg_timeout,
+                    on_tick=sender_sync_tick,
+                    label=f"{sender_possessive} group message",
+                )
+                sc_rcv = dev.screencap(f"{screenshot_prefix}_{dev.name.lower()}_rcv_msg{turn_num}")
+                if received:
+                    self.log_step(f"{dev.name} Received {msg_label}", "PASS", f"Received {sender_possessive} group message: '{msg_text}'", sc_rcv)
                 else:
-                    self.log_step(f"{dev.name} Received Msg 1", "FAIL", f"{dev.name} timed out waiting for Alice's message: '{msg1}'", sc_rcv)
+                    self.log_step(f"{dev.name} Received {msg_label}", "FAIL", f"{dev.name} timed out waiting for {sender_possessive} message: '{msg_text}'", sc_rcv)
                     all_turns_ok = False
                     fails_count += 1
+
+        # Turn 1: Alice sends to Group
+        execute_group_turn(
+            turn_num=1,
+            sender=self.alice,
+            sender_possessive="Alice's",
+            msg_text=f"Hello_Group_from_Alice_all_{len(all_devices)}_nodes",
+            recipients=all_devices[1:],
+            screenshot_prefix="05",
+            msg_label="Msg 1",
+        )
 
         # Turn 2: Bob sends to Group
-        msg2 = f"Bob_reporting_in_{group_name}"
-        print(f"\n[Turn 2] Bob sending: '{msg2}'", flush=True)
-        self.bob.ensure_app_foreground()
-        if not ensure_in_group(self.bob):
-            self.log_step("Turn 2 Bob Send", "FAIL", f"Bob is not inside group chat '{group_name}'")
-            all_turns_ok = False
-            fails_count += 1
-        else:
-            self.bob.click_element(test_tag="chat_message_input")
-            self.bob.type_text(msg2)
-            self.sleep(0.5)
-            self.bob.click_element(test_tag="chat_send_button", content_desc="Send")
-            self.bob.close_keyboard()
-            self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-            self.sleep(send_settle)
-
-            last_bob_sync = [0.0]
-            def bob_sync_tick():
-                now = time.time()
-                if now - last_bob_sync[0] >= 15.0:
-                    print("[Bob] Triggering background sync on Bob during Turn 2...", flush=True)
-                    self.bob.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                    last_bob_sync[0] = now
-
-            for dev in [self.alice] + all_devices[2:]:
-                if not ensure_in_group(dev):
-                    self.log_step(f"{dev.name} Received Msg 2", "FAIL", f"{dev.name} is not in group chat (invite missing)")
-                    all_turns_ok = False
-                    fails_count += 1
-                    continue
-                dev.close_keyboard()
-                print(f"[{dev.name}] Waiting for Bob's group message...", flush=True)
-                rcv2 = dev.wait_for_element(
-                    text=msg2,
-                    timeout=msg_timeout,
-                    sync_chip_tag="chat_sync_chip",
-                    on_tick=bob_sync_tick
-                )
-                sc_rcv = dev.screencap(f"06_{dev.name.lower()}_rcv_msg2")
-                if rcv2:
-                    self.log_step(f"{dev.name} Received Msg 2", "PASS", f"Received Bob's group message: '{msg2}'", sc_rcv)
-                else:
-                    self.log_step(f"{dev.name} Received Msg 2", "FAIL", f"{dev.name} timed out waiting for Bob's message: '{msg2}'", sc_rcv)
-                    all_turns_ok = False
-                    fails_count += 1
+        execute_group_turn(
+            turn_num=2,
+            sender=self.bob,
+            sender_possessive="Bob's",
+            msg_text=f"Bob_reporting_in_{group_name}",
+            recipients=[self.alice] + all_devices[2:],
+            screenshot_prefix="06",
+            msg_label="Msg 2",
+            log_tick=True,
+        )
 
         if self.args.basic:
             if all_turns_ok:
@@ -1811,110 +1857,30 @@ class MultiEmulatorOrchestrator:
 
         # Turn 3: Charlie sends to Group (if nodes >= 3)
         if self.charlie:
-            msg3 = f"Charlie_here_group_pqc_confirmed"
-            print(f"\n[Turn 3] Charlie sending: '{msg3}'", flush=True)
-            self.charlie.ensure_app_foreground()
-            if not ensure_in_group(self.charlie):
-                self.log_step("Turn 3 Charlie Send", "FAIL", f"Charlie is not inside group chat '{group_name}'")
-                all_turns_ok = False
-                fails_count += 1
-            else:
-                self.charlie.click_element(test_tag="chat_message_input")
-                self.charlie.type_text(msg3)
-                self.sleep(0.5)
-                self.charlie.click_element(test_tag="chat_send_button", content_desc="Send")
-                self.charlie.close_keyboard()
-                self.charlie.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                self.sleep(send_settle)
-
-                targets = [self.alice, self.bob]
-                if self.dave:
-                    targets.append(self.dave)
-                last_charlie_sync = [0.0]
-                def charlie_sync_tick():
-                    now = time.time()
-                    if now - last_charlie_sync[0] >= 15.0:
-                        self.charlie.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                        last_charlie_sync[0] = now
-                for dev in targets:
-                    if not ensure_in_group(dev):
-                        self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} is not in group chat")
-                        all_turns_ok = False
-                        fails_count += 1
-                        continue
-                    dev.close_keyboard()
-                    print(f"[{dev.name}] Waiting for Charlie's group message...", flush=True)
-                    rcv3 = dev.wait_for_element(text=msg3, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=charlie_sync_tick)
-                    sc_rcv = dev.screencap(f"07_{dev.name.lower()}_rcv_msg3")
-                    if rcv3:
-                        self.log_step(f"{dev.name} Received Msg 3", "PASS", f"Received Charlie's group message: '{msg3}'", sc_rcv)
-                    else:
-                        self.log_step(f"{dev.name} Received Msg 3", "FAIL", f"{dev.name} timed out waiting for Charlie's message: '{msg3}'", sc_rcv)
-                        all_turns_ok = False
-                        fails_count += 1
+            targets = [self.alice, self.bob]
+            if self.dave:
+                targets.append(self.dave)
+            execute_group_turn(
+                turn_num=3,
+                sender=self.charlie,
+                sender_possessive="Charlie's",
+                msg_text="Charlie_here_group_pqc_confirmed",
+                recipients=targets,
+                screenshot_prefix="07",
+                msg_label="Msg 3",
+            )
 
         # Turn 4: Dave sends to Group (if nodes >= 4)
         if self.dave:
-            msg4 = f"Dave_4th_node_pqc_group_active"
-            print(f"\n[Turn 4] Dave sending: '{msg4}'", flush=True)
-            self.dave.ensure_app_foreground()
-            if not ensure_in_group(self.dave):
-                self.log_step("Turn 4 Dave Send", "FAIL", f"Dave is not inside group chat '{group_name}'")
-                all_turns_ok = False
-                fails_count += 1
-            else:
-                self.dave.click_element(test_tag="chat_message_input")
-                self.dave.type_text(msg4)
-                self.sleep(0.5)
-                self.dave.click_element(test_tag="chat_send_button", content_desc="Send")
-                self.dave.close_keyboard()
-                self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                self.sleep(send_settle)
-
-                last_dave_sync = [0.0]
-                def dave_sync_tick():
-                    now = time.time()
-                    if now - last_dave_sync[0] >= 15.0:
-                        self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                        last_dave_sync[0] = now
-                for dev in [self.alice, self.bob, self.charlie]:
-                    if not ensure_in_group(dev):
-                        self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} is not in group chat")
-                        all_turns_ok = False
-                        fails_count += 1
-                        continue
-                    dev.close_keyboard()
-                    print(f"[{dev.name}] Waiting for Dave's group message...", flush=True)
-                    rcv4 = dev.wait_for_element(text=msg4, timeout=msg_timeout, sync_chip_tag="chat_sync_chip", on_tick=dave_sync_tick)
-                    if not rcv4:
-                        dev.ensure_app_foreground()
-                        dev.close_keyboard()
-                        dev.scroll_down()
-                        for retry in range(2):
-                            print(
-                                f"[{dev.name}] Retrying Dave's group message poll "
-                                f"({retry + 1}/2)...",
-                                flush=True,
-                            )
-                            self.dave.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                            self.sleep(0.5)
-                            dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False)
-                            dev.close_keyboard()
-                            dev.scroll_down()
-                            if dev.wait_for_element(
-                                text=msg4,
-                                timeout=20,
-                                sync_chip_tag="chat_sync_chip",
-                            ):
-                                rcv4 = True
-                                break
-                    sc_rcv = dev.screencap(f"08_{dev.name.lower()}_rcv_msg4")
-                    if rcv4:
-                        self.log_step(f"{dev.name} Received Msg 4", "PASS", f"Received Dave's group message: '{msg4}'", sc_rcv)
-                    else:
-                        self.log_step(f"{dev.name} Received Msg 4", "FAIL", f"{dev.name} timed out waiting for Dave's message: '{msg4}'", sc_rcv)
-                        all_turns_ok = False
-                        fails_count += 1
+            execute_group_turn(
+                turn_num=4,
+                sender=self.dave,
+                sender_possessive="Dave's",
+                msg_text="Dave_4th_node_pqc_group_active",
+                recipients=[self.alice, self.bob, self.charlie],
+                screenshot_prefix="08",
+                msg_label="Msg 4",
+            )
 
         if all_turns_ok:
             self.log_step("Group Multi-Turn Complete", "PASS", f"All {len(all_devices)} participants successfully exchanged messages in '{group_name}'")

@@ -62,17 +62,22 @@ class MainActivity : FragmentActivity() {
 
         val e2eFastMode = intent?.getBooleanExtra("e2e_fast_mode", false) == true
         if (e2eFastMode) {
+            val isRealDht = useRealDht || (intent.hasExtra("is_local_testbed") && !isTestbedExplicit)
             (application as? org.pqchat.dht.PQChatApplication)?.let { app ->
-                app.settingsManager.setIntervalForegroundChat(2000L)
-                app.settingsManager.setIntervalAppActive(2000L)
-                app.settingsManager.setIntervalBackgroundIdle(3000L)
-                app.settingsManager.setIntervalDozeSleep(5000L)
+                val fgInterval = if (isRealDht) 3500L else 2000L
+                val activeInterval = if (isRealDht) 4000L else 2000L
+                val bgInterval = if (isRealDht) 5000L else 3000L
+                val dozeInterval = if (isRealDht) 8000L else 5000L
+                app.settingsManager.setIntervalForegroundChat(fgInterval)
+                app.settingsManager.setIntervalAppActive(activeInterval)
+                app.settingsManager.setIntervalBackgroundIdle(bgInterval)
+                app.settingsManager.setIntervalDozeSleep(dozeInterval)
                 app.pollingScheduler.pollingManager.jitterRatio = 0.0
                 app.pollingScheduler.pollingManager.updateIntervals(
-                    foreground = 2000L,
-                    appActive = 2000L,
-                    bgIdle = 3000L,
-                    doze = 5000L
+                    foreground = fgInterval,
+                    appActive = activeInterval,
+                    bgIdle = bgInterval,
+                    doze = dozeInterval
                 )
                 app.pollingScheduler.pollingManager.isFastMode = true
                 app.trafficGenerator.isFastMode = true

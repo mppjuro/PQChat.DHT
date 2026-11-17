@@ -217,6 +217,8 @@ class ChatRepository(
     var onIncomingMessageDelivered: ((contactId: String, textContent: String, isImage: Boolean) -> Unit)? = null
     var onRepublishTaskUpdated: (() -> Unit)? = null
     @Volatile var isFastTestMode: Boolean = false
+    private val isFastLocalTestbedMode: Boolean
+        get() = isFastTestMode && org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()
 
     suspend fun markMessageExpiredOffline(messageId: Long) = withContext(Dispatchers.IO) {
         messageDao.updateStatus(messageId, "EXPIRED_OFFLINE")
@@ -1980,7 +1982,7 @@ class ChatRepository(
      * then queries the current slot counterIn.
      */
     suspend fun pollContactIncoming(contactId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastTestMode) 15_000L else 20_000L) {
+        withTimeoutOrNull(if (isFastLocalTestbedMode) 15_000L else 25_000L) {
             getContactMutex(contactId).withLock {
                 pollContactIncomingInternal(contactId)
             }
@@ -4459,7 +4461,8 @@ class ChatRepository(
         val target: ByteArray,
         val frame: ByteArray,
         val signingKey: ByteArray,
-        val timestamp: Long
+        val timestamp: Long,
+        @Volatile var lastRepublishAt: Long = timestamp
     )
 
     private val isPollingBatch = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -4467,6 +4470,7 @@ class ChatRepository(
     private val groupKeyRelayCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private val relayedGroupMemberKeys = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
     private val broadcastedGroupSenderKeyEpochs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val groupMemberLastRekeyEpoch = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val recentGroupOutboundFrames = java.util.concurrent.ConcurrentHashMap<String, MutableList<CachedGroupOutboundFrame>>()
 
     suspend fun flushOutboundPoissonQueue(): Int = withContext(Dispatchers.IO) {
@@ -4492,26 +4496,51 @@ class ChatRepository(
         count
     }
 
-    suspend fun republishRecentGroupMessages(groupId: String): Int = withContext(Dispatchers.IO) {
+    suspend fun republishRecentGroupMessages(groupId: String, force: Boolean = false): Int = withContext(Dispatchers.IO) {
         val list = recentGroupOutboundFrames[groupId] ?: return@withContext 0
         val now = System.currentTimeMillis()
         val framesToRepublish = synchronized(list) {
             list.removeAll { item ->
-                (now - item.timestamp) > 90_000L ||
+                (now - item.timestamp) > 180_000L ||
                     (targetLastSeenSeq[CryptoUtils.toHex(item.target)] ?: 0L) > DhtClient.DEFAULT_MUTABLE_SEQ
             }
-            list.toList()
+            list.filter { item -> force || (now - item.lastRepublishAt) >= 10_000L }
         }
-        var republishCount = 0
-        for (item in framesToRepublish) {
-            val ok = putGroupFrameWithRetries(
-                target = item.target,
-                frame = item.frame,
-                signingKey = item.signingKey
-            )
-            if (ok) republishCount++
+        if (framesToRepublish.isEmpty()) return@withContext 0
+        val republishCount = java.util.concurrent.atomic.AtomicInteger(0)
+        coroutineScope {
+            framesToRepublish.map { item ->
+                async {
+                    val slotHex = CryptoUtils.toHex(item.target)
+                    val remoteExisting = try {
+                        dhtLeafNode.getMutable(item.target, skipLocalStore = true, minSeq = 0L)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    // If the slot on DHT now holds a different payload at seq > 1, the recipient already consumed and tombstoned it.
+                    if (remoteExisting != null &&
+                        remoteExisting.seq > DhtClient.DEFAULT_MUTABLE_SEQ &&
+                        !remoteExisting.v.contentEquals(item.frame)
+                    ) {
+                        targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, remoteExisting.seq)
+                        synchronized(list) {
+                            list.remove(item)
+                        }
+                        return@async
+                    }
+                    val ok = putGroupFrameWithRetries(
+                        target = item.target,
+                        frame = item.frame,
+                        signingKey = item.signingKey
+                    )
+                    if (ok) {
+                        item.lastRepublishAt = System.currentTimeMillis()
+                        republishCount.incrementAndGet()
+                    }
+                }
+            }.awaitAll()
         }
-        republishCount
+        republishCount.get()
     }
 
     suspend fun pollConstantBatch(
@@ -4539,16 +4568,20 @@ class ChatRepository(
         val focusedGroup = if (focusContactId != null) groupDao?.getGroupById(focusContactId) else null
         val focusedMemberContactIds = if (focusedGroup != null) {
             val focusedGroupMembers = groupMemberDao?.getMembersForGroup(focusedGroup.groupId) ?: emptyList()
+            val pendingControlContactIds = pendingGroupControls.values
+                .filter { it.groupId == focusedGroup.groupId }
+                .map { it.contactId }
+                .toSet()
             val missingMembers = focusedGroupMembers.filter {
                 it.isActive && it.memberId != focusedGroup.myMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() }
             }
             if (missingMembers.isEmpty()) {
-                emptySet()
+                pendingControlContactIds
             } else {
                 val missingDirectIds = missingMembers.mapNotNull { it.contactId }.toSet()
-                missingDirectIds.ifEmpty {
+                (missingDirectIds.ifEmpty {
                     focusedGroupMembers.mapNotNull { it.contactId }.toSet()
-                }
+                }) + pendingControlContactIds
             }
         } else {
             emptySet()
@@ -4703,7 +4736,7 @@ class ChatRepository(
         }
 
         val controlRecords = if (focusContactId != null) {
-            pendingGroupControls.values.filter { it.contactId == focusContactId }
+            pendingGroupControls.values.filter { it.contactId == focusContactId || it.groupId == focusContactId }
         } else {
             pendingGroupControls.values.toList()
         }
@@ -4712,7 +4745,7 @@ class ChatRepository(
                 PendingGroupControlAckPollTask(
                     target = rec.targetAck,
                     record = rec,
-                    isFocused = rec.contactId == focusContactId
+                    isFocused = (rec.contactId == focusContactId || rec.groupId == focusContactId)
                 )
             )
         }
@@ -4746,7 +4779,7 @@ class ChatRepository(
 
         // 5. Execute batch sequentially with bounded timeouts and intra-batch jitter
         var anyReceived = false
-        val taskTimeout = if (isFastTestMode) 6_000L else 15_000L
+        val taskTimeout = if (isFastLocalTestbedMode) 6_000L else 15_000L
         for (i in finalTasks.indices) {
             val task = finalTasks[i]
             try {
@@ -4989,7 +5022,7 @@ class ChatRepository(
                 timestamp = System.currentTimeMillis()
             )
 
-            val success = withTimeoutOrNull(if (isFastTestMode) 8_000L else 20_000L) {
+            val success = withTimeoutOrNull(if (isFastLocalTestbedMode) 8_000L else 20_000L) {
                 dhtLeafNode.putMutable(
                     target = slot.target,
                     v = frame,
@@ -6141,6 +6174,24 @@ class ChatRepository(
         )
     }
 
+    private fun stepChainForward(
+        startKey: ByteArray,
+        startCounter: Int,
+        targetCounter: Int
+    ): ByteArray {
+        var ck = startKey
+        for (c in startCounter until targetCounter) {
+            ck = RatchetChain.deriveSlot(ck, c).nextChainKey
+        }
+        return ck
+    }
+
+    /**
+     * Returns true if [incomingChainKey]/[incomingCounter] represents the same chain state,
+     * a stale older state on the same chain, or a forward descendant along our already-held
+     * chain (which must NOT overwrite [existingChainKey]/[existingCounter] or in-flight slots
+     * in [existingCounter .. incomingCounter - 1] will be permanently skipped).
+     */
     private fun isSameOrOlderChainState(
         existingChainKey: ByteArray,
         existingCounter: Int,
@@ -6151,12 +6202,11 @@ class ChatRepository(
         if (incomingCounter == existingCounter) {
             return existingChainKey.contentEquals(incomingChainKey)
         }
-        if (incomingCounter in 0 until existingCounter && (existingCounter - incomingCounter) <= 64) {
-            var ck = incomingChainKey
-            for (c in incomingCounter until existingCounter) {
-                ck = RatchetChain.deriveSlot(ck, c).nextChainKey
-            }
-            return ck.contentEquals(existingChainKey)
+        if (incomingCounter in 0 until existingCounter && (existingCounter - incomingCounter) <= 128) {
+            return stepChainForward(incomingChainKey, incomingCounter, existingCounter).contentEquals(existingChainKey)
+        }
+        if (existingCounter in 0 until incomingCounter && (incomingCounter - existingCounter) <= 128) {
+            return stepChainForward(existingChainKey, existingCounter, incomingCounter).contentEquals(incomingChainKey)
         }
         return false
     }
@@ -6424,6 +6474,7 @@ class ChatRepository(
                         isActive = true
                     )
                     groupMemberDao?.insertOrUpdate(senderMember)
+                    groupMemberLastRekeyEpoch["${groupId}_${senderMemberId}"] = control.groupEpoch
 
                     val myMember = GroupMemberEntity(
                         groupId = groupId,
@@ -6488,12 +6539,22 @@ class ChatRepository(
                     }
                 } else {
                     val existingSender = groupMemberDao?.getMember(groupId, senderMemberId)
-                    val sameOrOlderSender = existingSender != null && isSameOrOlderChainState(
-                        existingChainKey = existingSender.rawChainKeyIn,
-                        existingCounter = existingSender.counterIn,
-                        incomingChainKey = control.senderGroupChainKey,
-                        incomingCounter = control.currentCounter.toInt()
+                    val memberEpochKey = "${groupId}_${senderMemberId}"
+                    val knownEpoch = groupMemberLastRekeyEpoch[memberEpochKey] ?: 0L
+                    val staleEpoch = existingSender != null &&
+                        !existingSender.rawChainKeyIn.all { b -> b == 0.toByte() } &&
+                        control.groupEpoch < knownEpoch
+                    val sameOrOlderSender = existingSender != null && (
+                        staleEpoch || isSameOrOlderChainState(
+                            existingChainKey = existingSender.rawChainKeyIn,
+                            existingCounter = existingSender.counterIn,
+                            incomingChainKey = control.senderGroupChainKey,
+                            incomingCounter = control.currentCounter.toInt()
+                        )
                     )
+                    if (!staleEpoch) {
+                        groupMemberLastRekeyEpoch[memberEpochKey] = maxOf(knownEpoch, control.groupEpoch)
+                    }
                     if (existingSender == null || !sameOrOlderSender || !existingSender.isActive || existingSender.contactId == null) {
                         val member = GroupMemberEntity(
                             groupId = groupId,
@@ -6571,12 +6632,19 @@ class ChatRepository(
                 val placeholderMember = allMembers.firstOrNull { it.contactId == contactId && it.memberId != senderMemberId && it.rawChainKeyIn.all { b -> b == 0.toByte() } }
 
                 if (existingMember != null) {
-                    val sameOrOlder = isSameOrOlderChainState(
+                    val memberEpochKey = "${groupId}_${senderMemberId}"
+                    val knownEpoch = groupMemberLastRekeyEpoch[memberEpochKey] ?: 0L
+                    val staleEpoch = !existingMember.rawChainKeyIn.all { b -> b == 0.toByte() } &&
+                        control.groupEpoch < knownEpoch
+                    val sameOrOlder = staleEpoch || isSameOrOlderChainState(
                         existingChainKey = existingMember.rawChainKeyIn,
                         existingCounter = existingMember.counterIn,
                         incomingChainKey = control.senderGroupChainKey,
                         incomingCounter = control.currentCounter.toInt()
                     )
+                    if (!staleEpoch) {
+                        groupMemberLastRekeyEpoch[memberEpochKey] = maxOf(knownEpoch, control.groupEpoch)
+                    }
                     if (!sameOrOlder || !existingMember.isActive || existingMember.contactId == null) {
                         val updated = existingMember.copy(
                             contactId = existingMember.contactId ?: contactId,
@@ -6594,6 +6662,7 @@ class ChatRepository(
                         }
                     }
                 } else if (placeholderMember != null) {
+                    groupMemberLastRekeyEpoch["${groupId}_${senderMemberId}"] = control.groupEpoch
                     groupMemberDao?.deleteMember(groupId, placeholderMember.memberId)
                     val updated = GroupMemberEntity(
                         groupId = groupId,
@@ -6608,6 +6677,7 @@ class ChatRepository(
                     groupMemberDao?.insertOrUpdate(updated)
                     invalidateRelayedMemberKey(groupId, senderMemberId)
                 } else {
+                    groupMemberLastRekeyEpoch["${groupId}_${senderMemberId}"] = control.groupEpoch
                     val newMember = GroupMemberEntity(
                         groupId = groupId,
                         memberId = senderMemberId,
@@ -6649,9 +6719,13 @@ class ChatRepository(
         text: String,
         ephemeralTtlSeconds: Long = 0L
     ): Boolean = withContext(Dispatchers.IO) {
-        getGroupMutex(groupId).withLock {
-            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
-            if (!group.isActive) return@withLock false
+        var immediateReturn: Boolean? = null
+        val dispatchPair: Pair<Long, List<CachedGroupOutboundFrame>>? = getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId)
+            if (group == null || !group.isActive) {
+                immediateReturn = false
+                return@withLock null
+            }
 
             // Auto-rekey every 50 messages
             if (group.myCounterOut > 0 && group.myCounterOut % BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL == 0) {
@@ -6786,14 +6860,39 @@ class ChatRepository(
                     )
                 }
                 outboundPoissonQueue.enqueueInterleaved(outboundFrames)
-                return@withLock true
+                immediateReturn = true
+                return@withLock null
             }
 
-            var overallSuccess = false
-            withContext(NonCancellable) {
+            Pair(msgId, cachedFrames)
+        }
+
+        val (msgId, cachedFrames) = dispatchPair ?: return@withContext (immediateReturn ?: false)
+
+        var overallSuccess = false
+        withContext(NonCancellable) {
+            if (isFastTestMode) {
+                val results = coroutineScope {
+                    cachedFrames.mapIndexed { idx, cached ->
+                        async {
+                            if (idx > 0) kotlinx.coroutines.delay(idx * 40L)
+                            val success = putGroupFrameWithRetries(
+                                target = cached.target,
+                                frame = cached.frame,
+                                signingKey = cached.signingKey
+                            )
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(cached.target)
+                            }
+                            success
+                        }
+                    }.awaitAll()
+                }
+                overallSuccess = results.any { it }
+            } else {
                 for ((idx, cached) in cachedFrames.withIndex()) {
                     if (idx > 0) {
-                        val jitterMs = if (isFastTestMode) 20L else (40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F))
+                        val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
                         kotlinx.coroutines.delay(jitterMs)
                     }
                     val success = putGroupFrameWithRetries(
@@ -6807,12 +6906,12 @@ class ChatRepository(
                     }
                 }
             }
-
-            if (overallSuccess) {
-                messageDao.updateStatus(msgId, "SENT_DHT")
-            }
-            overallSuccess
         }
+
+        if (overallSuccess) {
+            messageDao.updateStatus(msgId, "SENT_DHT")
+        }
+        overallSuccess
     }
 
     suspend fun sendGroupReaction(
@@ -7604,63 +7703,149 @@ class ChatRepository(
         groupIdBytes: ByteArray,
         members: List<GroupMemberEntity>
     ): Boolean {
+        val eligibleMembers = members.filter {
+            it.memberId != myMemberId && !it.rawChainKeyIn.all { b -> b == 0.toByte() }
+        }
+        if (eligibleMembers.isEmpty()) return false
+        val results = coroutineScope {
+            eligibleMembers.map { member ->
+                async {
+                    pollSingleGroupMemberSlotsInternal(
+                        groupId = groupId,
+                        myMemberIdBytes = myMemberIdBytes,
+                        groupIdBytes = groupIdBytes,
+                        member = member
+                    )
+                }
+            }.awaitAll()
+        }
+        return results.any { it }
+    }
+
+    private suspend fun pollSingleGroupMemberSlotsInternal(
+        groupId: String,
+        myMemberIdBytes: ByteArray,
+        groupIdBytes: ByteArray,
+        member: GroupMemberEntity
+    ): Boolean {
         var anyReceived = false
-        for (member in members) {
-            if (member.memberId == myMemberId) continue
-            if (member.rawChainKeyIn.all { it == 0.toByte() }) continue
+        var curMember = groupMemberDao?.getMember(groupId, member.memberId) ?: member
+        var consecutive = 0
+        while (consecutive < 10) {
+            val memberIdBytes = uuidStringToBytes(curMember.memberId)
+            val baseSlot = RatchetChain.deriveSlot(curMember.rawChainKeyIn, curMember.counterIn)
+            val individualSlot = RatchetChain.deriveGroupRecipientSlot(
+                chainKey = curMember.rawChainKeyIn,
+                counter = curMember.counterIn,
+                groupId = groupIdBytes,
+                senderMemberId = memberIdBytes,
+                recipientMemberId = myMemberIdBytes
+            )
 
-            var curMember = groupMemberDao?.getMember(groupId, member.memberId) ?: member
-            var consecutive = 0
-            while (consecutive < 10) {
-                val memberIdBytes = uuidStringToBytes(curMember.memberId)
-                val baseSlot = RatchetChain.deriveSlot(curMember.rawChainKeyIn, curMember.counterIn)
-                val individualSlot = RatchetChain.deriveGroupRecipientSlot(
-                    chainKey = curMember.rawChainKeyIn,
-                    counter = curMember.counterIn,
-                    groupId = groupIdBytes,
-                    senderMemberId = memberIdBytes,
-                    recipientMemberId = myMemberIdBytes
-                )
+            // Execute network DHT query OUTSIDE the mutex lock to prevent lock contention
+            val slotHex = CryptoUtils.toHex(individualSlot.target)
+            val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
+            val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false, minSeq = minExpectedSeq) ?: break
+            val activeSlot = individualSlot
+            val isIndividualSlot = true
 
-                // Execute network DHT query OUTSIDE the mutex lock to prevent lock contention
-                val slotHex = CryptoUtils.toHex(individualSlot.target)
-                val minExpectedSeq = targetLastSeenSeq[slotHex] ?: -1L
-                val item = dhtLeafNode.getMutable(individualSlot.target, skipLocalStore = false, minSeq = minExpectedSeq) ?: break
-                val activeSlot = individualSlot
-                val isIndividualSlot = true
+            val processed = getGroupMutex(groupId).withLock {
+                val freshMember = groupMemberDao?.getMember(groupId, curMember.memberId) ?: curMember
+                if (freshMember.counterIn > activeSlot.counter) {
+                    curMember = freshMember
+                    return@withLock true
+                }
+                try {
+                    val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(
+                        key = activeSlot.msgKey,
+                        frame = item.v,
+                        target = activeSlot.target,
+                        groupId = groupIdBytes,
+                        senderMemberId = memberIdBytes
+                    )
+                    org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
+                        contactId = groupId,
+                        target = activeSlot.target,
+                        seq = item.seq,
+                        senderEdPublicKey = item.k,
+                        senderSignature = item.sig,
+                        frame = item.v,
+                        frameMsg = frameMsg
+                    )
 
-                val processed = getGroupMutex(groupId).withLock {
-                    val freshMember = groupMemberDao?.getMember(groupId, curMember.memberId) ?: curMember
-                    if (freshMember.counterIn > activeSlot.counter) {
-                        curMember = freshMember
-                        return@withLock true
-                    }
-                    try {
-                        val frameMsg = BinaryFrameCodec.unpackGroupAeadFrame(
-                            key = activeSlot.msgKey,
-                            frame = item.v,
-                            target = activeSlot.target,
-                            groupId = groupIdBytes,
-                            senderMemberId = memberIdBytes
-                        )
-                        org.pqchat.dht.debug.MessageDebugLogger.logIncomingMessage(
-                            contactId = groupId,
-                            target = activeSlot.target,
-                            seq = item.seq,
-                            senderEdPublicKey = item.k,
-                            senderSignature = item.sig,
-                            frame = item.v,
-                            frameMsg = frameMsg
-                        )
+                    val bitmap = SlidingWindowBitmap(freshMember.receivedBitmapBase, 1024, freshMember.receivedBitmap)
 
-                        val bitmap = SlidingWindowBitmap(freshMember.receivedBitmapBase, 1024, freshMember.receivedBitmap)
+                    if (!bitmap.isReceived(activeSlot.counter)) {
+                        bitmap.markReceived(activeSlot.counter)
 
-                        if (!bitmap.isReceived(activeSlot.counter)) {
-                            bitmap.markReceived(activeSlot.counter)
-
-                            when (frameMsg.msgType) {
-                                BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
-                                    val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                        when (frameMsg.msgType) {
+                            BinaryFrameCodec.TYPE_TEXT_MESSAGE -> {
+                                val textPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.TextMessage
+                                val seqEpoch = activeSlot.counter / 65536
+                                val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
+                                if (!alreadyExists) {
+                                    messageDao.insertMessage(
+                                        MessageEntity(
+                                            contactId = groupId,
+                                            isOutgoing = false,
+                                            seqEpoch = seqEpoch,
+                                            seqNum = activeSlot.counter,
+                                            ackNum = frameMsg.ackNum,
+                                            timestamp = frameMsg.timestampUTC,
+                                            textContent = textPayload.text,
+                                            status = "DELIVERED",
+                                            slotTarget = activeSlot.target,
+                                            slotEdSeed = activeSlot.edPrivateKeySeed,
+                                            senderMemberId = freshMember.memberId,
+                                            senderName = freshMember.rawMemberName,
+                                            ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                            expiresAtTimestamp = null
+                                        )
+                                    )
+                                    onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                                }
+                            }
+                            BinaryFrameCodec.TYPE_REACTION -> {
+                                val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
+                                messageDao.updateMessageReactionAnyDirection(groupId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
+                            }
+                            BinaryFrameCodec.TYPE_LOCATION_PIN -> {
+                                val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
+                                val seqEpoch = activeSlot.counter / 65536
+                                val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
+                                if (!alreadyExists) {
+                                    val locText = org.pqchat.dht.protocol.LocationPinData(
+                                        locPayload.latitude,
+                                        locPayload.longitude,
+                                        locPayload.altitude,
+                                        locPayload.accuracy,
+                                        locPayload.note
+                                    ).toPayloadText()
+                                    messageDao.insertMessage(
+                                        MessageEntity(
+                                            contactId = groupId,
+                                            isOutgoing = false,
+                                            seqEpoch = seqEpoch,
+                                            seqNum = activeSlot.counter,
+                                            ackNum = frameMsg.ackNum,
+                                            timestamp = frameMsg.timestampUTC,
+                                            textContent = locText,
+                                            status = "DELIVERED",
+                                            slotTarget = activeSlot.target,
+                                            slotEdSeed = activeSlot.edPrivateKeySeed,
+                                            senderMemberId = freshMember.memberId,
+                                            senderName = freshMember.rawMemberName,
+                                            ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
+                                            expiresAtTimestamp = null
+                                        )
+                                    )
+                                    onIncomingMessageDelivered?.invoke(groupId, locText, false)
+                                }
+                            }
+                            BinaryFrameCodec.TYPE_VOICE_NOTE -> {
+                                val voicePayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.VoiceNote
+                                val assembled = voiceSegmentAssembler.ingest(voicePayload)
+                                if (assembled != null) {
                                     val seqEpoch = activeSlot.counter / 65536
                                     val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                     if (!alreadyExists) {
@@ -7672,61 +7857,40 @@ class ChatRepository(
                                                 seqNum = activeSlot.counter,
                                                 ackNum = frameMsg.ackNum,
                                                 timestamp = frameMsg.timestampUTC,
-                                                textContent = textPayload.text,
+                                                voiceBytes = assembled.voiceBytes,
+                                                voiceDurationMs = assembled.totalDurationMs,
                                                 status = "DELIVERED",
                                                 slotTarget = activeSlot.target,
                                                 slotEdSeed = activeSlot.edPrivateKeySeed,
                                                 senderMemberId = freshMember.memberId,
                                                 senderName = freshMember.rawMemberName,
-                                                ephemeralTtlSeconds = textPayload.ephemeralTtlSeconds,
+                                                ephemeralTtlSeconds = assembled.ephemeralTtlSeconds,
                                                 expiresAtTimestamp = null
                                             )
                                         )
-                                        onIncomingMessageDelivered?.invoke(groupId, textPayload.text, false)
+                                        onIncomingMessageDelivered?.invoke(groupId, "Voice Note (${assembled.totalDurationMs / 1000}s)", false)
                                     }
                                 }
-                                BinaryFrameCodec.TYPE_REACTION -> {
-                                    val reactionPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.Reaction
-                                    messageDao.updateMessageReactionAnyDirection(groupId, reactionPayload.targetSeqEpoch, reactionPayload.targetSeqNum, reactionPayload.emoji)
-                                }
-                                BinaryFrameCodec.TYPE_LOCATION_PIN -> {
-                                    val locPayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.LocationPin
-                                    val seqEpoch = activeSlot.counter / 65536
-                                    val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
-                                    if (!alreadyExists) {
-                                        val locText = org.pqchat.dht.protocol.LocationPinData(
-                                            locPayload.latitude,
-                                            locPayload.longitude,
-                                            locPayload.altitude,
-                                            locPayload.accuracy,
-                                            locPayload.note
-                                        ).toPayloadText()
-                                        messageDao.insertMessage(
-                                            MessageEntity(
-                                                contactId = groupId,
-                                                isOutgoing = false,
-                                                seqEpoch = seqEpoch,
-                                                seqNum = activeSlot.counter,
-                                                ackNum = frameMsg.ackNum,
-                                                timestamp = frameMsg.timestampUTC,
-                                                textContent = locText,
-                                                status = "DELIVERED",
-                                                slotTarget = activeSlot.target,
-                                                slotEdSeed = activeSlot.edPrivateKeySeed,
-                                                senderMemberId = freshMember.memberId,
-                                                senderName = freshMember.rawMemberName,
-                                                ephemeralTtlSeconds = locPayload.ephemeralTtlSeconds,
-                                                expiresAtTimestamp = null
-                                            )
-                                        )
-                                        onIncomingMessageDelivered?.invoke(groupId, locText, false)
-                                    }
-                                }
-                                BinaryFrameCodec.TYPE_VOICE_NOTE -> {
-                                    val voicePayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.VoiceNote
-                                    val assembled = voiceSegmentAssembler.ingest(voicePayload)
-                                    if (assembled != null) {
+                            }
+                            BinaryFrameCodec.TYPE_GROUP_POLL -> {
+                                when (val pollPayload = frameMsg.payload) {
+                                    is BinaryFrameCodec.DecodedPayload.GroupPollCreate -> {
+                                        val pollIdStr = bytesToUuidString(pollPayload.pollId)
                                         val seqEpoch = activeSlot.counter / 65536
+                                        val optionsJson = org.json.JSONArray(pollPayload.options).toString()
+                                        pollDao?.insertOrUpdatePoll(
+                                            PollEntity(
+                                                pollId = pollIdStr,
+                                                groupId = groupId,
+                                                creatorMemberId = freshMember.memberId,
+                                                creatorName = freshMember.rawMemberName,
+                                                question = pollPayload.question,
+                                                optionsJson = optionsJson,
+                                                isMultiChoice = pollPayload.isMultiChoice,
+                                                expirationTimestamp = pollPayload.expirationTimestamp,
+                                                createdAt = frameMsg.timestampUTC
+                                            )
+                                        )
                                         val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
                                         if (!alreadyExists) {
                                             messageDao.insertMessage(
@@ -7737,139 +7901,94 @@ class ChatRepository(
                                                     seqNum = activeSlot.counter,
                                                     ackNum = frameMsg.ackNum,
                                                     timestamp = frameMsg.timestampUTC,
-                                                    voiceBytes = assembled.voiceBytes,
-                                                    voiceDurationMs = assembled.totalDurationMs,
+                                                    textContent = "[Poll] ${pollPayload.question}",
                                                     status = "DELIVERED",
                                                     slotTarget = activeSlot.target,
                                                     slotEdSeed = activeSlot.edPrivateKeySeed,
                                                     senderMemberId = freshMember.memberId,
                                                     senderName = freshMember.rawMemberName,
-                                                    ephemeralTtlSeconds = assembled.ephemeralTtlSeconds,
-                                                    expiresAtTimestamp = null
+                                                    pollId = pollIdStr
                                                 )
                                             )
-                                            onIncomingMessageDelivered?.invoke(groupId, "Voice Note (${assembled.totalDurationMs / 1000}s)", false)
+                                            onIncomingMessageDelivered?.invoke(groupId, "[Poll] ${pollPayload.question}", false)
                                         }
                                     }
-                                }
-                                BinaryFrameCodec.TYPE_GROUP_POLL -> {
-                                    when (val pollPayload = frameMsg.payload) {
-                                        is BinaryFrameCodec.DecodedPayload.GroupPollCreate -> {
-                                            val pollIdStr = bytesToUuidString(pollPayload.pollId)
-                                            val seqEpoch = activeSlot.counter / 65536
-                                            val optionsJson = org.json.JSONArray(pollPayload.options).toString()
-                                            pollDao?.insertOrUpdatePoll(
-                                                PollEntity(
+                                    is BinaryFrameCodec.DecodedPayload.GroupPollVote -> {
+                                        val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                        val poll = pollDao?.getPoll(pollIdStr)
+                                        if (poll != null && !poll.isClosed && System.currentTimeMillis() <= poll.expirationTimestamp) {
+                                            pollDao.insertOrUpdateVote(
+                                                PollVoteEntity(
                                                     pollId = pollIdStr,
-                                                    groupId = groupId,
-                                                    creatorMemberId = freshMember.memberId,
-                                                    creatorName = freshMember.rawMemberName,
-                                                    question = pollPayload.question,
-                                                    optionsJson = optionsJson,
-                                                    isMultiChoice = pollPayload.isMultiChoice,
-                                                    expirationTimestamp = pollPayload.expirationTimestamp,
-                                                    createdAt = frameMsg.timestampUTC
+                                                    memberId = freshMember.memberId,
+                                                    memberName = freshMember.rawMemberName,
+                                                    selectedBitmask = pollPayload.selectedOptionsBitmask,
+                                                    voteTimestamp = pollPayload.voteTimestamp
                                                 )
                                             )
-                                            val alreadyExists = messageDao.existsMessageWithSlotTarget(activeSlot.target)
-                                            if (!alreadyExists) {
-                                                messageDao.insertMessage(
-                                                    MessageEntity(
-                                                        contactId = groupId,
-                                                        isOutgoing = false,
-                                                        seqEpoch = seqEpoch,
-                                                        seqNum = activeSlot.counter,
-                                                        ackNum = frameMsg.ackNum,
-                                                        timestamp = frameMsg.timestampUTC,
-                                                        textContent = "[Poll] ${pollPayload.question}",
-                                                        status = "DELIVERED",
-                                                        slotTarget = activeSlot.target,
-                                                        slotEdSeed = activeSlot.edPrivateKeySeed,
-                                                        senderMemberId = freshMember.memberId,
-                                                        senderName = freshMember.rawMemberName,
-                                                        pollId = pollIdStr
-                                                    )
-                                                )
-                                                onIncomingMessageDelivered?.invoke(groupId, "[Poll] ${pollPayload.question}", false)
-                                            }
                                         }
-                                        is BinaryFrameCodec.DecodedPayload.GroupPollVote -> {
-                                            val pollIdStr = bytesToUuidString(pollPayload.pollId)
-                                            val poll = pollDao?.getPoll(pollIdStr)
-                                            if (poll != null && !poll.isClosed && System.currentTimeMillis() <= poll.expirationTimestamp) {
-                                                pollDao.insertOrUpdateVote(
-                                                    PollVoteEntity(
-                                                        pollId = pollIdStr,
-                                                        memberId = freshMember.memberId,
-                                                        memberName = freshMember.rawMemberName,
-                                                        selectedBitmask = pollPayload.selectedOptionsBitmask,
-                                                        voteTimestamp = pollPayload.voteTimestamp
-                                                    )
-                                                )
-                                            }
-                                        }
-                                        else -> {}
                                     }
+                                    else -> {}
                                 }
-                                else -> {}
                             }
+                            else -> {}
                         }
-
-                        // Advance incoming chain state for this member
-                        groupMemberDao?.updateMemberIncomingStateWithBitmap(
-                            groupId = groupId,
-                            memberId = freshMember.memberId,
-                            counterIn = activeSlot.counter + 1,
-                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${freshMember.memberId}", "chainKeyIn"),
-                            bitmapBase = bitmap.windowBase,
-                            bitmap = bitmap.toByteArray()
-                        )
-
-                        curMember = freshMember.copy(
-                            counterIn = activeSlot.counter + 1,
-                            chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${freshMember.memberId}", "chainKeyIn"),
-                            receivedBitmapBase = bitmap.windowBase,
-                            receivedBitmap = bitmap.toByteArray()
-                        )
-
-                        anyReceived = true
-                        true
-                    } catch (_: Exception) {
-                        harvestUndecryptableItem(activeSlot.target, item)
-                        false
                     }
-                }
 
-                if (!processed) {
-                    break
-                }
-                targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
+                    // Advance incoming chain state for this member
+                    groupMemberDao?.updateMemberIncomingStateWithBitmap(
+                        groupId = groupId,
+                        memberId = freshMember.memberId,
+                        counterIn = activeSlot.counter + 1,
+                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${freshMember.memberId}", "chainKeyIn"),
+                        bitmapBase = bitmap.windowBase,
+                        bitmap = bitmap.toByteArray()
+                    )
 
-                // For individual recipient slot: safe to overwrite with 900B CSPRNG noise tombstone!
-                // Other group members have their own distinct derived slots so their messages remain intact.
-                if (isIndividualSlot) {
-                    try {
-                        val tombSeq = item.seq + 1
-                        targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] = maxOf(targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] ?: 0L, tombSeq)
-                        dhtLeafNode.putMutable(
-                            target = activeSlot.target,
-                            v = BinaryFrameCodec.createTombstonePayload(),
-                            seq = tombSeq,
-                            salt = null,
-                            sk = activeSlot.edPrivateKeySeed,
-                            skipLocalStore = false
-                        )
-                    } catch (_: Exception) {}
-                }
+                    curMember = freshMember.copy(
+                        counterIn = activeSlot.counter + 1,
+                        chainKeyIn = EncryptedBlob(baseSlot.nextChainKey, "group_members", "${groupId}_${freshMember.memberId}", "chainKeyIn"),
+                        receivedBitmapBase = bitmap.windowBase,
+                        receivedBitmap = bitmap.toByteArray()
+                    )
 
-                consecutive++
+                    anyReceived = true
+                    true
+                } catch (_: Exception) {
+                    harvestUndecryptableItem(activeSlot.target, item)
+                    false
+                }
             }
+
+            if (!processed) {
+                break
+            }
+            targetLastSeenSeq[slotHex] = maxOf(targetLastSeenSeq[slotHex] ?: 0L, item.seq)
+
+            // For individual recipient slot: safe to overwrite with 900B CSPRNG noise tombstone!
+            // Other group members have their own distinct derived slots so their messages remain intact.
+            if (isIndividualSlot) {
+                try {
+                    val tombSeq = item.seq + 1
+                    targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] = maxOf(targetLastSeenSeq[CryptoUtils.toHex(activeSlot.target)] ?: 0L, tombSeq)
+                    dhtLeafNode.putMutable(
+                        target = activeSlot.target,
+                        v = BinaryFrameCodec.createTombstonePayload(),
+                        seq = tombSeq,
+                        salt = null,
+                        sk = activeSlot.edPrivateKeySeed,
+                        skipLocalStore = false
+                    )
+                } catch (_: Exception) {}
+            }
+
+            consecutive++
         }
         return anyReceived
     }
 
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastTestMode) 15_000L else 20_000L) {
+        withTimeoutOrNull(if (isFastLocalTestbedMode) 15_000L else 30_000L) {
             val group = groupDao?.getGroupById(groupId) ?: return@withTimeoutOrNull false
             val initialMembers = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
             val groupIdBytes = uuidStringToBytes(groupId)
@@ -8091,6 +8210,7 @@ class ChatRepository(
         pendingRekeyOfferFrames.clear()
         deferredGroupControls.clear()
         broadcastedGroupSenderKeyEpochs.clear()
+        groupMemberLastRekeyEpoch.clear()
         repositoryScope.cancel()
     }
 }

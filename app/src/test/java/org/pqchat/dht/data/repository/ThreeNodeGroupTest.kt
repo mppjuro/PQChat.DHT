@@ -1323,4 +1323,255 @@ class ThreeNodeGroupTest {
             dhtNode.stop()
         }
     }
+
+    private data class RegressionPeerHarness(
+        val contactDao: FakeContactDao,
+        val messageDao: FakeMessageDao,
+        val groupDao: FakeGroupDao,
+        val groupMemberDao: FakeGroupMemberDao,
+        val repo: ChatRepository
+    )
+
+    private fun createRegressionPeer(dhtNode: FakeDht): RegressionPeerHarness {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = dhtNode,
+            pendingAckQueue = PendingAckQueue(),
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao
+        )
+        return RegressionPeerHarness(contactDao, messageDao, groupDao, groupMemberDao, repo)
+    }
+
+    private suspend fun setupRegressionPairwiseChannel(
+        initiator: RegressionPeerHarness,
+        responder: RegressionPeerHarness,
+        initiatorIdInResponder: String,
+        initiatorNameInResponder: String,
+        responderIdInInitiator: String,
+        responderNameInInitiator: String
+    ) {
+        val outKey = CryptoUtils.secureRandomBytes(64)
+        val inKey = CryptoUtils.secureRandomBytes(64)
+        initiator.contactDao.insertOrUpdate(
+            ContactEntity(
+                id = responderIdInInitiator,
+                name = responderNameInInitiator,
+                chainKeyOut = outKey,
+                chainKeyIn = inKey,
+                counterOut = 0,
+                counterIn = 0,
+                isInitiator = true,
+                isVerified = true
+            )
+        )
+        responder.contactDao.insertOrUpdate(
+            ContactEntity(
+                id = initiatorIdInResponder,
+                name = initiatorNameInResponder,
+                chainKeyOut = inKey,
+                chainKeyIn = outKey,
+                counterOut = 0,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+    }
+
+    @Test
+    fun testAdvancedKeyBundleAndRekeyDoNotSkipUnreceivedMessageZeroOnSameChain() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val dave = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, dave, "alice", "Alice", "dave", "Dave")
+
+            val group = alice.repo.createGroup("Advanced_Bundle_Guard_Group", listOf("dave"))
+            val groupId = group.groupId
+            val groupIdBytes = testUuidStringToBytes(groupId)
+            val aliceMemberId = group.myMemberId
+            val aliceMemberIdBytes = testUuidStringToBytes(aliceMemberId)
+
+            assertTrue("Dave must ingest Alice's group invite", dave.repo.pollContactIncoming("alice"))
+            val daveAliceInitial = dave.groupMemberDao.getMember(groupId, aliceMemberId)!!
+            assertEquals(0, daveAliceInitial.counterIn)
+            val aliceKey0 = daveAliceInitial.rawChainKeyIn.copyOf()
+
+            // Alice sends Turn 1 (counter=0) while Dave has not polled the group yet, advancing Alice's local chain to counter=1
+            assertTrue("Alice must send counter=0 group message", alice.repo.sendGroupMessage(groupId, "Turn1_Msg0_InFlight"))
+            val aliceAdvancedGroup = alice.groupDao.getGroupById(groupId)!!
+            assertEquals(1, aliceAdvancedGroup.myCounterOut)
+            val aliceKey1 = aliceAdvancedGroup.rawMyChainKeyOut.copyOf()
+
+            // Simulate delayed Alice KEY_BUNDLE and REKEY arriving with Alice's already-advanced state (counter=1)
+            dave.repo.processIncomingGroupControl(
+                contactId = "alice",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_KEY_BUNDLE,
+                    groupId = groupIdBytes,
+                    groupEpoch = 1L,
+                    senderMemberId = aliceMemberIdBytes,
+                    senderGroupChainKey = ByteArray(64),
+                    currentCounter = 0L,
+                    groupName = "Advanced_Bundle_Guard_Group",
+                    members = emptyList(),
+                    memberKeys = listOf(
+                        org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupMemberKey(
+                            memberId = aliceMemberIdBytes,
+                            counter = 1L,
+                            chainKey = aliceKey1
+                        )
+                    )
+                )
+            )
+            dave.repo.processIncomingGroupControl(
+                contactId = "alice",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupId = groupIdBytes,
+                    groupEpoch = 1L,
+                    senderMemberId = aliceMemberIdBytes,
+                    senderGroupChainKey = aliceKey1,
+                    currentCounter = 1L,
+                    groupName = "Advanced_Bundle_Guard_Group",
+                    members = emptyList(),
+                    memberKeys = emptyList()
+                )
+            )
+
+            // Same-chain advanced counter=1 control must NOT skip Dave's unreceived counter=0 slot
+            val daveAliceAfterRelay = dave.groupMemberDao.getMember(groupId, aliceMemberId)!!
+            assertEquals("Dave counterIn must remain at 0 for unreceived message 0", 0, daveAliceAfterRelay.counterIn)
+            assertArrayEquals("Dave chainKeyIn must remain at chain(0)", aliceKey0, daveAliceAfterRelay.rawChainKeyIn)
+
+            // Dave must still decrypt the in-flight counter=0 message
+            assertTrue("Dave must poll and decrypt Alice's message 0", dave.repo.pollGroupIncoming(groupId))
+            assertEquals(1, dave.messageDao.messages.count { it.textContent?.raw == "Turn1_Msg0_InFlight" && !it.isOutgoing })
+        } finally {
+            alice.repo.close()
+            dave.repo.close()
+            dhtNode.stop()
+        }
+    }
+
+    @Test
+    fun testOlderEpochRekeyDoesNotOverwriteNewerEpochMemberKey() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val bob = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+
+            val group = alice.repo.createGroup("Epoch_Monotonicity_Group", listOf("bob"))
+            val groupId = group.groupId
+            val groupIdBytes = testUuidStringToBytes(groupId)
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            val bobMemberId = bob.groupDao.getGroupById(groupId)!!.myMemberId
+            val bobMemberIdBytes = testUuidStringToBytes(bobMemberId)
+
+            val epoch2Key = CryptoUtils.secureRandomBytes(64)
+            alice.repo.processIncomingGroupControl(
+                contactId = "bob",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupId = groupIdBytes,
+                    groupEpoch = 2L,
+                    senderMemberId = bobMemberIdBytes,
+                    senderGroupChainKey = epoch2Key,
+                    currentCounter = 0L,
+                    groupName = "Epoch_Monotonicity_Group",
+                    members = emptyList(),
+                    memberKeys = emptyList()
+                )
+            )
+            val afterEpoch2 = alice.groupMemberDao.getMember(groupId, bobMemberId)!!
+            assertArrayEquals("Epoch 2 REKEY must update member key", epoch2Key, afterEpoch2.rawChainKeyIn)
+
+            // Deliver stale Epoch 1 REKEY with a higher counter
+            val epoch1StaleKey = CryptoUtils.secureRandomBytes(64)
+            alice.repo.processIncomingGroupControl(
+                contactId = "bob",
+                control = org.pqchat.dht.crypto.BinaryFrameCodec.DecodedPayload.GroupControl(
+                    controlSubType = org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_SUBTYPE_REKEY,
+                    groupId = groupIdBytes,
+                    groupEpoch = 1L,
+                    senderMemberId = bobMemberIdBytes,
+                    senderGroupChainKey = epoch1StaleKey,
+                    currentCounter = 5L,
+                    groupName = "Epoch_Monotonicity_Group",
+                    members = emptyList(),
+                    memberKeys = emptyList()
+                )
+            )
+            val afterStaleEpoch1 = alice.groupMemberDao.getMember(groupId, bobMemberId)!!
+            assertArrayEquals("Stale Epoch 1 REKEY must never overwrite Epoch 2 key", epoch2Key, afterStaleEpoch1.rawChainKeyIn)
+            assertEquals(0, afterStaleEpoch1.counterIn)
+        } finally {
+            alice.repo.close()
+            bob.repo.close()
+            dhtNode.stop()
+        }
+    }
+
+    @Test
+    fun testRepublishRecentGroupMessagesSkipsTombstoneAndRepublishesEvictedSlot() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val bob = createRegressionPeer(dhtNode)
+        val charlie = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+            setupRegressionPairwiseChannel(alice, charlie, "alice", "Alice", "charlie", "Charlie")
+
+            val group = alice.repo.createGroup("Republish_Tombstone_Guard", listOf("bob", "charlie"))
+            val groupId = group.groupId
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            assertTrue(charlie.repo.pollContactIncoming("alice"))
+
+            val keysBeforeSend = dhtNode.storage.keys.toSet()
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Msg_For_Bob_And_Charlie"))
+            val newSlots = dhtNode.storage.keys - keysBeforeSend
+            assertEquals("Sending to Bob & Charlie must create 2 recipient slots", 2, newSlots.size)
+
+            // Bob polls and tombstones his slot
+            assertTrue(bob.repo.pollGroupIncoming(groupId))
+            val bobTombstonedKey = newSlots.single { (dhtNode.storage[it]?.item?.seq ?: 0L) > 1L }
+            val charliePendingKey = newSlots.single { it != bobTombstonedKey }
+            val bobTombstoneEntry = dhtNode.storage[bobTombstonedKey]!!.item
+            val bobTombstoneSeq = bobTombstoneEntry.seq
+            val bobTombstoneBytes = bobTombstoneEntry.v.copyOf()
+
+            // Simulate DHT eviction of Charlie's unconsumed slot
+            dhtNode.storage.remove(charliePendingKey)
+
+            // Republish must leave Bob's tombstone untouched and restore Charlie's evicted slot
+            val republished = alice.repo.republishRecentGroupMessages(groupId, force = true)
+            assertEquals("Only Charlie's unconsumed slot should be republished", 1, republished)
+
+            val bobAfterRepublish = dhtNode.storage[bobTombstonedKey]!!.item
+            assertEquals("Bob tombstone seq must remain unchanged", bobTombstoneSeq, bobAfterRepublish.seq)
+            assertArrayEquals("Bob tombstone noise bytes must not be overwritten", bobTombstoneBytes, bobAfterRepublish.v)
+
+            assertNotNull("Charlie's evicted slot must be restored on DHT", dhtNode.storage[charliePendingKey])
+            assertTrue("Charlie must receive message after republish", charlie.repo.pollGroupIncoming(groupId))
+            assertEquals(1, charlie.messageDao.messages.count { it.textContent?.raw == "Msg_For_Bob_And_Charlie" && !it.isOutgoing })
+        } finally {
+            alice.repo.close()
+            bob.repo.close()
+            charlie.repo.close()
+            dhtNode.stop()
+        }
+    }
 }

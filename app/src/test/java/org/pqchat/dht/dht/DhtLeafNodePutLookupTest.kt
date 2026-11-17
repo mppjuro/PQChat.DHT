@@ -286,4 +286,100 @@ class DhtLeafNodePutLookupTest {
             node.stop()
         }
     }
+
+    @Test
+    fun testPutMutableContinuesDiscoveryBeyondHop3EvenAfterCollectingManyTokens() = runBlocking {
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+        val targetHex = CryptoUtils.toHex(target)
+
+        // Build target-monotonic XOR chain: B1 -> B2 -> B3 -> B4 (distance 0 = target)
+        fun flippedId(vararg bitIndicesFromEnd: Int): ByteArray {
+            val id = target.copyOf()
+            for (idx in bitIndicesFromEnd) {
+                val bytePos = 19 - (idx / 8)
+                val bitPos = idx % 8
+                id[bytePos] = (id[bytePos].toInt() xor (1 shl bitPos)).toByte()
+            }
+            return id
+        }
+
+        val nodeA = DhtLeafNode(autoBootstrap = false)
+        val nodeB1 = DhtLeafNode(myNodeId = flippedId(3), autoBootstrap = false)
+        val nodeB2 = DhtLeafNode(myNodeId = flippedId(2), autoBootstrap = false)
+        val nodeB3 = DhtLeafNode(myNodeId = flippedId(1), autoBootstrap = false)
+        val nodeB4 = DhtLeafNode(myNodeId = target.copyOf(), autoBootstrap = false)
+
+        // 13 farther distractor nodes known in hop 1 so tokenMap.size >= 12 by hop 2
+        val distractors = (0 until 13).map { i ->
+            val farId = target.copyOf()
+            farId[0] = (farId[0].toInt() xor (0x80 or (i shl 2))).toByte()
+            DhtLeafNode(myNodeId = farId, autoBootstrap = false)
+        }
+
+        val allNodes = listOf(nodeA, nodeB1, nodeB2, nodeB3, nodeB4) + distractors
+        try {
+            val ports = allNodes.associateWith { it.initSocket().localPort }
+            allNodes.forEach { it.start() }
+
+            // Wire chain: A knows B1 + all distractors; B1 -> B2 -> B3 -> B4
+            nodeA.addPeer(nodeB1.myNodeId, InetSocketAddress("127.0.0.1", ports.getValue(nodeB1)))
+            distractors.forEach { d ->
+                nodeA.addPeer(d.myNodeId, InetSocketAddress("127.0.0.1", ports.getValue(d)))
+            }
+            nodeB1.addPeer(nodeB2.myNodeId, InetSocketAddress("127.0.0.1", ports.getValue(nodeB2)))
+            nodeB2.addPeer(nodeB3.myNodeId, InetSocketAddress("127.0.0.1", ports.getValue(nodeB3)))
+            nodeB3.addPeer(nodeB4.myNodeId, InetSocketAddress("127.0.0.1", ports.getValue(nodeB4)))
+
+            val putSuccess = nodeA.putMutable(
+                target = target,
+                v = payload,
+                seq = 1L,
+                salt = null,
+                sk = seed,
+                skipLocalStore = true
+            )
+
+            assertTrue("Multi-hop putMutable must succeed", putSuccess)
+            val storedOnB4 = nodeB4.localMutableStore[targetHex]
+            assertNotNull(
+                "Closest peer B4 at hop 4 must receive PUT even when >= 12 tokens were collected earlier",
+                storedOnB4
+            )
+            assertArrayEquals("Payload stored on B4 must match", payload, storedOnB4!!.v)
+        } finally {
+            allNodes.forEach { try { it.stop() } catch (_: Exception) {} }
+        }
+    }
+
+    @Test
+    fun testGetMutableFastSingleHopHitPreservesRoutingTableAndReturnsItem() = runBlocking {
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+
+        val nodeA = DhtLeafNode(autoBootstrap = false)
+        val nodeB = DhtLeafNode(myNodeId = target.copyOf(), autoBootstrap = false)
+
+        try {
+            nodeA.initSocket()
+            val portB = nodeB.initSocket().localPort
+            nodeA.start()
+            nodeB.start()
+
+            assertTrue(nodeB.putMutable(target = target, v = payload, seq = 1L, salt = null, sk = seed, skipLocalStore = false))
+            nodeA.addPeer(nodeB.myNodeId, InetSocketAddress("127.0.0.1", portB))
+
+            val retrieved = nodeA.getMutable(target = target, salt = null, skipLocalStore = true, timeoutMs = 1500L)
+            assertNotNull("Single-hop getMutable hit must return stored mutable item", retrieved)
+            assertArrayEquals("Retrieved payload must match", payload, retrieved!!.v)
+            assertTrue("Routing table must retain verified responder", nodeA.getActivePeerCount() >= 1)
+        } finally {
+            nodeA.stop()
+            nodeB.stop()
+        }
+    }
 }

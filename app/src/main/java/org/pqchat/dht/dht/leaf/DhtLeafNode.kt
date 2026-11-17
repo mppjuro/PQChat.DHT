@@ -1695,7 +1695,7 @@ open class DhtLeafNode(
         )
         _lastOperationMetrics.set(metrics)
 
-        if (isLiveNetwork && (totalResponded <= 2 || hops <= 1 || totalQueried < 10) && autoBootstrap) {
+        if (isLiveNetwork && foundItem.get() == null && (totalResponded <= 2 || hops <= 1 || totalQueried < 10) && autoBootstrap) {
             logInfo(TAG, "[PQChat] getMutable shallow traversal detected (candidates=$totalQueried, responded=$totalResponded, hops=$hops), triggering background rebootstrap")
             scope.launch { rebootstrap(force = true) }
         }
@@ -1817,15 +1817,14 @@ open class DhtLeafNode(
         }
 
         val isLiveNetwork = !isLocalMode && candidatePool.values.any { !isLoopbackOrLocal(it.address) }
-        val maxLookupHops = if (isLiveNetwork) 8 else 3
-        val maxLookupQueries = if (isLiveNetwork) 80 else 24
+        val maxLookupHops = if (isLiveNetwork) 6 else if (isLocalMode) 3 else 5
+        val maxLookupQueries = if (isLiveNetwork) 64 else if (isLocalMode) 24 else 48
         val queryTimeoutMs = if (isLocalMode) 500L else 2500L
 
         // 2. Iterative BEP 44 token-harvesting lookup (sending "q": "get" to harvest tokens and closest nodes simultaneously)
         for (hop in 1..maxLookupHops) {
             if (queriesSent.get() >= maxLookupQueries) break
             if (isLocalMode && tokenMap.size >= 8 && hop >= 2) break
-            if (!isLocalMode && tokenMap.size >= 12 && hop >= 3) break
 
             val unqueried = candidatePool.values
                 .filter { it.address !in queriedAddresses && (candidatePool.size <= 3 || !isBootstrapRouter(it.address)) }
@@ -1835,6 +1834,33 @@ open class DhtLeafNode(
                     val distB = xorDistance(b.nodeId, target)
                     compareBytes(distA, distB)
                 }
+
+            if (isLiveNetwork && hop > 4 && tokenMap.size >= 16) {
+                val targetTopCount = maxOf(8, replicationK)
+                val closestTokenPeers = tokenMap.keys.mapNotNull { addr ->
+                    candidatePool[addr]?.takeIf { it.nodeId.any { b -> b != 0.toByte() } }
+                }.sortedWith { a, b ->
+                    compareBytes(xorDistance(a.nodeId, target), xorDistance(b.nodeId, target))
+                }
+                if (closestTokenPeers.size >= targetTopCount) {
+                    val kthBestDist = xorDistance(closestTokenPeers[targetTopCount - 1].nodeId, target)
+                    val closestUnqueried = unqueried.firstOrNull()
+                    if (closestUnqueried == null || compareBytes(xorDistance(closestUnqueried.nodeId, target), kthBestDist) >= 0) {
+                        break
+                    }
+                }
+            } else if (!isLiveNetwork && !isLocalMode && tokenMap.size >= 12 && hop >= 4) {
+                if (unqueried.isEmpty()) break
+                val closestTokenPeers = tokenMap.keys.mapNotNull { addr ->
+                    candidatePool[addr]?.takeIf { it.nodeId.any { b -> b != 0.toByte() } }
+                }.sortedWith { a, b ->
+                    compareBytes(xorDistance(a.nodeId, target), xorDistance(b.nodeId, target))
+                }
+                val kthBest = closestTokenPeers.getOrNull(minOf(7, closestTokenPeers.size - 1))
+                if (kthBest != null && compareBytes(xorDistance(unqueried.first().nodeId, target), xorDistance(kthBest.nodeId, target)) >= 0) {
+                    break
+                }
+            }
 
             if (unqueried.isEmpty()) {
                 if (tokenMap.size < 3 && queriesSent.get() < maxLookupQueries && !isLocalMode && autoBootstrap) {
@@ -2078,9 +2104,14 @@ open class DhtLeafNode(
             compareBytes(distA, distB)
         }
 
-        val targetPutNodes = peersWithToken.take(maxOf(12, minOf(16, replicationK)))
+        val targetPutNodes = if (isLiveNetwork) {
+            peersWithToken.take(maxOf(16, replicationK))
+        } else {
+            peersWithToken.take(maxOf(12, minOf(16, replicationK)))
+        }
         val putNodesAttemptedCount = targetPutNodes.size
         val putAcks = java.util.concurrent.atomic.AtomicInteger(0)
+        val putCompleted = java.util.concurrent.atomic.AtomicInteger(0)
 
         // 6. Send "q": "put" in parallel to closest peers with token
         coroutineScope {
@@ -2117,26 +2148,36 @@ open class DhtLeafNode(
                         }
                     } catch (e: Exception) {
                         if (lastOpError == null) lastOpError = e.message ?: e.javaClass.simpleName
+                    } finally {
+                        putCompleted.incrementAndGet()
                     }
                 }
             }
 
             val startPut = System.currentTimeMillis()
             val maxPutWait = if (isLocalMode) 1000L else 3500L
-            val requiredAcks = if (isLocalMode) minOf(3, targetPutNodes.size) else minOf(8, targetPutNodes.size)
+            val requiredAcks = when {
+                isLocalMode -> minOf(3, targetPutNodes.size)
+                isLiveNetwork -> minOf(12, targetPutNodes.size)
+                else -> minOf(8, targetPutNodes.size)
+            }
             // Wait until we reach required ACKs or all target nodes reply or maxPutWait timeout
-            while (putAcks.get() < requiredAcks && (System.currentTimeMillis() - startPut) < maxPutWait) {
+            while (putAcks.get() < requiredAcks &&
+                putCompleted.get() < putNodesAttemptedCount &&
+                (System.currentTimeMillis() - startPut) < maxPutWait
+            ) {
                 delay(10)
             }
             putJobs.forEach { it.cancel() }
         }
 
         val putOkCount = putAcks.get()
-        // Mobile quorum: success if at least 1 node ACKed the put
-        val putSuccess = if (skipLocalStore) {
+        // Mobile quorum: live network requires at least 1 remote ACK so callers retry/republish on failure;
+        // local/testbed mode preserves localMutableStore success when remote peers are absent.
+        val putSuccess = if (skipLocalStore || isLiveNetwork) {
             putOkCount >= 1
         } else {
-            putOkCount >= 1 || true
+            true
         }
 
         val finalMetrics = DhtOpMetrics(
