@@ -221,6 +221,7 @@ class FirebaseResearchSync(
         const val EXPECTED_SCHEMA_VERSION = 2
         const val MIN_VALID_TIMESTAMP_MS = 1_700_000_000_000L
         const val MAX_BUNDLE_ZIP_BYTES = 700_000L
+        const val MAX_CHUNK_ZIP_BYTES = 550_000L
         const val MAX_BUNDLE_BASE64_CHARS = 950_000
 
         private val REQUIRED_TOP_LEVEL_KEYS = setOf(
@@ -417,16 +418,101 @@ class FirebaseResearchSync(
         }
 
         val docId = if (!hasSynced && !hasSessionSynced(sessionId)) sessionId else "${sessionId}_${now}"
+        _syncStatus.value = "Saving metrics to Cloud Firestore..."
+        val ok = writeFirestoreDocument(docId, sessionId, documentData)
+        if (ok) {
+            recordSuccessfulSync(sessionId, now)
+            _syncStatus.value = "Successfully synchronized with Cloud Firestore"
+        }
+        return@withContext ok
+    }
 
+    /**
+     * Synchronizes a multi-part chunked research session (each ZIP chunk <= 550 KB)
+     * across sequential `research_sessions` documents so multi-day sessions never hit
+     * Firestore's 1 MB document size limit.
+     */
+    suspend fun syncResearchSessionChunks(
+        sessionId: String,
+        payloads: List<Pair<Map<String, Any>, Map<String, Any>>>,
+        isManual: Boolean = false
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (payloads.isEmpty()) return@withContext false
+        if (payloads.size == 1) {
+            return@withContext syncResearchSession(
+                sessionId = sessionId,
+                deviceInfo = payloads[0].first,
+                metrics = payloads[0].second,
+                isManual = isManual
+            )
+        }
+
+        if (!isFirebaseConfigured()) {
+            _syncStatus.value = "Local storage active (Firebase not configured)"
+            return@withContext false
+        }
+
+        val now = clockProvider()
+        if (!isManual) {
+            val minInterval = DEFAULT_BATCH_SYNC_INTERVAL_MS - JITTER_WINDOW_MS
+            val lastSync = getLastAutoSyncTimestamp()
+            if (lastSync > 0L && now - lastSync < minInterval) {
+                return@withContext false
+            }
+            if (!isSafeToSync()) {
+                return@withContext false
+            }
+        }
+
+        // Pre-flight validate every chunk document before transmitting any part
+        val preparedDocs = payloads.mapIndexed { idx, (deviceInfo, metrics) ->
+            val chunkTs = now + idx
+            val docData = mapOf(
+                "sessionId" to sessionId,
+                "timestamp" to chunkTs,
+                "deviceInfo" to deviceInfo,
+                "metrics" to metrics,
+                "schemaVersion" to EXPECTED_SCHEMA_VERSION
+            )
+            val (isValid, validationError) = validatePayloadWithReason(docData)
+            if (!isValid) {
+                _syncStatus.value = "Chunk ${idx + 1} payload validation failed: $validationError"
+                return@withContext false
+            }
+            docData
+        }
+
+        if (!ensureAuthenticated()) {
+            return@withContext false
+        }
+
+        val baseDocId = if (!hasSynced && !hasSessionSynced(sessionId)) sessionId else "${sessionId}_${now}"
+        val total = preparedDocs.size
+        for ((idx, docData) in preparedDocs.withIndex()) {
+            val partNum = idx + 1
+            val docId = if (partNum == 1) baseDocId else "${baseDocId}_part${partNum}_of_${total}"
+            _syncStatus.value = "Saving chunk $partNum/$total to Cloud Firestore..."
+            val ok = writeFirestoreDocument(docId, "${sessionId}_part${partNum}_of_${total}", docData)
+            if (!ok) {
+                return@withContext false
+            }
+        }
+
+        recordSuccessfulSync(sessionId, now)
+        _syncStatus.value = "Successfully synchronized $total chunks with Cloud Firestore"
+        return@withContext true
+    }
+
+    private suspend fun writeFirestoreDocument(
+        docId: String,
+        fallbackPrefix: String,
+        documentData: Map<String, Any>
+    ): Boolean {
         val customWriter = customDocumentWriter
         if (customWriter != null) {
-            return@withContext try {
-                _syncStatus.value = "Saving metrics to Cloud Firestore..."
+            return try {
                 val ok = customWriter.invoke(docId, documentData)
-                if (ok) {
-                    recordSuccessfulSync(sessionId, now)
-                    _syncStatus.value = "Successfully synchronized with Cloud Firestore"
-                } else {
+                if (!ok) {
                     _syncStatus.value = "Firestore write rejected"
                 }
                 ok
@@ -438,31 +524,26 @@ class FirebaseResearchSync(
 
         val firestore = getFirestore() ?: run {
             _syncStatus.value = "Firestore unavailable"
-            return@withContext false
+            return false
         }
 
-        try {
-            _syncStatus.value = "Saving metrics to Cloud Firestore..."
+        return try {
             try {
                 firestore.collection("research_sessions")
                     .document(docId)
                     .set(documentData)
                     .await()
             } catch (_: Exception) {
-                // If collision or already created, write with unique timestamped suffix
-                val fallbackId = "${sessionId}_${clockProvider()}"
+                val fallbackId = "${fallbackPrefix}_${clockProvider()}"
                 firestore.collection("research_sessions")
                     .document(fallbackId)
                     .set(documentData)
                     .await()
             }
-
-            recordSuccessfulSync(sessionId, now)
-            _syncStatus.value = "Successfully synchronized with Cloud Firestore"
-            return@withContext true
+            true
         } catch (e: Exception) {
             _syncStatus.value = "Firestore write error: ${e.message}"
-            return@withContext false
+            false
         }
     }
 

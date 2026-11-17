@@ -92,6 +92,20 @@ data class PacketTelemetryEvent(
 }
 
 /**
+ * Republishing strategy mode used to partition BEP 44 replica survival curves.
+ */
+enum class RepublishMode(val displayName: String) {
+    /** Control group: record published once without any periodic refresh. */
+    NO_REPUBLISH("No Republishing"),
+
+    /** Sender periodically republishes its own unacknowledged message. */
+    OWN_REPUBLISH("Own Republish"),
+
+    /** Third-party peers relay cached BEP 44 records via Blind Cooperative Republishing. */
+    CROWD_REPUBLISH("Crowd Republish (Blind Cooperative)")
+}
+
+/**
  * Telemetry record for an empirical DHT retention (TTL) probe checking packet survival.
  */
 data class TtlSampleEvent(
@@ -115,8 +129,17 @@ data class TtlSampleEvent(
     val replicationK: Int = 8,
     val poissonLambda: Double = 0.0,
     val batteryCurrentUa: Long = 0L,
-    val batteryLevelPct: Int = 100
+    val batteryLevelPct: Int = 100,
+    val republishMode: RepublishMode = if (republishActive) RepublishMode.OWN_REPUBLISH else RepublishMode.NO_REPUBLISH
 ) {
+    /** Number of live responding replicas k_alive bounded by replicationK. */
+    val kAlive: Int
+        get() = if (isAlive) nodesResponded.coerceIn(0, replicationK.coerceAtLeast(1)) else 0
+
+    /** Normalized replica survival ratio k_alive / K in [0.0, 1.0]. */
+    val replicaSurvivalRatio: Double
+        get() = kAlive.toDouble() / replicationK.coerceAtLeast(1).toDouble()
+
     fun toMap(): Map<String, Any?> = mapOf(
         "sampleId" to sampleId,
         "sessionId" to sessionId,
@@ -127,9 +150,12 @@ data class TtlSampleEvent(
         "elapsedMinutes" to elapsedMinutes,
         "elapsedHours" to elapsedHours,
         "republishActive" to republishActive,
+        "republishMode" to republishMode.name,
         "isAlive" to isAlive,
         "nodesQueried" to nodesQueried,
         "nodesResponded" to nodesResponded,
+        "kAlive" to kAlive,
+        "replicaSurvivalRatio" to replicaSurvivalRatio,
         "lookupHops" to lookupHops,
         "probeRttMs" to probeRttMs,
         "confirmedLifespanMinutes" to confirmedLifespanMinutes,
@@ -146,18 +172,19 @@ data class TtlSampleEvent(
         val elapsedHrStr = String.format(Locale.US, "%.4f", elapsedHours)
         val confirmedStr = confirmedLifespanMinutes?.let { String.format(Locale.US, "%.2f", it) } ?: ""
         val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
-        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,$targetPrefix,$initialPutEpochMs,$elapsedMinStr,$elapsedHrStr,$republishActive,$isAlive,$nodesQueried,$nodesResponded,$lookupHops,$probeRttMs,$confirmedStr,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct"
+        val survivalStr = String.format(Locale.US, "%.6f", replicaSurvivalRatio)
+        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,$targetPrefix,$initialPutEpochMs,$elapsedMinStr,$elapsedHrStr,$republishActive,$isAlive,$nodesQueried,$nodesResponded,$lookupHops,$probeRttMs,$confirmedStr,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,${republishMode.name},$kAlive,$survivalStr"
     }
 
     fun toMasterCsvRow(): String {
         val elapsedHrStr = String.format(Locale.US, "%.4f", elapsedHours)
         val lambdaStr = String.format(Locale.US, "%.6f", poissonLambda)
-        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,TTL_PROBE,TTL_PROBE,$targetPrefix,1,900,$probeRttMs,$nodesQueried,$nodesResponded,$lookupHops,$isAlive,0,0,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,$republishActive,$isAlive,$elapsedHrStr,\"\",\"\""
+        return "$sampleId,$sessionId,$timestampEpochMs,$isoTimestamp,TTL_PROBE,TTL_PROBE,$targetPrefix,1,900,$probeRttMs,$nodesQueried,$nodesResponded,$lookupHops,$isAlive,0,0,$networkType,$pollingState,$replicationK,$lambdaStr,$batteryCurrentUa,$batteryLevelPct,$republishActive,$isAlive,$elapsedHrStr,\"\",\"mode=${republishMode.name};kAlive=$kAlive\""
     }
 
     companion object {
         const val CSV_HEADER =
-            "sample_id,session_id,timestamp_epoch_ms,iso_timestamp,target_prefix,initial_put_epoch_ms,elapsed_minutes,elapsed_hours,republish_active,is_alive,nodes_queried,nodes_responded,lookup_hops,probe_rtt_ms,confirmed_lifespan_minutes,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct"
+            "sample_id,session_id,timestamp_epoch_ms,iso_timestamp,target_prefix,initial_put_epoch_ms,elapsed_minutes,elapsed_hours,republish_active,is_alive,nodes_queried,nodes_responded,lookup_hops,probe_rtt_ms,confirmed_lifespan_minutes,network_type,polling_state,replication_k,poisson_lambda,battery_current_ua,battery_level_pct,republish_mode,k_alive,replica_survival_ratio"
     }
 }
 
@@ -206,7 +233,7 @@ data class RepublishAnalysisSummary(
 
 /**
  * Telemetry record for group chat operations (multi-recipient broadcast, delivery latency,
- * fan-out delivery skew, and key rotation convergence).
+ * fan-out delivery skew, recipient target isolation, and key rotation convergence).
  */
 data class GroupTelemetryEvent(
     val eventId: String = UUID.randomUUID().toString(),
@@ -219,8 +246,27 @@ data class GroupTelemetryEvent(
     val latencyMs: Long = 0L,
     val fanOutSkewMs: Long = 0L,
     val keyRotationConvergenceMs: Long = 0L,
-    val epoch: Long = 1L
+    val epoch: Long = 1L,
+    val uniqueTargetCount: Int = groupSizeM,
+    val interleavedCoverCount: Int = 0
 ) {
+    /** Recipient slot decorrelation score in [0.0, 1.0]: 1.0 if all N recipients use distinct slots, 0.0 if shared slot. */
+    val targetDecorrelationRatio: Double
+        get() = when {
+            groupSizeM <= 0 -> 0.0
+            groupSizeM == 1 -> if (uniqueTargetCount >= 1) 1.0 else 0.0
+            uniqueTargetCount <= 1 -> 0.0
+            else -> ((uniqueTargetCount.coerceAtMost(groupSizeM) - 1).toDouble() / (groupSizeM - 1).toDouble()).coerceIn(0.0, 1.0)
+        }
+
+    /** Fraction of cover/interleaved packets masking real group size N in [0.0, 1.0). */
+    val coverPaddingRatio: Double
+        get() = if (groupSizeM + interleavedCoverCount > 0) {
+            interleavedCoverCount.coerceAtLeast(0).toDouble() / (groupSizeM + interleavedCoverCount).toDouble()
+        } else {
+            0.0
+        }
+
     fun toMap(): Map<String, Any?> = mapOf(
         "eventId" to eventId,
         "sessionId" to sessionId,
@@ -232,20 +278,24 @@ data class GroupTelemetryEvent(
         "latencyMs" to latencyMs,
         "fanOutSkewMs" to fanOutSkewMs,
         "keyRotationConvergenceMs" to keyRotationConvergenceMs,
-        "epoch" to epoch
+        "epoch" to epoch,
+        "uniqueTargetCount" to uniqueTargetCount,
+        "interleavedCoverCount" to interleavedCoverCount,
+        "targetDecorrelationRatio" to targetDecorrelationRatio,
+        "coverPaddingRatio" to coverPaddingRatio
     )
 
     fun toCsvRow(): String {
-        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,$eventType,$groupIdPrefix,$groupSizeM,$latencyMs,$fanOutSkewMs,$keyRotationConvergenceMs,$epoch"
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,$eventType,$groupIdPrefix,$groupSizeM,$latencyMs,$fanOutSkewMs,$keyRotationConvergenceMs,$epoch,$uniqueTargetCount,$interleavedCoverCount"
     }
 
     fun toMasterCsvRow(): String {
-        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,GROUP_EVENT,$eventType,$groupIdPrefix,1,900,$latencyMs,$groupSizeM,$groupSizeM,0,true,0,0,\"\",\"\",8,0.0,0,100,false,true,\"\",$latencyMs,\"epoch=$epoch;skew=$fanOutSkewMs;rekey=$keyRotationConvergenceMs\""
+        return "$eventId,$sessionId,$timestampEpochMs,$isoTimestamp,GROUP_EVENT,$eventType,$groupIdPrefix,1,900,$latencyMs,$groupSizeM,$groupSizeM,0,true,0,0,\"\",\"\",8,0.0,0,100,false,true,\"\",$latencyMs,\"epoch=$epoch;skew=$fanOutSkewMs;rekey=$keyRotationConvergenceMs;uniq=$uniqueTargetCount;cover=$interleavedCoverCount\""
     }
 
     companion object {
         const val CSV_HEADER =
-            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,event_type,group_id_prefix,group_size_m,latency_ms,fan_out_skew_ms,key_rotation_convergence_ms,epoch"
+            "event_id,session_id,timestamp_epoch_ms,iso_timestamp,event_type,group_id_prefix,group_size_m,latency_ms,fan_out_skew_ms,key_rotation_convergence_ms,epoch,unique_target_count,interleaved_cover_count"
     }
 }
 
@@ -277,7 +327,16 @@ data class TrafficShapingStats(
     val decoyGetPercent: Double,
     val tombstonePercent: Double,
     val targetEntropyBits: Double,
-    val targetEntropyNormalized: Double
+    val targetEntropyNormalized: Double,
+    val klDivergenceNats: Double = 0.0,
+    val klDivergenceConfiguredNats: Double = 0.0,
+    val andersonDarlingA2: Double = 0.0,
+    val andersonDarlingA2Star: Double = 0.0,
+    val andersonDarlingPValue: Double = 1.0,
+    val targetNibbleEntropyBits: Double = 0.0,
+    val targetNibbleEntropyNormalized: Double = 0.0,
+    val uniqueTargetPrefixesCount: Int = 0,
+    val targetUniqueRatio: Double = 0.0
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "sampleCount" to sampleCount,
@@ -286,6 +345,11 @@ data class TrafficShapingStats(
         "coefficientOfVariation" to coefficientOfVariation,
         "kolmogorovSmirnovD" to kolmogorovSmirnovD,
         "kolmogorovSmirnovPValue" to kolmogorovSmirnovPValue,
+        "klDivergenceNats" to klDivergenceNats,
+        "klDivergenceConfiguredNats" to klDivergenceConfiguredNats,
+        "andersonDarlingA2" to andersonDarlingA2,
+        "andersonDarlingA2Star" to andersonDarlingA2Star,
+        "andersonDarlingPValue" to andersonDarlingPValue,
         "deltaTheoreticalMeanMs" to deltaTheoreticalMeanMs,
         "deltaActualMeanMs" to deltaActualMeanMs,
         "wakeUpJitterMeanMs" to wakeUpJitterMeanMs,
@@ -304,7 +368,11 @@ data class TrafficShapingStats(
         "decoyGetPercent" to decoyGetPercent,
         "tombstonePercent" to tombstonePercent,
         "targetEntropyBits" to targetEntropyBits,
-        "targetEntropyNormalized" to targetEntropyNormalized
+        "targetEntropyNormalized" to targetEntropyNormalized,
+        "targetNibbleEntropyBits" to targetNibbleEntropyBits,
+        "targetNibbleEntropyNormalized" to targetNibbleEntropyNormalized,
+        "uniqueTargetPrefixesCount" to uniqueTargetPrefixesCount,
+        "targetUniqueRatio" to targetUniqueRatio
     )
 }
 
@@ -326,7 +394,8 @@ data class DhtRetentionAndConvergenceStats(
     val preWarmingHitRatePercent: Double,
     val fastTerminationSavingsPercent: Double,
     val subnet24EntropyBits: Double,
-    val ttlDecayCurve: List<Map<String, Any>>
+    val ttlDecayCurve: List<Map<String, Any>>,
+    val replicaSurvivalByMode: List<Map<String, Any>> = emptyList()
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "putLatencyP50Ms" to putLatencyP50Ms,
@@ -343,7 +412,8 @@ data class DhtRetentionAndConvergenceStats(
         "preWarmingHitRatePercent" to preWarmingHitRatePercent,
         "fastTerminationSavingsPercent" to fastTerminationSavingsPercent,
         "subnet24EntropyBits" to subnet24EntropyBits,
-        "ttlDecayCurve" to ttlDecayCurve
+        "ttlDecayCurve" to ttlDecayCurve,
+        "replicaSurvivalByMode" to replicaSurvivalByMode
     )
 }
 
@@ -400,7 +470,11 @@ data class HardwareBatteryStats(
     val ramPssKb: Long,
     val udpTxBytesPerHour: Long,
     val udpRxBytesPerHour: Long,
-    val statsByPoissonProfile: Map<String, Map<String, Any>>
+    val statsByPoissonProfile: Map<String, Map<String, Any>>,
+    val totalEnergyDrainUah: Double = 0.0,
+    val deliveredRealMessagesCount: Int = 0,
+    val energyOverheadUahPerDeliveredMsg: Double = 0.0,
+    val energyOverheadUahPerRealSentMsg: Double = 0.0
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "batteryDrainUahPerHour" to batteryDrainUahPerHour,
@@ -408,7 +482,11 @@ data class HardwareBatteryStats(
         "ramPssKb" to ramPssKb,
         "udpTxBytesPerHour" to udpTxBytesPerHour,
         "udpRxBytesPerHour" to udpRxBytesPerHour,
-        "statsByPoissonProfile" to statsByPoissonProfile
+        "statsByPoissonProfile" to statsByPoissonProfile,
+        "totalEnergyDrainUah" to totalEnergyDrainUah,
+        "deliveredRealMessagesCount" to deliveredRealMessagesCount,
+        "energyOverheadUahPerDeliveredMsg" to energyOverheadUahPerDeliveredMsg,
+        "energyOverheadUahPerRealSentMsg" to energyOverheadUahPerRealSentMsg
     )
 }
 
@@ -534,7 +612,7 @@ data class ChunkResumptionStats(
 }
 
 /**
- * Empirical group messaging latency and key rotation convergence metrics.
+ * Empirical group messaging latency, masking efficacy, and key rotation convergence metrics.
  */
 data class GroupChatResearchStats(
     val latencyByGroupSize: Map<String, Double>,
@@ -542,7 +620,12 @@ data class GroupChatResearchStats(
     val maxFanOutDeliverySkewMs: Long,
     val avgKeyRotationConvergenceMs: Double,
     val totalGroupMessagesTracked: Int,
-    val totalKeyRotationsTracked: Int
+    val totalKeyRotationsTracked: Int,
+    val recipientDecorrelationScore: Double = 0.0,
+    val groupMaskingCoefficient: Double = 0.0,
+    val groupMaskingPercent: Double = 0.0,
+    val avgInterleavedCoverRatio: Double = 0.0,
+    val recipientCountCorrelation: Double = 0.0
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "latencyByGroupSize" to latencyByGroupSize,
@@ -550,7 +633,12 @@ data class GroupChatResearchStats(
         "maxFanOutDeliverySkewMs" to maxFanOutDeliverySkewMs,
         "avgKeyRotationConvergenceMs" to avgKeyRotationConvergenceMs,
         "totalGroupMessagesTracked" to totalGroupMessagesTracked,
-        "totalKeyRotationsTracked" to totalKeyRotationsTracked
+        "totalKeyRotationsTracked" to totalKeyRotationsTracked,
+        "recipientDecorrelationScore" to recipientDecorrelationScore,
+        "groupMaskingCoefficient" to groupMaskingCoefficient,
+        "groupMaskingPercent" to groupMaskingPercent,
+        "avgInterleavedCoverRatio" to avgInterleavedCoverRatio,
+        "recipientCountCorrelation" to recipientCountCorrelation
     )
 }
 
@@ -573,6 +661,67 @@ data class RetentionSurvivalPoint(
         "survivalRatePercent" to survivalRatePercent,
         "republishActive" to republishActive
     )
+}
+
+/**
+ * Replica survival distribution (k_alive / K) at a given horizon partitioned by [RepublishMode].
+ */
+data class ReplicaSurvivalDistributionPoint(
+    val horizonLabel: String,
+    val horizonHours: Double,
+    val republishMode: RepublishMode,
+    val totalSamples: Int,
+    val aliveSamples: Int,
+    val binarySurvivalRatePercent: Double,
+    val meanReplicaSurvivalRatio: Double,
+    val meanKAlive: Double,
+    val targetReplicationK: Double,
+    val ci95LowerRatio: Double,
+    val ci95UpperRatio: Double
+) {
+    fun toMap(): Map<String, Any> = mapOf(
+        "horizonLabel" to horizonLabel,
+        "horizonHours" to horizonHours,
+        "republishMode" to republishMode.name,
+        "totalSamples" to totalSamples,
+        "aliveSamples" to aliveSamples,
+        "binarySurvivalRatePercent" to binarySurvivalRatePercent,
+        "meanReplicaSurvivalRatio" to meanReplicaSurvivalRatio,
+        "meanKAlive" to meanKAlive,
+        "targetReplicationK" to targetReplicationK,
+        "ci95LowerRatio" to ci95LowerRatio,
+        "ci95UpperRatio" to ci95UpperRatio
+    )
+}
+
+/**
+ * Metadata describing a single part of a chunked research ZIP bundle (<= 550 KB).
+ */
+data class ChunkedBundleManifest(
+    val bundleGroupId: String,
+    val sessionId: String,
+    val chunkIndex: Int,
+    val totalChunks: Int,
+    val createdEpochMs: Long,
+    val isoCreatedAt: String,
+    val entryChecksums: Map<String, String>,
+    var chunkSha256: String = ""
+) {
+    fun toJsonString(): String {
+        val checksumsJson = entryChecksums.entries.joinToString(",") { (k, v) ->
+            "\"$k\":\"$v\""
+        }
+        return """{
+  "bundleGroupId": "$bundleGroupId",
+  "sessionId": "$sessionId",
+  "chunkIndex": $chunkIndex,
+  "totalChunks": $totalChunks,
+  "createdEpochMs": $createdEpochMs,
+  "isoCreatedAt": "$isoCreatedAt",
+  "entryChecksums": {$checksumsJson},
+  "chunkSha256": "$chunkSha256"
+}""".trimIndent()
+    }
 }
 
 object ResearchCsvSchema {
@@ -641,6 +790,11 @@ data class SessionManifest(
   "manifestSha256": "$manifestSha256"
 }""".trimIndent()
     }
+}
+
+fun computeSha256(bytes: ByteArray): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    return digest.digest(bytes).joinToString("") { "%02x".format(it) }
 }
 
 fun computeSha256(file: java.io.File): String {

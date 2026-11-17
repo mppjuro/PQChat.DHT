@@ -208,5 +208,32 @@ class HistoricalTtlSamplerTest {
         assertEquals(75, sample.batteryLevelPct)
         assertEquals(1.0 / 600.0, sample.poissonLambda, 0.00001)
         assertEquals(8, sample.replicationK)
+        assertEquals(RepublishMode.NO_REPUBLISH, sample.republishMode)
+    }
+
+    @Test
+    fun `test calibration probe triplet and RepublishMode propagation`() = runBlocking {
+        val sampler = HistoricalTtlSampler(
+            dhtClient = mockDhtClient,
+            onSampleRecorded = { recordedSamples.add(it) }
+        )
+
+        val ok = sampler.injectCalibrationProbeTriplet()
+        assertTrue("Calibration triplet injection should succeed", ok)
+        assertEquals("Should register 3 tracked calibration packets", 3, sampler.getTrackedCount())
+
+        val passTime = System.currentTimeMillis() + 15 * 60 * 1000L
+        val count = sampler.executeSamplingPass(passTime, "sess_triplet")
+        assertEquals(3, count)
+        val modes = recordedSamples.map { it.republishMode }.toSet()
+        assertEquals(setOf(RepublishMode.NO_REPUBLISH, RepublishMode.OWN_REPUBLISH, RepublishMode.CROWD_REPUBLISH), modes)
+
+        val extraTarget = CryptoUtils.secureRandomBytes(20)
+        mockDhtClient.putMutable(extraTarget, ByteArray(900), 1L, null, ByteArray(32))
+        sampler.trackPacket(extraTarget, initialPutEpochMs = 1_000_000L, republishMode = RepublishMode.OWN_REPUBLISH)
+        sampler.updateRepublishMode(extraTarget, RepublishMode.CROWD_REPUBLISH)
+        sampler.executeSamplingPass(1_000_000L + 3_600_000L, "sess_triplet")
+        assertEquals(RepublishMode.CROWD_REPUBLISH, recordedSamples.last().republishMode)
+        assertEquals(1.0, recordedSamples.last().replicaSurvivalRatio, 0.001)
     }
 }

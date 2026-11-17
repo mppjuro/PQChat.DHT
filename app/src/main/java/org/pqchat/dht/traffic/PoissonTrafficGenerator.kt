@@ -106,9 +106,14 @@ class PoissonTrafficGenerator(
             )
             val isDummy = outboundFrame.isDummyCover
             val rttMs = System.currentTimeMillis() - tStart
+            val telemetryRole = when {
+                isDummy -> org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT
+                outboundFrame.packetClass == PacketClass.GROUP_MESSAGE -> org.pqchat.dht.research.PacketRole.GROUP_FAN_OUT
+                else -> org.pqchat.dht.research.PacketRole.FIRST_SEND
+            }
             try {
                 researchTelemetryProvider?.invoke()?.recordPacketEvent(
-                    role = if (isDummy) org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT else org.pqchat.dht.research.PacketRole.FIRST_SEND,
+                    role = telemetryRole,
                     target = outboundFrame.target,
                     seqNum = outboundFrame.seqNum.toLong(),
                     payloadBytes = outboundFrame.payload.size,
@@ -308,11 +313,30 @@ class PoissonTrafficGenerator(
         scope.launch {
             while (isRunning) {
                 val delayMs = computeNextIntervalMs()
+                val sleepStartMs = System.currentTimeMillis()
                 delay(delayMs)
                 if (!isRunning) break
+                val actualDelayMs = (System.currentTimeMillis() - sleepStartMs).coerceAtLeast(0L)
+                val jitterMs = (actualDelayMs - delayMs).coerceAtLeast(0L)
 
                 try {
-                    processCoverTrafficTick(delayMs)
+                    val event = processCoverTrafficTick(delayMs)
+                    val telemetry = researchTelemetryProvider?.invoke()
+                    if (telemetry?.isEnabled == true) {
+                        val role = when {
+                            event.isFirstSend -> org.pqchat.dht.research.PacketRole.FIRST_SEND
+                            event.isAck -> org.pqchat.dht.research.PacketRole.COVER_ACK_SENT
+                            event.isBlindRepublish -> org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH
+                            else -> org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT
+                        }
+                        telemetry.recordTrafficInterval(
+                            role = role,
+                            scheduledDelayMs = delayMs,
+                            actualDelayMs = actualDelayMs,
+                            wakeUpJitterMs = jitterMs,
+                            poissonLambda = lambda
+                        )
+                    }
                 } catch (_: Exception) {}
             }
         }

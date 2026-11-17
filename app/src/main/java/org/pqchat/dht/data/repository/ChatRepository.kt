@@ -6885,6 +6885,9 @@ class ChatRepository(
 
         val (msgId, cachedFrames) = dispatchPair ?: return@withContext (immediateReturn ?: false)
 
+        val fanOutStartMs = System.currentTimeMillis()
+        var firstCompletionMs = 0L
+        var lastCompletionMs = 0L
         var overallSuccess = false
         withContext(NonCancellable) {
             if (isFastTestMode) {
@@ -6892,10 +6895,22 @@ class ChatRepository(
                     cachedFrames.mapIndexed { idx, cached ->
                         async {
                             if (idx > 0) kotlinx.coroutines.delay(idx * 40L)
+                            val putStart = System.currentTimeMillis()
                             val success = putGroupFrameWithRetries(
                                 target = cached.target,
                                 frame = cached.frame,
                                 signingKey = cached.signingKey
+                            )
+                            val putRtt = System.currentTimeMillis() - putStart
+                            researchTelemetry?.recordPacketEvent(
+                                role = org.pqchat.dht.research.PacketRole.GROUP_FAN_OUT,
+                                target = cached.target,
+                                payloadBytes = cached.frame.size,
+                                rttMs = putRtt,
+                                nodesQueried = dhtLeafNode.lastNodesQueried,
+                                nodesResponded = dhtLeafNode.lastNodesResponded,
+                                lookupHops = dhtLeafNode.lastLookupHops,
+                                success = success
                             )
                             if (success) {
                                 decoyTargetPool.registerPopulatedTarget(cached.target)
@@ -6905,16 +6920,32 @@ class ChatRepository(
                     }.awaitAll()
                 }
                 overallSuccess = results.any { it }
+                lastCompletionMs = System.currentTimeMillis()
+                firstCompletionMs = fanOutStartMs
             } else {
                 for ((idx, cached) in cachedFrames.withIndex()) {
                     if (idx > 0) {
                         val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
                         kotlinx.coroutines.delay(jitterMs)
                     }
+                    val putStart = System.currentTimeMillis()
                     val success = putGroupFrameWithRetries(
                         target = cached.target,
                         frame = cached.frame,
                         signingKey = cached.signingKey
+                    )
+                    val doneMs = System.currentTimeMillis()
+                    if (firstCompletionMs == 0L) firstCompletionMs = doneMs
+                    lastCompletionMs = doneMs
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.GROUP_FAN_OUT,
+                        target = cached.target,
+                        payloadBytes = cached.frame.size,
+                        rttMs = doneMs - putStart,
+                        nodesQueried = dhtLeafNode.lastNodesQueried,
+                        nodesResponded = dhtLeafNode.lastNodesResponded,
+                        lookupHops = dhtLeafNode.lastLookupHops,
+                        success = success
                     )
                     if (success) {
                         decoyTargetPool.registerPopulatedTarget(cached.target)
@@ -6926,6 +6957,21 @@ class ChatRepository(
 
         if (overallSuccess) {
             messageDao.updateStatus(msgId, "SENT_DHT")
+            if (researchTelemetry?.isEnabled == true) {
+                val uniqueTargets = cachedFrames.map { CryptoUtils.toHex(it.target).take(8) }.distinct().size
+                val totalLatency = (lastCompletionMs - fanOutStartMs).coerceAtLeast(1L)
+                val skew = if (cachedFrames.size > 1 && lastCompletionMs >= firstCompletionMs) {
+                    lastCompletionMs - firstCompletionMs
+                } else 0L
+                researchTelemetry?.recordGroupMessageDelivery(
+                    groupId = uuidStringToBytes(groupId),
+                    groupSizeM = cachedFrames.size,
+                    latencyMs = totalLatency,
+                    fanOutSkewMs = skew,
+                    uniqueTargetCount = uniqueTargets,
+                    interleavedCoverCount = 0
+                )
+            }
         }
         overallSuccess
     }

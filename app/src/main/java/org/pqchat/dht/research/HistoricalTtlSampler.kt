@@ -26,8 +26,8 @@ class HistoricalTtlSampler(
     private val networkTypeProvider: (() -> String)? = null
 ) {
     companion object {
-        const val DEFAULT_PROBE_INTERVAL_MS = 15 * 60 * 1000L // 15 minut
-        const val MAX_TRACKED_AGE_MS = 72 * 60 * 60 * 1000L   // 72 godziny
+        const val DEFAULT_PROBE_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes
+        const val MAX_TRACKED_AGE_MS = 72 * 60 * 60 * 1000L   // 72 hours
     }
 
     data class TrackedPacket(
@@ -37,7 +37,8 @@ class HistoricalTtlSampler(
         val republishActive: Boolean,
         var lastSeenAliveMs: Long = initialPutEpochMs,
         var isExpired: Boolean = false,
-        var consecutiveMisses: Int = 0
+        var consecutiveMisses: Int = 0,
+        var republishMode: RepublishMode = if (republishActive) RepublishMode.OWN_REPUBLISH else RepublishMode.NO_REPUBLISH
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -59,68 +60,85 @@ class HistoricalTtlSampler(
     fun trackPacket(
         target: ByteArray,
         initialPutEpochMs: Long = System.currentTimeMillis(),
-        republishActive: Boolean = true
+        republishActive: Boolean = true,
+        republishMode: RepublishMode = if (republishActive) RepublishMode.OWN_REPUBLISH else RepublishMode.NO_REPUBLISH
     ) {
         val prefix = CryptoUtils.toHex(target).take(8)
         val tracked = TrackedPacket(
             target = target.copyOf(),
             targetPrefix = prefix,
             initialPutEpochMs = initialPutEpochMs,
-            republishActive = republishActive,
-            lastSeenAliveMs = initialPutEpochMs
+            republishActive = republishMode != RepublishMode.NO_REPUBLISH,
+            lastSeenAliveMs = initialPutEpochMs,
+            republishMode = republishMode
         )
         trackedPackets[prefix] = tracked
     }
 
     /**
+     * Updates the [RepublishMode] for an already tracked target (e.g., when crowd-relayed).
+     */
+    fun updateRepublishMode(target: ByteArray, mode: RepublishMode) {
+        val prefix = CryptoUtils.toHex(target).take(8)
+        trackedPackets[prefix]?.let { existing ->
+            existing.republishMode = mode
+        }
+    }
+
+    /**
      * Injects a synthetic calibration probe pair into the DHT to measure baseline node churn:
-     * - One packet configured with active republish
-     * - One packet without republish (decay control)
+     * - One packet without republish (NO_REPUBLISH decay control)
+     * - One packet configured with active own republish (OWN_REPUBLISH)
      */
     suspend fun injectCalibrationProbePair(): Boolean = withContext(Dispatchers.IO) {
         try {
             val now = System.currentTimeMillis()
-
-            // 1. Packet without republish (unrefreshed decay baseline)
-            val seedDecay = CryptoUtils.secureRandomBytes(32)
-            val keyPairDecay = Ed25519Engine.generateKeyPairFromSeed(seedDecay)
-            val targetDecay = Ed25519Engine.computeTarget(keyPairDecay.publicKey)
-            val payloadDecay = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
-
-            val okDecay = dhtClient.putMutable(
-                target = targetDecay,
-                v = payloadDecay,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = seedDecay,
-                skipLocalStore = false
-            )
-            if (okDecay) {
-                trackPacket(targetDecay, initialPutEpochMs = now, republishActive = false)
-            }
-
-            // 2. Packet with republish active
-            val seedRepub = CryptoUtils.secureRandomBytes(32)
-            val keyPairRepub = Ed25519Engine.generateKeyPairFromSeed(seedRepub)
-            val targetRepub = Ed25519Engine.computeTarget(keyPairRepub.publicKey)
-            val payloadRepub = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
-
-            val okRepub = dhtClient.putMutable(
-                target = targetRepub,
-                v = payloadRepub,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = seedRepub,
-                skipLocalStore = false
-            )
-            if (okRepub) {
-                trackPacket(targetRepub, initialPutEpochMs = now, republishActive = true)
-            }
-
+            val okDecay = injectCalibrationProbe(now, RepublishMode.NO_REPUBLISH)
+            val okRepub = injectCalibrationProbe(now, RepublishMode.OWN_REPUBLISH)
             return@withContext okDecay || okRepub
         } catch (_: Exception) {
             return@withContext false
         }
+    }
+
+    /**
+     * Injects a 3-mode calibration probe triplet into the DHT comparing
+     * NO_REPUBLISH, OWN_REPUBLISH, and CROWD_REPUBLISH retention curves.
+     */
+    suspend fun injectCalibrationProbeTriplet(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val now = System.currentTimeMillis()
+            val okDecay = injectCalibrationProbe(now, RepublishMode.NO_REPUBLISH)
+            val okOwn = injectCalibrationProbe(now, RepublishMode.OWN_REPUBLISH)
+            val okCrowd = injectCalibrationProbe(now, RepublishMode.CROWD_REPUBLISH)
+            return@withContext okDecay || okOwn || okCrowd
+        } catch (_: Exception) {
+            return@withContext false
+        }
+    }
+
+    private suspend fun injectCalibrationProbe(now: Long, mode: RepublishMode): Boolean {
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+        val ok = dhtClient.putMutable(
+            target = target,
+            v = payload,
+            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+            salt = null,
+            sk = seed,
+            skipLocalStore = false
+        )
+        if (ok) {
+            trackPacket(
+                target = target,
+                initialPutEpochMs = now,
+                republishActive = mode != RepublishMode.NO_REPUBLISH,
+                republishMode = mode
+            )
+        }
+        return ok
     }
 
     /**
@@ -202,7 +220,8 @@ class HistoricalTtlSampler(
                 replicationK = dhtClient.replicationK,
                 poissonLambda = resourceProfiler?.getPoissonLambda() ?: (1.0 / 480.0),
                 batteryCurrentUa = resourceProfiler?.queryBatteryCurrentNowUa() ?: 0L,
-                batteryLevelPct = resourceProfiler?.queryBatteryLevelPercent() ?: 100
+                batteryLevelPct = resourceProfiler?.queryBatteryLevelPercent() ?: 100,
+                republishMode = item.republishMode
             )
 
             onSampleRecorded(sample)

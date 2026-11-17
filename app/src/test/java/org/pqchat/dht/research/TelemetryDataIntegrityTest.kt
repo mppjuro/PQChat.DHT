@@ -229,4 +229,35 @@ class TelemetryDataIntegrityTest {
         }
         assertTrue("Decompressed Base64 ZIP must contain entries", entryCount >= 5)
     }
+
+    @Test
+    fun `test new thesis metrics stay inert when opt-in disabled and chunked bundles leak zero PII`() = runBlocking {
+        assertFalse(settingsManager.isAnonymousStatsEnabled.value)
+        val disabledMgr = ResearchTelemetryManager(
+            settingsManager = settingsManager,
+            dhtClient = mockDhtClient,
+            baseDir = File(tempDir, "disabled"),
+            maxCsvFileBytes = 2000L,
+            maxChunkZipBytes = 10_000L
+        )
+        val secretTarget = CryptoUtils.secureRandomBytes(20)
+        disabledMgr.recordGroupMessageDelivery(secretTarget, 5, 100L, 50L, uniqueTargetCount = 5, interleavedCoverCount = 3)
+        disabledMgr.recordTtlSample(
+            TtlSampleEvent(
+                sessionId = disabledMgr.sessionId,
+                targetPrefix = "deadbeef",
+                initialPutEpochMs = 1000L,
+                elapsedMinutes = 15.0,
+                elapsedHours = 0.25,
+                republishActive = true,
+                isAlive = true,
+                nodesResponded = 8,
+                republishMode = RepublishMode.CROWD_REPUBLISH
+            )
+        )
+        assertEquals(0, disabledMgr.ttlSamplesCount.value)
+        assertEquals(0, disabledMgr.computeGroupChatStats().totalGroupMessagesTracked)
+        assertTrue(disabledMgr.getRotatedCsvFiles().isEmpty())
+        disabledMgr.stop()
+    }
 }

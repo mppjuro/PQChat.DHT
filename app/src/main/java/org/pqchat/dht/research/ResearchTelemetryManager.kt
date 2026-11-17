@@ -45,8 +45,28 @@ class ResearchTelemetryManager(
     val firebaseSync: FirebaseResearchSync = FirebaseResearchSync(context),
     val resourceProfiler: org.pqchat.dht.debug.AndroidResourceProfiler? = null,
     val baseDir: File? = null,
-    customTtlSampler: HistoricalTtlSampler? = null
+    customTtlSampler: HistoricalTtlSampler? = null,
+    private val maxCsvFileBytes: Long = DEFAULT_MAX_CSV_FILE_BYTES,
+    private val maxChunkZipBytes: Long = DEFAULT_MAX_CHUNK_ZIP_BYTES,
+    private val clockProvider: () -> Long = { System.currentTimeMillis() }
 ) {
+    companion object {
+        const val DEFAULT_MAX_CSV_FILE_BYTES = 1_500_000L
+        const val DEFAULT_MAX_CHUNK_ZIP_BYTES = 550_000L
+
+        private val STUDENT_T_95_TABLE = doubleArrayOf(
+            12.7062, 4.3027, 3.1824, 2.7764, 2.5706, 2.4469, 2.3646, 2.3060, 2.2622, 2.2281,
+            2.2010, 2.1788, 2.1604, 2.1448, 2.1314, 2.1199, 2.1098, 2.1009, 2.0930, 2.0860,
+            2.0796, 2.0739, 2.0687, 2.0639, 2.0595, 2.0555, 2.0518, 2.0484, 2.0452, 2.0423
+        )
+
+        fun studentTCritical95(degreesOfFreedom: Int): Double {
+            if (degreesOfFreedom <= 0) return 1.959964
+            if (degreesOfFreedom <= STUDENT_T_95_TABLE.size) return STUDENT_T_95_TABLE[degreesOfFreedom - 1]
+            return 1.959964
+        }
+    }
+
     val sessionId: String = UUID.randomUUID().toString().take(12)
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -79,11 +99,13 @@ class ResearchTelemetryManager(
     private val aliveTtlCount = AtomicInteger(0)
     private val expiredTtlCount = AtomicInteger(0)
     private val deliveredAckCount = AtomicInteger(0)
+    private val directDeliveredWithoutTrackerCount = AtomicInteger(0)
     private val totalDeliveredLatencyMs = AtomicLong(0L)
 
     // Traffic shaping & anonymity tracking
     private val lastOutboundPacketTimestampMs = AtomicLong(0L)
     private val outboundIntervalsMs = ConcurrentLinkedQueue<Long>()
+    private val configuredLambdaSamples = ConcurrentLinkedQueue<Double>()
     private val realMsgCount = AtomicInteger(0)
     private val coverDummyCount = AtomicInteger(0)
     private val blindRepublishCount = AtomicInteger(0)
@@ -91,9 +113,12 @@ class ResearchTelemetryManager(
     private val tombstoneCount = AtomicInteger(0)
     private val totalOutboundPackets = AtomicInteger(0)
 
-    // Target ID prefix frequency distribution for Shannon entropy (256 bins for byte 0)
+    // Target ID prefix frequency distribution for Shannon entropy (256 bins for byte 0 + 16 hex nibble bins)
     private val targetPrefixByteCounts = java.util.concurrent.atomic.AtomicIntegerArray(256)
     private val totalTargetPrefixSamples = AtomicInteger(0)
+    private val targetNibbleCounts = java.util.concurrent.atomic.AtomicIntegerArray(16)
+    private val totalTargetNibbleSamples = AtomicInteger(0)
+    private val uniqueTargetPrefixes = ConcurrentHashMap.newKeySet<String>()
 
     // Ed25519 signature & response validation stats
     private val totalEd25519Queries = AtomicInteger(0)
@@ -108,15 +133,29 @@ class ResearchTelemetryManager(
     private val chunkTransfersResumed = AtomicInteger(0)
     private val chunkTransfersSuccessful = AtomicInteger(0)
 
-    // Group chat metrics
+    // Group chat & masking metrics
+    private data class GroupMaskingRecord(
+        val groupSizeM: Int,
+        val uniqueTargetCount: Int,
+        val interleavedCoverCount: Int,
+        val fanOutSkewMs: Long,
+        val decorrelationScore: Double,
+        val coverPaddingRatio: Double,
+        val maskingCoefficient: Double
+    )
+
     private val groupLatencyBySize = ConcurrentHashMap<Int, ConcurrentLinkedQueue<Long>>()
     private val groupDeliverySkews = ConcurrentLinkedQueue<Long>()
+    private val groupMaskingRecords = ConcurrentLinkedQueue<GroupMaskingRecord>()
     private val keyRotationConvergenceList = ConcurrentLinkedQueue<Long>()
     private val totalGroupMessagesTracked = AtomicInteger(0)
     private val totalKeyRotationsTracked = AtomicInteger(0)
 
     // Historical retention samples cache for survival curves
     private val ttlSamplesHistory = ConcurrentLinkedQueue<TtlSampleEvent>()
+
+    // Hardware battery current samples fallback when AndroidResourceProfiler has < 2 snapshots
+    private val packetBatteryCurrentSamples = ConcurrentLinkedQueue<Pair<Long, Long>>()
 
     // Adversarial & Anomaly Counters
     private val badEd25519SigCount = AtomicInteger(0)
@@ -128,6 +167,7 @@ class ResearchTelemetryManager(
 
     // Traffic interval scheduling and wake-up jitter
     private val theoreticalDelaysMs = ConcurrentLinkedQueue<Long>()
+    private val actualTrafficDelaysMs = ConcurrentLinkedQueue<Long>()
     private val wakeUpJittersMs = ConcurrentLinkedQueue<Long>()
     private val packetRoleCounts = ConcurrentHashMap<String, AtomicInteger>()
 
@@ -179,6 +219,7 @@ class ResearchTelemetryManager(
     val adversarialEventsCsvFile: File by lazy { File(telemetryDir, "research_adversarial_events.csv") }
 
     private val csvLock = Any()
+    private val csvRotationSequence = AtomicInteger(0)
 
     val ttlSampler: HistoricalTtlSampler? = customTtlSampler ?: if (dhtClient != null) {
         HistoricalTtlSampler(
@@ -216,8 +257,8 @@ class ResearchTelemetryManager(
                 val isProfiling = resourceProfiler?.isProfiling?.value == true
                 if (isEnabled && firebaseSync.isSafeToSync(isProfiling) && firebaseSync.isFirebaseConfigured()) {
                     try {
-                        val (deviceInfo, metrics) = computeSessionPayload()
-                        firebaseSync.syncResearchSession(sessionId, deviceInfo, metrics, isManual = false)
+                        val payloads = computeChunkedSessionPayloads()
+                        firebaseSync.syncResearchSessionChunks(sessionId, payloads, isManual = false)
                     } catch (_: Exception) {}
                 }
             }
@@ -294,12 +335,13 @@ class ResearchTelemetryManager(
         poissonLambda: Double? = null,
         batteryCurrentUa: Long? = null,
         batteryLevelPct: Int? = null,
-        errorCode: String? = null
+        errorCode: String? = null,
+        timestampEpochMs: Long = clockProvider()
     ) {
         if (!isEnabled) return
 
         val targetPrefix = CryptoUtils.toHex(target).take(8)
-        val now = System.currentTimeMillis()
+        val now = timestampEpochMs
 
         if (rttMs > 0L && rttSamples.size < 2000) {
             rttSamples.add(rttMs)
@@ -311,6 +353,13 @@ class ResearchTelemetryManager(
         val resolvedPoissonLambda = poissonLambda ?: (resourceProfiler?.getPoissonLambda() ?: (1.0 / 480.0))
         val resolvedBatteryCurrentUa = batteryCurrentUa ?: (resourceProfiler?.queryBatteryCurrentNowUa() ?: 0L)
         val resolvedBatteryLevelPct = batteryLevelPct ?: (resourceProfiler?.queryBatteryLevelPercent() ?: 100)
+
+        if (resolvedPoissonLambda > 0.0 && configuredLambdaSamples.size < 5000) {
+            configuredLambdaSamples.add(resolvedPoissonLambda)
+        }
+        if (resolvedBatteryCurrentUa != 0L && packetBatteryCurrentSamples.size < 5000) {
+            packetBatteryCurrentSamples.add(now to resolvedBatteryCurrentUa)
+        }
 
         // Track distribution of all observed packet roles
         packetRoleCounts.computeIfAbsent(role.name) { AtomicInteger(0) }.incrementAndGet()
@@ -340,19 +389,29 @@ class ResearchTelemetryManager(
                 else -> {}
             }
             val prevOutbound = lastOutboundPacketTimestampMs.getAndSet(now)
-            if (prevOutbound > 0L) {
-                val interval = (now - prevOutbound).coerceAtLeast(0L)
-                if (outboundIntervalsMs.size < 5000) {
+            if (prevOutbound > 0L && now >= prevOutbound) {
+                val interval = now - prevOutbound
+                if (outboundIntervalsMs.size < 10_000) {
                     outboundIntervalsMs.add(interval)
                 }
             }
         }
 
-        // 2. Shannon Entropy of Target Prefixes (evaluated on first byte: 256 states)
+        // 2. Shannon Entropy of Target Prefixes (256 bins for byte 0 + 16 hex nibble bins)
         if (target.isNotEmpty()) {
             val firstByte = target[0].toInt() and 0xFF
             targetPrefixByteCounts.incrementAndGet(firstByte)
             totalTargetPrefixSamples.incrementAndGet()
+            if (uniqueTargetPrefixes.size < 50_000) {
+                uniqueTargetPrefixes.add(targetPrefix)
+            }
+            for (ch in targetPrefix) {
+                val nibble = ch.digitToIntOrNull(16)
+                if (nibble != null) {
+                    targetNibbleCounts.incrementAndGet(nibble)
+                    totalTargetNibbleSamples.incrementAndGet()
+                }
+            }
         }
 
         // 3. Node query tracking & Ed25519 signature validation
@@ -399,7 +458,12 @@ class ResearchTelemetryManager(
             PacketRole.FIRST_SEND -> {
                 _firstSendCount.value += 1
                 inFlightRepublishes[targetPrefix] = InFlightTracker(targetPrefix, now)
-                ttlSampler?.trackPacket(target, initialPutEpochMs = now, republishActive = true)
+                ttlSampler?.trackPacket(
+                    target = target,
+                    initialPutEpochMs = now,
+                    republishActive = true,
+                    republishMode = RepublishMode.OWN_REPUBLISH
+                )
             }
             PacketRole.OWN_REPUBLISH -> {
                 _ownRepublishCount.value += 1
@@ -413,7 +477,17 @@ class ResearchTelemetryManager(
             }
             PacketRole.CROWD_REPUBLISH -> {
                 _crowdRepublishCount.value += 1
-                inFlightRepublishes[targetPrefix]?.crowdRelayed = true
+                val tracker = inFlightRepublishes[targetPrefix]
+                if (tracker != null) {
+                    tracker.crowdRelayed = true
+                } else {
+                    ttlSampler?.trackPacket(
+                        target = target,
+                        initialPutEpochMs = now,
+                        republishActive = true,
+                        republishMode = RepublishMode.CROWD_REPUBLISH
+                    )
+                }
             }
             PacketRole.PACKET_RECEIVED -> {
                 _packetsReceivedCount.value += 1
@@ -421,8 +495,8 @@ class ResearchTelemetryManager(
             else -> {}
         }
 
-        // Append to local CSV files immediately
-        appendPacketEventCsv(event)
+        // Append to local CSV files immediately with automatic rotation
+        appendCsvRow(packetEventsCsvFile, PacketTelemetryEvent.CSV_HEADER, event.toCsvRow(), alsoMaster = true, masterRow = event.toMasterCsvRow())
     }
 
     /**
@@ -459,14 +533,16 @@ class ResearchTelemetryManager(
     }
 
     /**
-     * Records group chat message fan-out delivery latency and skew.
+     * Records group chat message fan-out delivery latency, skew, and recipient masking properties.
      */
     fun recordGroupMessageDelivery(
         groupId: ByteArray,
         groupSizeM: Int,
         latencyMs: Long,
         fanOutSkewMs: Long = 0L,
-        epoch: Long = 1L
+        epoch: Long = 1L,
+        uniqueTargetCount: Int = groupSizeM,
+        interleavedCoverCount: Int = 0
     ) {
         if (!isEnabled) return
         totalGroupMessagesTracked.incrementAndGet()
@@ -477,14 +553,39 @@ class ResearchTelemetryManager(
         val prefix = CryptoUtils.toHex(groupId).take(8)
         val event = GroupTelemetryEvent(
             sessionId = sessionId,
+            timestampEpochMs = clockProvider(),
             eventType = if (fanOutSkewMs > 0L) "FAN_OUT_SKEW" else "BROADCAST",
             groupIdPrefix = prefix,
             groupSizeM = groupSizeM,
             latencyMs = latencyMs,
             fanOutSkewMs = fanOutSkewMs,
-            epoch = epoch
+            epoch = epoch,
+            uniqueTargetCount = uniqueTargetCount,
+            interleavedCoverCount = interleavedCoverCount
         )
-        appendGroupEventCsv(event)
+        val decorrelation = event.targetDecorrelationRatio
+        val coverRatio = event.coverPaddingRatio
+        val temporalDispersion = if (groupSizeM <= 1) {
+            1.0
+        } else {
+            1.0 - kotlin.math.exp(-fanOutSkewMs.coerceAtLeast(0L).toDouble() / 1000.0)
+        }
+        val burstMasking = maxOf(coverRatio, temporalDispersion)
+        val maskingCoeff = (decorrelation * (0.5 + 0.5 * burstMasking)).coerceIn(0.0, 1.0)
+        if (groupMaskingRecords.size < 5000) {
+            groupMaskingRecords.add(
+                GroupMaskingRecord(
+                    groupSizeM = groupSizeM,
+                    uniqueTargetCount = uniqueTargetCount,
+                    interleavedCoverCount = interleavedCoverCount,
+                    fanOutSkewMs = fanOutSkewMs,
+                    decorrelationScore = decorrelation,
+                    coverPaddingRatio = coverRatio,
+                    maskingCoefficient = maskingCoeff
+                )
+            )
+        }
+        appendCsvRow(groupEventsCsvFile, GroupTelemetryEvent.CSV_HEADER, event.toCsvRow(), alsoMaster = true, masterRow = event.toMasterCsvRow())
     }
 
     /**
@@ -502,6 +603,7 @@ class ResearchTelemetryManager(
         val prefix = CryptoUtils.toHex(groupId).take(8)
         val event = GroupTelemetryEvent(
             sessionId = sessionId,
+            timestampEpochMs = clockProvider(),
             eventType = "KEY_ROTATION",
             groupIdPrefix = prefix,
             groupSizeM = groupSizeM,
@@ -509,7 +611,7 @@ class ResearchTelemetryManager(
             keyRotationConvergenceMs = convergenceMs,
             epoch = epoch
         )
-        appendGroupEventCsv(event)
+        appendCsvRow(groupEventsCsvFile, GroupTelemetryEvent.CSV_HEADER, event.toCsvRow(), alsoMaster = true, masterRow = event.toMasterCsvRow())
     }
 
     /**
@@ -517,11 +619,18 @@ class ResearchTelemetryManager(
      */
     fun recordDeliveryAck(
         target: ByteArray,
-        deliveredEpochMs: Long = System.currentTimeMillis()
+        deliveredEpochMs: Long = clockProvider()
     ) {
-        if (!isEnabled) return
+        recordDeliveryAckInternal(target, deliveredEpochMs)
+    }
+
+    private fun recordDeliveryAckInternal(
+        target: ByteArray,
+        deliveredEpochMs: Long = clockProvider()
+    ): Boolean {
+        if (!isEnabled) return false
         val prefix = CryptoUtils.toHex(target).take(8)
-        val tracker = inFlightRepublishes.remove(prefix) ?: return
+        val tracker = inFlightRepublishes.remove(prefix) ?: return false
 
         val latency = (deliveredEpochMs - tracker.initialSentMs).coerceAtLeast(0L)
         deliveredAckCount.incrementAndGet()
@@ -540,7 +649,8 @@ class ResearchTelemetryManager(
             finalStatus = "DELIVERED"
         )
 
-        appendRepublishSummaryCsv(summary)
+        appendCsvRow(republishSummaryCsvFile, RepublishAnalysisSummary.CSV_HEADER, summary.toCsvRow(), alsoMaster = true, masterRow = summary.toMasterCsvRow())
+        return true
     }
 
     fun recordTtlSample(sample: TtlSampleEvent) {
@@ -563,10 +673,10 @@ class ResearchTelemetryManager(
         } else {
             expiredTtlCount.incrementAndGet()
         }
-        if (ttlSamplesHistory.size < 5000) {
+        if (ttlSamplesHistory.size < 10_000) {
             ttlSamplesHistory.add(enriched)
         }
-        appendTtlSampleCsv(enriched)
+        appendCsvRow(ttlSamplesCsvFile, TtlSampleEvent.CSV_HEADER, enriched.toCsvRow(), alsoMaster = true, masterRow = enriched.toMasterCsvRow())
     }
 
     private fun recordTtlSampleInternal(sample: TtlSampleEvent) {
@@ -587,9 +697,16 @@ class ResearchTelemetryManager(
     ) {
         if (!isEnabled) return
         theoreticalDelaysMs.add(scheduledDelayMs)
+        if (actualDelayMs >= 0L && actualTrafficDelaysMs.size < 10_000) {
+            actualTrafficDelaysMs.add(actualDelayMs)
+        }
+        if (poissonLambda > 0.0 && configuredLambdaSamples.size < 5000) {
+            configuredLambdaSamples.add(poissonLambda)
+        }
         wakeUpJittersMs.add(wakeUpJitterMs)
         val event = TrafficIntervalEvent(
             sessionId = sessionId,
+            timestampEpochMs = clockProvider(),
             role = role,
             scheduledDelayMs = scheduledDelayMs,
             actualDelayMs = actualDelayMs,
@@ -598,7 +715,7 @@ class ResearchTelemetryManager(
             pollingState = pollingState,
             isScreenOn = isScreenOn
         )
-        appendTrafficIntervalCsv(event)
+        appendCsvRow(trafficIntervalsCsvFile, TrafficIntervalEvent.CSV_HEADER, event.toCsvRow())
     }
 
     /**
@@ -640,6 +757,7 @@ class ResearchTelemetryManager(
 
         val event = DhtConvergenceEvent(
             sessionId = sessionId,
+            timestampEpochMs = clockProvider(),
             operation = operation,
             targetPrefix = targetPrefix,
             rttMs = rttMs,
@@ -650,7 +768,7 @@ class ResearchTelemetryManager(
             fastTerminated = fastTerminated,
             uniqueSubnets24Count = subnets24.distinct().size
         )
-        appendDhtConvergenceCsv(event)
+        appendCsvRow(kademliaConvergenceCsvFile, DhtConvergenceEvent.CSV_HEADER, event.toCsvRow())
     }
 
     /**
@@ -665,7 +783,9 @@ class ResearchTelemetryManager(
         if (!isEnabled) return
         deliveryLatencyByLifecycleMap.computeIfAbsent(lifecycleState) { ConcurrentLinkedQueue() }.add(latencyMs)
         deliveryLatencyByTransportMap.computeIfAbsent(networkType) { ConcurrentLinkedQueue() }.add(latencyMs)
-        recordDeliveryAck(target)
+        if (!recordDeliveryAckInternal(target)) {
+            directDeliveredWithoutTrackerCount.incrementAndGet()
+        }
     }
 
     /**
@@ -723,72 +843,72 @@ class ResearchTelemetryManager(
         val targetPrefix = if (target != null && target.isNotEmpty()) CryptoUtils.toHex(target).take(8) else "00000000"
         val event = AdversarialTelemetryEvent(
             sessionId = sessionId,
+            timestampEpochMs = clockProvider(),
             anomalyType = anomalyType,
             targetPrefix = targetPrefix,
             details = details,
             mitigated = mitigated
         )
-        appendAdversarialEventCsv(event)
+        appendCsvRow(adversarialEventsCsvFile, AdversarialTelemetryEvent.CSV_HEADER, event.toCsvRow())
     }
 
-    private fun appendPacketEventCsv(event: PacketTelemetryEvent) {
+    private fun rotateCsvIfNeededLocked(file: File, header: String, incomingRowBytes: Int) {
+        if (!file.exists()) {
+            file.writeText(header + "\n", Charsets.UTF_8)
+            return
+        }
+        val minHeaderSize = header.length + 2
+        if (maxCsvFileBytes > minHeaderSize && file.length() > minHeaderSize &&
+            file.length() + incomingRowBytes >= maxCsvFileBytes
+        ) {
+            val baseName = file.nameWithoutExtension
+            val seq = csvRotationSequence.incrementAndGet()
+            val rotatedName = String.format(java.util.Locale.US, "%s.rot_%04d_%d.csv", baseName, seq, clockProvider())
+            val rotatedFile = File(telemetryDir, rotatedName)
+            if (file.renameTo(rotatedFile)) {
+                file.writeText(header + "\n", Charsets.UTF_8)
+            }
+        }
+    }
+
+    private fun appendCsvRow(
+        file: File,
+        header: String,
+        row: String,
+        alsoMaster: Boolean = false,
+        masterRow: String? = null
+    ) {
         synchronized(csvLock) {
             try {
-                PrintWriter(FileWriter(packetEventsCsvFile, true)).use { it.println(event.toCsvRow()) }
-                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(event.toMasterCsvRow()) }
+                rotateCsvIfNeededLocked(file, header, row.length + 1)
+                PrintWriter(FileWriter(file, true)).use { it.println(row) }
+                if (alsoMaster && masterRow != null) {
+                    rotateCsvIfNeededLocked(masterCsvFile, ResearchCsvSchema.MASTER_CSV_HEADER, masterRow.length + 1)
+                    PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(masterRow) }
+                }
             } catch (_: Exception) {}
         }
     }
 
-    private fun appendGroupEventCsv(event: GroupTelemetryEvent) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(groupEventsCsvFile, true)).use { it.println(event.toCsvRow()) }
-                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(event.toMasterCsvRow()) }
-            } catch (_: Exception) {}
-        }
+    fun getRotatedCsvFiles(): List<File> {
+        return telemetryDir.listFiles { f ->
+            f.isFile && f.name.contains(".rot_") && f.name.endsWith(".csv")
+        }?.sortedBy { it.name }.orEmpty()
     }
 
-    private fun appendTtlSampleCsv(sample: TtlSampleEvent) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(ttlSamplesCsvFile, true)).use { it.println(sample.toCsvRow()) }
-                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(sample.toMasterCsvRow()) }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun appendRepublishSummaryCsv(summary: RepublishAnalysisSummary) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(republishSummaryCsvFile, true)).use { it.println(summary.toCsvRow()) }
-                PrintWriter(FileWriter(masterCsvFile, true)).use { it.println(summary.toMasterCsvRow()) }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun appendTrafficIntervalCsv(event: TrafficIntervalEvent) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(trafficIntervalsCsvFile, true)).use { it.println(event.toCsvRow()) }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun appendDhtConvergenceCsv(event: DhtConvergenceEvent) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(kademliaConvergenceCsvFile, true)).use { it.println(event.toCsvRow()) }
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun appendAdversarialEventCsv(event: AdversarialTelemetryEvent) {
-        synchronized(csvLock) {
-            try {
-                PrintWriter(FileWriter(adversarialEventsCsvFile, true)).use { it.println(event.toCsvRow()) }
-            } catch (_: Exception) {}
-        }
+    fun getAllTelemetryCsvFiles(): List<File> {
+        val active = listOf(
+            masterCsvFile,
+            ttlSamplesCsvFile,
+            republishSummaryCsvFile,
+            resourceProfileCsvFile,
+            packetEventsCsvFile,
+            groupEventsCsvFile,
+            trafficIntervalsCsvFile,
+            kademliaConvergenceCsvFile,
+            adversarialEventsCsvFile
+        )
+        return (active + getRotatedCsvFiles()).filter { it.exists() && it.length() > 0L }
     }
 
     /**
@@ -810,8 +930,110 @@ class ResearchTelemetryManager(
         return p.coerceIn(0.0, 1.0)
     }
 
+    /**
+     * Computes empirical Kullback-Leibler divergence D_KL(P_emp || Exp(lambda)) in nats
+     * using equiprobable quantile binning under the theoretical exponential distribution.
+     *
+     * Partitioning [0, +inf) into B equiprobable quantile bins ensures every bin has exact
+     * theoretical probability q_b = 1/B under Exp(lambda), yielding D_KL >= 0 (0 for exact fit,
+     * up to ln(B) for deterministic periodic spikes).
+     */
+    fun computeExponentialKlDivergenceNats(
+        intervalsSec: List<Double>,
+        referenceLambda: Double? = null
+    ): Double {
+        val valid = intervalsSec.filter { it.isFinite() && it >= 0.0 }
+        val n = valid.size
+        if (n < 5) return 0.0
+        val meanSec = valid.average()
+        val lambda = referenceLambda?.takeIf { it > 0.0 && it.isFinite() }
+            ?: if (meanSec > 0.0) 1.0 / meanSec else return 0.0
+
+        val binCount = kotlin.math.sqrt(n.toDouble()).toInt().coerceIn(5, 20)
+        val counts = IntArray(binCount)
+        for (x in valid) {
+            val u = 1.0 - kotlin.math.exp(-lambda * x)
+            val binIdx = (u * binCount).toInt().coerceIn(0, binCount - 1)
+            counts[binIdx]++
+        }
+
+        val q = 1.0 / binCount.toDouble()
+        var dkl = 0.0
+        for (c in counts) {
+            if (c > 0) {
+                val p = c.toDouble() / n.toDouble()
+                dkl += p * kotlin.math.ln(p / q)
+            }
+        }
+        return dkl.coerceAtLeast(0.0)
+    }
+
+    /**
+     * Computes the Anderson-Darling goodness-of-fit statistic (A^2), Stephens modified A*^2,
+     * and asymptotic p-value for the exponential distribution Exp(lambda) with estimated rate lambda_hat = 1/mean.
+     */
+    fun computeAndersonDarlingExponential(intervalsSec: List<Double>): Triple<Double, Double, Double> {
+        val sorted = intervalsSec.filter { it.isFinite() && it >= 0.0 }.sorted()
+        val n = sorted.size
+        if (n < 3) return Triple(0.0, 0.0, 1.0)
+        val meanSec = sorted.average()
+        if (meanSec <= 0.0) return Triple(0.0, 0.0, 1.0)
+
+        val lambdaHat = 1.0 / meanSec
+        var acc = 0.0
+        for (i in 0 until n) {
+            val wI = (lambdaHat * sorted[i]).coerceAtLeast(1e-15)
+            val wRev = (lambdaHat * sorted[n - 1 - i]).coerceAtLeast(0.0)
+            val logCdf = if (wI < 35.0) {
+                kotlin.math.ln(-java.lang.Math.expm1(-wI))
+            } else {
+                0.0
+            }
+            val logSf = -wRev
+            acc += (2 * i + 1).toDouble() * (logCdf + logSf)
+        }
+
+        val a2 = (-n.toDouble() - acc / n.toDouble()).coerceAtLeast(0.0)
+        val a2Star = a2 * (1.0 + 0.6 / n.toDouble())
+        val pValue = computeAndersonDarlingExpPValue(a2Star)
+        return Triple(a2, a2Star, pValue)
+    }
+
+    /**
+     * Computes continuous Stephens-calibrated p-value for the exponential Anderson-Darling A*^2 statistic.
+     */
+    fun computeAndersonDarlingExpPValue(a2Star: Double): Double {
+        if (!a2Star.isFinite() || a2Star <= 0.12) return 1.0
+        val p = when {
+            a2Star < 0.30 -> {
+                val dx = a2Star - 0.12
+                kotlin.math.exp(-5.8 * dx * dx)
+            }
+            a2Star < 0.60 -> {
+                kotlin.math.exp(0.28370357 - 1.04706567 * a2Star - 1.82138258 * a2Star * a2Star)
+            }
+            else -> {
+                val x = a2Star.coerceAtMost(13.0)
+                kotlin.math.exp(0.72367984 - 2.93819843 * x + 0.11173838 * x * x)
+            }
+        }
+        return p.coerceIn(0.0, 1.0)
+    }
+
+    private fun computeMeanAndCi95(values: List<Double>): Triple<Double, Double, Double> {
+        val n = values.size
+        if (n == 0) return Triple(0.0, 0.0, 0.0)
+        val mean = values.average()
+        if (n == 1) return Triple(mean, mean, mean)
+        val variance = values.sumOf { (it - mean) * (it - mean) } / (n - 1).toDouble()
+        val se = kotlin.math.sqrt(variance / n.toDouble())
+        val tCrit = studentTCritical95(n - 1)
+        val half = tCrit * se
+        return Triple(mean, mean - half, mean + half)
+    }
+
     fun computeTrafficShapingStats(): TrafficShapingStats {
-        val intervals = outboundIntervalsMs.toList()
+        val intervals = outboundIntervalsMs.toList().ifEmpty { actualTrafficDelaysMs.toList() }
         val count = intervals.size
         val totalOut = totalOutboundPackets.get()
         val realCount = realMsgCount.get()
@@ -841,7 +1063,7 @@ class ResearchTelemetryManager(
             }
         }
 
-        // Target Prefix Shannon Entropy
+        // Target Prefix Shannon Entropy (256-bin byte 0 and 16-bin nibble entropy)
         val totalPrefixes = totalTargetPrefixSamples.get()
         var entropyBits = 0.0
         if (totalPrefixes > 0) {
@@ -854,6 +1076,21 @@ class ResearchTelemetryManager(
             }
         }
         val entropyNormalized = (entropyBits / 8.0) * 100.0
+
+        val totalNibbles = totalTargetNibbleSamples.get()
+        var nibbleEntropyBits = 0.0
+        if (totalNibbles > 0) {
+            for (i in 0 until 16) {
+                val c = targetNibbleCounts.get(i)
+                if (c > 0) {
+                    val p = c.toDouble() / totalNibbles
+                    nibbleEntropyBits -= p * (kotlin.math.ln(p) / kotlin.math.ln(2.0))
+                }
+            }
+        }
+        val nibbleEntropyNormalized = (nibbleEntropyBits / 4.0) * 100.0
+        val uniquePrefixes = uniqueTargetPrefixes.size
+        val targetUniqueRatio = if (totalPrefixes > 0) uniquePrefixes.toDouble() / totalPrefixes.toDouble() else 0.0
 
         if (count == 0) {
             return TrafficShapingStats(
@@ -881,22 +1118,33 @@ class ResearchTelemetryManager(
                 decoyGetPercent = decoyPct,
                 tombstonePercent = tombPct,
                 targetEntropyBits = entropyBits,
-                targetEntropyNormalized = entropyNormalized
+                targetEntropyNormalized = entropyNormalized,
+                klDivergenceNats = 0.0,
+                klDivergenceConfiguredNats = 0.0,
+                andersonDarlingA2 = 0.0,
+                andersonDarlingA2Star = 0.0,
+                andersonDarlingPValue = 1.0,
+                targetNibbleEntropyBits = nibbleEntropyBits,
+                targetNibbleEntropyNormalized = nibbleEntropyNormalized,
+                uniqueTargetPrefixesCount = uniquePrefixes,
+                targetUniqueRatio = targetUniqueRatio
             )
         }
 
         val meanMs = intervals.average()
         val varianceMs = if (count > 1) {
-            intervals.map { (it - meanMs) * (it - meanMs) }.sum() / (count - 1)
+            intervals.sumOf { (it - meanMs) * (it - meanMs) } / (count - 1)
         } else 0.0
         val stdDevMs = kotlin.math.sqrt(varianceMs)
         val cv = if (meanMs > 0.0) (stdDevMs / meanMs) else 0.0
+
+        val intervalsSec = intervals.map { it / 1000.0 }
 
         // Kolmogorov-Smirnov test against exponential distribution F(x) = 1 - exp(-lambda * x)
         val ksD = if (count >= 2 && meanMs > 0.0) {
             val meanSec = meanMs / 1000.0
             val lambdaHat = 1.0 / meanSec
-            val sortedSec = intervals.map { it / 1000.0 }.sorted()
+            val sortedSec = intervalsSec.sorted()
             var maxD = 0.0
             for (i in 0 until count) {
                 val x = sortedSec[i]
@@ -911,6 +1159,16 @@ class ResearchTelemetryManager(
         } else 0.0
 
         val ksPValue = computeKolmogorovSmirnovPValue(ksD, count)
+        val klNats = computeExponentialKlDivergenceNats(intervalsSec)
+        val configuredLambda = if (configuredLambdaSamples.isNotEmpty()) {
+            configuredLambdaSamples.average().takeIf { it > 0.0 }
+        } else null
+        val klConfiguredNats = if (configuredLambda != null && theoreticalDelaysMs.isNotEmpty()) {
+            computeExponentialKlDivergenceNats(intervalsSec, referenceLambda = configuredLambda)
+        } else {
+            klNats
+        }
+        val (adA2, adA2Star, adPValue) = computeAndersonDarlingExponential(intervalsSec)
 
         return TrafficShapingStats(
             sampleCount = count,
@@ -937,7 +1195,16 @@ class ResearchTelemetryManager(
             decoyGetPercent = decoyPct,
             tombstonePercent = tombPct,
             targetEntropyBits = entropyBits,
-            targetEntropyNormalized = entropyNormalized
+            targetEntropyNormalized = entropyNormalized,
+            klDivergenceNats = klNats,
+            klDivergenceConfiguredNats = klConfiguredNats,
+            andersonDarlingA2 = adA2,
+            andersonDarlingA2Star = adA2Star,
+            andersonDarlingPValue = adPValue,
+            targetNibbleEntropyBits = nibbleEntropyBits,
+            targetNibbleEntropyNormalized = nibbleEntropyNormalized,
+            uniqueTargetPrefixesCount = uniquePrefixes,
+            targetUniqueRatio = targetUniqueRatio
         )
     }
 
@@ -964,9 +1231,14 @@ class ResearchTelemetryManager(
         val timeouts = totalKrpcTimeouts.get()
         val timeoutRate = if (totalOps > 0) (timeouts.toDouble() / totalOps * 100.0) else 0.0
 
-        val ttlAlive = aliveTtlCount.get()
-        val ttlTotal = ttlAlive + expiredTtlCount.get()
-        val replicaSurvival = if (ttlTotal > 0) (ttlAlive.toDouble() / ttlTotal) else 0.0
+        val ttlSamples = ttlSamplesHistory.toList()
+        val replicaSurvival = if (ttlSamples.isNotEmpty()) {
+            ttlSamples.map { it.replicaSurvivalRatio }.average()
+        } else {
+            val ttlAlive = aliveTtlCount.get()
+            val ttlTotal = ttlAlive + expiredTtlCount.get()
+            if (ttlTotal > 0) (ttlAlive.toDouble() / ttlTotal) else 0.0
+        }
 
         val preAttempts = totalPreWarmingAttempts.get()
         val preHits = totalPreWarmingHits.get()
@@ -987,6 +1259,7 @@ class ResearchTelemetryManager(
         }
 
         val decayCurve = computeRetentionCurveStats().map { it.toMap() }
+        val modeSurvival = computeReplicaSurvivalByMode().map { it.toMap() }
 
         return DhtRetentionAndConvergenceStats(
             putLatencyP50Ms = putPct[0],
@@ -1003,7 +1276,8 @@ class ResearchTelemetryManager(
             preWarmingHitRatePercent = preWarmingHitRate,
             fastTerminationSavingsPercent = fastTermSavings,
             subnet24EntropyBits = subnetEntropy,
-            ttlDecayCurve = decayCurve
+            ttlDecayCurve = decayCurve,
+            replicaSurvivalByMode = modeSurvival
         )
     }
 
@@ -1074,6 +1348,7 @@ class ResearchTelemetryManager(
 
         var batteryDrainUahPerHour = 0.0
         var batteryPercentPerHour = 0.0
+        var totalEnergyDrainUah = 0.0
         var txBytesPerHour = 0L
         var rxBytesPerHour = 0L
         val profileMap = mutableMapOf<String, Map<String, Any>>()
@@ -1086,11 +1361,13 @@ class ResearchTelemetryManager(
 
             val uahDiff = (first.batteryChargeCounterUah - last.batteryChargeCounterUah).coerceAtLeast(0L)
             if (uahDiff > 0L && hours > 0.0) {
-                batteryDrainUahPerHour = uahDiff.toDouble() / hours
+                totalEnergyDrainUah = uahDiff.toDouble()
+                batteryDrainUahPerHour = totalEnergyDrainUah / hours
             } else {
-                val avgCurrentUa = samples.map { it.batteryCurrentNowUa }.average()
+                val avgCurrentUa = samples.map { kotlin.math.abs(it.batteryCurrentNowUa) }.average()
                 if (avgCurrentUa > 0.0) {
                     batteryDrainUahPerHour = avgCurrentUa
+                    totalEnergyDrainUah = avgCurrentUa * hours
                 }
             }
 
@@ -1108,7 +1385,7 @@ class ResearchTelemetryManager(
 
             val byLambda = samples.groupBy { it.poissonLambda }
             for ((lambda, sList) in byLambda) {
-                val avgUa = sList.map { it.batteryCurrentNowUa }.average()
+                val avgUa = sList.map { kotlin.math.abs(it.batteryCurrentNowUa) }.average()
                 val label = String.format(java.util.Locale.US, "lambda_%.5f", lambda)
                 profileMap[label] = mapOf(
                     "sampleCount" to sList.size,
@@ -1116,7 +1393,25 @@ class ResearchTelemetryManager(
                     "lambda" to lambda
                 )
             }
+        } else {
+            val currentSamples = packetBatteryCurrentSamples.toList()
+            if (currentSamples.size >= 2) {
+                val minTs = currentSamples.minOf { it.first }
+                val maxTs = currentSamples.maxOf { it.first }
+                val elapsedMs = (maxTs - minTs).coerceAtLeast(1000L)
+                val hours = elapsedMs.toDouble() / (3600.0 * 1000.0)
+                val avgCurrentUa = currentSamples.map { kotlin.math.abs(it.second) }.average()
+                if (avgCurrentUa > 0.0) {
+                    batteryDrainUahPerHour = avgCurrentUa
+                    totalEnergyDrainUah = avgCurrentUa * hours
+                }
+            }
         }
+
+        val deliveredRealCount = deliveredAckCount.get() + directDeliveredWithoutTrackerCount.get()
+        val sentRealCount = firstSendCount.value
+        val energyPerDeliveredMsg = if (deliveredRealCount > 0) totalEnergyDrainUah / deliveredRealCount.toDouble() else 0.0
+        val energyPerSentMsg = if (sentRealCount > 0) totalEnergyDrainUah / sentRealCount.toDouble() else 0.0
 
         val ramPss = queryRamPssKb()
 
@@ -1126,7 +1421,11 @@ class ResearchTelemetryManager(
             ramPssKb = ramPss,
             udpTxBytesPerHour = txBytesPerHour,
             udpRxBytesPerHour = rxBytesPerHour,
-            statsByPoissonProfile = profileMap
+            statsByPoissonProfile = profileMap,
+            totalEnergyDrainUah = totalEnergyDrainUah,
+            deliveredRealMessagesCount = deliveredRealCount,
+            energyOverheadUahPerDeliveredMsg = energyPerDeliveredMsg,
+            energyOverheadUahPerRealSentMsg = energyPerSentMsg
         )
     }
 
@@ -1195,14 +1494,56 @@ class ResearchTelemetryManager(
         val rekeys = keyRotationConvergenceList.toList()
         val avgRekey = if (rekeys.isNotEmpty()) rekeys.average() else 0.0
 
+        val maskRecords = groupMaskingRecords.toList()
+        val avgDecorrelation = if (maskRecords.isNotEmpty()) maskRecords.map { it.decorrelationScore }.average() else 0.0
+        val avgCoverRatio = if (maskRecords.isNotEmpty()) maskRecords.map { it.coverPaddingRatio }.average() else 0.0
+        val avgMasking = if (maskRecords.isNotEmpty()) maskRecords.map { it.maskingCoefficient }.average() else 0.0
+        val recipientCorrelation = computeGroupRecipientCorrelation(maskRecords)
+
         return GroupChatResearchStats(
             latencyByGroupSize = latencyMap,
             avgFanOutDeliverySkewMs = avgSkew,
             maxFanOutDeliverySkewMs = maxSkew,
             avgKeyRotationConvergenceMs = avgRekey,
             totalGroupMessagesTracked = totalGroupMessagesTracked.get(),
-            totalKeyRotationsTracked = totalKeyRotationsTracked.get()
+            totalKeyRotationsTracked = totalKeyRotationsTracked.get(),
+            recipientDecorrelationScore = avgDecorrelation,
+            groupMaskingCoefficient = avgMasking,
+            groupMaskingPercent = avgMasking * 100.0,
+            avgInterleavedCoverRatio = avgCoverRatio,
+            recipientCountCorrelation = recipientCorrelation
         )
+    }
+
+    /**
+     * Computes Pearson correlation between real group size M and observable slot signature.
+     * When recipients use unique derived slots and cover padding keeps window size constant (or
+     * independent of M), correlation approaches 0.0; unpadded bursts correlate near 1.0.
+     */
+    private fun computeGroupRecipientCorrelation(records: List<GroupMaskingRecord>): Double {
+        if (records.size < 2) return 0.0
+        val xs = records.map { it.groupSizeM.toDouble() }
+        val ys = records.map { rec ->
+            if (rec.uniqueTargetCount <= 1 && rec.groupSizeM > 1) {
+                rec.groupSizeM.toDouble()
+            } else {
+                (rec.groupSizeM + rec.interleavedCoverCount).toDouble()
+            }
+        }
+        val meanX = xs.average()
+        val meanY = ys.average()
+        var num = 0.0
+        var denX = 0.0
+        var denY = 0.0
+        for (i in xs.indices) {
+            val dx = xs[i] - meanX
+            val dy = ys[i] - meanY
+            num += dx * dy
+            denX += dx * dx
+            denY += dy * dy
+        }
+        val denom = kotlin.math.sqrt(denX * denY)
+        return if (denom > 1e-12) (num / denom).coerceIn(-1.0, 1.0) else 0.0
     }
 
     fun computeRetentionCurveStats(): List<RetentionSurvivalPoint> {
@@ -1234,6 +1575,60 @@ class ResearchTelemetryManager(
                         aliveSamples = alive,
                         survivalRatePercent = rate,
                         republishActive = republish
+                    )
+                )
+            }
+        }
+        return result
+    }
+
+    /**
+     * Computes the BEP 44 replica survival distribution (k_alive / K) across canonical thesis horizons
+     * (15m, 1h, 6h, 12h, 24h, 48h, 72h) partitioned into non-overlapping bins by [RepublishMode]:
+     * NO_REPUBLISH, OWN_REPUBLISH, and CROWD_REPUBLISH.
+     */
+    fun computeReplicaSurvivalByMode(): List<ReplicaSurvivalDistributionPoint> {
+        val samples = ttlSamplesHistory.toList()
+        data class HorizonBin(val label: String, val targetHours: Double, val minHours: Double, val maxHours: Double)
+        val horizons = listOf(
+            HorizonBin("15m", 0.25, 0.0, 0.625),
+            HorizonBin("1h", 1.0, 0.625, 3.5),
+            HorizonBin("6h", 6.0, 3.5, 9.0),
+            HorizonBin("12h", 12.0, 9.0, 18.0),
+            HorizonBin("24h", 24.0, 18.0, 36.0),
+            HorizonBin("48h", 48.0, 36.0, 60.0),
+            HorizonBin("72h", 72.0, 60.0, Double.POSITIVE_INFINITY)
+        )
+
+        val result = mutableListOf<ReplicaSurvivalDistributionPoint>()
+        for (h in horizons) {
+            for (mode in RepublishMode.entries) {
+                val matching = samples.filter { sample ->
+                    sample.republishMode == mode &&
+                        sample.elapsedHours >= h.minHours &&
+                        sample.elapsedHours < h.maxHours
+                }
+                val total = matching.size
+                val alive = matching.count { it.isAlive }
+                val binaryPct = if (total > 0) (alive.toDouble() / total.toDouble() * 100.0) else 0.0
+                val ratios = matching.map { it.replicaSurvivalRatio }
+                val (meanRatio, lowRatio, highRatio) = computeMeanAndCi95(ratios)
+                val meanKAlive = if (total > 0) matching.map { it.kAlive.toDouble() }.average() else 0.0
+                val meanKTarget = if (total > 0) matching.map { it.replicationK.toDouble() }.average() else 8.0
+
+                result.add(
+                    ReplicaSurvivalDistributionPoint(
+                        horizonLabel = h.label,
+                        horizonHours = h.targetHours,
+                        republishMode = mode,
+                        totalSamples = total,
+                        aliveSamples = alive,
+                        binarySurvivalRatePercent = binaryPct,
+                        meanReplicaSurvivalRatio = meanRatio.coerceIn(0.0, 1.0),
+                        meanKAlive = meanKAlive,
+                        targetReplicationK = meanKTarget,
+                        ci95LowerRatio = lowRatio.coerceIn(0.0, 1.0),
+                        ci95UpperRatio = highRatio.coerceIn(0.0, 1.0)
                     )
                 )
             }
@@ -1335,28 +1730,17 @@ class ResearchTelemetryManager(
     }
 
     /**
-     * Prepares device metadata and aggregated metrics conforming to `firestore.rules`.
-     * If the bundle size is <= 600 KB, embeds the complete raw CSV bundle as Base64 in `metrics`.
+     * Prepares Firestore-compliant session payloads for all ZIP bundle chunks (<= 550 KB each),
+     * ensuring multi-day sessions are split across sequential documents without ever falling back to
+     * `OMITTED_EXCEEDS_600KB`.
      */
-    fun computeSessionPayload(): Pair<Map<String, Any>, Map<String, Any>> {
+    fun computeChunkedSessionPayloads(
+        maxChunkBytes: Long = maxChunkZipBytes
+    ): List<Pair<Map<String, Any>, Map<String, Any>>> {
         val manifest = generateManifestData()
-        val zipFile = buildCompressedResearchBundle()
-
-        val bundleBase64: String
-        val bundleStatus: String
-        val zipSize = zipFile.length()
-
-        if (zipSize in 1..600_000) {
-            val bytes = zipFile.readBytes()
-            bundleBase64 = Base64.getEncoder().encodeToString(bytes)
-            bundleStatus = "EMBEDDED_ZIP_BASE64"
-        } else if (zipSize > 600_000) {
-            bundleBase64 = "OMITTED_EXCEEDS_600KB"
-            bundleStatus = "Available via local device export (.ZIP) to preserve Firestore 1MB limit"
-        } else {
-            bundleBase64 = ""
-            bundleStatus = "EMPTY"
-        }
+        val chunkFiles = buildChunkedResearchBundles(maxChunkBytes = maxChunkBytes)
+        val totalChunks = chunkFiles.size.coerceAtLeast(1)
+        val bundleGroupId = "${sessionId}_${manifest.createdEpochMs}"
 
         val deviceInfo: Map<String, Any> = mapOf(
             "sessionId" to sessionId,
@@ -1366,7 +1750,7 @@ class ResearchTelemetryManager(
             "versionCode" to manifest.versionCode
         )
 
-        val metrics: Map<String, Any> = mapOf(
+        val baseMetrics: Map<String, Any> = mapOf(
             "totalEvents" to manifest.totalEvents,
             "firstSendCount" to manifest.firstSendCount,
             "ownRepublishCount" to manifest.ownRepublishCount,
@@ -1382,37 +1766,94 @@ class ResearchTelemetryManager(
             "chunkResumptionStats" to computeChunkResumptionStats().toMap(),
             "groupChatStats" to computeGroupChatStats().toMap(),
             "retentionCurveStats" to computeRetentionCurveStats().map { it.toMap() },
+            "replicaSurvivalByMode" to computeReplicaSurvivalByMode().map { it.toMap() },
             "ed25519SignatureStats" to computeEd25519SignatureStats(),
             "dhtRetentionAndConvergenceStats" to computeDhtConvergenceStats().toMap(),
             "endToEndDeliveryAndRekeyStats" to computeE2eDeliveryStats().toMap(),
             "adversarialAnomalyStats" to computeAdversarialStats().toMap(),
             "hardwareBatteryStats" to computeHardwareStats().toMap(),
             "fileChecksums" to manifest.fileChecksums,
-            "manifestSha256" to manifest.manifestSha256,
-            "bundleZipSizeBytes" to zipSize,
-            "bundleZipStatus" to bundleStatus,
-            "bundleZipBase64" to bundleBase64
+            "manifestSha256" to manifest.manifestSha256
         )
 
-        return Pair(deviceInfo, metrics)
+        if (chunkFiles.isEmpty()) {
+            val emptyMetrics = baseMetrics + mapOf(
+                "bundleZipSizeBytes" to 0L,
+                "bundleZipStatus" to "EMPTY",
+                "bundleZipBase64" to "",
+                "bundleChunkIndex" to 1,
+                "bundleTotalChunks" to 1,
+                "bundleGroupId" to bundleGroupId
+            )
+            return listOf(Pair(deviceInfo, emptyMetrics))
+        }
+
+        val totalUnchunkedBytes = chunkFiles.sumOf { it.length() }
+        return chunkFiles.mapIndexed { idx, chunkFile ->
+            val chunkIndex = idx + 1
+            val zipSize = chunkFile.length()
+            val bytes = if (zipSize > 0L) chunkFile.readBytes() else ByteArray(0)
+            val bundleBase64 = if (bytes.isNotEmpty()) Base64.getEncoder().encodeToString(bytes) else ""
+            val status = when {
+                zipSize == 0L -> "EMPTY"
+                totalChunks == 1 -> "EMBEDDED_ZIP_BASE64"
+                else -> "CHUNKED_ZIP_BASE64"
+            }
+
+            // Include full aggregated metrics in chunk 1 (and compact summary + required counters in subsequent parts)
+            val chunkMetrics = if (chunkIndex == 1) {
+                baseMetrics + mapOf(
+                    "bundleZipSizeBytes" to zipSize,
+                    "bundleZipStatus" to status,
+                    "bundleZipBase64" to bundleBase64,
+                    "bundleChunkIndex" to chunkIndex,
+                    "bundleTotalChunks" to totalChunks,
+                    "bundleGroupId" to bundleGroupId,
+                    "bundleTotalZipBytes" to totalUnchunkedBytes
+                )
+            } else {
+                mapOf(
+                    "totalEvents" to manifest.totalEvents,
+                    "firstSendCount" to manifest.firstSendCount,
+                    "ownRepublishCount" to manifest.ownRepublishCount,
+                    "crowdRepublishCount" to manifest.crowdRepublishCount,
+                    "packetsReceivedCount" to manifest.packetsReceivedCount,
+                    "ttlSamplesCount" to manifest.ttlSamplesCount,
+                    "manifestSha256" to manifest.manifestSha256,
+                    "bundleZipSizeBytes" to zipSize,
+                    "bundleZipStatus" to status,
+                    "bundleZipBase64" to bundleBase64,
+                    "bundleChunkIndex" to chunkIndex,
+                    "bundleTotalChunks" to totalChunks,
+                    "bundleGroupId" to bundleGroupId,
+                    "bundleTotalZipBytes" to totalUnchunkedBytes
+                )
+            }
+            Pair(deviceInfo, chunkMetrics)
+        }
     }
 
     /**
-     * Generates SessionManifest containing device specs, counters, and SHA-256 hashes of all CSV files.
+     * Prepares device metadata and aggregated metrics conforming to `firestore.rules`.
+     * Uses chunked ZIP packaging (<= 550 KB) so payload Base64 is always embedded cleanly.
+     */
+    fun computeSessionPayload(): Pair<Map<String, Any>, Map<String, Any>> {
+        return computeChunkedSessionPayloads().first()
+    }
+
+    /**
+     * Generates SessionManifest containing device specs, counters, and SHA-256 hashes of all CSV files
+     * (both active files and rotated segments).
      */
     fun generateManifestData(): SessionManifest {
         val checksums = mutableMapOf<String, String>()
-        if (masterCsvFile.exists() && masterCsvFile.length() > 0) checksums[masterCsvFile.name] = computeSha256(masterCsvFile)
-        if (ttlSamplesCsvFile.exists() && ttlSamplesCsvFile.length() > 0) checksums[ttlSamplesCsvFile.name] = computeSha256(ttlSamplesCsvFile)
-        if (republishSummaryCsvFile.exists() && republishSummaryCsvFile.length() > 0) checksums[republishSummaryCsvFile.name] = computeSha256(republishSummaryCsvFile)
-        if (resourceProfileCsvFile.exists() && resourceProfileCsvFile.length() > 0) checksums[resourceProfileCsvFile.name] = computeSha256(resourceProfileCsvFile)
-        if (packetEventsCsvFile.exists() && packetEventsCsvFile.length() > 0) checksums[packetEventsCsvFile.name] = computeSha256(packetEventsCsvFile)
-        if (groupEventsCsvFile.exists() && groupEventsCsvFile.length() > 0) checksums[groupEventsCsvFile.name] = computeSha256(groupEventsCsvFile)
-        if (trafficIntervalsCsvFile.exists() && trafficIntervalsCsvFile.length() > 0) checksums[trafficIntervalsCsvFile.name] = computeSha256(trafficIntervalsCsvFile)
-        if (kademliaConvergenceCsvFile.exists() && kademliaConvergenceCsvFile.length() > 0) checksums[kademliaConvergenceCsvFile.name] = computeSha256(kademliaConvergenceCsvFile)
-        if (adversarialEventsCsvFile.exists() && adversarialEventsCsvFile.length() > 0) checksums[adversarialEventsCsvFile.name] = computeSha256(adversarialEventsCsvFile)
+        synchronized(csvLock) {
+            for (csvFile in getAllTelemetryCsvFiles()) {
+                checksums[csvFile.name] = computeSha256(csvFile)
+            }
+        }
 
-        val now = System.currentTimeMillis()
+        val now = clockProvider()
         val manifest = SessionManifest(
             sessionId = sessionId,
             appVersion = try { BuildConfig.VERSION_NAME } catch (_: Throwable) { "1.0.0" },
@@ -1433,42 +1874,31 @@ class ResearchTelemetryManager(
         return manifest
     }
 
-    /**
-     * Packs all primary CSV files (master, ttl_samples, republish_analysis, resource_profile, packet_events, group_events,
-     * traffic_intervals, kademlia_convergence, adversarial_events) and session_manifest.json into a compressed ZIP archive.
-     */
-    fun buildCompressedResearchBundle(): File {
+    private fun refreshExportFilesAndManifest(): Pair<SessionManifest, File> {
         val dir = telemetryDir
-
-        // 1. Export latest resource profiling samples
         try {
             resourceProfiler?.exportToCsvFile(dir, "research_resource_profile.csv")
         } catch (_: Exception) {}
-
-        // Ensure headers exist
         initCsvFiles()
-
-        // 2. Generate and write session_manifest.json
         val manifest = generateManifestData()
         val manifestFile = File(dir, "session_manifest.json")
         manifestFile.writeText(manifest.toJsonString(), Charsets.UTF_8)
+        return Pair(manifest, manifestFile)
+    }
 
-        // 3. Create compressed ZIP archive
-        val timestamp = System.currentTimeMillis()
+    /**
+     * Packs all CSV files (active + rotated) and session_manifest.json into a compressed ZIP archive.
+     */
+    fun buildCompressedResearchBundle(): File {
+        val dir = telemetryDir
+        val (_, manifestFile) = refreshExportFilesAndManifest()
+
+        val timestamp = clockProvider()
         val zipFile = File(dir, "pqchat_research_${sessionId}_${timestamp}.zip")
 
-        val filesToZip = listOf(
-            masterCsvFile,
-            ttlSamplesCsvFile,
-            republishSummaryCsvFile,
-            resourceProfileCsvFile,
-            packetEventsCsvFile,
-            groupEventsCsvFile,
-            trafficIntervalsCsvFile,
-            kademliaConvergenceCsvFile,
-            adversarialEventsCsvFile,
-            manifestFile
-        ).filter { it.exists() && it.length() > 0 }
+        val filesToZip = synchronized(csvLock) {
+            (getAllTelemetryCsvFiles() + manifestFile).filter { it.exists() && it.length() > 0 }
+        }
 
         ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile))).use { zos ->
             for (file in filesToZip) {
@@ -1480,6 +1910,240 @@ class ResearchTelemetryManager(
         }
 
         return zipFile
+    }
+
+    /**
+     * Builds one or more compressed ZIP bundles strictly bounded by [maxChunkBytes] (default 550 KB).
+     * Automatically includes rotated CSV segments and splits oversized CSV files on newline boundaries
+     * while preserving CSV headers in every slice so every part is independently parseable.
+     */
+    fun buildChunkedResearchBundles(maxChunkBytes: Long = maxChunkZipBytes): List<File> {
+        val dir = telemetryDir
+        val singleZip = buildCompressedResearchBundle()
+        if (singleZip.length() <= maxChunkBytes) {
+            return listOf(singleZip)
+        }
+
+        // Remove oversized single archive before generating chunked parts
+        singleZip.delete()
+
+        val (manifest, manifestFile) = refreshExportFilesAndManifest()
+        val manifestBytes = manifestFile.readBytes()
+        val effectiveMax = maxChunkBytes.coerceAtLeast(8_192L)
+        val manifestMargin = manifestBytes.size + 4_096L
+        val maxEntryCompressedBudget = (effectiveMax - manifestMargin).coerceAtLeast(2_048L)
+
+        val csvFiles = synchronized(csvLock) { getAllTelemetryCsvFiles() }
+        val namedEntries = mutableListOf<Pair<String, ByteArray>>()
+        for (csvFile in csvFiles) {
+            namedEntries.addAll(splitCsvFileForChunkBudget(csvFile, maxEntryCompressedBudget))
+        }
+
+        val bundleGroupId = "${sessionId}_${clockProvider()}"
+        val stagedChunks = mutableListOf<MutableList<Pair<String, ByteArray>>>()
+        var currentChunk = mutableListOf<Pair<String, ByteArray>>()
+
+        for (entry in namedEntries) {
+            val candidateList = ArrayList<Pair<String, ByteArray>>(currentChunk.size + 3)
+            candidateList.addAll(currentChunk)
+            candidateList.add(entry)
+            if (stagedChunks.isEmpty()) {
+                candidateList.add("session_manifest.json" to manifestBytes)
+            }
+            val estChunkManifest = buildChunkManifestBytes(
+                bundleGroupId = bundleGroupId,
+                chunkIndex = stagedChunks.size + 1,
+                totalChunks = 999,
+                createdEpochMs = manifest.createdEpochMs,
+                isoCreatedAt = manifest.isoCreatedAt,
+                entries = candidateList
+            )
+            val totalZipBytes = measureZipSizeBytes(candidateList + ("chunk_manifest.json" to estChunkManifest))
+
+            if (totalZipBytes <= effectiveMax) {
+                currentChunk.add(entry)
+            } else {
+                if (currentChunk.isNotEmpty()) {
+                    stagedChunks.add(currentChunk)
+                    currentChunk = mutableListOf(entry)
+                } else {
+                    stagedChunks.add(mutableListOf(entry))
+                }
+            }
+        }
+        if (currentChunk.isNotEmpty() || stagedChunks.isEmpty()) {
+            stagedChunks.add(currentChunk)
+        }
+
+        val totalChunks = stagedChunks.size
+        val timestamp = clockProvider()
+        val outputFiles = mutableListOf<File>()
+        for ((idx, entries) in stagedChunks.withIndex()) {
+            val chunkIndex = idx + 1
+            val finalEntries = ArrayList<Pair<String, ByteArray>>(entries.size + 2)
+            finalEntries.addAll(entries)
+            if (chunkIndex == 1) {
+                finalEntries.add("session_manifest.json" to manifestBytes)
+            }
+            val chunkManifestBytes = buildChunkManifestBytes(
+                bundleGroupId = bundleGroupId,
+                chunkIndex = chunkIndex,
+                totalChunks = totalChunks,
+                createdEpochMs = manifest.createdEpochMs,
+                isoCreatedAt = manifest.isoCreatedAt,
+                entries = finalEntries
+            )
+            finalEntries.add("chunk_manifest.json" to chunkManifestBytes)
+
+            val partName = String.format(
+                java.util.Locale.US,
+                "pqchat_research_%s_%d_part%03d_of_%03d.zip",
+                sessionId,
+                timestamp,
+                chunkIndex,
+                totalChunks
+            )
+            val partFile = File(dir, partName)
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(partFile))).use { zos ->
+                for ((name, data) in finalEntries) {
+                    zos.putNextEntry(ZipEntry(name))
+                    zos.write(data)
+                    zos.closeEntry()
+                }
+            }
+            outputFiles.add(partFile)
+        }
+
+        return outputFiles
+    }
+
+    private fun buildChunkManifestBytes(
+        bundleGroupId: String,
+        chunkIndex: Int,
+        totalChunks: Int,
+        createdEpochMs: Long,
+        isoCreatedAt: String,
+        entries: List<Pair<String, ByteArray>>
+    ): ByteArray {
+        val checksums = linkedMapOf<String, String>()
+        for ((name, bytes) in entries) {
+            checksums[name] = computeSha256(bytes)
+        }
+        val manifest = ChunkedBundleManifest(
+            bundleGroupId = bundleGroupId,
+            sessionId = sessionId,
+            chunkIndex = chunkIndex,
+            totalChunks = totalChunks,
+            createdEpochMs = createdEpochMs,
+            isoCreatedAt = isoCreatedAt,
+            entryChecksums = checksums
+        )
+        manifest.chunkSha256 = computeSha256(manifest.toJsonString())
+        return manifest.toJsonString().toByteArray(Charsets.UTF_8)
+    }
+
+    private fun splitCsvFileForChunkBudget(
+        csvFile: File,
+        maxCompressedBytes: Long
+    ): List<Pair<String, ByteArray>> {
+        val rawBytes = csvFile.readBytes()
+        if (measureZipSizeBytes(listOf(csvFile.name to rawBytes)) <= maxCompressedBytes) {
+            return listOf(csvFile.name to rawBytes)
+        }
+
+        val text = rawBytes.toString(Charsets.UTF_8)
+        val lines = text.lines().filter { it.isNotEmpty() }
+        if (lines.size <= 2) {
+            return listOf(csvFile.name to rawBytes)
+        }
+
+        val header = lines.first()
+        val headerBytes = (header + "\n").toByteArray(Charsets.UTF_8)
+        val dataLines = lines.drop(1)
+        val stem = csvFile.nameWithoutExtension
+        val slices = mutableListOf<Pair<String, ByteArray>>()
+
+        var startIdx = 0
+        var partNum = 1
+        while (startIdx < dataLines.size) {
+            // Binary search largest slice [startIdx, endIdx) that compresses within maxCompressedBytes
+            var lo = startIdx + 1
+            var hi = dataLines.size
+            var bestEnd = lo
+            var bestBytes: ByteArray? = null
+
+            // Fast exponential probe from startIdx + 1 upward to avoid full range rebuilds on large files
+            var probeStep = 16
+            var probeEnd = (startIdx + probeStep).coerceAtMost(dataLines.size)
+            while (probeEnd < dataLines.size) {
+                val candidate = buildCsvSliceBytes(headerBytes, dataLines, startIdx, probeEnd)
+                if (measureZipSizeBytes(listOf("${stem}_p.csv" to candidate)) <= maxCompressedBytes) {
+                    bestEnd = probeEnd
+                    bestBytes = candidate
+                    lo = probeEnd
+                    probeStep *= 2
+                    probeEnd = (startIdx + probeStep).coerceAtMost(dataLines.size)
+                } else {
+                    hi = probeEnd - 1
+                    break
+                }
+            }
+
+            if (probeEnd == dataLines.size && bestEnd < dataLines.size) {
+                val candidate = buildCsvSliceBytes(headerBytes, dataLines, startIdx, dataLines.size)
+                if (measureZipSizeBytes(listOf("${stem}_p.csv" to candidate)) <= maxCompressedBytes) {
+                    bestEnd = dataLines.size
+                    bestBytes = candidate
+                    lo = dataLines.size + 1
+                }
+            }
+
+            while (lo <= hi) {
+                val mid = (lo + hi) ushr 1
+                val candidate = buildCsvSliceBytes(headerBytes, dataLines, startIdx, mid)
+                if (measureZipSizeBytes(listOf("${stem}_p.csv" to candidate)) <= maxCompressedBytes) {
+                    bestEnd = mid
+                    bestBytes = candidate
+                    lo = mid + 1
+                } else {
+                    hi = mid - 1
+                }
+            }
+
+            val finalSliceBytes = bestBytes ?: buildCsvSliceBytes(headerBytes, dataLines, startIdx, bestEnd)
+            val sliceName = String.format(java.util.Locale.US, "%s.part%03d.csv", stem, partNum++)
+            slices.add(sliceName to finalSliceBytes)
+            startIdx = bestEnd
+        }
+
+        return slices
+    }
+
+    private fun buildCsvSliceBytes(
+        headerBytes: ByteArray,
+        dataLines: List<String>,
+        startIdx: Int,
+        endIdxExclusive: Int
+    ): ByteArray {
+        val baos = java.io.ByteArrayOutputStream()
+        baos.write(headerBytes)
+        for (i in startIdx until endIdxExclusive) {
+            baos.write(dataLines[i].toByteArray(Charsets.UTF_8))
+            baos.write('\n'.code)
+        }
+        return baos.toByteArray()
+    }
+
+    private fun measureZipSizeBytes(entries: List<Pair<String, ByteArray>>): Long {
+        val baos = java.io.ByteArrayOutputStream()
+        ZipOutputStream(baos).use { zos ->
+            for ((name, data) in entries) {
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(data)
+                zos.closeEntry()
+            }
+        }
+        return baos.size().toLong()
     }
 
     /**
@@ -1533,12 +2197,13 @@ class ResearchTelemetryManager(
 
     /**
      * Manually triggers an immediate batch synchronization to Google Cloud Firestore (Firebase Spark free tier).
+     * Automatically splits large multi-day sessions into <= 550 KB chunks.
      * Strictly requires explicit user opt-in (isEnabled == true).
      */
     suspend fun forceFirebaseSync(): Boolean = withContext(Dispatchers.IO) {
         if (!isEnabled || !firebaseSync.isFirebaseConfigured()) return@withContext false
-        val (deviceInfo, metrics) = computeSessionPayload()
-        firebaseSync.syncResearchSession(sessionId, deviceInfo, metrics, isManual = true)
+        val payloads = computeChunkedSessionPayloads()
+        firebaseSync.syncResearchSessionChunks(sessionId, payloads, isManual = true)
     }
 
     fun stop() {
