@@ -75,6 +75,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`5d10427`](https://github.com/mppjuro/PQChat.DHT/commit/5d10427c145fffd74dab66963e35cac68bbe9c98) (2026-11-17) — **dht,group,e2e**: harden live Mainline DHT puts, group ratchet sync, and 4-node E2E orchestration
 - [`eebc39a`](https://github.com/mppjuro/PQChat.DHT/commit/eebc39a30ad963427ed397cfae7c1b4fbd910b92) (2026-11-16) — 4-node star-topology group message reception on hub node
 - [`f290c9b`](https://github.com/mppjuro/PQChat.DHT/commit/f290c9bb2e022cb09a52dfffcef8ef383d0ad5c9) (2026-11-16) — **group,e2e**: synchronize group invites with pending PQC rekey and E2E orchestrator
 - [`f676d35`](https://github.com/mppjuro/PQChat.DHT/commit/f676d359286826ae2bb6b754481ddb72014cea1a) (2026-11-15) — **ci,research**: fix Firebase secrets injection in workflows and add E2E Firestore telemetry verification
