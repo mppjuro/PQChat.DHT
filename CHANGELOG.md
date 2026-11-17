@@ -76,6 +76,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`fdc97dd`](https://github.com/mppjuro/PQChat.DHT/commit/fdc97dd4b75694dcae41e6208f4e3e4494d1909d) (2026-11-17) — UI Automator physical click tests, rotation state preservation, and multi-emulator E2E dialog handling
 - [`50ab5e7`](https://github.com/mppjuro/PQChat.DHT/commit/50ab5e7bb1e6683af080b755f89c7a2559ed072e) (2026-11-17) — **db,crypto,formal**: harden SQLite encryption, Keystore guard, memory zeroing, and formal proofs
 - [`1c794d1`](https://github.com/mppjuro/PQChat.DHT/commit/1c794d16566c51db1acc7aa941fc659e590e9992) (2026-11-17) — **dht,traffic,crypto**: eliminate nodeId, subnet, keepalive, and timestamp metadata leaks
 - [`5d10427`](https://github.com/mppjuro/PQChat.DHT/commit/5d10427c145fffd74dab66963e35cac68bbe9c98) (2026-11-17) — **dht,group,e2e**: harden live Mainline DHT puts, group ratchet sync, and 4-node E2E orchestration
@@ -265,6 +266,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`ba09059`](https://github.com/mppjuro/PQChat.DHT/commit/ba0905994c6b9667e2648365b46297ab77f6ad84) (2026-11-17) — Byzantine DHT attack simulations, protocol defenses, and nightly CI threshold assertions
 - [`e6e362b`](https://github.com/mppjuro/PQChat.DHT/commit/e6e362bd419e3a0f2f81eac5fc15016c93651abc) (2026-11-16) — **deps**: bump com.google.devtools.ksp from 2.3.13 to 2.3.14
 - [`fdb76c9`](https://github.com/mppjuro/PQChat.DHT/commit/fdb76c9b1ebebe647f042927b672414089427abe) (2026-11-16) — **deps**: bump org.robolectric:robolectric from 4.17 to 4.18
 - [`ab363f9`](https://github.com/mppjuro/PQChat.DHT/commit/ab363f9baef83d103d35c2db60a9735a18c9f1b6) (2026-11-16) — **deps**: bump com.google.firebase:firebase-bom from 35.1.0 to 35.2.0
