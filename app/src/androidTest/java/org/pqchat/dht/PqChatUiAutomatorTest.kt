@@ -125,22 +125,32 @@ class PqChatUiAutomatorTest {
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
             var activity = getCurrentResumedActivity() as? MainActivity
-            if (activity == null) {
-                val context = instrumentation.targetContext
-                val intent = android.content.Intent(context, MainActivity::class.java).apply {
-                    flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            if (activity != null && uiDevice.isScreenOn) {
+                return
+            }
+            if (!uiDevice.isScreenOn) {
+                runCatching { uiDevice.wakeUp() }
+                runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+            }
+            val context = instrumentation.targetContext
+            val intent = android.content.Intent(context, MainActivity::class.java).apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            runCatching { uiDevice.waitForIdle(500L) }
+            var attempts = 0
+            while (attempts < 50) {
+                activity = getCurrentResumedActivity() as? MainActivity
+                if (activity != null) break
+                if (attempts == 15) {
+                    runCatching { uiDevice.wakeUp() }
+                    runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                    context.startActivity(intent)
                 }
-                context.startActivity(intent)
-                uiDevice.waitForIdle()
-                var attempts = 0
-                while (attempts < 25) {
-                    activity = getCurrentResumedActivity() as? MainActivity
-                    if (activity != null) break
-                    Thread.sleep(100)
-                    attempts++
-                }
+                Thread.sleep(100)
+                attempts++
             }
         } catch (_: Throwable) {}
     }
@@ -191,7 +201,9 @@ class PqChatUiAutomatorTest {
         VoicePlayer.isSyntheticAudioTestMode = true
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         runCatching { uiDevice.wakeUp() }
-        runCatching { uiDevice.setOrientationNatural() }
+        if (uiDevice.displayRotation != android.view.Surface.ROTATION_0) {
+            runCatching { uiDevice.setOrientationNatural() }
+        }
         runCatching { uiDevice.unfreezeRotation() }
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
@@ -233,7 +245,9 @@ class PqChatUiAutomatorTest {
         VoiceRecorder.isSyntheticAudioTestMode = false
         VoicePlayer.isSyntheticAudioTestMode = false
         runCatching { uiDevice.wakeUp() }
-        runCatching { uiDevice.setOrientationNatural() }
+        if (uiDevice.displayRotation != android.view.Surface.ROTATION_0) {
+            runCatching { uiDevice.setOrientationNatural() }
+        }
         runCatching { uiDevice.unfreezeRotation() }
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
@@ -287,7 +301,8 @@ class PqChatUiAutomatorTest {
         try {
             androidx.test.espresso.Espresso.closeSoftKeyboard()
         } catch (_: Throwable) {}
-        uiDevice.waitForIdle()
+        // Bounded idle wait avoids 10s stalls on live 20ms waveform or 1s countdown AccessibilityEvents
+        runCatching { uiDevice.waitForIdle(300L) }
         Thread.sleep(if (hadKeyboard) 180L else 60L)
         composeTestRule.waitForIdle()
     }
@@ -330,7 +345,7 @@ class PqChatUiAutomatorTest {
         val startY = (height * 0.75f).toInt()
         val endY = (height * 0.25f).toInt()
         uiDevice.swipe(startX, startY, startX, endY, steps)
-        uiDevice.waitForIdle()
+        runCatching { uiDevice.waitForIdle(300L) }
         composeTestRule.waitForIdle()
     }
 
@@ -345,7 +360,7 @@ class PqChatUiAutomatorTest {
         val startY = (height * 0.25f).toInt()
         val endY = (height * 0.75f).toInt()
         uiDevice.swipe(startX, startY, startX, endY, steps)
-        uiDevice.waitForIdle()
+        runCatching { uiDevice.waitForIdle(300L) }
         composeTestRule.waitForIdle()
     }
 
@@ -360,7 +375,7 @@ class PqChatUiAutomatorTest {
         val startY = (height * 0.35f).toInt()
         val endY = (height * 0.85f).toInt()
         uiDevice.swipe(startX, startY, startX, endY, steps)
-        uiDevice.waitForIdle()
+        runCatching { uiDevice.waitForIdle(300L) }
         composeTestRule.waitForIdle()
     }
 
@@ -406,7 +421,7 @@ class PqChatUiAutomatorTest {
             try {
                 uiDevice.click(clampedX, clampedY)
             } catch (_: Throwable) {}
-            uiDevice.waitForIdle()
+            runCatching { uiDevice.waitForIdle(300L) }
         }
 
         composeTestRule.waitForIdle()
@@ -474,7 +489,7 @@ class PqChatUiAutomatorTest {
             .coerceIn(1, uiDevice.displayHeight - 2)
         val tapped = uiDevice.click(centerX, centerY)
         assertTrue("Physical UiDevice.click failed at ($centerX, $centerY) bounds=$bounds", tapped)
-        uiDevice.waitForIdle()
+        runCatching { uiDevice.waitForIdle(300L) }
         Thread.sleep(60)
         composeTestRule.waitForIdle()
         return bounds
@@ -1897,11 +1912,16 @@ class PqChatUiAutomatorTest {
             }
             assertEquals(AdaptivePollingManager.PollingState.DOZE_SLEEP, app.lifecycleCoordinator.currentState)
 
-            // Wake device and bring app back to foreground -> APP_ACTIVE_OTHER
+            // Wake device and bring app back to steady RESUMED foreground state -> APP_ACTIVE_OTHER
             uiDevice.wakeUp()
+            val wakeDeadline = System.currentTimeMillis() + 3_000L
+            while (System.currentTimeMillis() < wakeDeadline && !ScreenStateReceiver.isScreenInteractive(context)) {
+                Thread.sleep(50)
+            }
             runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
             ensureActivityInForeground()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                getCurrentResumedActivity() is MainActivity &&
                 app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER &&
                 composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
             }
@@ -1909,7 +1929,9 @@ class PqChatUiAutomatorTest {
             SecureScreenConfig.isEnabled = false
             runCatching { uiDevice.wakeUp() }
             runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
-            runCatching { uiDevice.setOrientationNatural() }
+            if (uiDevice.displayRotation != android.view.Surface.ROTATION_0) {
+                runCatching { uiDevice.setOrientationNatural() }
+            }
             runCatching { uiDevice.unfreezeRotation() }
             ensureActivityInForeground()
         }

@@ -126,7 +126,7 @@ class MainActivity : FragmentActivity() {
             val isDuressActive by viewModel.isDuressActive.collectAsState()
 
             val requiresLock = (isBiometricEnabled || isPinConfigured || isDuressConfigured) && !isDuressActive
-            var isUnlocked by rememberSaveable(requiresLock) { mutableStateOf(!requiresLock) }
+            var isUnlocked by rememberSaveable { mutableStateOf(!requiresLock) }
 
             LaunchedEffect(requiresLock) {
                 if (!requiresLock) {
