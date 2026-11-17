@@ -6,9 +6,10 @@ Kademlia XOR routing, and malicious observer telemetry logging.
 
 import os
 import time
+import socket
 import hashlib
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 
 from . import bencode
 from . import ed25519
@@ -120,6 +121,76 @@ class DhtNode:
         # BEP 44 Mutable item storage: target_hex -> MutableRecord
         self.storage: Dict[str, MutableRecord] = {}
 
+        # Optional set of target hex strings targeted by selective dropping / rekey blocking
+        self.selective_drop_targets: Set[str] = set()
+        self.suppressed_tombstone_count: int = 0
+        self.dropped_put_count: int = 0
+
+    @staticmethod
+    def is_valid_peer_endpoint(
+        peer: DhtPeer,
+        self_node_id: Optional[bytes] = None
+    ) -> bool:
+        """Validates peer node_id and IPv4 endpoint against bogon/self/port-0 poisoning."""
+        if len(peer.node_id) != 20 or peer.node_id == b"\x00" * 20:
+            return False
+        if self_node_id is not None and peer.node_id == self_node_id:
+            return False
+        if not (1 <= peer.port <= 65535):
+            return False
+        try:
+            octets = [int(part) for part in peer.ip.split(".")]
+        except ValueError:
+            return False
+        if len(octets) != 4 or any(o < 0 or o > 255 for o in octets):
+            return False
+        # Reject 0.0.0.0/8 (unspecified), 169.254.0.0/16 (link-local), 224.0.0.0/4 (multicast)
+        if octets[0] == 0:
+            return False
+        if octets[0] == 169 and octets[1] == 254:
+            return False
+        if octets[0] >= 224:
+            return False
+        return True
+
+    @classmethod
+    def sanitize_compact_nodes(
+        cls,
+        compact_bytes: bytes,
+        max_per_subnet: int = 2,
+        self_node_id: Optional[bytes] = None
+    ) -> List[DhtPeer]:
+        """Parses compact BEP 5 nodes while stripping bogons and enforcing /24 subnet caps."""
+        clean_peers: List[DhtPeer] = []
+        subnet_counts: Dict[str, int] = {}
+        usable_len = (len(compact_bytes) // 26) * 26
+        for offset in range(0, usable_len, 26):
+            peer = DhtPeer.from_compact(compact_bytes[offset:offset + 26])
+            if not cls.is_valid_peer_endpoint(peer, self_node_id=self_node_id):
+                continue
+            parts = peer.ip.split(".")
+            subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+            cnt = subnet_counts.get(subnet, 0)
+            if cnt >= max_per_subnet:
+                continue
+            subnet_counts[subnet] = cnt + 1
+            clean_peers.append(peer)
+        return clean_peers
+
+    def _build_poisoned_compact_nodes(self, target: bytes) -> bytes:
+        """Builds fabricated XOR-close /24 Sybil + bogon compact node entries."""
+        entries: List[bytes] = []
+        # Bogon / invalid endpoints designed to corrupt naive routing tables
+        entries.append(DhtPeer(b"\x00" * 20, "0.0.0.0", 0).to_compact())
+        entries.append(DhtPeer(target, "224.0.0.1", 6881).to_compact())
+        entries.append(DhtPeer(target[:19] + b"\x02", "169.254.1.10", 6882).to_compact())
+        # Concentrated single-/24 Sybil subtree extremely close in XOR distance
+        for idx in range(1, 13):
+            poison_id = bytearray(target)
+            poison_id[19] ^= idx
+            entries.append(DhtPeer(bytes(poison_id), f"185.220.101.{10 + idx}", 7000 + idx).to_compact())
+        return b"".join(entries)
+
     def add_peer(self, peer_id: bytes, ip: str, port: int):
         if peer_id == self.node_id:
             return
@@ -192,32 +263,44 @@ class DhtNode:
                 target = args.get("target")
                 if isinstance(target, bytes) and len(target) == 20:
                     target_hex = target.hex()
-                    closest = self.find_closest_nodes(target, count=self.K)
-                    compact_nodes = b"".join(p.to_compact() for p in closest)
-                    resp_data["nodes"] = compact_nodes
+                    if self.byzantine_behavior == "poison_routing_table":
+                        resp_data["nodes"] = self._build_poisoned_compact_nodes(target)
+                    else:
+                        closest = self.find_closest_nodes(target, count=self.K)
+                        compact_nodes = b"".join(p.to_compact() for p in closest)
+                        resp_data["nodes"] = compact_nodes
 
             elif q_method == "get":
                 # BEP 44 get query
                 target = args.get("target")
                 if isinstance(target, bytes) and len(target) == 20:
                     target_hex = target.hex()
-                    token = self._generate_token(sender_ip)
+                    if self.byzantine_behavior in ("poison_token_and_mitm", "poison_token_oversized"):
+                        token = b"\xaa" * 256
+                    elif self.byzantine_behavior == "poison_token_empty":
+                        token = b""
+                    else:
+                        token = self._generate_token(sender_ip)
                     resp_data["token"] = token
 
                     if self.byzantine_behavior == "withhold_get":
                         # Byzantine Withholding Attack: do not return record
                         resp_data["nodes"] = b""
+                    elif self.byzantine_behavior == "poison_routing_table":
+                        resp_data["nodes"] = self._build_poisoned_compact_nodes(target)
                     elif target_hex in self.storage:
                         rec = self.storage[target_hex]
                         v_out = rec.v
-                        sig_out = rec.sig
+                        sig_out: Optional[bytes] = rec.sig
                         k_out = rec.k
+                        seq_out = rec.seq
+                        salt_out = rec.salt
 
-                        if self.byzantine_behavior == "mutate_bit_flip" and len(v_out) > 0:
+                        if self.byzantine_behavior in ("mutate_bit_flip", "mitm_flip_v", "poison_token_and_mitm") and len(v_out) > 0:
                             v_arr = bytearray(v_out)
                             v_arr[0] ^= 0x01
                             v_out = bytes(v_arr)
-                        elif self.byzantine_behavior == "mutate_bad_signature" and len(sig_out) > 0:
+                        elif self.byzantine_behavior in ("mutate_bad_signature", "mitm_flip_sig") and sig_out and len(sig_out) > 0:
                             sig_arr = bytearray(sig_out)
                             sig_arr[0] ^= 0xFF
                             sig_out = bytes(sig_arr)
@@ -225,6 +308,21 @@ class DhtNode:
                             k_arr = bytearray(k_out)
                             k_arr[0] ^= 0xFF
                             k_out = bytes(k_arr)
+                        elif self.byzantine_behavior == "mitm_flip_seq":
+                            seq_out = rec.seq + 1
+                        elif self.byzantine_behavior == "mitm_flip_salt":
+                            if salt_out and len(salt_out) > 0:
+                                s_arr = bytearray(salt_out)
+                                s_arr[0] ^= 0x55
+                                salt_out = bytes(s_arr)
+                            else:
+                                salt_out = b"forged_salt"
+                        elif self.byzantine_behavior == "mitm_strip_sig":
+                            sig_out = None
+                        elif self.byzantine_behavior == "mitm_strip_salt":
+                            salt_out = None
+                        elif self.byzantine_behavior == "mitm_poison_seq_overflow":
+                            seq_out = (1 << 63) - 1
                         elif self.byzantine_behavior == "inject_bad_size_0b":
                             v_out = b""
                         elif self.byzantine_behavior == "inject_bad_size_899b":
@@ -234,11 +332,12 @@ class DhtNode:
 
                         resp_data["v"] = v_out
                         resp_data["k"] = k_out
-                        resp_data["sig"] = sig_out
-                        resp_data["seq"] = rec.seq
-                        seq_val = rec.seq
-                        if rec.salt:
-                            resp_data["salt"] = rec.salt
+                        if sig_out is not None:
+                            resp_data["sig"] = sig_out
+                        resp_data["seq"] = seq_out
+                        seq_val = seq_out
+                        if salt_out:
+                            resp_data["salt"] = salt_out
                     else:
                         closest = self.find_closest_nodes(target, count=self.K)
                         compact_nodes = b"".join(p.to_compact() for p in closest)
@@ -264,23 +363,26 @@ class DhtNode:
                 ):
                     seq_val = int(seq)
                     salt_bytes = salt if isinstance(salt, bytes) else None
+                    target_bytes = ed25519.compute_target(k, salt_bytes)
+                    target_hex = target_bytes.hex()
 
-                    # Byzantine Drop Attack: accept token but do not store
-                    if self.byzantine_behavior == "drop_put":
-                        pass
-                    # Verify write token
-                    elif self._validate_token(token, sender_ip):
+                    is_selective_drop = (
+                        self.byzantine_behavior == "selective_drop_put"
+                        and (not self.selective_drop_targets or target_hex in self.selective_drop_targets)
+                    )
+                    # Byzantine Drop / Rekey Blocking Attack: acknowledge RPC without storing
+                    if self.byzantine_behavior in ("drop_put", "rekey_blocking") or is_selective_drop:
+                        self.dropped_put_count += 1
+                    # Verify write token (must also be bounded 1..64 bytes)
+                    elif 1 <= len(token) <= 64 and self._validate_token(token, sender_ip):
                         # Verify Ed25519 signature
                         sign_data = bencode.encode_bep44_sign_data(v, seq_val, salt_bytes)
                         if ed25519.verify(k, sign_data, sig):
-                            target_bytes = ed25519.compute_target(k, salt_bytes)
-                            target_hex = target_bytes.hex()
-
                             # Check seq freshness
                             existing = self.storage.get(target_hex)
                             # Byzantine Tombstone Suppression / Sequence Rollback: ignore seq + 1 tombstone updates
                             if self.byzantine_behavior == "suppress_tombstone" and existing is not None and seq_val > existing.seq:
-                                pass # preserve stale record
+                                self.suppressed_tombstone_count += 1
                             elif existing is None or seq_val >= existing.seq:
                                 self.storage[target_hex] = MutableRecord(
                                     v=v,

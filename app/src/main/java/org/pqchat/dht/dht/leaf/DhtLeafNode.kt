@@ -790,11 +790,67 @@ open class DhtLeafNode(
         }
     }
 
+    internal fun isValidDiscoveredPeer(
+        nodeId: ByteArray,
+        address: InetSocketAddress,
+        isLocalMode: Boolean = isLocalTestbedActive()
+    ): Boolean {
+        if (nodeId.size != 20) return false
+        if (nodeId.all { it == 0.toByte() }) return false
+        if (nodeId.contentEquals(myNodeId)) return false
+        if (address.port !in 1..65535) return false
+        val ip = address.address ?: return false
+        if (ip !is java.net.Inet4Address) return false
+        if (ip.isAnyLocalAddress || ip.isMulticastAddress || ip.isLinkLocalAddress) return false
+        if (isLocalMode && !isLoopbackOrLocal(address)) return false
+        return true
+    }
+
+    internal fun isValidDhtToken(token: ByteArray?): Boolean {
+        return token != null && token.size in 1..64
+    }
+
+    private fun updateHighestVerifiedSeq(
+        resp: KrpcMessage.Response,
+        target: ByteArray,
+        salt: ByteArray?,
+        responderAddress: InetSocketAddress,
+        highestNetworkSeq: java.util.concurrent.atomic.AtomicLong
+    ) {
+        val verified = parseAndVerifyGetResult(resp, target, salt, responderAddress) ?: return
+        if (verified.seq >= 0L && verified.seq < Long.MAX_VALUE - 1024L) {
+            highestNetworkSeq.updateAndGet { cur -> maxOf(cur, verified.seq) }
+        }
+    }
+
+    private fun ingestDiscoveredNodes(
+        nodesBytes: ByteArray,
+        candidatePool: MutableMap<InetSocketAddress, DhtPeer>,
+        isLocalMode: Boolean
+    ) {
+        val discovered = parseCompactNodesList(nodesBytes)
+        discovered.forEach { node ->
+            if ((!isLocalMode || isLoopbackOrLocal(node.address)) &&
+                !isBootstrapRouter(node.address) &&
+                node.nodeId.any { b -> b != 0.toByte() }
+            ) {
+                candidatePool.putIfAbsent(node.address, node)
+            }
+        }
+    }
+
     fun addPeer(nodeId: ByteArray, address: InetSocketAddress) {
-        if (isLocalTestbedActive() && !isLoopbackOrLocal(address)) {
+        if (!isValidDiscoveredPeer(nodeId, address)) {
             return
         }
         val peer = DhtPeer(nodeId, address)
+        if (!isLoopbackOrLocal(address)) {
+            val subnet = getSubnet24Prefix(address)
+            val subnetCount = routingTable.count { !isLoopbackOrLocal(it.address) && getSubnet24Prefix(it.address) == subnet }
+            if (subnetCount >= 4 && routingTable.none { it.address == address }) {
+                return
+            }
+        }
         if (!routingTable.contains(peer)) {
             if (routingTable.size < 128) {
                 routingTable.add(peer)
@@ -970,6 +1026,7 @@ open class DhtLeafNode(
         val count = bytes.size / 26
         val list = ArrayList<DhtPeer>(count)
         val isLocalMode = isLocalTestbedActive()
+        val subnetCounts = HashMap<String, Int>()
         for (i in 0 until count) {
             val offset = i * 26
             val nodeId = bytes.copyOfRange(offset, offset + 20)
@@ -977,8 +1034,16 @@ open class DhtLeafNode(
             val ip = InetAddress.getByAddress(ipBytes)
             val port = ((bytes[offset + 24].toInt() and 0xFF) shl 8) or (bytes[offset + 25].toInt() and 0xFF)
             val addr = InetSocketAddress(ip, port)
-            if (isLocalMode && !isLoopbackOrLocal(addr)) {
+            if (!isValidDiscoveredPeer(nodeId, addr, isLocalMode)) {
                 continue
+            }
+            if (!isLoopbackOrLocal(addr)) {
+                val subnet = getSubnet24Prefix(addr)
+                val current = subnetCounts[subnet] ?: 0
+                if (current >= 2) {
+                    continue
+                }
+                subnetCounts[subnet] = current + 1
             }
             addPeer(nodeId, addr)
             list.add(DhtPeer(nodeId, addr))
@@ -1417,12 +1482,7 @@ open class DhtLeafNode(
                                 }
                                 val nodesBytes = resp.responseData["nodes"] as? ByteArray
                                 if (nodesBytes != null) {
-                                    val discovered = parseCompactNodesList(nodesBytes)
-                                    discovered.forEach { node ->
-                                        if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
-                                            candidatePool.putIfAbsent(node.address, node)
-                                        }
-                                    }
+                                    ingestDiscoveredNodes(nodesBytes, candidatePool, isLocalMode)
                                 }
                             }
                         } catch (_: Exception) {}
@@ -1513,6 +1573,13 @@ open class DhtLeafNode(
         val k = resp.responseData["k"] as? ByteArray ?: return null
         val sig = resp.responseData["sig"] as? ByteArray ?: return null
         val seq = (resp.responseData["seq"] as? Long) ?: 0L
+        if (seq < 0L) return null
+        if (resp.responseData.containsKey("salt")) {
+            val respSalt = resp.responseData["salt"] as? ByteArray ?: return null
+            if (salt == null || !respSalt.contentEquals(salt)) {
+                return null
+            }
+        }
         val token = resp.responseData["token"] as? ByteArray
 
         // 1. Verify Ed25519 signature
@@ -1687,18 +1754,13 @@ open class DhtLeafNode(
                             }
 
                             val token = resp.responseData["token"] as? ByteArray
-                            if (token != null && token.isNotEmpty()) {
+                            if (isValidDhtToken(token)) {
                                 tokensReceived.incrementAndGet()
                             }
 
                             val nodesBytes = resp.responseData["nodes"] as? ByteArray
                             if (nodesBytes != null) {
-                                val discovered = parseCompactNodesList(nodesBytes)
-                                discovered.forEach { node ->
-                                    if ((!isLocalMode || isLoopbackOrLocal(node.address)) && !isBootstrapRouter(node.address) && node.nodeId.any { it != 0.toByte() }) {
-                                        candidatePool.putIfAbsent(node.address, node)
-                                    }
-                                }
+                                ingestDiscoveredNodes(nodesBytes, candidatePool, isLocalMode)
                             }
 
                             val verified = parseAndVerifyGetResult(resp, target, salt, peer.address)
@@ -1721,9 +1783,13 @@ open class DhtLeafNode(
                                 if (!probeAllReplicas && isFresh) {
                                     val currBest = foundItem.get()
                                     val currSeq = currBest?.seq ?: 0L
+                                    val isTombstoneOrOverwrite = currSeq > DhtClient.DEFAULT_MUTABLE_SEQ
                                     val minQuorum = minOf(3, currentHopNodes.size)
-                                    val canTerminate = wasPrewarmed ||
-                                            (currSeq > DhtClient.DEFAULT_MUTABLE_SEQ && verifiedResponses.get() >= minOf(2, currentHopNodes.size)) ||
+                                    // Do not cancel concurrent replica queries on a single prewarmed response
+                                    // when currSeq <= DEFAULT_MUTABLE_SEQ so a fast Byzantine node cannot
+                                    // suppress an honest seq = 2 Secure Tombstone from another replica.
+                                    val canTerminate = (wasPrewarmed && (isTombstoneOrOverwrite || currentHopNodes.size <= 1)) ||
+                                            (isTombstoneOrOverwrite && verifiedResponses.get() >= minOf(2, currentHopNodes.size)) ||
                                             (verifiedResponses.get() >= minQuorum && verifiedSubnets.size >= minOf(2, minQuorum)) ||
                                             (verifiedResponses.get() >= minOf(5, currentHopNodes.size))
                                     if (canTerminate) {
@@ -2042,24 +2108,16 @@ open class DhtLeafNode(
                                         candidatePool[peer.address] = verifiedPeer
                                         addPeer(respId, peer.address)
                                     }
-                                    val respSeq = resp.responseData["seq"] as? Long
-                                    if (respSeq != null) {
-                                        highestNetworkSeq.updateAndGet { cur -> maxOf(cur, respSeq) }
-                                    }
+                                    updateHighestVerifiedSeq(resp, target, salt, peer.address, highestNetworkSeq)
                                     val token = resp.responseData["token"] as? ByteArray
-                                    if (token != null && token.isNotEmpty()) {
-                                        tokenMap[peer.address] = token
+                                    if (isValidDhtToken(token)) {
+                                        tokenMap[peer.address] = token!!
                                     } else {
                                         peersWithoutToken[peer.address] = candidatePool[peer.address] ?: peer
                                     }
                                     val nodesBytes = resp.responseData["nodes"] as? ByteArray
                                     if (nodesBytes != null) {
-                                        val discovered = parseCompactNodesList(nodesBytes)
-                                        discovered.forEach { node ->
-                                            if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
-                                                candidatePool.putIfAbsent(node.address, node)
-                                            }
-                                        }
+                                        ingestDiscoveredNodes(nodesBytes, candidatePool, isLocalMode)
                                     }
                                 }
                                 is QueryResult.Error -> {
@@ -2112,24 +2170,16 @@ open class DhtLeafNode(
                                             candidatePool[peer.address] = verifiedPeer
                                             addPeer(respId, peer.address)
                                         }
-                                        val respSeq = resp.responseData["seq"] as? Long
-                                        if (respSeq != null) {
-                                            highestNetworkSeq.updateAndGet { cur -> maxOf(cur, respSeq) }
-                                        }
+                                        updateHighestVerifiedSeq(resp, target, salt, peer.address, highestNetworkSeq)
                                         val token = resp.responseData["token"] as? ByteArray
-                                        if (token != null && token.isNotEmpty()) {
-                                            tokenMap[peer.address] = token
+                                        if (isValidDhtToken(token)) {
+                                            tokenMap[peer.address] = token!!
                                         } else {
                                             peersWithoutToken[peer.address] = candidatePool[peer.address] ?: peer
                                         }
                                         val nodesBytes = resp.responseData["nodes"] as? ByteArray
                                         if (nodesBytes != null) {
-                                            val discovered = parseCompactNodesList(nodesBytes)
-                                            discovered.forEach { node ->
-                                                if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
-                                                    candidatePool.putIfAbsent(node.address, node)
-                                                }
-                                            }
+                                            ingestDiscoveredNodes(nodesBytes, candidatePool, isLocalMode)
                                         }
                                     }
                                     is QueryResult.Error -> {
@@ -2177,18 +2227,13 @@ open class DhtLeafNode(
                                 if (res is QueryResult.Success) {
                                     responsesReceived.incrementAndGet()
                                     val token = res.response.responseData["token"] as? ByteArray
-                                    if (token != null && token.isNotEmpty()) {
-                                        tokenMap[peer.address] = token
+                                    if (isValidDhtToken(token)) {
+                                        tokenMap[peer.address] = token!!
                                         candidatePool.putIfAbsent(peer.address, peer)
                                     }
                                     val nodesBytes = res.response.responseData["nodes"] as? ByteArray
                                     if (nodesBytes != null) {
-                                        val discovered = parseCompactNodesList(nodesBytes)
-                                        discovered.forEach { node ->
-                                            if (!isBootstrapRouter(node.address) && node.nodeId.any { b -> b != 0.toByte() }) {
-                                                candidatePool.putIfAbsent(node.address, node)
-                                            }
-                                        }
+                                        ingestDiscoveredNodes(nodesBytes, candidatePool, isLocalMode)
                                     }
                                 }
                             } catch (_: Exception) {}

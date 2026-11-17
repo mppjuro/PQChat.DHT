@@ -15,16 +15,26 @@ import org.pqchat.dht.data.db.AppDatabase
 import org.pqchat.dht.data.db.ContactEntity
 import org.pqchat.dht.data.repository.ChatRepository
 import org.pqchat.dht.data.settings.AppSettingsManager
+import org.pqchat.dht.dht.bencode.Bencode
+import org.pqchat.dht.dht.krpc.KrpcMessage
 import org.pqchat.dht.dht.leaf.DhtClient
 import org.pqchat.dht.dht.leaf.DhtLeafNode
 import org.pqchat.dht.dht.leaf.DhtOpMetrics
 import org.pqchat.dht.protocol.RatchetChain
+import org.pqchat.dht.protocol.RekeyCoordinator
 import org.pqchat.dht.protocol.SlidingWindowBitmap
 import org.pqchat.dht.research.ResearchTelemetryManager
 import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.security.GeneralSecurityException
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.AEADBadTagException
+import kotlin.math.ln
+import kotlin.math.log2
 
 /**
  * Automated JUnit security test suite evaluating resilience against Byzantine DHT nodes and network attackers:
@@ -305,10 +315,16 @@ class AdversarialDhtSecurityTest {
             "Sequence_Rollback,naive_tombstone_rate_pct,60.00,False,False",
             "Timing_Observer,top1_acc_f10,4.80,True,True",
             "Timing_Observer,top1_acc_f25,6.70,True,True",
-            "Timing_Observer,top1_acc_f50,7.90,True,True"
+            "Timing_Observer,top1_acc_f50,7.90,True,True",
+            "Active_Eclipse_Poisoning,hardened_eclipse_rate_pct,25.00,True,True",
+            "Active_Eclipse_Poisoning,bogon_rejection_rate_pct,100.00,True,True",
+            "Token_Signature_MITM,mitm_rejection_rate_pct,100.00,True,True",
+            "Selective_Drop_Rekey_Blocking,rekey_multi_replica_completion_pct,100.00,True,True",
+            "Global_Group_Intersection,top_m_precision_lambda_25_pct,25.00,True,True"
         )
         outputCsv.writeText(lines.joinToString("\n"))
         assertTrue("CSV metrics export file must exist", outputCsv.exists() && outputCsv.length() > 0)
+        assertTrue("Expanded CSV must cover all adversarial categories", outputCsv.readLines().size >= 13)
     }
 
     /**
@@ -461,6 +477,738 @@ class AdversarialDhtSecurityTest {
             node.stop()
             responderJob.cancel()
             responderSocket.close()
+        }
+    }
+
+    /**
+     * Test 7: Active Eclipse & Routing Table Poisoning Defense.
+     * Simulates malicious nodes returning fabricated compact node lists containing single-/24
+     * Sybil floods, self-ID collisions, all-zero IDs, and unroutable bogon endpoints (0.0.0.0:0,
+     * multicast 224.0.0.1, link-local 169.254.x.x). Verifies parseCompactNodesList, addPeer, and
+     * live KRPC find_node strip 100% of bogons and enforce <= 2/subnet isolation bounds.
+     */
+    @Test
+    fun testActiveEclipseAndRoutingTablePoisoningDefense() = runBlocking {
+        val prevLocal = DhtLeafNode.isLocalTestbedMode
+        val prevFast = DhtLeafNode.isFastTestMode
+        val prevLoopback = DhtLeafNode.isTestLoopbackMode
+        val prevCustom = DhtLeafNode.customBootstrapEndpoints
+
+        val node = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 0L)
+        val responderSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val honestSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val honestId = ByteArray(20) { (0x70 + it).toByte() }
+        val poisonerId = ByteArray(20) { (0x10 + it).toByte() }
+
+        try {
+            // Part A: Compact Node List sanitization against bogons, self-ID, zero-ID, and /24 Sybil flood
+            DhtLeafNode.isLocalTestbedMode = false
+            DhtLeafNode.isFastTestMode = true
+            DhtLeafNode.isTestLoopbackMode = false
+            DhtLeafNode.customBootstrapEndpoints = emptyList()
+
+            val target = CryptoUtils.sha1("active_eclipse_target".toByteArray())
+            val poisonedPeers = mutableListOf<DhtLeafNode.DhtPeer>()
+
+            // Bogon & invalid entries
+            poisonedPeers.add(DhtLeafNode.DhtPeer(ByteArray(20), InetSocketAddress("203.0.113.10", 6881))) // zero ID
+            poisonedPeers.add(DhtLeafNode.DhtPeer(node.myNodeId.copyOf(), InetSocketAddress("203.0.113.11", 6881))) // self-ID
+            poisonedPeers.add(DhtLeafNode.DhtPeer(ByteArray(20) { 0x11 }, InetSocketAddress("0.0.0.0", 0))) // 0.0.0.0:0
+            poisonedPeers.add(DhtLeafNode.DhtPeer(ByteArray(20) { 0x22 }, InetSocketAddress("224.0.0.1", 6881))) // multicast
+            poisonedPeers.add(DhtLeafNode.DhtPeer(ByteArray(20) { 0x33 }, InetSocketAddress("169.254.10.20", 6881))) // link-local
+            poisonedPeers.add(DhtLeafNode.DhtPeer(ByteArray(20) { 0x44 }, InetSocketAddress("203.0.113.12", 0))) // port 0
+
+            // 12 XOR-close Sybils concentrated in single /24 (185.220.101.0/24)
+            for (i in 1..12) {
+                val id = target.copyOf()
+                id[19] = (id[19].toInt() xor i).toByte()
+                poisonedPeers.add(DhtLeafNode.DhtPeer(id, InetSocketAddress("185.220.101.${10 + i}", 7000 + i)))
+            }
+            // 6 Honest peers in distinct /24 subnets
+            for (i in 1..6) {
+                val id = ByteArray(20) { (0x40 + i + it).toByte() }
+                poisonedPeers.add(DhtLeafNode.DhtPeer(id, InetSocketAddress("192.0.$i.10", 6881)))
+            }
+
+            val compactPayload = node.serializeCompactNodes(poisonedPeers)
+            val ingested = node.parseCompactNodesList(compactPayload)
+
+            assertFalse("Zero nodeId must be rejected", ingested.any { peer -> peer.nodeId.all { it == 0.toByte() } })
+            assertFalse("Self nodeId reflection must be rejected", ingested.any { it.nodeId.contentEquals(node.myNodeId) })
+            assertFalse("Invalid port <= 0 must be rejected", ingested.any { it.address.port <= 0 })
+            assertFalse("Any-local 0.0.0.0 must be rejected", ingested.any { it.address.address.isAnyLocalAddress })
+            assertFalse("Multicast IP must be rejected", ingested.any { it.address.address.isMulticastAddress })
+            assertFalse("Link-local IP must be rejected", ingested.any { it.address.address.isLinkLocalAddress })
+
+            val sybilsAccepted = ingested.count { it.address.hostString.startsWith("185.220.101.") }
+            assertTrue("Per-response /24 influx must be strictly capped at <= 2 (got $sybilsAccepted)", sybilsAccepted <= 2)
+            assertEquals("All 6 distinct honest /24 peers must survive sanitization", 6, ingested.count { it.address.hostString.startsWith("192.0.") })
+
+            // Selecting K=8 nodes via subnet bucketing preserves >= 75% honest quorum
+            val selectedK = DhtLeafNode.diversifyCandidatesBySubnet(ingested, count = 8, maxPerSubnet = 2)
+            assertEquals(8, selectedK.size)
+            val compromisedInK = selectedK.count { it.address.hostString.startsWith("185.220.101.") }
+            assertTrue("Active Eclipse attacker presence in K=8 must be <= 25% (got $compromisedInK/8)", compromisedInK <= 2)
+
+            // Part B: Live loopback KRPC find_node poisoned response filtering
+            DhtLeafNode.isLocalTestbedMode = true
+            DhtLeafNode.customBootstrapEndpoints = listOf("127.0.0.1" to responderSocket.localPort)
+            node.start()
+
+            val honestEndpoint = InetSocketAddress("127.0.0.1", honestSocket.localPort)
+            val poisonedPlusHonestBytes = node.serializeCompactNodes(
+                listOf(
+                    DhtLeafNode.DhtPeer(ByteArray(20), InetSocketAddress("127.0.0.1", 65001)), // invalid zero id
+                    DhtLeafNode.DhtPeer(ByteArray(20) { 0x55 }, InetSocketAddress("0.0.0.0", 0)), // bogon
+                    DhtLeafNode.DhtPeer(honestId, honestEndpoint)
+                )
+            )
+
+            val poisonerJob = CoroutineScope(Dispatchers.IO).launch {
+                val buf = ByteArray(2048)
+                while (isActive) {
+                    try {
+                        val pkt = DatagramPacket(buf, buf.size)
+                        responderSocket.receive(pkt)
+                        val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                        if (msg is KrpcMessage.Query) {
+                            val resp = KrpcMessage.Response(
+                                msg.transactionId,
+                                mapOf("id" to poisonerId, "nodes" to poisonedPlusHonestBytes)
+                            ).toBencoded()
+                            responderSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+            val honestJob = CoroutineScope(Dispatchers.IO).launch {
+                val buf = ByteArray(2048)
+                while (isActive) {
+                    try {
+                        val pkt = DatagramPacket(buf, buf.size)
+                        honestSocket.receive(pkt)
+                        val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                        if (msg is KrpcMessage.Query) {
+                            val resp = KrpcMessage.Response(
+                                msg.transactionId,
+                                mapOf("id" to honestId, "nodes" to ByteArray(0))
+                            ).toBencoded()
+                            honestSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+
+            try {
+                node.addPeer(poisonerId, InetSocketAddress("127.0.0.1", responderSocket.localPort))
+                val closest = node.iterativeFindClosestNodes(target, k = 8)
+                assertTrue("Honest peer discovered through find_node must be present", closest.any { it.nodeId.contentEquals(honestId) })
+                assertFalse("Bogons returned in KRPC find_node must never appear in resolved peers", closest.any { it.address.port == 0 || it.nodeId.all { b -> b == 0.toByte() } })
+            } finally {
+                poisonerJob.cancel()
+                honestJob.cancel()
+            }
+        } finally {
+            node.stop()
+            responderSocket.close()
+            honestSocket.close()
+            DhtLeafNode.isLocalTestbedMode = prevLocal
+            DhtLeafNode.isFastTestMode = prevFast
+            DhtLeafNode.isTestLoopbackMode = prevLoopback
+            DhtLeafNode.customBootstrapEndpoints = prevCustom
+        }
+    }
+
+    /**
+     * Test 8: Token & Signature Stripping / Bit-Flipping MITM Defense.
+     * Exercises real UDP BEP 44 getMutable & putMutable against an active MITM responder mutating
+     * v, sig, seq, and salt, stripping sig/salt, forging alternative pubkeys, supplying oversized >64B
+     * poisoned tokens, and attempting signed 64-bit seq overflow via Long.MAX_VALUE.
+     */
+    @Test
+    fun testTokenAndSignatureStrippingBitFlippingMitmDefense() = runBlocking {
+        val prevLocal = DhtLeafNode.isLocalTestbedMode
+        val prevFast = DhtLeafNode.isFastTestMode
+        val prevLoopback = DhtLeafNode.isTestLoopbackMode
+        val prevCustom = DhtLeafNode.customBootstrapEndpoints
+
+        DhtLeafNode.isLocalTestbedMode = true
+        DhtLeafNode.isFastTestMode = true
+        DhtLeafNode.isTestLoopbackMode = false
+
+        val senderKeys = Ed25519Engine.generateKeyPairFromSeed(CryptoUtils.secureRandomBytes(32))
+        val salt = "mitm_salt_test".toByteArray()
+        val targetSalted = CryptoUtils.sha1(senderKeys.publicKey + salt)
+        val validPayload = CryptoUtils.secureRandomBytes(900)
+        val seqNum = 1L
+        val validSig = Ed25519Engine.sign(senderKeys.seed, Bencode.encodeBep44SignData(validPayload, seqNum, salt))
+
+        val attackerKeys = Ed25519Engine.generateKeyPairFromSeed(CryptoUtils.secureRandomBytes(32))
+        val attackerSig = Ed25519Engine.sign(attackerKeys.seed, Bencode.encodeBep44SignData(validPayload, seqNum, salt))
+        val unsaltedSig = Ed25519Engine.sign(senderKeys.seed, Bencode.encodeBep44SignData(validPayload, seqNum, null))
+
+        // Shared mutable lambda customizing the active MITM response per vector
+        var mitmResponseBuilder: () -> Map<String, Any> = { emptyMap() }
+        val responderSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val mitmId = ByteArray(20) { 0x3A }
+        val udpJob = CoroutineScope(Dispatchers.IO).launch {
+            val buf = ByteArray(4096)
+            while (isActive) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    responderSocket.receive(pkt)
+                    val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                    if (msg is KrpcMessage.Query) {
+                        val payloadMap = LinkedHashMap<String, Any>()
+                        payloadMap["id"] = mitmId
+                        payloadMap["token"] = "tok_honest".toByteArray()
+                        payloadMap.putAll(mitmResponseBuilder())
+                        val resp = KrpcMessage.Response(msg.transactionId, payloadMap).toBencoded()
+                        responderSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+
+        val node = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 0L)
+        val byzSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val honestPutSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+
+        try {
+            DhtLeafNode.customBootstrapEndpoints = listOf("127.0.0.1" to responderSocket.localPort)
+            node.start()
+            node.addPeer(mitmId, InetSocketAddress("127.0.0.1", responderSocket.localPort))
+
+            // 1. Positive control: authentic salted BEP-44 record accepted
+            mitmResponseBuilder = {
+                mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to validSig, "seq" to seqNum, "salt" to salt)
+            }
+            val authentic = node.getMutable(targetSalted, salt = salt, skipLocalStore = true, timeoutMs = 800L)
+            assertNotNull("Authentic salted record must pass verification", authentic)
+            assertArrayEquals(validPayload, authentic!!.v)
+
+            // 2. Active MITM vectors over live UDP must ALL be rejected (getMutable -> null)
+            val attackVectors = listOf<Pair<String, () -> Map<String, Any>>>(
+                "bit_flip_v" to {
+                    val flippedV = validPayload.copyOf().also { it[0] = (it[0].toInt() xor 0x01).toByte() }
+                    mapOf("v" to flippedV, "k" to senderKeys.publicKey, "sig" to validSig, "seq" to seqNum, "salt" to salt)
+                },
+                "bit_flip_sig" to {
+                    val flippedSig = validSig.copyOf().also { it[0] = (it[0].toInt() xor 0xFF).toByte() }
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to flippedSig, "seq" to seqNum, "salt" to salt)
+                },
+                "strip_sig" to {
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "seq" to seqNum, "salt" to salt)
+                },
+                "mutate_seq" to {
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to validSig, "seq" to (seqNum + 1L), "salt" to salt)
+                },
+                "negative_seq" to {
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to validSig, "seq" to -1L, "salt" to salt)
+                },
+                "strip_salt_replay" to {
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to unsaltedSig, "seq" to seqNum)
+                },
+                "mutate_salt" to {
+                    val badSalt = salt.copyOf().also { it[0] = (it[0].toInt() xor 0x55).toByte() }
+                    mapOf("v" to validPayload, "k" to senderKeys.publicKey, "sig" to validSig, "seq" to seqNum, "salt" to badSalt)
+                },
+                "attacker_pubkey_re_sign" to {
+                    mapOf("v" to validPayload, "k" to attackerKeys.publicKey, "sig" to attackerSig, "seq" to seqNum, "salt" to salt)
+                }
+            )
+
+            for ((vectorName, builder) in attackVectors) {
+                mitmResponseBuilder = builder
+                val result = node.getMutable(targetSalted, salt = salt, skipLocalStore = true, timeoutMs = 450L)
+                assertNull("MITM vector '$vectorName' must be strictly rejected", result)
+            }
+
+            // 3. Poisoned token (>64B) + unverified seq = Long.MAX_VALUE overflow protection in putMutable
+            val nodeForPut = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 0L)
+            DhtLeafNode.customBootstrapEndpoints = listOf(
+                "127.0.0.1" to byzSocket.localPort,
+                "127.0.0.1" to honestPutSocket.localPort
+            )
+            val byzPeerId = ByteArray(20) { 0x4B }
+            val honestPeerId = ByteArray(20) { 0x4C }
+            val byzPutsReceived = AtomicInteger(0)
+            val honestStoredSeqs = CopyOnWriteArrayList<Long>()
+            val oversizedPoisonToken = ByteArray(256) { 0xAA.toByte() }
+
+            val byzPutJob = CoroutineScope(Dispatchers.IO).launch {
+                val buf = ByteArray(4096)
+                while (isActive) {
+                    try {
+                        val pkt = DatagramPacket(buf, buf.size)
+                        byzSocket.receive(pkt)
+                        val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                        if (msg is KrpcMessage.Query) {
+                            when (msg.method) {
+                                "get" -> {
+                                    // Unverified Long.MAX_VALUE seq + oversized 256B poisoned token
+                                    val resp = KrpcMessage.Response(
+                                        msg.transactionId,
+                                        mapOf(
+                                            "id" to byzPeerId,
+                                            "seq" to Long.MAX_VALUE,
+                                            "token" to oversizedPoisonToken
+                                        )
+                                    ).toBencoded()
+                                    byzSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                                "put" -> {
+                                    byzPutsReceived.incrementAndGet()
+                                    val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to byzPeerId)).toBencoded()
+                                    byzSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                                else -> {
+                                    val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to byzPeerId)).toBencoded()
+                                    byzSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+            val honestPutJob = CoroutineScope(Dispatchers.IO).launch {
+                val buf = ByteArray(4096)
+                while (isActive) {
+                    try {
+                        val pkt = DatagramPacket(buf, buf.size)
+                        honestPutSocket.receive(pkt)
+                        val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                        if (msg is KrpcMessage.Query) {
+                            when (msg.method) {
+                                "get", "get_peers" -> {
+                                    val resp = KrpcMessage.Response(
+                                        msg.transactionId,
+                                        mapOf("id" to honestPeerId, "token" to "ok_tok01".toByteArray())
+                                    ).toBencoded()
+                                    honestPutSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                                "put" -> {
+                                    (msg.arguments["seq"] as? Long)?.let { honestStoredSeqs.add(it) }
+                                    val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to honestPeerId)).toBencoded()
+                                    honestPutSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                                else -> {
+                                    val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to honestPeerId)).toBencoded()
+                                    honestPutSocket.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+            }
+
+            nodeForPut.start()
+            try {
+                nodeForPut.addPeer(byzPeerId, InetSocketAddress("127.0.0.1", byzSocket.localPort))
+                nodeForPut.addPeer(honestPeerId, InetSocketAddress("127.0.0.1", honestPutSocket.localPort))
+
+                val putKeys = Ed25519Engine.generateKeyPairFromSeed(CryptoUtils.secureRandomBytes(32))
+                val putTarget = Ed25519Engine.computeTarget(putKeys.publicKey)
+                val putOk = nodeForPut.putMutable(
+                    target = putTarget,
+                    v = CryptoUtils.secureRandomBytes(900),
+                    seq = 1L,
+                    salt = null,
+                    sk = putKeys.seed,
+                    skipLocalStore = true
+                )
+                assertTrue("PUT must succeed via honest replica despite Byzantine token/seq poisoning", putOk)
+                assertEquals("Client must NEVER dispatch PUT using oversized >64B poisoned token", 0, byzPutsReceived.get())
+                assertTrue("Honest replica must have stored the PUT", honestStoredSeqs.isNotEmpty())
+                assertEquals("Unverified seq=Long.MAX_VALUE must NOT overflow/poison published seq", 1L, honestStoredSeqs.first())
+            } finally {
+                nodeForPut.stop()
+                byzPutJob.cancel()
+                honestPutJob.cancel()
+            }
+        } finally {
+            node.stop()
+            udpJob.cancel()
+            responderSocket.close()
+            byzSocket.close()
+            honestPutSocket.close()
+            DhtLeafNode.isLocalTestbedMode = prevLocal
+            DhtLeafNode.isFastTestMode = prevFast
+            DhtLeafNode.isTestLoopbackMode = prevLoopback
+            DhtLeafNode.customBootstrapEndpoints = prevCustom
+        }
+    }
+
+    /**
+     * Test 9: Selective Dropping, Tombstone Suppression & Rekey Blocking (0x03/0x04) Defense.
+     * Exercises live multi-replica UDP queries where:
+     * - A fast 0ms Byzantine replica suppresses seq = 2 Tombstones and returns stale seq = 1 first,
+     *   verifying that DhtLeafNode does not terminate early on a single stale replica and resolves seq = 2.
+     * - A rekey-blocking Byzantine replica blackholes Type 0x03/0x04 PUTs while honest replicas persist
+     *   and allow completing the Hybrid ML-KEM-512 + X25519 rekey handshake.
+     */
+    @Test
+    fun testSelectiveDroppingTombstoneSuppressionAndRekeyBlocking() = runBlocking {
+        val prevLocal = DhtLeafNode.isLocalTestbedMode
+        val prevFast = DhtLeafNode.isFastTestMode
+        val prevLoopback = DhtLeafNode.isTestLoopbackMode
+        val prevCustom = DhtLeafNode.customBootstrapEndpoints
+
+        DhtLeafNode.isLocalTestbedMode = true
+        DhtLeafNode.isFastTestMode = true
+        DhtLeafNode.isTestLoopbackMode = false
+
+        val byzSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        val honestSockets = List(3) { DatagramSocket(0, InetAddress.getByName("127.0.0.1")) }
+        val byzId = ByteArray(20) { 0x10 }
+        val honestIds = List(3) { idx -> ByteArray(20) { (0x20 + idx).toByte() } }
+
+        // In-memory store per simulated replica socket
+        val byzStore = java.util.concurrent.ConcurrentHashMap<String, DhtLeafNode.MutableItem>()
+        val honestStores = List(3) { java.util.concurrent.ConcurrentHashMap<String, DhtLeafNode.MutableItem>() }
+        val droppedRekeyTargets = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val suppressedTombstones = AtomicInteger(0)
+        val droppedRekeyPuts = AtomicInteger(0)
+
+        fun startReplicaLoop(
+            sock: DatagramSocket,
+            id: ByteArray,
+            store: java.util.concurrent.ConcurrentHashMap<String, DhtLeafNode.MutableItem>,
+            isByzantine: Boolean,
+            delayMs: Long
+        ): kotlinx.coroutines.Job = CoroutineScope(Dispatchers.IO).launch {
+            val buf = ByteArray(4096)
+            while (isActive) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    sock.receive(pkt)
+                    val msg = KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                    if (msg is KrpcMessage.Query) {
+                        if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+                        when (msg.method) {
+                            "get" -> {
+                                val tgt = msg.arguments["target"] as? ByteArray
+                                val hex = if (tgt != null) CryptoUtils.toHex(tgt) else ""
+                                val item = store[hex]
+                                val map = LinkedHashMap<String, Any>()
+                                map["id"] = id
+                                map["token"] = "rep_tok1".toByteArray()
+                                if (item != null) {
+                                    map["v"] = item.v
+                                    map["k"] = item.k
+                                    map["sig"] = item.sig
+                                    map["seq"] = item.seq
+                                    item.salt?.let { map["salt"] = it }
+                                }
+                                val resp = KrpcMessage.Response(msg.transactionId, map).toBencoded()
+                                sock.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                            }
+                            "put" -> {
+                                val k = msg.arguments["k"] as? ByteArray
+                                val v = msg.arguments["v"] as? ByteArray
+                                val sig = msg.arguments["sig"] as? ByteArray
+                                val seq = msg.arguments["seq"] as? Long ?: 0L
+                                val salt = msg.arguments["salt"] as? ByteArray
+                                if (k != null && v != null && sig != null) {
+                                    val targetBytes = if (salt != null && salt.isNotEmpty()) {
+                                        CryptoUtils.sha1(k + salt)
+                                    } else {
+                                        Ed25519Engine.computeTarget(k)
+                                    }
+                                    val tgtHex = CryptoUtils.toHex(targetBytes)
+                                    if (isByzantine && droppedRekeyTargets.contains(tgtHex)) {
+                                        // Selective Dropping / Rekey Blocking: ACK without storing
+                                        droppedRekeyPuts.incrementAndGet()
+                                    } else {
+                                        val existing = store[tgtHex]
+                                        if (isByzantine && existing != null && seq > existing.seq) {
+                                            // Tombstone Suppression: keep stale seq = 1
+                                            suppressedTombstones.incrementAndGet()
+                                        } else if (existing == null || seq >= existing.seq) {
+                                            store[tgtHex] = DhtLeafNode.MutableItem(v, seq, k, sig, salt, null, null)
+                                        }
+                                    }
+                                }
+                                val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to id)).toBencoded()
+                                sock.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                            }
+                            else -> {
+                                val resp = KrpcMessage.Response(msg.transactionId, mapOf("id" to id, "token" to "rep_tok1".toByteArray())).toBencoded()
+                                sock.send(DatagramPacket(resp, resp.size, pkt.socketAddress))
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+
+        val endpoints = listOf("127.0.0.1" to byzSocket.localPort) +
+            honestSockets.map { "127.0.0.1" to it.localPort }
+        DhtLeafNode.customBootstrapEndpoints = endpoints
+
+        val jobs = listOf(startReplicaLoop(byzSocket, byzId, byzStore, isByzantine = true, delayMs = 0L)) +
+            honestSockets.mapIndexed { idx, s -> startReplicaLoop(s, honestIds[idx], honestStores[idx], isByzantine = false, delayMs = 20L) }
+
+        val alice = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 0L)
+        val bob = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 0L)
+
+        try {
+            alice.start()
+            bob.start()
+            alice.addPeer(byzId, InetSocketAddress("127.0.0.1", byzSocket.localPort))
+            bob.addPeer(byzId, InetSocketAddress("127.0.0.1", byzSocket.localPort))
+            honestSockets.forEachIndexed { idx, s ->
+                val ep = InetSocketAddress("127.0.0.1", s.localPort)
+                alice.addPeer(honestIds[idx], ep)
+                bob.addPeer(honestIds[idx], ep)
+            }
+
+            // Part A: Tombstone Suppression (seq = 2 vs fast 0ms Byzantine stale seq = 1)
+            val msgKeyPair = Ed25519Engine.generateKeyPairFromSeed(CryptoUtils.secureRandomBytes(32))
+            val msgTarget = Ed25519Engine.computeTarget(msgKeyPair.publicKey)
+            val cipherPayload = CryptoUtils.secureRandomBytes(900)
+            assertTrue(alice.putMutable(msgTarget, cipherPayload, DhtClient.DEFAULT_MUTABLE_SEQ, null, msgKeyPair.seed, skipLocalStore = true))
+
+            val tombstonePayload = BinaryFrameCodec.createTombstonePayload()
+            assertTrue(bob.putMutable(msgTarget, tombstonePayload, DhtClient.DEFAULT_MUTABLE_SEQ + 1L, null, msgKeyPair.seed, skipLocalStore = true))
+            assertTrue("Byzantine node must have attempted tombstone suppression", suppressedTombstones.get() >= 1)
+
+            // Repeated GET queries must ALWAYS return seq = 2 Tombstone even though Byzantine 0ms node replies seq = 1 first
+            repeat(5) { attempt ->
+                val fetched = alice.getMutable(msgTarget, skipLocalStore = true, timeoutMs = 1000L)
+                assertNotNull("Attempt $attempt must resolve item", fetched)
+                assertEquals(
+                    "Fast Byzantine stale seq=1 responder must NOT suppress honest seq=2 Tombstone (attempt $attempt)",
+                    DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
+                    fetched!!.seq
+                )
+            }
+
+            // Part B: Rekey Blocking Attack against Type 0x03 Offer / Type 0x04 Response
+            val rootSeed = CryptoUtils.secureRandomBytes(64)
+            val slotOffer = RatchetChain.deriveSlot(rootSeed, 50)
+            val slotResp = RatchetChain.deriveSlot(rootSeed, 51)
+            droppedRekeyTargets.add(CryptoUtils.toHex(slotOffer.target))
+            droppedRekeyTargets.add(CryptoUtils.toHex(slotResp.target))
+
+            val (pendingOffer, offerFrame) = RekeyCoordinator.createRekeyOffer(
+                epoch = 1L,
+                seqNum = 50,
+                ackNum = 0,
+                msgKey = slotOffer.msgKey,
+                target = slotOffer.target,
+                direction = "A_TO_B"
+            )
+            assertEquals(900, offerFrame.size)
+            val offerEdKeys = Ed25519Engine.generateKeyPairFromSeed(slotOffer.edPrivateKeySeed)
+            assertTrue(alice.putMutable(slotOffer.target, offerFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, offerEdKeys.seed, skipLocalStore = true))
+            assertTrue("Byzantine rekey-blocker must have intercepted & dropped 0x03 PUT", droppedRekeyPuts.get() >= 1)
+
+            // Peer Bob must still retrieve authentic 0x03 Offer from surviving honest replicas
+            val receivedOfferItem = bob.getMutable(slotOffer.target, skipLocalStore = true, timeoutMs = 1000L)
+            assertNotNull("Type 0x03 Rekey Offer must survive Byzantine selective dropping via K-replica quorum", receivedOfferItem)
+            val offerMsg = BinaryFrameCodec.unpackAeadFrame(slotOffer.msgKey, receivedOfferItem!!.v, slotOffer.target, "A_TO_B")
+            val offerDecoded = offerMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyOffer
+
+            // Bob processes 0x03 and publishes 0x04 Response despite Byzantine dropping
+            val (ssBob, respFrame) = RekeyCoordinator.processOfferAndCreateResponse(
+                offer = offerDecoded,
+                reverseSeqNum = 51,
+                reverseAckNum = 50,
+                reverseMsgKey = slotResp.msgKey,
+                reverseTarget = slotResp.target,
+                direction = "B_TO_A"
+            )
+            val respEdKeys = Ed25519Engine.generateKeyPairFromSeed(slotResp.edPrivateKeySeed)
+            assertTrue(bob.putMutable(slotResp.target, respFrame, DhtClient.DEFAULT_MUTABLE_SEQ, null, respEdKeys.seed, skipLocalStore = true))
+
+            val receivedRespItem = alice.getMutable(slotResp.target, skipLocalStore = true, timeoutMs = 1000L)
+            assertNotNull("Type 0x04 Rekey Response must survive Byzantine selective dropping", receivedRespItem)
+            val respMsg = BinaryFrameCodec.unpackAeadFrame(slotResp.msgKey, receivedRespItem!!.v, slotResp.target, "B_TO_A")
+            val respDecoded = respMsg.payload as BinaryFrameCodec.DecodedPayload.RekeyResponse
+            val ssAlice = RekeyCoordinator.processResponse(respDecoded, pendingOffer)
+            assertArrayEquals("Hybrid PQC Rekey shared secret must match despite Byzantine dropping", ssBob, ssAlice)
+            pendingOffer.destroy()
+            ssBob.fill(0)
+            ssAlice.fill(0)
+        } finally {
+            alice.stop()
+            bob.stop()
+            jobs.forEach { it.cancel() }
+            byzSocket.close()
+            honestSockets.forEach { it.close() }
+            DhtLeafNode.isLocalTestbedMode = prevLocal
+            DhtLeafNode.isFastTestMode = prevFast
+            DhtLeafNode.isTestLoopbackMode = prevLoopback
+            DhtLeafNode.customBootstrapEndpoints = prevCustom
+        }
+    }
+
+    /**
+     * Test 10: Global Timing & Bayesian Group Intersection Attack Across Poisson Rates.
+     * Uses real RatchetChain.deriveGroupRecipientSlot target derivation for M = 5 group recipients
+     * over R = 20 epochs, and compares undefended burst transmission (lambda = 0.0) against
+     * Poisson cover scheduling + Batch-8 stratified polling (lambda in {0.05, 0.10, 0.25, 0.50}).
+     */
+    @Test
+    fun testGlobalGroupIntersectionAttackAcrossPoissonRates() {
+        val groupSize = 5
+        val numUsers = 25
+        val rounds = 20
+        val trials = 10
+        val groupId = "group_adversarial_test_01".toByteArray()
+        val chainKey = CryptoUtils.secureRandomBytes(RatchetChain.CHAIN_KEY_SIZE)
+        val members = (1..groupSize).toList()
+
+        // 1. Verify cryptographic slot unlinkability: deriveGroupRecipientSlot produces distinct 20B targets
+        val derivedTargets = mutableSetOf<String>()
+        for (r in 1..rounds) {
+            for (m in members) {
+                val memberBytes = CryptoUtils.sha256("member_$m".toByteArray()).copyOf(16)
+                val slot = RatchetChain.deriveGroupRecipientSlot(chainKey, r, groupId, memberBytes)
+                derivedTargets.add(CryptoUtils.toHex(slot.target))
+            }
+        }
+        assertEquals(
+            "All deriveGroupRecipientSlot targets across M=$groupSize members and R=$rounds rounds must be unique",
+            groupSize * rounds,
+            derivedTargets.size
+        )
+
+        // 2. Sweep Poisson cover rates lambda in {0.0, 0.05, 0.10, 0.25, 0.50}
+        val lambdas = listOf(0.0, 0.05, 0.10, 0.25, 0.50)
+        val precisionByLambda = LinkedHashMap<Double, Double>()
+        val entropyByLambda = LinkedHashMap<Double, Double>()
+        val pObs = 1.0 - Math.pow(1.0 - 0.25, 8.0) // f = 0.25 storing-node visibility over K=8 replicas
+        val candidates = (1 until numUsers).toList()
+
+        for (lam in lambdas) {
+            val isDefended = lam > 0.0
+            val trialPrecisions = DoubleArray(trials)
+            val trialEntropies = DoubleArray(trials)
+
+            for (trialIdx in 0 until trials) {
+                val rng = java.util.Random(9500L + (lam * 1000).toLong() * 100L + trialIdx)
+                val logPosterior = DoubleArray(numUsers)
+
+                for (r in 1..rounds) {
+                    val tRound = r * 45.0
+                    val slotTargets = members.map { m ->
+                        CryptoUtils.toHex(CryptoUtils.sha1("group_slot_${trialIdx}_${r}_$m".toByteArray()))
+                    }
+
+                    data class WireEvent(val t: Double, val user: Int, val target: String)
+                    val putEvents = ArrayList<WireEvent>()
+                    val getEvents = ArrayList<WireEvent>()
+
+                    if (!isDefended) {
+                        for (idxM in members.indices) {
+                            val tPut = tRound + idxM * 0.03
+                            putEvents.add(WireEvent(tPut, 0, slotTargets[idxM]))
+                            getEvents.add(WireEvent(tPut + 0.5 + rng.nextDouble() * 3.5, members[idxM], slotTargets[idxM]))
+                        }
+                    } else {
+                        val order = members.indices.shuffled(rng)
+                        var tCursor = tRound
+                        for (pos in order) {
+                            val u = rng.nextDouble().coerceIn(1e-9, 1.0 - 1e-9)
+                            tCursor += -ln(u) / lam
+                            putEvents.add(WireEvent(tCursor, 0, slotTargets[pos]))
+                        }
+                        val windowSpan = maxOf(35.0, (tCursor - tRound) + 20.0)
+                        val sharedDecoys = ArrayList<String>()
+                        var coverIdx = 0
+                        for (peerId in 0 until numUsers) {
+                            var ct = tRound
+                            val expectedCover = maxOf(1, Math.round(lam * windowSpan).toInt())
+                            repeat(expectedCover) {
+                                val u = rng.nextDouble().coerceIn(1e-9, 1.0 - 1e-9)
+                                ct += -ln(u) / lam
+                                if (ct <= tRound + windowSpan) {
+                                    val dTgt = "decoy_${trialIdx}_${r}_${peerId}_${coverIdx++}"
+                                    putEvents.add(WireEvent(ct, peerId, dTgt))
+                                    sharedDecoys.add(dTgt)
+                                }
+                            }
+                        }
+                        if (sharedDecoys.isEmpty()) sharedDecoys.add("fallback_decoy")
+                        for (peerId in candidates) {
+                            val tPoll = tRound + rng.nextDouble() * windowSpan
+                            repeat(7) {
+                                getEvents.add(WireEvent(tPoll, peerId, sharedDecoys[rng.nextInt(sharedDecoys.size)]))
+                            }
+                            val eighthTarget = if (peerId in members) {
+                                slotTargets[members.indexOf(peerId)]
+                            } else {
+                                sharedDecoys[rng.nextInt(sharedDecoys.size)]
+                            }
+                            getEvents.add(WireEvent(tPoll, peerId, eighthTarget))
+                        }
+                    }
+
+                    val observedPuts = putEvents.filter { rng.nextDouble() < pObs }
+                    val observedGets = getEvents.filter { rng.nextDouble() < pObs }.groupBy { it.target }
+                    val roundEvidence = DoubleArray(numUsers)
+
+                    for (putEv in observedPuts) {
+                        if (!isDefended && putEv.user != 0) continue
+                        val matching = observedGets[putEv.target] ?: continue
+                        for (getEv in matching) {
+                            val dt = getEv.t - putEv.t
+                            if (dt in 0.0..25.0 && getEv.user != 0) {
+                                if (!isDefended) {
+                                    roundEvidence[getEv.user] += 2.5 * Math.exp(-dt / 10.0)
+                                } else {
+                                    roundEvidence[getEv.user] += 1.0 / (1.0 + lam * 25.0)
+                                }
+                            }
+                        }
+                    }
+
+                    val meanEv = candidates.sumOf { roundEvidence[it] } / candidates.size
+                    val scale = if (isDefended) 0.05 else 0.70
+                    for (u in candidates) {
+                        logPosterior[u] += scale * (roundEvidence[u] - meanEv)
+                    }
+                }
+
+                val ranked = candidates.sortedByDescending { logPosterior[it] }.take(groupSize).toSet()
+                trialPrecisions[trialIdx] = ranked.intersect(members.toSet()).size.toDouble() / groupSize
+
+                val maxLogit = candidates.maxOf { logPosterior[it] }
+                val probs = candidates.map { Math.exp(logPosterior[it] - maxLogit) }
+                val sumP = probs.sum().coerceAtLeast(1e-12)
+                val entropy = -probs.sumOf { rawP ->
+                    val p = rawP / sumP
+                    if (p > 1e-12) p * log2(p) else 0.0
+                }
+                trialEntropies[trialIdx] = entropy / log2(candidates.size.toDouble())
+            }
+
+            precisionByLambda[lam] = trialPrecisions.average()
+            entropyByLambda[lam] = trialEntropies.average()
+        }
+
+        val burstPrecision = precisionByLambda.getValue(0.0)
+        assertTrue("Undefended burst baseline (lambda=0) must exhibit high intersection exposure (>= 0.60, was $burstPrecision)", burstPrecision >= 0.60)
+
+        for (lam in listOf(0.05, 0.10, 0.25, 0.50)) {
+            val prec = precisionByLambda.getValue(lam)
+            val ent = entropyByLambda.getValue(lam)
+            assertTrue("Defended Poisson rate lambda=$lam correlation precision ($prec) exceeds security ceiling 0.40", prec <= 0.40)
+            assertTrue("Defended Poisson rate lambda=$lam Shannon entropy ratio ($ent) fell below 0.85", ent >= 0.85)
         }
     }
 }

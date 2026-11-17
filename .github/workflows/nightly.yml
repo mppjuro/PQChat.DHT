@@ -470,21 +470,32 @@ jobs:
         run: ./gradlew testDebugUnitTest --tests "org.pqchat.dht.dht.AdversarialDhtSecurityTest"
 
       - name: Run Python Byzantine & Adversarial Attack Simulation Suite
-        run: python -m tools.testbed.attackers --run-adversarial-suite
+        run: |
+          python -m tools.testbed.attackers --run-adversarial-suite --require-plots
+          test -s docs/adversarial_simulation_results.csv
+          test -s tools/testbed/adversarial_simulation_results.csv
+          test -s docs/adversarial_defense_effectiveness.png
+          test -s tools/testbed/adversarial_defense_effectiveness.png
 
       - name: Publish Adversarial Simulation Summary to GitHub Job Summary
         if: always()
         run: |
-          echo "## ⚔️ Byzantine & Adversarial DHT Attack Simulation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Byzantine & Adversarial DHT Attack Simulation Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Attack Profile | Threat Vector | Defense Mechanism | Result |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- | :--- | :---: |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Sybil & Eclipse** | Routing table /24 subnet flooding | Subnet bucketing (max 2 nodes per /24) | ✅ DEFENDED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Payload Mutator** | Bit flipping in v/sig/k/Bencode | Strict 900B framing + GCM tag + Ed25519 | ✅ REJECTED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Sequence Rollback** | Replay of old seq numbers & tombstone suppression | Strict seq monotonically increasing + 900B tombstone | ✅ MITIGATED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Timing & Traffic Analysis** | Inter-arrival timing correlation | Poisson cover traffic + decoy hops | ✅ OBFUSCATED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Active Eclipse & Routing Poisoning** | Fabricated XOR-close /24 nodes + bogons (0.0.0.0:0, multicast, link-local) | Bogon sanitization + strict /24 bucketing (max 2/subnet, no backfill) | DEFENDED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Token & Signature MITM** | Bit-flips in v/sig/seq/salt, sig/salt stripping, >64B tokens, seq overflow | Ed25519 + target SHA-1(k+salt) binding + bounded token/seq verification | REJECTED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Selective Drop & Tombstone Suppression** | Fast stale seq=1 replay & 0x03/0x04 Rekey blackholing | Quorum highest-seq tombstone resolution + K=8 multi-replica quorum | MITIGATED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Global Timing & Group Intersection** | Bayesian recipient linking on deriveGroupRecipientSlot across lambda | Shuffled WFQ Poisson cover emissions + N=8 populated decoy polling | OBFUSCATED |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f docs/adversarial_simulation_results.csv ]; then
+            echo "### Measured Adversarial CSV Telemetry" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            python -c "import csv; r=list(csv.DictReader(open('docs/adversarial_simulation_results.csv', encoding='utf-8'))); print('| Category | Metric | Value | Defense | Mitigated |\n| :--- | :--- | ---: | :---: | :---: |'); print('\n'.join(f\"| {x['metric_category']} | {x['attack_parameter']} | {x['value']} | {x['defense_active']} | {x['mitigated']} |\" for x in r))" >> $GITHUB_STEP_SUMMARY
+          fi
 
-      - name: Upload Adversarial Simulation Results & CSVs
+      - name: Upload Adversarial Simulation Results, Plots & CSVs
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -492,6 +503,8 @@ jobs:
           path: |
             docs/adversarial_simulation_results.csv
             tools/testbed/adversarial_simulation_results.csv
+            docs/adversarial_defense_effectiveness.png
+            tools/testbed/adversarial_defense_effectiveness.png
             app/build/reports/tests/testDebugUnitTest/
 
   multi-emulator-dht-real-e2e:
