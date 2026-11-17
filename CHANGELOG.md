@@ -76,6 +76,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`407bd7a`](https://github.com/mppjuro/PQChat.DHT/commit/407bd7aaff6b818a508db8e9e370529b94244469) (2026-11-17) — rememberSaveable PIN lock reset, bounded UiDevice idle waits, and RESUMED teardown sync
 - [`fdc97dd`](https://github.com/mppjuro/PQChat.DHT/commit/fdc97dd4b75694dcae41e6208f4e3e4494d1909d) (2026-11-17) — UI Automator physical click tests, rotation state preservation, and multi-emulator E2E dialog handling
 - [`50ab5e7`](https://github.com/mppjuro/PQChat.DHT/commit/50ab5e7bb1e6683af080b755f89c7a2559ed072e) (2026-11-17) — **db,crypto,formal**: harden SQLite encryption, Keystore guard, memory zeroing, and formal proofs
 - [`1c794d1`](https://github.com/mppjuro/PQChat.DHT/commit/1c794d16566c51db1acc7aa941fc659e590e9992) (2026-11-17) — **dht,traffic,crypto**: eliminate nodeId, subnet, keepalive, and timestamp metadata leaks
