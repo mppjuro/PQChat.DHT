@@ -40,6 +40,8 @@ class PQChatApplication : Application() {
     lateinit var researchTelemetryManager: org.pqchat.dht.research.ResearchTelemetryManager
         private set
 
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -99,7 +101,12 @@ class PQChatApplication : Application() {
             researchTelemetryProvider = { if (::researchTelemetryManager.isInitialized) researchTelemetryManager else null }
         ).apply { start() }
         pollingScheduler = PollingScheduler(this, repository, dhtLeafNode, settingsManager).apply { start() }
-        embeddedTorManager = org.pqchat.dht.network.tor.EmbeddedTorManager(this)
+        embeddedTorManager = org.pqchat.dht.network.tor.EmbeddedTorManager(this).apply {
+            onCircuitChanged = { circuitId ->
+                dhtLeafNode.onTorCircuitChanged(circuitId)
+            }
+        }
+        registerNetworkInterfaceMonitor()
 
         val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
         appScope.launch {
@@ -163,8 +170,74 @@ class PQChatApplication : Application() {
         )
     }
 
+    private fun registerNetworkInterfaceMonitor() {
+        try {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    notifyNetworkSignature(cm, network)
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: android.net.Network,
+                    networkCapabilities: android.net.NetworkCapabilities
+                ) {
+                    notifyNetworkSignature(cm, network, networkCapabilities)
+                }
+
+                override fun onLinkPropertiesChanged(
+                    network: android.net.Network,
+                    linkProperties: android.net.LinkProperties
+                ) {
+                    notifyNetworkSignature(cm, network, linkProperties = linkProperties)
+                }
+
+                override fun onLost(network: android.net.Network) {
+                    dhtLeafNode.onNetworkInterfaceLost()
+                }
+            }
+            networkCallback = callback
+            cm.registerDefaultNetworkCallback(callback)
+        } catch (_: Throwable) {
+            // ConnectivityManager unavailable or permission restricted
+        }
+    }
+
+    private fun notifyNetworkSignature(
+        cm: android.net.ConnectivityManager,
+        network: android.net.Network,
+        capsOverride: android.net.NetworkCapabilities? = null,
+        linkProperties: android.net.LinkProperties? = null
+    ) {
+        val caps = capsOverride ?: cm.getNetworkCapabilities(network)
+        val links = linkProperties ?: cm.getLinkProperties(network)
+        val transports = buildList {
+            if (caps != null) {
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) add("WIFI")
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) add("CELLULAR")
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) add("ETHERNET")
+            }
+        }.joinToString("+").ifEmpty { "OTHER" }
+        val iface = links?.interfaceName ?: "unknown"
+        val addrs = links?.linkAddresses
+            ?.mapNotNull { it.address?.hostAddress }
+            ?.sorted()
+            ?.joinToString(",")
+            ?: ""
+        val signature = "$network|$transports|$iface|$addrs"
+        dhtLeafNode.onNetworkInterfaceChanged(signature)
+        pollingScheduler.updateNetworkAdaptiveK()
+    }
+
     override fun onTerminate() {
         super.onTerminate()
+        networkCallback?.let { cb ->
+            try {
+                getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
+            } catch (_: Throwable) {}
+            networkCallback = null
+        }
         researchTelemetryManager.stop()
         resourceProfiler.stopSession()
         lifecycleCoordinator.stop()

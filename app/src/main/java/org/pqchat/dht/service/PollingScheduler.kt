@@ -52,7 +52,7 @@ class PollingScheduler(
     private val isStarted = AtomicBoolean(false)
 
     init {
-        // Wire active chat 20-25s keepalive ping
+        // Wire Poisson-scheduled NAT keepalive ping (decoupled from active chat open/close)
         pollingManager.onKeepalivePingRequested = {
             dhtLeafNode?.sendKeepalivePing()
         }

@@ -23,6 +23,8 @@ class AdaptivePollingManager(
     var onCoverTrafficTick: (suspend () -> Unit)? = null
     var onKeepalivePingRequested: (suspend () -> Unit)? = null
     private var keepaliveJob: Job? = null
+    @Volatile var keepaliveMeanIntervalMs: Long = DEFAULT_KEEPALIVE_MEAN_INTERVAL_MS
+    val isKeepaliveRunning: Boolean get() = keepaliveJob?.isActive == true
     @Volatile var pollBatchSize: Int = N_POLL_TARGETS
     @Volatile var isFastMode: Boolean = false
     var random: java.util.Random = org.pqchat.dht.crypto.CryptoUtils.secureRandom
@@ -207,6 +209,9 @@ class AdaptivePollingManager(
     companion object {
         const val N_POLL_TARGETS = 8
         const val DEFAULT_POLL_BATCH_SIZE = N_POLL_TARGETS
+        const val DEFAULT_KEEPALIVE_MEAN_INTERVAL_MS = 20_000L
+        const val MIN_KEEPALIVE_DELAY_MS = 1_000L
+        const val MAX_KEEPALIVE_DELAY_MS = 28_000L
 
         /**
          * Resolves the target PollingState based on the triplet:
@@ -328,10 +333,12 @@ class AdaptivePollingManager(
         val stateChanged = _currentState.value != newState
         _currentState.value = newState
 
-        if (newState == PollingState.FOREGROUND_CHAT) {
-            startKeepaliveLoop()
-        } else {
+        if (newState == PollingState.DOZE_SLEEP) {
             stopKeepaliveLoop()
+        } else {
+            // Decouple NAT keepalive from FOREGROUND_CHAT so opening/closing a chat
+            // never starts, stops, or resets the ping stream for a passive ISP observer.
+            ensureKeepaliveLoopRunning()
         }
 
         if (newState == PollingState.DOZE_SLEEP) {
@@ -439,15 +446,26 @@ class AdaptivePollingManager(
         }
     }
 
-    private fun startKeepaliveLoop() {
-        keepaliveJob?.cancel()
+    /**
+     * Computes memoryless Poisson (exponential) NAT keepalive delay bounded below
+     * carrier CGNAT UDP mapping timeouts (~30s).
+     */
+    fun computeNextKeepaliveDelayMs(): Long {
+        val meanMs = keepaliveMeanIntervalMs.coerceAtLeast(1L)
+        val minDelay = if (meanMs < MIN_KEEPALIVE_DELAY_MS) (meanMs / 4L).coerceAtLeast(1L) else MIN_KEEPALIVE_DELAY_MS
+        val maxDelay = maxOf(minDelay, MAX_KEEPALIVE_DELAY_MS)
+        val u = random.nextDouble().coerceIn(1e-10, 1.0 - 1e-10)
+        val expMs = (-meanMs.toDouble() * kotlin.math.ln(u)).toLong()
+        return expMs.coerceIn(minDelay, maxDelay)
+    }
+
+    private fun ensureKeepaliveLoopRunning() {
+        if (keepaliveJob?.isActive == true) return
         keepaliveJob = scope.launch {
-            while (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
-                // Keepalive 20-25 seconds (randomized between 20000 and 25000 ms)
-                // Preserves carrier CGNAT / LTE UDP NAT mapping tables (which timeout after 30s)
-                val delayMs = 20_000L + (random.nextDouble() * 5_000L).toLong()
+            while (isActive && _currentState.value != PollingState.DOZE_SLEEP) {
+                val delayMs = computeNextKeepaliveDelayMs()
                 delay(delayMs)
-                if (isActive && _currentState.value == PollingState.FOREGROUND_CHAT) {
+                if (isActive && _currentState.value != PollingState.DOZE_SLEEP && !isFastMode) {
                     try {
                         onKeepalivePingRequested?.invoke()
                     } catch (e: CancellationException) {

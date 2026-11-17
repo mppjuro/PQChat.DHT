@@ -61,7 +61,8 @@ object ChunkingEngine {
                 transferId = transferId,
                 chunkIndex = j,
                 totalChunks = totalChunks,
-                chunkData = chunkBytes
+                chunkData = chunkBytes,
+                obfuscateTimestamp = true
             )
             val frame = BinaryFrameCodec.packAeadFrame(subMsgKey, plaintext, subTarget, direction)
 

@@ -222,4 +222,59 @@ class AdaptivePollingManagerTest {
 
         assertFalse("isSyncing must be reset to false after timeout, preventing infinite spinner hang", manager!!.isSyncing.value)
     }
+
+    @Test
+    fun testKeepaliveDecoupledFromChatOpen_noTimingCorrelationOrPingBurst() = runBlocking {
+        val pingTimestamps = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        manager = AdaptivePollingManager { /* no-op poll */ }
+        manager!!.keepaliveMeanIntervalMs = 40L
+        manager!!.onKeepalivePingRequested = {
+            pingTimestamps.add(System.currentTimeMillis())
+        }
+
+        // Start in APP_ACTIVE_OTHER (contact list, no chat selected)
+        manager!!.onAppForegrounded()
+        assertEquals(AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER, manager!!.currentState.value)
+        assertTrue("Keepalive must already be running in APP_ACTIVE_OTHER", manager!!.isKeepaliveRunning)
+
+        delay(220L)
+        val pingsBeforeChatOpen = pingTimestamps.size
+        assertTrue("Keepalive pings must run in APP_ACTIVE_OTHER before opening chat", pingsBeforeChatOpen >= 1)
+
+        // Open a chat -> transitions APP_ACTIVE_OTHER -> FOREGROUND_CHAT
+        val chatOpenTime = System.currentTimeMillis()
+        manager!!.onChatOpened("alice")
+        assertEquals(AdaptivePollingManager.PollingState.FOREGROUND_CHAT, manager!!.currentState.value)
+        assertTrue("Keepalive remains running in FOREGROUND_CHAT", manager!!.isKeepaliveRunning)
+
+        // Verify opening the chat does NOT immediately fire a synchronous burst of pings at click time
+        val immediatePostOpenPings = pingTimestamps.count { it in chatOpenTime..(chatOpenTime + 8L) }
+        assertTrue("Opening chat must not trigger an immediate ping burst", immediatePostOpenPings <= 1)
+
+        delay(220L)
+        val pingsWhileChatOpen = pingTimestamps.size - pingsBeforeChatOpen
+        assertTrue("Keepalive continues smoothly during FOREGROUND_CHAT", pingsWhileChatOpen >= 1)
+
+        // Close chat -> keepalive MUST continue running seamlessly in APP_ACTIVE_OTHER
+        manager!!.onChatClosed()
+        assertEquals(AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER, manager!!.currentState.value)
+        assertTrue("Keepalive must stay running after closing chat", manager!!.isKeepaliveRunning)
+
+        // Only DOZE_SLEEP stops the keepalive loop
+        manager!!.onDeviceScreenOff()
+        assertEquals(AdaptivePollingManager.PollingState.DOZE_SLEEP, manager!!.currentState.value)
+        assertFalse("Keepalive must stop only in DOZE_SLEEP", manager!!.isKeepaliveRunning)
+    }
+
+    @Test
+    fun testKeepaliveDelayFollowsBoundedPoissonExponentialDistribution() {
+        manager = AdaptivePollingManager { }
+        manager!!.keepaliveMeanIntervalMs = 20_000L
+        val samples = DoubleArray(2000) { manager!!.computeNextKeepaliveDelayMs().toDouble() }
+        assertTrue("All keepalive delays >= 1000ms", samples.all { it >= AdaptivePollingManager.MIN_KEEPALIVE_DELAY_MS })
+        assertTrue("All keepalive delays <= 28000ms (below 30s CGNAT timeout)", samples.all { it <= AdaptivePollingManager.MAX_KEEPALIVE_DELAY_MS })
+        // Must have substantial spread (not confined to [20s, 25s] uniform window)
+        assertTrue("Poisson keepalive must produce samples below 10s", samples.any { it < 10_000.0 })
+        assertTrue("Poisson keepalive must produce samples above 25s", samples.any { it > 25_000.0 })
+    }
 }

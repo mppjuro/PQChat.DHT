@@ -1,5 +1,9 @@
 package org.pqchat.dht.dht
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Before
@@ -305,5 +309,158 @@ class AdversarialDhtSecurityTest {
         )
         outputCsv.writeText(lines.joinToString("\n"))
         assertTrue("CSV metrics export file must exist", outputCsv.exists() && outputCsv.length() > 0)
+    }
+
+    /**
+     * Test 5: Strict /24 IPv4 and /48 IPv6 Subnet Cap Enforcement Without Backfill.
+     * Even when total candidate count is small (< K) and an attacker supplies only Sybil peers
+     * from a single /24 (or IPv6 /48), diversifyCandidatesBySubnet must NEVER backfill excess peers.
+     */
+    @Test
+    fun testStrictSubnetCapEnforcedWithoutBackfillEvenWhenCandidatePoolIsSmall() {
+        val target = CryptoUtils.secureRandomBytes(20)
+
+        // Case A: Only 6 Sybil nodes in the same /24 subnet, requested K = 8
+        val singleSubnetSybils = (0 until 6).map { i ->
+            val id = target.copyOf()
+            id[19] = i.toByte()
+            DhtLeafNode.DhtPeer(id, InetSocketAddress("198.51.100.${10 + i}", 6881 + i))
+        }
+        val selectedOnlySybils = DhtLeafNode.diversifyCandidatesBySubnet(singleSubnetSybils, count = 8, maxPerSubnet = 2)
+        assertEquals(
+            "Single /24 Sybil subnet must be strictly capped at 2 peers even when fewer than K=8 total candidates exist",
+            2,
+            selectedOnlySybils.size
+        )
+
+        // Case B: 5 Sybils in 198.51.100.0/24 + 2 honest peers in distinct /24 subnets (total = 7 < K=8)
+        val honestPeers = listOf(
+            DhtLeafNode.DhtPeer(CryptoUtils.secureRandomBytes(20), InetSocketAddress("203.0.113.10", 6881)),
+            DhtLeafNode.DhtPeer(CryptoUtils.secureRandomBytes(20), InetSocketAddress("192.0.2.20", 6881))
+        )
+        val mixedSmallPool = singleSubnetSybils.take(5) + honestPeers
+        val selectedMixed = DhtLeafNode.diversifyCandidatesBySubnet(mixedSmallPool, count = 8, maxPerSubnet = 2)
+        assertEquals(
+            "Must select at most 2 from Sybil /24 + 2 honest = 4 peers without backfilling rejected Sybils",
+            4,
+            selectedMixed.size
+        )
+        val sybilsInMixed = selectedMixed.count { it.address.hostString.startsWith("198.51.100.") }
+        assertEquals("Sybil /24 count must never exceed 2", 2, sybilsInMixed)
+
+        // Case C: IPv6 /48 subnet bucketing (first 6 bytes)
+        val ipv6Sybils = (1..5).map { i ->
+            DhtLeafNode.DhtPeer(
+                CryptoUtils.secureRandomBytes(20),
+                InetSocketAddress("2001:0db8:0001:${String.format("%04x", i)}::1", 6881)
+            )
+        }
+        val ipv6Honest = DhtLeafNode.DhtPeer(
+            CryptoUtils.secureRandomBytes(20),
+            InetSocketAddress("2001:0db8:0002:0001::1", 6881)
+        )
+        val selectedIpv6 = DhtLeafNode.diversifyCandidatesBySubnet(ipv6Sybils + ipv6Honest, count = 8, maxPerSubnet = 2)
+        assertEquals(
+            "IPv6 /48 subnet must be strictly capped at 2 peers + 1 peer from distinct /48 = 3",
+            3,
+            selectedIpv6.size
+        )
+    }
+
+    /**
+     * Test 6: Ephemeral Node ID Rotation Across Network Interfaces, Tor Circuits, and 15-Minute Intervals.
+     * Verifies via real UDP KRPC packet capture that serialized queries never leak a static myNodeId.
+     */
+    @Test
+    fun testEphemeralNodeIdRotationPreventsCrossNetworkTracking() = runBlocking {
+        assertEquals(15 * 60 * 1000L, DhtLeafNode.DEFAULT_NODE_ID_ROTATION_INTERVAL_MS)
+
+        val capturedIds = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val responderSocket = java.net.DatagramSocket(0, java.net.InetAddress.getByName("127.0.0.1"))
+        val responderPort = responderSocket.localPort
+        val responderJob = CoroutineScope(Dispatchers.IO).launch {
+            val buf = ByteArray(2048)
+            while (isActive) {
+                try {
+                    val pkt = java.net.DatagramPacket(buf, buf.size)
+                    responderSocket.receive(pkt)
+                    val parsed = org.pqchat.dht.dht.krpc.KrpcMessage.parse(pkt.data.copyOf(pkt.length))
+                    if (parsed is org.pqchat.dht.dht.krpc.KrpcMessage.Query) {
+                        val senderId = parsed.arguments["id"] as? ByteArray
+                        if (senderId != null) {
+                            capturedIds.add(CryptoUtils.toHex(senderId))
+                        }
+                        val resp = org.pqchat.dht.dht.krpc.KrpcMessage.createPingResponse(
+                            CryptoUtils.secureRandomBytes(20),
+                            parsed.transactionId
+                        ).toBencoded()
+                        responderSocket.send(java.net.DatagramPacket(resp, resp.size, pkt.socketAddress))
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+
+        val node = DhtLeafNode(port = 0, autoBootstrap = false, nodeIdRotationIntervalMs = 80L)
+        node.start()
+        try {
+            val peerAddr = InetSocketAddress("127.0.0.1", responderPort)
+            val idInitial = node.myNodeId
+
+            // 1. Initial network (Wi-Fi)
+            assertTrue(node.onNetworkInterfaceChanged("net1|WIFI|wlan0"))
+            val idWifi = node.myNodeId
+            assertFalse("Node ID must rotate on initial network interface", idInitial.contentEquals(idWifi))
+            assertNotNull(node.sendQuery(peerAddr, org.pqchat.dht.dht.krpc.KrpcMessage.createPingQuery(node.myNodeId), 1500L))
+
+            // 2. Network switch (Wi-Fi -> LTE)
+            assertTrue(node.onNetworkInterfaceChanged("net2|CELLULAR|rmnet0"))
+            val idLte = node.myNodeId
+            assertFalse("Node ID must rotate on Wi-Fi -> LTE switch", idWifi.contentEquals(idLte))
+            assertNotNull(node.sendQuery(peerAddr, org.pqchat.dht.dht.krpc.KrpcMessage.createPingQuery(node.myNodeId), 1500L))
+
+            // Same LTE signature should NOT churn ID unnecessarily
+            assertFalse(node.onNetworkInterfaceChanged("net2|CELLULAR|rmnet0"))
+            assertArrayEquals(idLte, node.myNodeId)
+
+            // Network lost then reconnected to Wi-Fi must rotate
+            node.onNetworkInterfaceLost()
+            assertTrue(node.onNetworkInterfaceChanged("net1|WIFI|wlan0"))
+            val idWifi2 = node.myNodeId
+            assertFalse("Node ID must rotate after network loss + reconnect", idLte.contentEquals(idWifi2))
+
+            // 3. Tor circuit change & setTorProxy transition
+            assertTrue(node.onTorCircuitChanged("circ:101"))
+            val idTor1 = node.myNodeId
+            assertFalse("Node ID must rotate on Tor circuit 101", idWifi2.contentEquals(idTor1))
+
+            assertTrue(node.onTorCircuitChanged("circ:102"))
+            val idTor2 = node.myNodeId
+            assertFalse("Node ID must rotate on Tor circuit 102", idTor1.contentEquals(idTor2))
+
+            node.setTorProxy(org.pqchat.dht.dht.leaf.TorProxyConfig(enabled = true, socksHost = "127.0.0.1", socksPort = 0))
+            val idTorBlocked = node.myNodeId
+            assertFalse("Node ID must rotate on Tor proxy transition", idTor2.contentEquals(idTorBlocked))
+            node.setTorProxy(null)
+            val idDirectAgain = node.myNodeId
+            assertFalse("Node ID must rotate when leaving Tor mode", idTorBlocked.contentEquals(idDirectAgain))
+            assertNotNull(node.sendQuery(peerAddr, org.pqchat.dht.dht.krpc.KrpcMessage.createPingQuery(node.myNodeId), 1500L))
+
+            // 4. Periodic rotation (80ms configured for test, representing 15m default)
+            val beforePeriodic = node.myNodeId
+            kotlinx.coroutines.delay(180L)
+            val afterPeriodic = node.myNodeId
+            assertFalse("Node ID must rotate periodically", beforePeriodic.contentEquals(afterPeriodic))
+            assertNotNull(node.sendQuery(peerAddr, org.pqchat.dht.dht.krpc.KrpcMessage.createPingQuery(node.myNodeId), 1500L))
+
+            // Verify every captured KRPC packet used distinct rotated node IDs
+            assertEquals("4 KRPC queries should have been captured", 4, capturedIds.size)
+            assertEquals("All 4 captured KRPC node IDs must be unique (no static myNodeId leak)", 4, capturedIds.distinct().size)
+        } finally {
+            node.stop()
+            responderJob.cancel()
+            responderSocket.close()
+        }
     }
 }

@@ -69,7 +69,8 @@ object RekeyCoordinator {
             ackNum = ackNum,
             timestampUTC = System.currentTimeMillis(),
             rekeyEpoch = epoch,
-            hybridPublicKey = pkNew
+            hybridPublicKey = pkNew,
+            obfuscateTimestamp = true
         )
 
         val frame = BinaryFrameCodec.packAeadFrame(msgKey, plaintext, target, direction)
@@ -107,7 +108,8 @@ object RekeyCoordinator {
             ackNum = reverseAckNum,
             timestampUTC = System.currentTimeMillis(),
             rekeyEpoch = offer.rekeyEpoch,
-            hybridCiphertext = ctNew
+            hybridCiphertext = ctNew,
+            obfuscateTimestamp = true
         )
 
         val frame = BinaryFrameCodec.packAeadFrame(reverseMsgKey, plaintext, reverseTarget, direction)

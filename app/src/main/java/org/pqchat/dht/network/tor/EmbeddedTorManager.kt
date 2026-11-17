@@ -33,6 +33,10 @@ class EmbeddedTorManager(
 
     private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startJob: Job? = null
+    private var controlMonitorJob: Job? = null
+
+    @Volatile
+    var onCircuitChanged: ((circuitId: String?) -> Unit)? = null
 
     private val _state = MutableStateFlow<TorState>(TorState.Disconnected)
     val state: StateFlow<TorState> = _state.asStateFlow()
@@ -84,6 +88,10 @@ class EmbeddedTorManager(
                     },
                     onReady = { readySocksPort, readyControlPort ->
                         _state.value = TorState.Connected(readySocksPort, readyControlPort)
+                        onCircuitChanged?.invoke("ready:$readySocksPort:$readyControlPort")
+                        if (readyControlPort > 0) {
+                            startControlPortCircuitMonitor(readyControlPort)
+                        }
                     },
                     onError = { message, cause ->
                         _state.value = TorState.Error(message, cause)
@@ -96,9 +104,73 @@ class EmbeddedTorManager(
     }
 
     /**
+     * Requests a new Tor circuit via ControlPort (`SIGNAL NEWNYM`) and notifies [onCircuitChanged].
+     */
+    suspend fun requestNewCircuit(): Boolean = withContext(Dispatchers.IO) {
+        val port = controlPort ?: return@withContext false
+        if (port <= 0) return@withContext false
+        return@withContext try {
+            java.net.Socket().use { sock ->
+                sock.soTimeout = 3000
+                sock.connect(InetSocketAddress("127.0.0.1", port), 3000)
+                val out = sock.getOutputStream().bufferedWriter()
+                val reader = sock.getInputStream().bufferedReader()
+                out.write("AUTHENTICATE\r\n")
+                out.flush()
+                val authResp = reader.readLine() ?: ""
+                if (!authResp.startsWith("250")) return@withContext false
+                out.write("SIGNAL NEWNYM\r\n")
+                out.flush()
+                val nymResp = reader.readLine() ?: ""
+                out.write("QUIT\r\n")
+                out.flush()
+                if (nymResp.startsWith("250")) {
+                    onCircuitChanged?.invoke("newnym:${System.nanoTime()}")
+                    true
+                } else {
+                    false
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startControlPortCircuitMonitor(port: Int) {
+        controlMonitorJob?.cancel()
+        controlMonitorJob = managerScope.launch {
+            val seenCircuits = HashSet<String>()
+            val circBuiltRegex = Regex("^650\\s+CIRC\\s+(\\S+)\\s+BUILT\\b")
+            try {
+                java.net.Socket().use { sock ->
+                    sock.connect(InetSocketAddress("127.0.0.1", port), 3000)
+                    val out = sock.getOutputStream().bufferedWriter()
+                    val reader = sock.getInputStream().bufferedReader()
+                    out.write("AUTHENTICATE\r\nSETEVENTS CIRC\r\n")
+                    out.flush()
+                    while (isConnected && kotlinx.coroutines.currentCoroutineContext()[Job]?.isActive == true) {
+                        val line = reader.readLine() ?: break
+                        val match = circBuiltRegex.find(line)
+                        if (match != null) {
+                            val circId = match.groupValues[1]
+                            if (seenCircuits.add(circId)) {
+                                onCircuitChanged?.invoke("circ:$circId")
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // ControlPort unavailable (e.g. external Orbot or unit-test simulation)
+            }
+        }
+    }
+
+    /**
      * Gracefully stops the Tor engine and reverts state to [TorState.Disconnected].
      */
     fun stop() {
+        controlMonitorJob?.cancel()
+        controlMonitorJob = null
         startJob?.cancel()
         startJob = null
         try {

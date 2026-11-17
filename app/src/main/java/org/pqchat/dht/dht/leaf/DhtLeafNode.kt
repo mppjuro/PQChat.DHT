@@ -30,10 +30,11 @@ typealias PeerContact = DhtLeafNode.DhtPeer
  * - Stores & retrieves 1000-byte encrypted messages via BEP 44 mutable items.
  */
 open class DhtLeafNode(
-    override val myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
+    myNodeId: ByteArray = CryptoUtils.secureRandomBytes(20),
     private val port: Int = 0, // 0 means ephemeral port
     private val nodeCacheDao: org.pqchat.dht.data.db.DhtNodeCacheDao? = null,
-    val autoBootstrap: Boolean = true
+    val autoBootstrap: Boolean = true,
+    private val nodeIdRotationIntervalMs: Long = DEFAULT_NODE_ID_ROTATION_INTERVAL_MS
 ) : DhtClient {
     companion object {
         const val TAG = "PQChat"
@@ -46,6 +47,7 @@ open class DhtLeafNode(
         const val TIMEOUT_MS = 3000L
         const val FAST_GET_TIMEOUT_MS = 600L
         const val BOOTSTRAP_TIMEOUT_MS = 2500L
+        const val DEFAULT_NODE_ID_ROTATION_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes
 
         /**
          * Global in-process cache of active, responsive DHT peers across node instances and test runs.
@@ -123,7 +125,16 @@ open class DhtLeafNode(
                 if (raw.size == 4) {
                     return "${raw[0].toInt() and 0xFF}.${raw[1].toInt() and 0xFF}.${raw[2].toInt() and 0xFF}.0/24"
                 } else if (raw.size == 16) {
-                    return "${raw[0].toInt() and 0xFF}:${raw[1].toInt() and 0xFF}:${raw[2].toInt() and 0xFF}/48"
+                    return String.format(
+                        java.util.Locale.US,
+                        "%02x%02x:%02x%02x:%02x%02x::/48",
+                        raw[0].toInt() and 0xFF,
+                        raw[1].toInt() and 0xFF,
+                        raw[2].toInt() and 0xFF,
+                        raw[3].toInt() and 0xFF,
+                        raw[4].toInt() and 0xFF,
+                        raw[5].toInt() and 0xFF
+                    )
                 }
             }
             val host = address.hostString
@@ -148,36 +159,31 @@ open class DhtLeafNode(
         }
 
         /**
-         * Diversifies candidate peers by /24 IP subnet bucketing.
-         * Enforces a ceiling of [maxPerSubnet] nodes per /24 subnet to prevent Sybil/Eclipse attackers
-         * from monopolizing the routing table or replication set.
+         * Diversifies candidate peers by /24 IPv4 (or /48 IPv6) subnet bucketing.
+         * Strictly enforces a ceiling of [maxPerSubnet] nodes per subnet without backfilling
+         * rejected excess peers, preventing Sybil/Eclipse attackers from monopolizing
+         * the routing table or K-replica list even when candidate diversity is low.
          */
         fun diversifyCandidatesBySubnet(
             candidates: List<DhtPeer>,
             count: Int,
             maxPerSubnet: Int = 2
         ): List<DhtPeer> {
+            if (count <= 0 || maxPerSubnet <= 0) return emptyList()
             if (candidates.size <= count && candidates.all { isLoopbackOrLocal(it.address) }) {
                 return candidates
             }
             val selected = mutableListOf<DhtPeer>()
             val subnetCounts = mutableMapOf<String, Int>()
-            val remaining = mutableListOf<DhtPeer>()
 
             for (peer in candidates) {
+                if (selected.size >= count) break
                 val subnet = getSubnet24Prefix(peer.address)
                 val current = subnetCounts.getOrDefault(subnet, 0)
-                if (current < maxPerSubnet && selected.size < count) {
+                if (current < maxPerSubnet) {
                     selected.add(peer)
                     subnetCounts[subnet] = current + 1
-                } else {
-                    remaining.add(peer)
                 }
-            }
-
-            for (peer in remaining) {
-                if (selected.size >= count) break
-                selected.add(peer)
             }
 
             return selected
@@ -298,6 +304,110 @@ open class DhtLeafNode(
         val lookupHops: Int = 0
     )
 
+    private val currentNodeId = java.util.concurrent.atomic.AtomicReference(
+        if (myNodeId.size == 20) myNodeId.copyOf() else CryptoUtils.secureRandomBytes(20)
+    )
+    override val myNodeId: ByteArray
+        get() = currentNodeId.get().copyOf()
+
+    private val nodeIdRotationLock = Any()
+    private val lastNodeIdRotationMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+    private val _nodeIdRotationCount = java.util.concurrent.atomic.AtomicLong(0L)
+    private val lastNetworkSignature = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val lastTorCircuitSignature = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private var nodeIdRotationJob: Job? = null
+
+    @Volatile
+    var onNodeIdRotated: ((newNodeId: ByteArray, reason: String) -> Unit)? = null
+
+    fun getNodeIdRotationCount(): Long = _nodeIdRotationCount.get()
+
+    /**
+     * Rotates the ephemeral 20-byte DHT Node ID immediately.
+     * Safe in leaf-only (ro=1) mode because peers do not store our Node ID in routing tables.
+     */
+    fun rotateNodeId(reason: String = "manual"): ByteArray {
+        val nextId = synchronized(nodeIdRotationLock) {
+            val prev = currentNodeId.get()
+            var candidate = CryptoUtils.secureRandomBytes(20)
+            while (candidate.contentEquals(prev)) {
+                candidate = CryptoUtils.secureRandomBytes(20)
+            }
+            currentNodeId.set(candidate)
+            lastNodeIdRotationMs.set(System.currentTimeMillis())
+            _nodeIdRotationCount.incrementAndGet()
+            candidate.copyOf()
+        }
+        onNodeIdRotated?.invoke(nextId.copyOf(), reason)
+        return nextId
+    }
+
+    /**
+     * Rotates the ephemeral Node ID if at least [nodeIdRotationIntervalMs] has elapsed
+     * since the previous rotation (e.g., 15-minute periodic rotation or Doze wakeup).
+     */
+    fun maybeRotatePeriodicNodeId(nowMs: Long = System.currentTimeMillis()): Boolean {
+        val interval = nodeIdRotationIntervalMs
+        if (interval <= 0L) return false
+        if (nowMs - lastNodeIdRotationMs.get() < interval) return false
+        synchronized(nodeIdRotationLock) {
+            if (nowMs - lastNodeIdRotationMs.get() < interval) return false
+            val prev = currentNodeId.get()
+            var candidate = CryptoUtils.secureRandomBytes(20)
+            while (candidate.contentEquals(prev)) {
+                candidate = CryptoUtils.secureRandomBytes(20)
+            }
+            currentNodeId.set(candidate)
+            lastNodeIdRotationMs.set(nowMs)
+            _nodeIdRotationCount.incrementAndGet()
+            onNodeIdRotated?.invoke(candidate.copyOf(), "periodic_15m")
+            return true
+        }
+    }
+
+    /**
+     * Notifies the leaf node that the active network interface/transport changed
+     * (e.g., Wi-Fi <-> LTE <-> VPN). Rotates [myNodeId] so the device cannot be tracked across networks.
+     */
+    fun onNetworkInterfaceChanged(interfaceSignature: String? = null): Boolean {
+        val shouldRotate = if (interfaceSignature == null) {
+            lastNetworkSignature.set(null)
+            true
+        } else {
+            val prev = lastNetworkSignature.getAndSet(interfaceSignature)
+            prev != interfaceSignature
+        }
+        if (shouldRotate) {
+            rotateNodeId("network_interface:${interfaceSignature ?: "unspecified"}")
+        }
+        return shouldRotate
+    }
+
+    /**
+     * Marks the current network interface as lost so the next connection always receives a fresh Node ID.
+     */
+    fun onNetworkInterfaceLost() {
+        lastNetworkSignature.set("__LOST__")
+    }
+
+    /**
+     * Notifies the leaf node that the active Tor circuit or proxy transport changed.
+     * Rotates [myNodeId] so exit nodes and DHT peers cannot correlate circuits.
+     */
+    fun onTorCircuitChanged(circuitSignature: String? = null): Boolean {
+        val shouldRotate = if (circuitSignature == null) {
+            lastTorCircuitSignature.set(null)
+            true
+        } else {
+            val prev = lastTorCircuitSignature.getAndSet(circuitSignature)
+            prev != circuitSignature
+        }
+        if (shouldRotate) {
+            rotateNodeId("tor_circuit:${circuitSignature ?: "unspecified"}")
+        }
+        return shouldRotate
+    }
+
     @Volatile
     var localPort: Int = port
         private set
@@ -389,6 +499,8 @@ open class DhtLeafNode(
 
     @Synchronized
     override fun setTorProxy(config: TorProxyConfig?) {
+        val previousConfig = torProxyConfig
+        val previousMode = torTransportMode
         torProxyConfig = config
         torListenerJob?.cancel()
         torListenerJob = null
@@ -405,6 +517,9 @@ open class DhtLeafNode(
                 torTransportMode = TorTransportMode.BLOCKED_ERROR
                 torDiagnosticMessage = "Tor is enabled in settings, waiting for SOCKS5 tunnel establishment (port ${config.socksPort}). Fail-Closed active."
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
+                if (previousConfig?.enabled != true || previousMode != TorTransportMode.BLOCKED_ERROR) {
+                    onTorCircuitChanged("tor_blocked_${config.socksHost}:${config.socksPort}")
+                }
                 return
             }
             val client = Socks5Client(
@@ -435,6 +550,10 @@ open class DhtLeafNode(
                 println("[PQChat] DhtLeafNode: $torDiagnosticMessage")
             }
 
+            if (previousConfig != config || previousMode != torTransportMode || wasBlocked) {
+                onTorCircuitChanged("tor:${config.socksHost}:${config.socksPort}:$torTransportMode")
+            }
+
             if (wasBlocked && isTorRoutingActive && autoBootstrap && isRunning) {
                 scope.launch {
                     bootstrap()
@@ -443,6 +562,9 @@ open class DhtLeafNode(
         } else {
             torTransportMode = TorTransportMode.DIRECT_UDP
             torDiagnosticMessage = null
+            if (previousConfig?.enabled == true || previousMode != TorTransportMode.DIRECT_UDP) {
+                onTorCircuitChanged("direct_udp")
+            }
             println("[PQChat] DhtLeafNode: Tor routing disabled, returned to direct UDP transport")
         }
     }
@@ -514,6 +636,18 @@ open class DhtLeafNode(
             listenLoop()
         }
 
+        if (nodeIdRotationIntervalMs > 0L) {
+            nodeIdRotationJob?.cancel()
+            nodeIdRotationJob = scope.launch {
+                while (isRunning && isActive) {
+                    delay(nodeIdRotationIntervalMs)
+                    if (isRunning && isActive) {
+                        maybeRotatePeriodicNodeId()
+                    }
+                }
+            }
+        }
+
         if (autoBootstrap) {
             scope.launch {
                 bootstrap()
@@ -523,6 +657,8 @@ open class DhtLeafNode(
 
     override fun stop() {
         isRunning = false
+        nodeIdRotationJob?.cancel()
+        nodeIdRotationJob = null
         torListenerJob?.cancel()
         torListenerJob = null
         try {
@@ -1084,6 +1220,7 @@ open class DhtLeafNode(
         query: KrpcMessage.Query,
         timeoutMs: Long = TIMEOUT_MS
     ): QueryResult = withContext(Dispatchers.IO) {
+        maybeRotatePeriodicNodeId()
         val deferred = CompletableDeferred<KrpcMessage.Response>()
         val txKey = CryptoUtils.toHex(query.transactionId)
         pendingTransactions[txKey] = deferred
@@ -1326,7 +1463,7 @@ open class DhtLeafNode(
                 compareBytes(distA, distB)
             }
 
-        val closest = if (isLiveNetwork && filtered.size > k) {
+        val closest = if (isLiveNetwork) {
             diversifyCandidatesBySubnet(filtered, count = k, maxPerSubnet = 2)
         } else {
             filtered.take(k)
@@ -1942,14 +2079,19 @@ open class DhtLeafNode(
 
         // 3. Final Token Harvest: Query up to 8 closest unqueried peers discovered during the last hop
         if (queriesSent.get() < maxLookupQueries) {
-            val unqueriedFinal = candidatePool.values
+            val unqueriedCandidates = candidatePool.values
                 .filter { it.address !in queriedAddresses && !isBootstrapRouter(it.address) }
                 .sortedWith { a, b ->
                     val distA = xorDistance(a.nodeId, target)
                     val distB = xorDistance(b.nodeId, target)
                     compareBytes(distA, distB)
                 }
-                .take(minOf(8, maxLookupQueries - queriesSent.get()))
+            val finalBatchLimit = minOf(8, maxLookupQueries - queriesSent.get())
+            val unqueriedFinal = if (isLiveNetwork) {
+                diversifyCandidatesBySubnet(unqueriedCandidates, count = finalBatchLimit, maxPerSubnet = 2)
+            } else {
+                unqueriedCandidates.take(finalBatchLimit)
+            }
 
             if (unqueriedFinal.isNotEmpty()) {
                 unqueriedFinal.forEach { queriedAddresses.add(it.address) }
@@ -2008,7 +2150,7 @@ open class DhtLeafNode(
 
         // 4. Token Acquisition via BEP 5 get_peers fallback if tokenMap.size < 4
         if (tokenMap.size < 4) {
-            val potentialPeers = (peersWithoutToken.values + routingTable + candidatePool.values)
+            val fallbackCandidates = (peersWithoutToken.values + routingTable + candidatePool.values)
                 .filter { it.address !in tokenMap.keys && !isBootstrapRouter(it.address) }
                 .filter { it.address.address is java.net.Inet4Address || it.address.isUnresolved }
                 .filter { isLocalMode || (!it.address.hostString.startsWith("10.0.2.") && it.address.port !in 49160..49162) || it.address.hostString == "127.0.0.1" }
@@ -2018,7 +2160,11 @@ open class DhtLeafNode(
                     val distB = xorDistance(b.nodeId, target)
                     compareBytes(distA, distB)
                 }
-                .take(16)
+            val potentialPeers = if (isLiveNetwork) {
+                diversifyCandidatesBySubnet(fallbackCandidates, count = 16, maxPerSubnet = 2)
+            } else {
+                fallbackCandidates.take(16)
+            }
 
             if (potentialPeers.isNotEmpty()) {
                 coroutineScope {
@@ -2105,7 +2251,7 @@ open class DhtLeafNode(
         }
 
         val targetPutNodes = if (isLiveNetwork) {
-            peersWithToken.take(maxOf(16, replicationK))
+            diversifyCandidatesBySubnet(peersWithToken, count = maxOf(16, replicationK), maxPerSubnet = 2)
         } else {
             peersWithToken.take(maxOf(12, minOf(16, replicationK)))
         }

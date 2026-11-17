@@ -380,4 +380,46 @@ class CryptoEngineTest {
             bencoded1000.size > BinaryFrameCodec.MAX_DHT_VALUE_BYTES
         )
     }
+
+    @Test
+    fun testOptionalTimestampQuantizationAndJitterPreserves900ByteFrameInvariant() {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val direction = "AliceToBob"
+        val rawTimestampMs = 1_771_900_123_456L // non-zero sub-second milliseconds (.456)
+        val expectedBaseSec = (rawTimestampMs / 1000L) * 1000L
+
+        val observedTimestamps = mutableSetOf<Long>()
+        for (i in 0 until 64) {
+            val encoded = BinaryFrameCodec.encodeTextMessage(
+                seqNum = i,
+                ackNum = 0,
+                timestampUTC = rawTimestampMs,
+                text = "Quantized timestamp message #$i",
+                obfuscateTimestamp = true
+            )
+            assertEquals(BinaryFrameCodec.CIPHERTEXT_SIZE, encoded.size)
+
+            val frame = BinaryFrameCodec.packAeadFrame(key, encoded, target, direction)
+            assertEquals(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES, frame.size)
+
+            val decoded = BinaryFrameCodec.unpackAeadFrame(key, frame, target, direction)
+            assertEquals(0L, decoded.timestampUTC % 1000L)
+            val delta = kotlin.math.abs(decoded.timestampUTC - expectedBaseSec)
+            assertTrue("Timestamp jitter must stay within ±2000ms (delta=$delta)", delta <= 2000L)
+            observedTimestamps.add(decoded.timestampUTC)
+        }
+        assertTrue("Random ±2s jitter must produce multiple quantized timestamps", observedTimestamps.size >= 3)
+
+        // Default (obfuscateTimestamp = false) preserves exact timestamp for deterministic callers
+        val exactPlaintext = BinaryFrameCodec.encodeTextMessage(
+            seqNum = 1,
+            ackNum = 0,
+            timestampUTC = rawTimestampMs,
+            text = "Exact timestamp"
+        )
+        val exactFrame = BinaryFrameCodec.packAeadFrame(key, exactPlaintext, target, direction)
+        val exactDecoded = BinaryFrameCodec.unpackAeadFrame(key, exactFrame, target, direction)
+        assertEquals(rawTimestampMs, exactDecoded.timestampUTC)
+    }
 }

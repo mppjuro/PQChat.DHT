@@ -46,11 +46,15 @@ data class OutboundPoissonFrame(
     val seqNum: Int = 0,
     val messageId: Long? = null,
     val contactId: String? = null,
-    val timestamp: Long = System.currentTimeMillis(),
+    val timestamp: Long = org.pqchat.dht.crypto.BinaryFrameCodec.obfuscateTimestamp(System.currentTimeMillis()),
     val isDummyCover: Boolean = false,
     val packetClass: PacketClass = if (isDummyCover) PacketClass.BACKGROUND_COVER else PacketClass.DIRECT_MESSAGE,
     val onSent: (suspend (success: Boolean) -> Unit)? = null
 ) {
+    fun zeroSensitiveMemory() {
+        sk.fill(0)
+        payload.fill(0)
+    }
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is OutboundPoissonFrame) return false

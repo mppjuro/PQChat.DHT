@@ -321,7 +321,8 @@ class ChatRepository(
                     triggerTimestamp = now,
                     latitude = latitude,
                     longitude = longitude,
-                    note = note
+                    note = note,
+                    obfuscateTimestamp = true
                 )
 
                 val ciphertext = BinaryFrameCodec.packAeadFrame(
@@ -729,7 +730,8 @@ class ChatRepository(
                 ackNum = contact.counterIn and 0xFFFF,
                 timestampUTC = System.currentTimeMillis(),
                 text = text,
-                ephemeralTtlSeconds = ephemeralTtlSeconds
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
             )
             val frame = BinaryFrameCodec.packAeadFrame(
                 key = slot.msgKey,
@@ -982,7 +984,8 @@ class ChatRepository(
                 timestampUTC = System.currentTimeMillis(),
                 targetSeqEpoch = targetSeqEpoch,
                 targetSeqNum = targetSeqNum,
-                emoji = emoji
+                emoji = emoji,
+                obfuscateTimestamp = true
             )
             val frame = BinaryFrameCodec.packAeadFrame(
                 key = slot.msgKey,
@@ -1099,7 +1102,8 @@ class ChatRepository(
                 altitude = altitude,
                 accuracy = accuracy,
                 note = note,
-                ephemeralTtlSeconds = ephemeralTtlSeconds
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
             )
             val frame = BinaryFrameCodec.packAeadFrame(
                 key = slot.msgKey,
@@ -1257,7 +1261,8 @@ class ChatRepository(
                     durationMs = thisSegDuration,
                     codecMode = org.pqchat.dht.media.voice.VoiceCodec.CODEC_MODE_LPC10_COMPACT,
                     ephemeralTtlSeconds = ephemeralTtlSeconds,
-                    voiceBytes = segBytes
+                    voiceBytes = segBytes,
+                    obfuscateTimestamp = true
                 )
                 val frame = BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -1746,7 +1751,8 @@ class ChatRepository(
                     ackNum = currentContact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
                     text = msg.textContent.raw,
-                    ephemeralTtlSeconds = msg.rawEphemeralTtlSeconds
+                    ephemeralTtlSeconds = msg.rawEphemeralTtlSeconds,
+                    obfuscateTimestamp = true
                 )
                 val frame = BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -4911,7 +4917,8 @@ class ChatRepository(
                     seqNum = contact.counterOut and 0xFFFF,
                     ackNum = contact.counterIn and 0xFFFF,
                     timestampUTC = System.currentTimeMillis(),
-                    text = text
+                    text = text,
+                    obfuscateTimestamp = true
                 )
                 BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -4927,7 +4934,8 @@ class ChatRepository(
                     transferId = CryptoUtils.secureRandomBytes(16),
                     chunkIndex = 0,
                     totalChunks = 1,
-                    chunkData = image
+                    chunkData = image,
+                    obfuscateTimestamp = true
                 )
                 BinaryFrameCodec.packAeadFrame(
                     key = slot.msgKey,
@@ -5366,7 +5374,8 @@ class ChatRepository(
             senderGroupChainKey = myChainKeyOut,
             currentCounter = currentCounter,
             groupName = groupName,
-            members = membersSummary
+            members = membersSummary,
+            obfuscateTimestamp = true
         )
 
         val frame = BinaryFrameCodec.packAeadFrame(
@@ -5562,7 +5571,8 @@ class ChatRepository(
                     senderMemberId = myMemberIdBytes,
                     senderGroupChainKey = myChainKeyOut,
                     currentCounter = currentCounter,
-                    groupName = groupName
+                    groupName = groupName,
+                    obfuscateTimestamp = true
                 )
                 BinaryFrameCodec.GROUP_SUBTYPE_LEAVE -> BinaryFrameCodec.encodeGroupLeave(
                     seqNum = contact.counterOut and 0xFFFF,
@@ -5571,7 +5581,8 @@ class ChatRepository(
                     groupId = groupIdBytes,
                     groupEpoch = groupEpoch,
                     senderMemberId = myMemberIdBytes,
-                    groupName = groupName
+                    groupName = groupName,
+                    obfuscateTimestamp = true
                 )
                 else -> BinaryFrameCodec.encodeGroupControl(
                     seqNum = contact.counterOut and 0xFFFF,
@@ -5584,7 +5595,8 @@ class ChatRepository(
                     senderGroupChainKey = myChainKeyOut,
                     currentCounter = currentCounter,
                     groupName = groupName,
-                    members = emptyList()
+                    members = emptyList(),
+                    obfuscateTimestamp = true
                 )
             }
 
@@ -5761,7 +5773,8 @@ class ChatRepository(
             groupEpoch = groupEpoch,
             senderMemberId = myMemberIdBytes,
             memberKeys = memberKeys,
-            groupName = groupName
+            groupName = groupName,
+            obfuscateTimestamp = true
         )
 
         val frame = BinaryFrameCodec.packAeadFrame(
@@ -6743,7 +6756,8 @@ class ChatRepository(
                 ackNum = 0,
                 timestampUTC = System.currentTimeMillis(),
                 text = text,
-                ephemeralTtlSeconds = ephemeralTtlSeconds
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
             )
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
@@ -6941,7 +6955,8 @@ class ChatRepository(
                 timestampUTC = System.currentTimeMillis(),
                 targetSeqEpoch = targetSeqEpoch,
                 targetSeqNum = targetSeqNum,
-                emoji = emoji
+                emoji = emoji,
+                obfuscateTimestamp = true
             )
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
@@ -7073,7 +7088,8 @@ class ChatRepository(
                 altitude = altitude,
                 accuracy = accuracy,
                 note = note,
-                ephemeralTtlSeconds = ephemeralTtlSeconds
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
             )
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
@@ -7292,7 +7308,8 @@ class ChatRepository(
                     durationMs = thisSegDuration,
                     codecMode = org.pqchat.dht.media.voice.VoiceCodec.CODEC_MODE_LPC10_COMPACT,
                     ephemeralTtlSeconds = ephemeralTtlSeconds,
-                    voiceBytes = segBytes
+                    voiceBytes = segBytes,
+                    obfuscateTimestamp = true
                 )
 
                 currentCounter++
@@ -7373,7 +7390,8 @@ class ChatRepository(
                 expirationTimestamp = expirationTimestamp,
                 flags = flags,
                 question = question,
-                options = options
+                options = options,
+                obfuscateTimestamp = true
             )
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
@@ -7509,7 +7527,8 @@ class ChatRepository(
                 timestampUTC = voteTs,
                 pollId = pollIdBytes,
                 selectedOptionsBitmask = selectedBitmask,
-                voteTimestamp = voteTs
+                voteTimestamp = voteTs,
+                obfuscateTimestamp = true
             )
 
             pollDao.insertOrUpdateVote(

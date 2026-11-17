@@ -62,7 +62,7 @@ object CoverAckProtocol {
         ratchetKey: ByteArray,
         messageId: String,
         seqNum: Int,
-        timestampUTC: Long = System.currentTimeMillis()
+        timestampUTC: Long = BinaryFrameCodec.obfuscateTimestamp(System.currentTimeMillis())
     ): ByteArray {
         val aesKey = deriveAckAesKey(ratchetKey, messageId)
         val msgIdBytes = messageId.toByteArray(Charsets.UTF_8)

@@ -213,7 +213,8 @@ object HandshakeManager {
             timestampUTC = System.currentTimeMillis(),
             hybridCiphertext = ctB,
             saltParameter = salt,
-            confirmationTag = confirmationTag
+            confirmationTag = confirmationTag,
+            obfuscateTimestamp = true
         )
         val frame = BinaryFrameCodec.packAeadFrame(
             key = kHs,

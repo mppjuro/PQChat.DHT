@@ -84,6 +84,36 @@ object BinaryFrameCodec {
 
     const val MAGIC_EPHEMERAL: Long = 0x5051435F4550484DL // "PQC_EPHM"
     const val EPHEMERAL_HEADER_SIZE = 12 // 8 bytes magic + 4 bytes TTL seconds
+    const val TIMESTAMP_QUANTUM_MS = 1_000L
+    const val DEFAULT_TIMESTAMP_JITTER_SECONDS = 2L
+
+    /**
+     * Quantizes [timestampUTC] to full seconds (removing sub-second clock-skew fingerprints)
+     * and applies symmetric random jitter in [-maxJitterSeconds, +maxJitterSeconds] seconds (default ±2s).
+     * Preserves the 13-byte inner header layout and 900-byte frame invariant.
+     */
+    fun obfuscateTimestamp(
+        timestampUTC: Long,
+        quantizeToSeconds: Boolean = true,
+        maxJitterSeconds: Long = DEFAULT_TIMESTAMP_JITTER_SECONDS,
+        random: java.util.Random = CryptoUtils.secureRandom
+    ): Long {
+        val quantized = if (quantizeToSeconds) {
+            (timestampUTC / TIMESTAMP_QUANTUM_MS) * TIMESTAMP_QUANTUM_MS
+        } else {
+            timestampUTC
+        }
+        if (maxJitterSeconds <= 0L) return quantized.coerceAtLeast(0L)
+        val jitterMs = if (quantizeToSeconds) {
+            val span = (maxJitterSeconds * 2L + 1L).toInt()
+            (random.nextInt(span).toLong() - maxJitterSeconds) * TIMESTAMP_QUANTUM_MS
+        } else {
+            val maxMs = maxJitterSeconds * TIMESTAMP_QUANTUM_MS
+            val span = maxMs * 2L + 1L
+            (random.nextDouble() * span).toLong() - maxMs
+        }
+        return (quantized + jitterMs).coerceAtLeast(0L)
+    }
 
     sealed class DecodedPayload {
         data class HandshakeFinalize(
@@ -403,7 +433,8 @@ object BinaryFrameCodec {
         timestampUTC: Long,
         hybridCiphertext: ByteArray,
         saltParameter: ByteArray,
-        confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE)
+        confirmationTag: ByteArray = ByteArray(T1_CONFIRMATION_TAG_SIZE),
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(hybridCiphertext.size == T1_CIPHERTEXT_SIZE)
         require(saltParameter.size == T1_SALT_SIZE)
@@ -415,7 +446,7 @@ object BinaryFrameCodec {
         buffer.put(confirmationTag)
         buffer.put(CryptoUtils.secureRandomBytes(T1_PADDING_SIZE))
 
-        return packPlaintext(TYPE_HANDSHAKE_FINALIZE, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_HANDSHAKE_FINALIZE, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeTextMessage(
@@ -423,7 +454,8 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         text: String,
-        ephemeralTtlSeconds: Long = 0L
+        ephemeralTtlSeconds: Long = 0L,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         val textBytes = text.toByteArray(Charsets.UTF_8)
         val maxText = if (ephemeralTtlSeconds > 0) {
@@ -449,7 +481,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_TEXT_MESSAGE, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_TEXT_MESSAGE, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeRekeyOffer(
@@ -457,7 +489,8 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         rekeyEpoch: Long,
-        hybridPublicKey: ByteArray
+        hybridPublicKey: ByteArray,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(hybridPublicKey.size == T3_PUBLIC_KEY_SIZE)
 
@@ -466,7 +499,7 @@ object BinaryFrameCodec {
         buffer.put(hybridPublicKey)
         buffer.put(CryptoUtils.secureRandomBytes(T3_PADDING_SIZE))
 
-        return packPlaintext(TYPE_REKEY_OFFER, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_REKEY_OFFER, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeRekeyResponse(
@@ -474,7 +507,8 @@ object BinaryFrameCodec {
         ackNum: Int,
         timestampUTC: Long,
         rekeyEpoch: Long,
-        hybridCiphertext: ByteArray
+        hybridCiphertext: ByteArray,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(hybridCiphertext.size == T4_CIPHERTEXT_SIZE)
 
@@ -483,7 +517,7 @@ object BinaryFrameCodec {
         buffer.put(hybridCiphertext)
         buffer.put(CryptoUtils.secureRandomBytes(T4_PADDING_SIZE))
 
-        return packPlaintext(TYPE_REKEY_RESPONSE, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_REKEY_RESPONSE, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeChunkData(
@@ -494,7 +528,8 @@ object BinaryFrameCodec {
         chunkIndex: Int,
         totalChunks: Int,
         chunkData: ByteArray,
-        ephemeralTtlSeconds: Long = 0L
+        ephemeralTtlSeconds: Long = 0L,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(transferId.size == T5_TRANSFER_ID_SIZE)
         val maxChunk = if (ephemeralTtlSeconds > 0) {
@@ -523,7 +558,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_CHUNK_DATA, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_CHUNK_DATA, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeGroupControl(
@@ -537,7 +572,8 @@ object BinaryFrameCodec {
         senderGroupChainKey: ByteArray,
         currentCounter: Long,
         groupName: String,
-        members: List<DecodedPayload.GroupMemberSummary> = emptyList()
+        members: List<DecodedPayload.GroupMemberSummary> = emptyList(),
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(groupId.size == 16) { "groupId must be 16 bytes" }
         require(senderMemberId.size == 16) { "senderMemberId must be 16 bytes" }
@@ -587,7 +623,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     /**
@@ -628,7 +664,8 @@ object BinaryFrameCodec {
         senderMemberId: ByteArray,
         senderGroupChainKey: ByteArray,
         currentCounter: Long,
-        groupName: String = ""
+        groupName: String = "",
+        obfuscateTimestamp: Boolean = false
     ): ByteArray = encodeGroupControl(
         seqNum = seqNum,
         ackNum = ackNum,
@@ -640,7 +677,8 @@ object BinaryFrameCodec {
         senderGroupChainKey = senderGroupChainKey,
         currentCounter = currentCounter,
         groupName = groupName,
-        members = emptyList()
+        members = emptyList(),
+        obfuscateTimestamp = obfuscateTimestamp
     )
 
     fun encodeGroupLeave(
@@ -650,7 +688,8 @@ object BinaryFrameCodec {
         groupId: ByteArray,
         groupEpoch: Long,
         senderMemberId: ByteArray,
-        groupName: String = ""
+        groupName: String = "",
+        obfuscateTimestamp: Boolean = false
     ): ByteArray = encodeGroupControl(
         seqNum = seqNum,
         ackNum = ackNum,
@@ -662,7 +701,8 @@ object BinaryFrameCodec {
         senderGroupChainKey = ByteArray(64),
         currentCounter = 0L,
         groupName = groupName,
-        members = emptyList()
+        members = emptyList(),
+        obfuscateTimestamp = obfuscateTimestamp
     )
 
     fun encodeGroupKeysBundle(
@@ -673,7 +713,8 @@ object BinaryFrameCodec {
         groupEpoch: Long,
         senderMemberId: ByteArray,
         memberKeys: List<DecodedPayload.GroupMemberKey>,
-        groupName: String = ""
+        groupName: String = "",
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(groupId.size == 16) { "groupId must be 16 bytes" }
         require(senderMemberId.size == 16) { "senderMemberId must be 16 bytes" }
@@ -705,7 +746,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_GROUP_CONTROL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeReaction(
@@ -714,7 +755,8 @@ object BinaryFrameCodec {
         timestampUTC: Long,
         targetSeqEpoch: Int,
         targetSeqNum: Int,
-        emoji: String
+        emoji: String,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         val emojiBytes = emoji.toByteArray(Charsets.UTF_8)
         require(emojiBytes.size <= T7_MAX_EMOJI_SIZE) {
@@ -732,7 +774,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_REACTION, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_REACTION, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeLocationPin(
@@ -744,7 +786,8 @@ object BinaryFrameCodec {
         altitude: Double,
         accuracy: Float,
         note: String,
-        ephemeralTtlSeconds: Long = 0L
+        ephemeralTtlSeconds: Long = 0L,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         val noteBytes = note.toByteArray(Charsets.UTF_8)
         val maxNote = if (ephemeralTtlSeconds > 0) {
@@ -774,7 +817,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_LOCATION_PIN, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_LOCATION_PIN, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeVoiceNote(
@@ -787,7 +830,8 @@ object BinaryFrameCodec {
         durationMs: Int,
         codecMode: Byte,
         voiceBytes: ByteArray,
-        ephemeralTtlSeconds: Long = 0L
+        ephemeralTtlSeconds: Long = 0L,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         val voiceData = voiceBytes
         require(segmentIndex in 0..2) { "Segment index must be 0..2, got $segmentIndex" }
@@ -812,7 +856,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_VOICE_NOTE, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_VOICE_NOTE, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeGroupPollCreate(
@@ -823,7 +867,8 @@ object BinaryFrameCodec {
         expirationTimestamp: Long,
         flags: Byte,
         question: String,
-        options: List<String>
+        options: List<String>,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(pollId.size == 16) { "PollId must be exactly 16 bytes (UUID)" }
         require(options.size in POLL_MIN_OPTIONS..POLL_MAX_OPTIONS) {
@@ -856,7 +901,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeGroupPollVote(
@@ -865,7 +910,8 @@ object BinaryFrameCodec {
         timestampUTC: Long,
         pollId: ByteArray,
         selectedOptionsBitmask: Int,
-        voteTimestamp: Long
+        voteTimestamp: Long,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(pollId.size == 16) { "PollId must be exactly 16 bytes (UUID)" }
         require(selectedOptionsBitmask in 0..0xFF) { "Selected options bitmask must fit in 1 byte (0..255)" }
@@ -881,7 +927,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     fun encodeSafetyCanary(
@@ -893,7 +939,8 @@ object BinaryFrameCodec {
         triggerTimestamp: Long,
         latitude: Double = 0.0,
         longitude: Double = 0.0,
-        note: String = ""
+        note: String = "",
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(canaryId.size == 16) { "CanaryId must be exactly 16 bytes (UUID)" }
         val noteBytes = note.toByteArray(Charsets.UTF_8)
@@ -915,7 +962,7 @@ object BinaryFrameCodec {
             buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
         }
 
-        return packPlaintext(TYPE_SAFETY_CANARY, seqNum, ackNum, timestampUTC, buffer.array())
+        return packPlaintext(TYPE_SAFETY_CANARY, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
     private fun packPlaintext(
@@ -923,15 +970,21 @@ object BinaryFrameCodec {
         seqNum: Int,
         ackNum: Int,
         timestampUTC: Long,
-        payloadBytes: ByteArray
+        payloadBytes: ByteArray,
+        obfuscateTimestamp: Boolean = false
     ): ByteArray {
         require(payloadBytes.size == INNER_PAYLOAD_SIZE)
+        val wireTimestamp = if (obfuscateTimestamp) {
+            obfuscateTimestamp(timestampUTC)
+        } else {
+            timestampUTC
+        }
 
         val buffer = ByteBuffer.allocate(CIPHERTEXT_SIZE).order(ByteOrder.BIG_ENDIAN)
         buffer.put(msgType)
         buffer.putShort(seqNum.toShort())
         buffer.putShort(ackNum.toShort())
-        buffer.putLong(timestampUTC)
+        buffer.putLong(wireTimestamp)
         buffer.put(payloadBytes)
 
         val plaintext = buffer.array()
