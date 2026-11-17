@@ -244,6 +244,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`843350d`](https://github.com/mppjuro/PQChat.DHT/commit/843350dac112f1adddab4334fc1e058f4ad6ec9c) (2026-11-17) — **ui,e2e**: expand physical pixel UI Automator and 3/4-node orchestrator CI coverage
 - [`4c83e8a`](https://github.com/mppjuro/PQChat.DHT/commit/4c83e8a1cc379718049d8b3696ab5ee5a4f60294) (2026-11-04) — remove API 35 Robolectric dependency in chat head timeout test
 - [`878f670`](https://github.com/mppjuro/PQChat.DHT/commit/878f670255c881851543536baea2a885cdd34588) (2026-11-01) — **e2e**: fix pixel coordinate bounds in UI Automator and automate full multi-emulator E2E scenario
 - [`3226a53`](https://github.com/mppjuro/PQChat.DHT/commit/3226a536d97709aec56a036fcb717a00b8885447) (2026-10-31) — **e2e**: add 3 and 4 emulator E2E tests with group creation and GitHub Actions workflow
