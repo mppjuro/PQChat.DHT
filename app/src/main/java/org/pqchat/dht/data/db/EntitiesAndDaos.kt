@@ -75,8 +75,12 @@ data class ContactEntity(
     ) : this(
         id = id,
         name = EncryptedText(name, "contacts", id, "name"),
-        chainKeyOut = if (chainKeyOut.boundColumn == null) EncryptedBlob(chainKeyOut.raw, "contacts", id, "chainKeyOut") else chainKeyOut,
-        chainKeyIn = if (chainKeyIn.boundColumn == null) EncryptedBlob(chainKeyIn.raw, "contacts", id, "chainKeyIn") else chainKeyIn,
+        chainKeyOut = if ((chainKeyOut.boundTable == null && chainKeyOut.boundId == null && chainKeyOut.boundColumn == null) ||
+            (chainKeyOut.boundTable == "contacts" && chainKeyOut.boundId == id && chainKeyOut.boundColumn == null)
+        ) EncryptedBlob(chainKeyOut.raw, "contacts", id, "chainKeyOut") else chainKeyOut,
+        chainKeyIn = if ((chainKeyIn.boundTable == null && chainKeyIn.boundId == null && chainKeyIn.boundColumn == null) ||
+            (chainKeyIn.boundTable == "contacts" && chainKeyIn.boundId == id && chainKeyIn.boundColumn == null)
+        ) EncryptedBlob(chainKeyIn.raw, "contacts", id, "chainKeyIn") else chainKeyIn,
         counterOut = counterOut,
         counterIn = counterIn,
         rekeyEpoch = rekeyEpoch,
@@ -106,6 +110,14 @@ data class ContactEntity(
     val rawFingerprint: String get() = fingerprint.raw
     val rawChainKeyOut: ByteArray get() = chainKeyOut.raw
     val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
+
+    /**
+     * Zeroes all in-memory cryptographic ratchet key buffers held by this contact entity.
+     */
+    fun zeroSensitiveMemory() {
+        chainKeyOut.zeroSensitiveMemory()
+        chainKeyIn.zeroSensitiveMemory()
+    }
 
     val outboundDirection: String
         get() = if (isInitiator) "AliceToBob" else "BobToAlice"
@@ -394,6 +406,16 @@ data class MessageEntity(
     val rawExpiresAtTimestamp: Long? get() = expiresAtTimestamp?.raw
     val rawReaction: String? get() = reaction?.raw
     val rawVoiceBytes: ByteArray? get() = voiceBytes?.raw
+
+    /**
+     * Zeroes all sensitive binary byte buffers held in RAM for this message entity.
+     */
+    fun zeroSensitiveMemory() {
+        imageBytes?.zeroSensitiveMemory()
+        ackRatchetKey?.zeroSensitiveMemory()
+        slotEdSeed?.zeroSensitiveMemory()
+        voiceBytes?.zeroSensitiveMemory()
+    }
 }
 
 @Entity(
@@ -631,6 +653,13 @@ data class ChunkEntity(
 
     val rawData: ByteArray get() = data.raw
 
+    /**
+     * Zeroes the in-memory decrypted chunk payload buffer.
+     */
+    fun zeroSensitiveMemory() {
+        data.zeroSensitiveMemory()
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ChunkEntity) return false
@@ -746,8 +775,12 @@ data class PendingChunkTransferEntity(
         seqNum = seqNum,
         totalChunks = totalChunks,
         missingIndices = EncryptedText(missingIndices, "pending_chunk_transfers", transferId, "missingIndices"),
-        baseEdSeed = if (baseEdSeed.boundColumn == null) EncryptedBlob(baseEdSeed.raw, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed") else baseEdSeed,
-        baseMsgKey = if (baseMsgKey.boundColumn == null) EncryptedBlob(baseMsgKey.raw, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey") else baseMsgKey,
+        baseEdSeed = if ((baseEdSeed.boundTable == null && baseEdSeed.boundId == null && baseEdSeed.boundColumn == null) ||
+            (baseEdSeed.boundTable == "pending_chunk_transfers" && baseEdSeed.boundId == "${transferId}_seed" && baseEdSeed.boundColumn == null)
+        ) EncryptedBlob(baseEdSeed.raw, "pending_chunk_transfers", "${transferId}_seed", "baseEdSeed") else baseEdSeed,
+        baseMsgKey = if ((baseMsgKey.boundTable == null && baseMsgKey.boundId == null && baseMsgKey.boundColumn == null) ||
+            (baseMsgKey.boundTable == "pending_chunk_transfers" && baseMsgKey.boundId == "${transferId}_key" && baseMsgKey.boundColumn == null)
+        ) EncryptedBlob(baseMsgKey.raw, "pending_chunk_transfers", "${transferId}_key", "baseMsgKey") else baseMsgKey,
         direction = direction,
         isSelf = isSelf,
         ackNum = ackNum,
@@ -769,6 +802,14 @@ data class PendingChunkTransferEntity(
     val rawBaseEdSeed: ByteArray get() = baseEdSeed.raw
     val rawBaseMsgKey: ByteArray get() = baseMsgKey.raw
     val rawMissingIndices: String get() = missingIndices.raw
+
+    /**
+     * Zeroes in-memory Ed25519 seed and message key buffers after chunk transfer completion or abort.
+     */
+    fun zeroSensitiveMemory() {
+        baseEdSeed.zeroSensitiveMemory()
+        baseMsgKey.zeroSensitiveMemory()
+    }
 
     fun parseMissingIndices(): List<Int> {
         if (missingIndices.raw.isBlank()) return emptyList()
@@ -1170,7 +1211,9 @@ data class GroupEntity(
         groupId = groupId,
         groupName = EncryptedText(groupName, "groups", groupId, "groupName"),
         myMemberId = myMemberId,
-        myChainKeyOut = if (myChainKeyOut.boundColumn == null) EncryptedBlob(myChainKeyOut.raw, "groups", groupId, "myChainKeyOut") else myChainKeyOut,
+        myChainKeyOut = if ((myChainKeyOut.boundTable == null && myChainKeyOut.boundId == null && myChainKeyOut.boundColumn == null) ||
+            (myChainKeyOut.boundTable == "groups" && myChainKeyOut.boundId == groupId && myChainKeyOut.boundColumn == null)
+        ) EncryptedBlob(myChainKeyOut.raw, "groups", groupId, "myChainKeyOut") else myChainKeyOut,
         myCounterOut = myCounterOut,
         groupEpoch = groupEpoch,
         createdAt = createdAt,
@@ -1189,6 +1232,13 @@ data class GroupEntity(
 
     val rawGroupName: String get() = groupName.raw
     val rawMyChainKeyOut: ByteArray get() = myChainKeyOut.raw
+
+    /**
+     * Zeroes the in-memory outbound group sender chain key buffer.
+     */
+    fun zeroSensitiveMemory() {
+        myChainKeyOut.zeroSensitiveMemory()
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -1269,7 +1319,9 @@ data class GroupMemberEntity(
         memberId = memberId,
         contactId = contactId,
         memberName = EncryptedText(memberName, "group_members", "${groupId}_${memberId}", "memberName"),
-        chainKeyIn = if (chainKeyIn.boundColumn == null) EncryptedBlob(chainKeyIn.raw, "group_members", "${groupId}_${memberId}", "chainKeyIn") else chainKeyIn,
+        chainKeyIn = if ((chainKeyIn.boundTable == null && chainKeyIn.boundId == null && chainKeyIn.boundColumn == null) ||
+            (chainKeyIn.boundTable == "group_members" && chainKeyIn.boundId == "${groupId}_${memberId}" && chainKeyIn.boundColumn == null)
+        ) EncryptedBlob(chainKeyIn.raw, "group_members", "${groupId}_${memberId}", "chainKeyIn") else chainKeyIn,
         counterIn = counterIn,
         receivedBitmapBase = receivedBitmapBase,
         receivedBitmap = receivedBitmap,
@@ -1289,6 +1341,13 @@ data class GroupMemberEntity(
 
     val rawMemberName: String get() = memberName.raw
     val rawChainKeyIn: ByteArray get() = chainKeyIn.raw
+
+    /**
+     * Zeroes the in-memory inbound group member ratchet chain key buffer.
+     */
+    fun zeroSensitiveMemory() {
+        chainKeyIn.zeroSensitiveMemory()
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -1412,18 +1471,59 @@ data class PollEntity(
     @PrimaryKey
     val pollId: String,
     val groupId: String,
-    val creatorMemberId: String,
-    val creatorName: String,
-    val question: String,
-    val optionsJson: String,
+    val creatorMemberId: EncryptedText,
+    val creatorName: EncryptedText,
+    val question: EncryptedText,
+    val optionsJson: EncryptedText,
     val isMultiChoice: Boolean,
     val expirationTimestamp: Long,
     val createdAt: Long = System.currentTimeMillis(),
     val isClosed: Boolean = false
 ) {
+    @Ignore
+    constructor(
+        pollId: String,
+        groupId: String,
+        creatorMemberId: String,
+        creatorName: String,
+        question: String,
+        optionsJson: String,
+        isMultiChoice: Boolean,
+        expirationTimestamp: Long,
+        createdAt: Long = System.currentTimeMillis(),
+        isClosed: Boolean = false
+    ) : this(
+        pollId = pollId,
+        groupId = groupId,
+        creatorMemberId = EncryptedText(creatorMemberId, "polls", pollId, "creatorMemberId"),
+        creatorName = EncryptedText(creatorName, "polls", pollId, "creatorName"),
+        question = EncryptedText(question, "polls", pollId, "question"),
+        optionsJson = EncryptedText(optionsJson, "polls", pollId, "optionsJson"),
+        isMultiChoice = isMultiChoice,
+        expirationTimestamp = expirationTimestamp,
+        createdAt = createdAt,
+        isClosed = isClosed
+    )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        creatorMemberId.validateRowBinding("polls", pollId, "creatorMemberId", "creatorMemberId")
+        creatorName.validateRowBinding("polls", pollId, "creatorName", "creatorName")
+        question.validateRowBinding("polls", pollId, "question", "question")
+        optionsJson.validateRowBinding("polls", pollId, "optionsJson", "optionsJson")
+    }
+
+    val rawCreatorMemberId: String get() = creatorMemberId.raw
+    val rawCreatorName: String get() = creatorName.raw
+    val rawQuestion: String get() = question.raw
+    val rawOptionsJson: String get() = optionsJson.raw
+
     val optionsList: List<String>
         get() = try {
-            val array = org.json.JSONArray(optionsJson)
+            val array = org.json.JSONArray(optionsJson.raw)
             val list = mutableListOf<String>()
             for (i in 0 until array.length()) {
                 list.add(array.getString(i))
@@ -1444,10 +1544,44 @@ data class PollEntity(
 data class PollVoteEntity(
     val pollId: String,
     val memberId: String,
-    val memberName: String,
-    val selectedBitmask: Int,
-    val voteTimestamp: Long
-)
+    val memberName: EncryptedText,
+    val selectedBitmask: EncryptedLong,
+    val voteTimestamp: EncryptedLong
+) {
+    companion object {
+        fun computeVoteRowId(pollId: String, memberId: String): String = "${pollId}_${memberId}"
+    }
+
+    @Ignore
+    constructor(
+        pollId: String,
+        memberId: String,
+        memberName: String,
+        selectedBitmask: Int,
+        voteTimestamp: Long
+    ) : this(
+        pollId = pollId,
+        memberId = memberId,
+        memberName = EncryptedText(memberName, "poll_votes", computeVoteRowId(pollId, memberId), "memberName"),
+        selectedBitmask = EncryptedLong(selectedBitmask.toLong(), "poll_votes", computeVoteRowId(pollId, memberId), "selectedBitmask"),
+        voteTimestamp = EncryptedLong(voteTimestamp, "poll_votes", computeVoteRowId(pollId, memberId), "voteTimestamp")
+    )
+
+    init {
+        validateRowBinding()
+    }
+
+    fun validateRowBinding() {
+        val expectedId = computeVoteRowId(pollId, memberId)
+        memberName.validateRowBinding("poll_votes", expectedId, "memberName", "memberName")
+        selectedBitmask.validateRowBinding("poll_votes", expectedId, "selectedBitmask", "selectedBitmask")
+        voteTimestamp.validateRowBinding("poll_votes", expectedId, "voteTimestamp", "voteTimestamp")
+    }
+
+    val rawMemberName: String get() = memberName.raw
+    val rawSelectedBitmask: Int get() = selectedBitmask.toInt()
+    val rawVoteTimestamp: Long get() = voteTimestamp.raw
+}
 
 @Dao
 interface PollDao {

@@ -7,7 +7,10 @@
 (* 2. Decoy Screen Activation Correspondence: Decoy screen only displays after   *)
 (*    duress wipe sequence is committed.                                          *)
 (* 3. Cryptographic Row & Column Binding Integrity (MAGIC_ROW_BOUND_V2 = 0x52):   *)
-(*    Attacker cannot swap ciphertexts between tables, rows, or columns.          *)
+(*    Attacker cannot swap ciphertexts between tables, rows, or columns across    *)
+(*    all sensitive Room tables (including messages, polls, and poll_votes).      *)
+(* 4. Strict MAGIC_ROW_BOUND_V2 Enforcement: Rejects legacy V1 (0x51) and raw     *)
+(*    unheaded ciphertext downgrade attacks in Room TypeConverters.               *)
 (* ============================================================================== *)
 
 (* --- Symmetric AEAD (AES-256-GCM) with Row-Bound AAD Binding --- *)
@@ -17,14 +20,26 @@ reduc forall k: bitstring, iv: bitstring, pt: bitstring, aad: bitstring;
 
 (* Row-level and Column-level AAD construction: table + "+" + id + "+" + column *)
 fun row_bound_aad(bitstring, bitstring, bitstring): bitstring.
+fun legacy_aad_v1(bitstring, bitstring): bitstring.
 
-(* Magic byte header representation: 0x52 (MAGIC_ROW_BOUND_V2) *)
-const MAGIC_ROW_BOUND_V2: bitstring.
+(* Distinct header version tags *)
+fun tag_v1(): bitstring [data].
+fun tag_v2(): bitstring [data].
+
+(* Magic byte header representation: 0x51 (V1) and 0x52 (MAGIC_ROW_BOUND_V2) *)
+letfun MAGIC_ROW_BOUND_V1 = tag_v1().
+letfun MAGIC_ROW_BOUND_V2 = tag_v2().
 
 (* Database schema entities *)
 const tbl_messages: bitstring.
 const row_id_42: bitstring.
 const col_text_content: bitstring.
+const tbl_polls: bitstring.
+const poll_id_1: bitstring.
+const col_poll_question: bitstring.
+const tbl_poll_votes: bitstring.
+const vote_id_1: bitstring.
+const col_vote_bitmask: bitstring.
 const tbl_swapped: bitstring.
 const id_swapped: bitstring.
 const col_swapped: bitstring.
@@ -36,6 +51,9 @@ free c_duress: channel [private]. (* Internal UI duress trigger signal *)
 
 (* Secret payloads stored in Room DB *)
 free secret_db_payload: bitstring [private].
+free secret_poll_payload: bitstring [private].
+free secret_vote_bitmask: bitstring [private].
+free secret_v1_plaintext: bitstring [private].
 free secret_swapped_plaintext: bitstring [private].
 
 (* Events *)
@@ -44,6 +62,7 @@ event MasterKeyDeleted().
 event DecoyModeActivated().
 event ValidRecordAccessed(bitstring, bitstring, bitstring, bitstring).
 event SwappedRecordDecrypted(bitstring).
+event LegacyDowngradeAccepted(bitstring).
 
 (* ============================================================================== *)
 (* SECURITY QUERIES                                                               *)
@@ -51,6 +70,9 @@ event SwappedRecordDecrypted(bitstring).
 
 (* (1) Irreversibility of Duress Wipe: Attacker seizing storage post-wipe cannot recover DB payload *)
 query attacker(secret_db_payload).
+query attacker(secret_poll_payload).
+query attacker(secret_vote_bitmask).
+query attacker(secret_v1_plaintext).
 
 (* (2) Decoy mode correspondence: Decoy mode only activates after hardware key deletion *)
 query inj-event(DecoyModeActivated()) ==> inj-event(MasterKeyDeleted()).
@@ -58,44 +80,96 @@ query inj-event(DecoyModeActivated()) ==> inj-event(MasterKeyDeleted()).
 (* (3) Row/Column Swap Resistance: Ciphertext bound to (Table1, Id1, Col1) cannot be decrypted under (Table2, Id2, Col2) *)
 query attacker(secret_swapped_plaintext).
 query event(SwappedRecordDecrypted(secret_db_payload)).
+query event(SwappedRecordDecrypted(secret_poll_payload)).
+query event(SwappedRecordDecrypted(secret_vote_bitmask)).
+
+(* (4) Strict V2 Enforcement: Room TypeConverters reject legacy V1 (0x51) and type-confusion downgrade attacks *)
+query event(LegacyDowngradeAccepted(secret_v1_plaintext)).
 
 (* ============================================================================== *)
 (* PROCESS DEFINITIONS                                                           *)
 (* ============================================================================== *)
 
+let processStrictV2Loader(master_key: bitstring) =
+  in(c_public, (hdr: bitstring, tbl: bitstring, rid: bitstring, col: bitstring, iv_in: bitstring, ct_in: bitstring));
+  (* KeystoreConverters.fromDatabase* strictly enforces MAGIC_ROW_BOUND_V2 (0x52) with row_bound_aad(tbl, rid, col) *)
+  if hdr = MAGIC_ROW_BOUND_V2 then
+  (
+    let aad_chk = row_bound_aad(tbl, rid, col) in
+    let pt_chk = aead_dec(master_key, iv_in, ct_in, aad_chk) in
+    event ValidRecordAccessed(tbl, rid, col, pt_chk);
+    event LegacyDowngradeAccepted(pt_chk)
+  ).
+
 let processStorage =
   (* 1. Device initializes hardware-backed Android KeyStore master key *)
   new master_key: bitstring;
   
-  (* 2. App encrypts sensitive Room database payload with MAGIC_ROW_BOUND_V2 *)
+  (* 2. App encrypts sensitive Room database payloads with MAGIC_ROW_BOUND_V2 *)
   new iv: bitstring;
   let aad_v2 = row_bound_aad(tbl_messages, row_id_42, col_text_content) in
   let ct = aead_enc(master_key, iv, secret_db_payload, aad_v2) in
   let db_record = (MAGIC_ROW_BOUND_V2, tbl_messages, row_id_42, col_text_content, iv, ct) in
+
+  (* Encrypt polls and poll_votes sensitive fields with MAGIC_ROW_BOUND_V2 *)
+  new iv_poll: bitstring;
+  let aad_poll = row_bound_aad(tbl_polls, poll_id_1, col_poll_question) in
+  let ct_poll = aead_enc(master_key, iv_poll, secret_poll_payload, aad_poll) in
+  let db_poll_record = (MAGIC_ROW_BOUND_V2, tbl_polls, poll_id_1, col_poll_question, iv_poll, ct_poll) in
+
+  new iv_vote: bitstring;
+  let aad_vote = row_bound_aad(tbl_poll_votes, vote_id_1, col_vote_bitmask) in
+  let ct_vote = aead_enc(master_key, iv_vote, secret_vote_bitmask, aad_vote) in
+  let db_vote_record = (MAGIC_ROW_BOUND_V2, tbl_poll_votes, vote_id_1, col_vote_bitmask, iv_vote, ct_vote) in
+
+  (* Legacy V1 record minted with table+id AAD (must be rejected even if re-wrapped with V2 header) *)
+  new iv_v1: bitstring;
+  let ct_v1 = aead_enc(master_key, iv_v1, secret_v1_plaintext, legacy_aad_v1(tbl_polls, poll_id_1)) in
+  let legacy_v1_record = (MAGIC_ROW_BOUND_V1, tbl_polls, poll_id_1, iv_v1, ct_v1) in
   
   (* Attacker observes physical SQLite database file (contains encrypted blobs) *)
-  out(c_public, db_record);
+  out(c_public, (db_record, db_poll_record, db_vote_record, legacy_v1_record));
   
   (* 3. Legitimate decryption verification *)
   let recovered_pt = aead_dec(master_key, iv, ct, aad_v2) in
   event ValidRecordAccessed(tbl_messages, row_id_42, col_text_content, recovered_pt);
+  let recovered_poll = aead_dec(master_key, iv_poll, ct_poll, aad_poll) in
+  event ValidRecordAccessed(tbl_polls, poll_id_1, col_poll_question, recovered_poll);
+  let recovered_vote = aead_dec(master_key, iv_vote, ct_vote, aad_vote) in
+  event ValidRecordAccessed(tbl_poll_votes, vote_id_1, col_vote_bitmask, recovered_vote);
   
-  (* Attacker attempts a Row/Column Swap attack on the intercepted database record *)
+  (* Attacker attempts a Row/Column Swap attack on intercepted database records *)
   let swapped_aad = row_bound_aad(tbl_swapped, id_swapped, col_swapped) in
-  let test_swap = aead_dec(master_key, iv, ct, swapped_aad) in
-  event SwappedRecordDecrypted(test_swap);
-  out(c_public, aead_enc(master_key, iv, secret_swapped_plaintext, swapped_aad));
-
-  (* 4. Duress Event: User enters Duress PIN under coercion *)
-  in(c_duress, (=true));
-  event DuressPinEntered();
-  
-  (* KeystoreCrypto.deleteMasterKey(): Hardware StrongBox Keymaster irreversibly purges alias *)
-  event MasterKeyDeleted();
-  
-  (* UI navigates immediately to DecoyNotesScreen showing harmless notes *)
-  event DecoyModeActivated();
-  out(c_public, harmless_decoy_notes).
+  (
+    (
+      let test_swap = aead_dec(master_key, iv, ct, swapped_aad) in
+      event SwappedRecordDecrypted(test_swap)
+    )
+    |
+    (
+      let test_poll_swap = aead_dec(master_key, iv_poll, ct_poll, swapped_aad) in
+      event SwappedRecordDecrypted(test_poll_swap)
+    )
+    |
+    (
+      let test_vote_swap = aead_dec(master_key, iv_vote, ct_vote, aad_poll) in
+      event SwappedRecordDecrypted(test_vote_swap)
+    )
+    |
+    processStrictV2Loader(master_key)
+  ) |
+  (
+    (* 4. Duress Event: User enters Duress PIN under coercion *)
+    in(c_duress, (=true));
+    event DuressPinEntered();
+    
+    (* KeystoreCrypto.deleteMasterKey(): Hardware StrongBox Keymaster irreversibly purges alias *)
+    event MasterKeyDeleted();
+    
+    (* UI navigates immediately to DecoyNotesScreen showing harmless notes *)
+    event DecoyModeActivated();
+    out(c_public, harmless_decoy_notes)
+  ).
 
 let processDuressTrigger =
   (* Simulated Duress trigger signal *)

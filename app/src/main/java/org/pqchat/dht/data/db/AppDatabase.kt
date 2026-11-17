@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PollEntity::class,
         PollVoteEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(KeystoreConverters::class)
@@ -678,6 +678,88 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val converters = KeystoreConverters()
+
+                fun decryptIfV2Hex(hex: String, table: String, rowId: String, col: String): String {
+                    return try {
+                        val raw = org.pqchat.dht.crypto.KeystoreCrypto.decryptString(hex, table, rowId, col)
+                        raw ?: hex
+                    } catch (_: Throwable) {
+                        hex
+                    }
+                }
+
+                // 1. Re-encrypt sensitive columns in `polls` using MAGIC_ROW_BOUND_V2 (table+id+column)
+                val cursorPolls = db.query(
+                    "SELECT pollId, creatorMemberId, creatorName, question, optionsJson FROM polls"
+                )
+                while (cursorPolls.moveToNext()) {
+                    val pollId = cursorPolls.getString(0)
+                    val plainCreatorId = decryptIfV2Hex(cursorPolls.getString(1), "polls", pollId, "creatorMemberId")
+                    val plainCreatorName = decryptIfV2Hex(cursorPolls.getString(2), "polls", pollId, "creatorName")
+                    val plainQuestion = decryptIfV2Hex(cursorPolls.getString(3), "polls", pollId, "question")
+                    val plainOptionsJson = decryptIfV2Hex(cursorPolls.getString(4), "polls", pollId, "optionsJson")
+
+                    val encCreatorId = converters.toDatabaseText(EncryptedText(plainCreatorId, "polls", pollId, "creatorMemberId"))!!
+                    val encCreatorName = converters.toDatabaseText(EncryptedText(plainCreatorName, "polls", pollId, "creatorName"))!!
+                    val encQuestion = converters.toDatabaseText(EncryptedText(plainQuestion, "polls", pollId, "question"))!!
+                    val encOptionsJson = converters.toDatabaseText(EncryptedText(plainOptionsJson, "polls", pollId, "optionsJson"))!!
+
+                    db.execSQL(
+                        "UPDATE polls SET creatorMemberId = ?, creatorName = ?, question = ?, optionsJson = ? WHERE pollId = ?",
+                        arrayOf(encCreatorId, encCreatorName, encQuestion, encOptionsJson, pollId)
+                    )
+                }
+                cursorPolls.close()
+
+                // 2. Recreate `poll_votes` with TEXT columns for encrypted memberName, selectedBitmask, voteTimestamp
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS poll_votes_new (
+                        pollId TEXT NOT NULL,
+                        memberId TEXT NOT NULL,
+                        memberName TEXT NOT NULL,
+                        selectedBitmask TEXT NOT NULL,
+                        voteTimestamp TEXT NOT NULL,
+                        PRIMARY KEY (pollId, memberId)
+                    )
+                """.trimIndent())
+
+                val cursorVotes = db.query(
+                    "SELECT pollId, memberId, memberName, selectedBitmask, voteTimestamp FROM poll_votes"
+                )
+                while (cursorVotes.moveToNext()) {
+                    val pollId = cursorVotes.getString(0)
+                    val memberId = cursorVotes.getString(1)
+                    val voteRowId = PollVoteEntity.computeVoteRowId(pollId, memberId)
+                    val plainMemberName = decryptIfV2Hex(cursorVotes.getString(2), "poll_votes", voteRowId, "memberName")
+                    val bitmaskVal = cursorVotes.getLong(3)
+                    val voteTsVal = cursorVotes.getLong(4)
+
+                    val encMemberName = converters.toDatabaseText(
+                        EncryptedText(plainMemberName, "poll_votes", voteRowId, "memberName")
+                    )!!
+                    val encBitmask = converters.toDatabaseLong(
+                        EncryptedLong(bitmaskVal, "poll_votes", voteRowId, "selectedBitmask")
+                    )!!
+                    val encVoteTs = converters.toDatabaseLong(
+                        EncryptedLong(voteTsVal, "poll_votes", voteRowId, "voteTimestamp")
+                    )!!
+
+                    db.execSQL(
+                        "INSERT INTO poll_votes_new (pollId, memberId, memberName, selectedBitmask, voteTimestamp) VALUES (?, ?, ?, ?, ?)",
+                        arrayOf(pollId, memberId, encMemberName, encBitmask, encVoteTs)
+                    )
+                }
+                cursorVotes.close()
+
+                db.execSQL("DROP TABLE poll_votes")
+                db.execSQL("ALTER TABLE poll_votes_new RENAME TO poll_votes")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_poll_votes_pollId ON poll_votes (pollId)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -689,7 +771,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                         MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                         MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
-                        MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
+                        MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()

@@ -51,7 +51,13 @@ def main():
         (r"RESULT not attacker\(secret_db_payload\[\]\) is true\.", "Lemma 8.1: Secrecy of SQLite Payload & Irreversibility of Master Key Erasure"),
         (r"RESULT inj-event\(DecoyModeActivated\) ==> inj-event\(MasterKeyDeleted\) is true\.", "Lemma 8.2: Decoy Screen Activation Correspondence with Key Deletion"),
         (r"RESULT not attacker\(secret_swapped_plaintext\[\]\) is true\.", "Lemma 8.3: Secrecy of Swapped Plaintext"),
-        (r"RESULT not event\(SwappedRecordDecrypted\(secret_db_payload\[\]\)\) is true\.", "Lemma 8.4: Non-Decryptability & Resistance to Row/Column Swap Attacks")
+        (r"RESULT not event\(SwappedRecordDecrypted\(secret_db_payload\[\]\)\) is true\.", "Lemma 8.4: Non-Decryptability & Resistance to Row/Column Swap Attacks"),
+        (r"RESULT not attacker\(secret_poll_payload\[\]\) is true\.", "Lemma 8.5: Secrecy of Encrypted Poll Question (polls Table)"),
+        (r"RESULT not attacker\(secret_vote_bitmask\[\]\) is true\.", "Lemma 8.6: Secrecy of Encrypted Poll Vote Bitmask (poll_votes Table)"),
+        (r"RESULT not attacker\(secret_v1_plaintext\[\]\) is true\.", "Lemma 8.7: Secrecy of Legacy V1 Record Against Extraction"),
+        (r"RESULT not event\(SwappedRecordDecrypted\(secret_poll_payload\[\]\)\) is true\.", "Lemma 8.8: Resistance of Poll Records to Row/Column Swap Attacks"),
+        (r"RESULT not event\(SwappedRecordDecrypted\(secret_vote_bitmask\[\]\)\) is true\.", "Lemma 8.9: Resistance of Poll Vote Records to Table/Column Swap Attacks"),
+        (r"RESULT not event\(LegacyDowngradeAccepted\(secret_v1_plaintext\[\]\)\) is true\.", "Lemma 8.10: Strict MAGIC_ROW_BOUND_V2 Enforcement & V1 Downgrade Rejection")
     ]
 
     print("\n==============================================================================")

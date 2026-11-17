@@ -28,7 +28,7 @@ jobs:
           sudo cp proverif /usr/local/bin/proverif
           sudo chmod +x /usr/local/bin/proverif
 
-      - name: Run Formal Verification Suite (24 Lemmas / 7 Models)
+      - name: Run Formal Verification Suite (38 Lemmas / 8 Models)
         run: bash docs/formal/run_verification.sh
 
       - name: Publish Formal Verification Summary to GitHub Job Summary
@@ -38,15 +38,16 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Model (.pv) | Verified Security Properties | Status |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- | :---: |" >> $GITHUB_STEP_SUMMARY
-          echo "| **01_pqc_handshake.pv** | Hybrid KEM Secrecy, MitM Resistance, Authenticated Key Exchange | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **02_sas_commitment.pv** | SAS Anti-Grinding, Transcript Binding, Collision Resistance | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **03_ratchet_chains.pv** | Forward Secrecy (FS), Dual Unidirectional Chains, Replay Protection | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **04_rekeying_pcs.pv** | Post-Compromise Security (PCS), Ephemeral Rekey Re-injection | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **05_tombstones_cover.pv** | 900 B Record Indistinguishability, Tombstone Privacy, Dummy Decoy Obfuscation | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **06_group_distribution.pv** | Frame 0x06 Key Secrecy, Pairwise Recipient Slot Address Privacy | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
-          echo "| **07_group_membership.pv** | Group AAD Context Binding, Forward Secrecy on Leave, Post-Leave Key Revocation | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_protocol.pv** | Hybrid KEM Secrecy, MitM Resistance, Authenticated Key Exchange, Reactions/Pins (12 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_secrecy.pv** | Chain Key & Payload Secrecy, Key Confirmation Agreement (5 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_forward_secrecy.pv** | Forward Secrecy upon Chain Compromise (2 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_post_compromise.pv** | Post-Compromise Security (PCS) via Hybrid KEM Rekey (2 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_replay.pv** | Anti-Replay Injective Handshake & Message Delivery (2 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_unlinkability.pv** | Target Hopping, Ephemeral NodeID Rotation & 900B Tombstone Indistinguishability (1 lemma) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_group_protocol.pv** | Frame 0x06 Key Secrecy, Group AAD Binding, Forward Secrecy / PCS (4 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **pqchat_duress_wipe.pv** | Duress Master Key Purge, Row-Bound V2 Integrity across polls/votes, Strict V2 Anti-Downgrade (10 lemmas) | ✅ PROVED |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Summary:** 24 out of 24 security lemmas mathematically verified under the Dolev-Yao attacker model." >> $GITHUB_STEP_SUMMARY
+          echo "**Summary:** 38 out of 38 security lemmas mathematically verified under the Dolev-Yao attacker model." >> $GITHUB_STEP_SUMMARY
           if [ -f "docs/formal/report.txt" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "<details><summary>Detailed ProVerif Output Log</summary>" >> $GITHUB_STEP_SUMMARY

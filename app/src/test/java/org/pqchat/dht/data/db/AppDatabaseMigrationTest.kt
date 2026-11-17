@@ -851,5 +851,87 @@ class AppDatabaseMigrationTest {
         assertTrue(executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS poll_votes") })
         assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_poll_votes_pollId ON poll_votes (pollId)") })
     }
+
+    @Test
+    fun testMigration16To17EncryptsPollsAndPollVotesWithV2Binding() {
+        val executedSql = mutableListOf<String>()
+        var updatedPollArgs: Array<*>? = null
+        var insertedVoteArgs: Array<*>? = null
+
+        val dbProxy = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java),
+            InvocationHandler { _, method, args ->
+                when (method.name) {
+                    "query" -> {
+                        val sql = args[0] as String
+                        when {
+                            sql.contains("FROM polls") -> createCursor(
+                                listOf(
+                                    listOf(
+                                        "poll_1",
+                                        "member_alice",
+                                        "Alice",
+                                        "Secret poll question?",
+                                        "[\"Opt1\",\"Opt2\"]"
+                                    )
+                                )
+                            )
+                            sql.contains("FROM poll_votes") -> createCursor(
+                                listOf(
+                                    listOf(
+                                        "poll_1",
+                                        "member_bob",
+                                        "Bob",
+                                        3L,
+                                        1794911223344L
+                                    )
+                                )
+                            )
+                            else -> createCursor(emptyList())
+                        }
+                    }
+                    "execSQL" -> {
+                        val sql = args[0] as String
+                        executedSql.add(sql)
+                        if (args.size > 1 && args[1] is Array<*>) {
+                            val bindArgs = args[1] as Array<*>
+                            if (sql.contains("UPDATE polls SET")) {
+                                updatedPollArgs = bindArgs
+                            } else if (sql.contains("INSERT INTO poll_votes_new")) {
+                                insertedVoteArgs = bindArgs
+                            }
+                        }
+                        null
+                    }
+                    else -> null
+                }
+            }
+        ) as SupportSQLiteDatabase
+
+        AppDatabase.MIGRATION_16_17.migrate(dbProxy)
+
+        assertTrue(executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS poll_votes_new") })
+        assertTrue(executedSql.any { it.contains("DROP TABLE poll_votes") })
+        assertTrue(executedSql.any { it.contains("ALTER TABLE poll_votes_new RENAME TO poll_votes") })
+        assertTrue(executedSql.any { it.contains("CREATE INDEX IF NOT EXISTS index_poll_votes_pollId ON poll_votes (pollId)") })
+
+        assertNotNull(updatedPollArgs)
+        val pollArgs = updatedPollArgs!!
+        assertEquals("member_alice", KeystoreCrypto.decryptString(pollArgs[0] as String, "polls", "poll_1", "creatorMemberId"))
+        assertEquals("Alice", KeystoreCrypto.decryptString(pollArgs[1] as String, "polls", "poll_1", "creatorName"))
+        assertEquals("Secret poll question?", KeystoreCrypto.decryptString(pollArgs[2] as String, "polls", "poll_1", "question"))
+        assertEquals("[\"Opt1\",\"Opt2\"]", KeystoreCrypto.decryptString(pollArgs[3] as String, "polls", "poll_1", "optionsJson"))
+        assertEquals("poll_1", pollArgs[4])
+
+        assertNotNull(insertedVoteArgs)
+        val voteArgs = insertedVoteArgs!!
+        val voteRowId = PollVoteEntity.computeVoteRowId("poll_1", "member_bob")
+        assertEquals("poll_1", voteArgs[0])
+        assertEquals("member_bob", voteArgs[1])
+        assertEquals("Bob", KeystoreCrypto.decryptString(voteArgs[2] as String, "poll_votes", voteRowId, "memberName"))
+        assertEquals(3L, KeystoreCrypto.decryptLong(voteArgs[3] as String, "poll_votes", voteRowId, "selectedBitmask"))
+        assertEquals(1794911223344L, KeystoreCrypto.decryptLong(voteArgs[4] as String, "poll_votes", voteRowId, "voteTimestamp"))
+    }
 }
 

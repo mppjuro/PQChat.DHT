@@ -2094,7 +2094,7 @@ fun GroupPollCard(
 
             // Question
             Text(
-                text = currentPoll.question,
+                text = currentPoll.rawQuestion,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = appColors.textPrimary
@@ -2105,7 +2105,7 @@ fun GroupPollCard(
             // Options with votes and progress bar
             options.forEachIndexed { index, optionText ->
                 val mask = 1 shl index
-                val optionVotes = votes.count { (it.selectedBitmask and mask) != 0 }
+                val optionVotes = votes.count { (it.rawSelectedBitmask and mask) != 0 }
                 val percentage = if (totalVoters > 0) (optionVotes * 100) / totalVoters else 0
                 val isSelected = (selectedBitmask and mask) != 0
 

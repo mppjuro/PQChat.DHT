@@ -84,6 +84,17 @@ process
   out(c_pub, choice[target_AB_0, target_CD_0]);
   out(c_pub, choice[target_AB_1, target_CD_1]);
 
+  (* Ephemeral DHT leaf myNodeId rotation across Wi-Fi / LTE / Tor transitions *)
+  new nid_AB_wifi: bitstring;
+  new nid_AB_lte: bitstring;
+  new nid_AB_tor: bitstring;
+  new nid_CD_wifi: bitstring;
+  new nid_CD_lte: bitstring;
+  new nid_CD_tor: bitstring;
+  out(c_pub, choice[nid_AB_wifi, nid_CD_wifi]);
+  out(c_pub, choice[nid_AB_lte, nid_CD_lte]);
+  out(c_pub, choice[nid_AB_tor, nid_CD_tor]);
+
   (* Indistinguishability of 900-byte Tombstone vs Encrypted Frame & Cover Traffic *)
   new k_payload: bitstring;
   new iv_frame: bitstring;

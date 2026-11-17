@@ -12,10 +12,12 @@ set -euo pipefail
 #   (3) Forward Secrecy of Past Messages after subsequent state compromise.
 #   (4) Post-Compromise Security (PCS / Self-Healing) via Hybrid KEM Rekey.
 #       (5) Anti-Replay Injective Agreement for Handshake & Data Packets.
-#   (6) Target Unlinkability & 900-Byte Safe Tombstone / Cover Traffic
-#       Indistinguishability (Observational Equivalence).
+#   (6) Target Unlinkability, Ephemeral NodeID Rotation & 900-Byte Safe
+#       Tombstone / Cover Traffic Indistinguishability (Observational Equivalence).
 #   (7) Group Chat Protocol & Key Rotation (PCS/FS, Frame 0x06 Secrecy,
 #       and Group AAD Binding).
+#   (8) Duress Wipe, Row-Bound V2 Integrity across all tables (incl. polls/votes),
+#       and Strict V2 Anti-Downgrade Enforcement.
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -138,8 +140,8 @@ Summary of Verified Security Lemmas:
 (5) pqchat_replay.pv (Anti-Replay Injective Agreement Model):
     - Lemma 5.1: Injective Handshake Agreement (Type 0x01)
     - Lemma 5.2: Injective Message Delivery (Type 0x02)
-(6) pqchat_unlinkability.pv (Target & 900B Tombstone Indistinguishability):
-    - Lemma 6.1: Observational Equivalence of Ephemeral Targets & 900B Tombstones
+(6) pqchat_unlinkability.pv (Target, NodeID & 900B Tombstone Indistinguishability):
+    - Lemma 6.1: Observational Equivalence of Ephemeral Targets, Rotated NodeIDs & 900B Tombstones
 (7) pqchat_group_protocol.pv (Group Chat Protocol & Key Rotation Model):
     - Lemma 7.1: Secrecy of senderGroupChainKey (Type 0x06 over 1-on-1 Hybrid Channel)
     - Lemma 7.2: Authenticity of Group Messages with AAD Binding
@@ -150,6 +152,12 @@ Summary of Verified Security Lemmas:
     - Lemma 8.2: Decoy Screen Activation Correspondence with Key Deletion
     - Lemma 8.3: Secrecy of Swapped Plaintext
     - Lemma 8.4: Non-Decryptability & Resistance to Row/Column Swap Attacks
+    - Lemma 8.5: Secrecy of Encrypted Poll Question (polls Table)
+    - Lemma 8.6: Secrecy of Encrypted Poll Vote Bitmask (poll_votes Table)
+    - Lemma 8.7: Secrecy of Legacy V1 Record Against Extraction
+    - Lemma 8.8: Resistance of Poll Records to Row/Column Swap Attacks
+    - Lemma 8.9: Resistance of Poll Vote Records to Table/Column Swap Attacks
+    - Lemma 8.10: Strict MAGIC_ROW_BOUND_V2 Enforcement & V1 Downgrade Rejection
 ------------------------------------------------------------------------------
 
 EOF
@@ -217,7 +225,7 @@ echo "==========================================================================
 OUT_DURESS="$(run_model "pqchat_duress_wipe.pv" 2>&1)"
 echo "${OUT_DURESS}" >> "${REPORT_FILE}"
 
-# Validation of all 32 lemmas
+# Validation of all 38 lemmas
 if command -v python3 >/dev/null 2>&1; then
     python3 "${SCRIPT_DIR}/verify_lemmas.py" "${REPORT_FILE}"
 else

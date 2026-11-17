@@ -1,6 +1,6 @@
 ==============================================================================
 PQChat.DHT Protocol Formal Verification Report
-Generated: 2026-10-22 00:45:09 UTC
+Generated: 2026-11-17 16:54:48 UTC
 Verifier: ProVerif 2.05 (Symbolic Dolev-Yao Protocol Analyzer)
 ==============================================================================
 
@@ -34,8 +34,8 @@ Summary of Verified Security Lemmas:
 (5) pqchat_replay.pv (Anti-Replay Injective Agreement Model):
     - Lemma 5.1: Injective Handshake Agreement (Type 0x01)
     - Lemma 5.2: Injective Message Delivery (Type 0x02)
-(6) pqchat_unlinkability.pv (Target & 900B Tombstone Indistinguishability):
-    - Lemma 6.1: Observational Equivalence of Ephemeral Targets & 900B Tombstones
+(6) pqchat_unlinkability.pv (Target, NodeID & 900B Tombstone Indistinguishability):
+    - Lemma 6.1: Observational Equivalence of Ephemeral Targets, Rotated NodeIDs & 900B Tombstones
 (7) pqchat_group_protocol.pv (Group Chat Protocol & Key Rotation Model):
     - Lemma 7.1: Secrecy of senderGroupChainKey (Type 0x06 over 1-on-1 Hybrid Channel)
     - Lemma 7.2: Authenticity of Group Messages with AAD Binding
@@ -46,6 +46,12 @@ Summary of Verified Security Lemmas:
     - Lemma 8.2: Decoy Screen Activation Correspondence with Key Deletion
     - Lemma 8.3: Secrecy of Swapped Plaintext
     - Lemma 8.4: Non-Decryptability & Resistance to Row/Column Swap Attacks
+    - Lemma 8.5: Secrecy of Encrypted Poll Question (polls Table)
+    - Lemma 8.6: Secrecy of Encrypted Poll Vote Bitmask (poll_votes Table)
+    - Lemma 8.7: Secrecy of Legacy V1 Record Against Extraction
+    - Lemma 8.8: Resistance of Poll Records to Row/Column Swap Attacks
+    - Lemma 8.9: Resistance of Poll Vote Records to Table/Column Swap Attacks
+    - Lemma 8.10: Strict MAGIC_ROW_BOUND_V2 Enforcement & V1 Downgrade Rejection
 ------------------------------------------------------------------------------
 
 ==============================================================================
@@ -1394,16 +1400,25 @@ Biprocess 0 (that is, the initial process):
 {17}out(c_pub, (Alice,Bob,Charlie,Dave));
 {18}out(c_pub, choice[target_AB_0,target_CD_0]);
 {19}out(c_pub, choice[target_AB_1,target_CD_1]);
-{20}new k_payload: bitstring;
-{21}new iv_frame: bitstring;
-{22}new secret_payload: bitstring;
-{23}new r_tombstone: bitstring;
-{24}new r_cover: bitstring;
-{25}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
-{26}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
-{27}let cover_slot: frame_t = cover_frame(r_cover) in
-{28}out(c_pub, choice[valid_frame,tombstone_slot]);
-{29}out(c_pub, choice[tombstone_slot,cover_slot])
+{20}new nid_AB_wifi: bitstring;
+{21}new nid_AB_lte: bitstring;
+{22}new nid_AB_tor: bitstring;
+{23}new nid_CD_wifi: bitstring;
+{24}new nid_CD_lte: bitstring;
+{25}new nid_CD_tor: bitstring;
+{26}out(c_pub, choice[nid_AB_wifi,nid_CD_wifi]);
+{27}out(c_pub, choice[nid_AB_lte,nid_CD_lte]);
+{28}out(c_pub, choice[nid_AB_tor,nid_CD_tor]);
+{29}new k_payload: bitstring;
+{30}new iv_frame: bitstring;
+{31}new secret_payload: bitstring;
+{32}new r_tombstone: bitstring;
+{33}new r_cover: bitstring;
+{34}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
+{35}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
+{36}let cover_slot: frame_t = cover_frame(r_cover) in
+{37}out(c_pub, choice[valid_frame,tombstone_slot]);
+{38}out(c_pub, choice[tombstone_slot,cover_slot])
 
 -- Observational equivalence in biprocess 1 (that is, biprocess 0, with let moved downwards):
 {1}new chain_key_AB: bitstring;
@@ -1425,16 +1440,25 @@ Biprocess 0 (that is, the initial process):
 {12}let ed_seed_AB_1: bitstring = get_ed_seed(entropy_AB_1) in
 {13}let target_AB_1: bitstring = sha1(ed_pk(ed_derive_sk(ed_seed_AB_1))) in
 {19}out(c_pub, choice[target_AB_1,target_CD_1]);
-{20}new k_payload: bitstring;
-{21}new iv_frame: bitstring;
-{22}new secret_payload: bitstring;
-{23}new r_tombstone: bitstring;
-{24}new r_cover: bitstring;
-{26}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
-{25}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
-{28}out(c_pub, choice[valid_frame,tombstone_slot]);
-{27}let cover_slot: frame_t = cover_frame(r_cover) in
-{29}out(c_pub, choice[tombstone_slot,cover_slot])
+{20}new nid_AB_wifi: bitstring;
+{21}new nid_AB_lte: bitstring;
+{22}new nid_AB_tor: bitstring;
+{23}new nid_CD_wifi: bitstring;
+{24}new nid_CD_lte: bitstring;
+{25}new nid_CD_tor: bitstring;
+{26}out(c_pub, choice[nid_AB_wifi,nid_CD_wifi]);
+{27}out(c_pub, choice[nid_AB_lte,nid_CD_lte]);
+{28}out(c_pub, choice[nid_AB_tor,nid_CD_tor]);
+{29}new k_payload: bitstring;
+{30}new iv_frame: bitstring;
+{31}new secret_payload: bitstring;
+{32}new r_tombstone: bitstring;
+{33}new r_cover: bitstring;
+{35}let tombstone_slot: frame_t = tombstone_frame(r_tombstone) in
+{34}let valid_frame: frame_t = enc_frame(k_payload,iv_frame,secret_payload) in
+{37}out(c_pub, choice[valid_frame,tombstone_slot]);
+{36}let cover_slot: frame_t = cover_frame(r_cover) in
+{38}out(c_pub, choice[tombstone_slot,cover_slot])
 
 Translating the process into Horn clauses...
 Termination warning: v ≠ v_1 && attacker2(v_2,v) && attacker2(v_2,v_1) -> bad
@@ -1679,48 +1703,173 @@ Process 0 (that is, the initial process):
     {2}new iv: bitstring;
     {3}let aad_v2: bitstring = row_bound_aad(tbl_messages,row_id_42,col_text_content) in
     {4}let ct: bitstring = aead_enc(master_key,iv,secret_db_payload,aad_v2) in
-    {5}let db_record: bitstring = (MAGIC_ROW_BOUND_V2,tbl_messages,row_id_42,col_text_content,iv,ct) in
-    {6}out(c_public, db_record);
-    {7}let recovered_pt: bitstring = aead_dec(master_key,iv,ct,aad_v2) in
-    {8}event ValidRecordAccessed(tbl_messages,row_id_42,col_text_content,recovered_pt);
-    {9}let swapped_aad: bitstring = row_bound_aad(tbl_swapped,id_swapped,col_swapped) in
-    {10}let test_swap: bitstring = aead_dec(master_key,iv,ct,swapped_aad) in
-    {11}event SwappedRecordDecrypted(test_swap);
-    {12}out(c_public, aead_enc(master_key,iv,secret_swapped_plaintext,swapped_aad));
-    {13}in(c_duress, =true);
-    {14}event DuressPinEntered;
-    {15}event MasterKeyDeleted;
-    {16}event DecoyModeActivated;
-    {17}out(c_public, harmless_decoy_notes)
+    {5}let db_record: bitstring = (tag_v2,tbl_messages,row_id_42,col_text_content,iv,ct) in
+    {6}new iv_poll: bitstring;
+    {7}let aad_poll: bitstring = row_bound_aad(tbl_polls,poll_id_1,col_poll_question) in
+    {8}let ct_poll: bitstring = aead_enc(master_key,iv_poll,secret_poll_payload,aad_poll) in
+    {9}let db_poll_record: bitstring = (tag_v2,tbl_polls,poll_id_1,col_poll_question,iv_poll,ct_poll) in
+    {10}new iv_vote: bitstring;
+    {11}let aad_vote: bitstring = row_bound_aad(tbl_poll_votes,vote_id_1,col_vote_bitmask) in
+    {12}let ct_vote: bitstring = aead_enc(master_key,iv_vote,secret_vote_bitmask,aad_vote) in
+    {13}let db_vote_record: bitstring = (tag_v2,tbl_poll_votes,vote_id_1,col_vote_bitmask,iv_vote,ct_vote) in
+    {14}new iv_v1: bitstring;
+    {15}let ct_v1: bitstring = aead_enc(master_key,iv_v1,secret_v1_plaintext,legacy_aad_v1(tbl_polls,poll_id_1)) in
+    {16}let legacy_v1_record: bitstring = (tag_v1,tbl_polls,poll_id_1,iv_v1,ct_v1) in
+    {17}out(c_public, (db_record,db_poll_record,db_vote_record,legacy_v1_record));
+    {18}let recovered_pt: bitstring = aead_dec(master_key,iv,ct,aad_v2) in
+    {19}event ValidRecordAccessed(tbl_messages,row_id_42,col_text_content,recovered_pt);
+    {20}let recovered_poll: bitstring = aead_dec(master_key,iv_poll,ct_poll,aad_poll) in
+    {21}event ValidRecordAccessed(tbl_polls,poll_id_1,col_poll_question,recovered_poll);
+    {22}let recovered_vote: bitstring = aead_dec(master_key,iv_vote,ct_vote,aad_vote) in
+    {23}event ValidRecordAccessed(tbl_poll_votes,vote_id_1,col_vote_bitmask,recovered_vote);
+    {24}let swapped_aad: bitstring = row_bound_aad(tbl_swapped,id_swapped,col_swapped) in
+    (
+        {25}let test_swap: bitstring = aead_dec(master_key,iv,ct,swapped_aad) in
+        {26}event SwappedRecordDecrypted(test_swap)
+    ) | (
+        {27}let test_poll_swap: bitstring = aead_dec(master_key,iv_poll,ct_poll,swapped_aad) in
+        {28}event SwappedRecordDecrypted(test_poll_swap)
+    ) | (
+        {29}let test_vote_swap: bitstring = aead_dec(master_key,iv_vote,ct_vote,aad_poll) in
+        {30}event SwappedRecordDecrypted(test_vote_swap)
+    ) | (
+        {31}let master_key_1: bitstring = master_key in
+        {32}in(c_public, (hdr: bitstring,tbl: bitstring,rid: bitstring,col: bitstring,iv_in: bitstring,ct_in: bitstring));
+        {33}if (hdr = tag_v2) then
+        {34}let aad_chk: bitstring = row_bound_aad(tbl,rid,col) in
+        {35}let pt_chk: bitstring = aead_dec(master_key_1,iv_in,ct_in,aad_chk) in
+        {36}event ValidRecordAccessed(tbl,rid,col,pt_chk);
+        {37}event LegacyDowngradeAccepted(pt_chk)
+    ) | (
+        {38}in(c_duress, =true);
+        {39}event DuressPinEntered;
+        {40}event MasterKeyDeleted;
+        {41}event DecoyModeActivated;
+        {42}out(c_public, harmless_decoy_notes)
+    )
 ) | (
-    {18}out(c_duress, true)
+    {43}out(c_duress, true)
 )
 
--- Query not attacker(secret_db_payload[]) in process 0.
+--  Process 1 (that is, process 0, with let moved downwards):
+(
+    {1}new master_key: bitstring;
+    {2}new iv: bitstring;
+    {6}new iv_poll: bitstring;
+    {10}new iv_vote: bitstring;
+    {14}new iv_v1: bitstring;
+    {15}let ct_v1: bitstring = aead_enc(master_key,iv_v1,secret_v1_plaintext,legacy_aad_v1(tbl_polls,poll_id_1)) in
+    {16}let legacy_v1_record: bitstring = (tag_v1,tbl_polls,poll_id_1,iv_v1,ct_v1) in
+    {11}let aad_vote: bitstring = row_bound_aad(tbl_poll_votes,vote_id_1,col_vote_bitmask) in
+    {12}let ct_vote: bitstring = aead_enc(master_key,iv_vote,secret_vote_bitmask,aad_vote) in
+    {13}let db_vote_record: bitstring = (tag_v2,tbl_poll_votes,vote_id_1,col_vote_bitmask,iv_vote,ct_vote) in
+    {7}let aad_poll: bitstring = row_bound_aad(tbl_polls,poll_id_1,col_poll_question) in
+    {8}let ct_poll: bitstring = aead_enc(master_key,iv_poll,secret_poll_payload,aad_poll) in
+    {9}let db_poll_record: bitstring = (tag_v2,tbl_polls,poll_id_1,col_poll_question,iv_poll,ct_poll) in
+    {3}let aad_v2: bitstring = row_bound_aad(tbl_messages,row_id_42,col_text_content) in
+    {4}let ct: bitstring = aead_enc(master_key,iv,secret_db_payload,aad_v2) in
+    {5}let db_record: bitstring = (tag_v2,tbl_messages,row_id_42,col_text_content,iv,ct) in
+    {17}out(c_public, (db_record,db_poll_record,db_vote_record,legacy_v1_record));
+    {18}let recovered_pt: bitstring = aead_dec(master_key,iv,ct,aad_v2) in
+    {19}event ValidRecordAccessed(tbl_messages,row_id_42,col_text_content,recovered_pt);
+    {20}let recovered_poll: bitstring = aead_dec(master_key,iv_poll,ct_poll,aad_poll) in
+    {21}event ValidRecordAccessed(tbl_polls,poll_id_1,col_poll_question,recovered_poll);
+    {22}let recovered_vote: bitstring = aead_dec(master_key,iv_vote,ct_vote,aad_vote) in
+    {23}event ValidRecordAccessed(tbl_poll_votes,vote_id_1,col_vote_bitmask,recovered_vote);
+    (
+        {24}let swapped_aad: bitstring = row_bound_aad(tbl_swapped,id_swapped,col_swapped) in
+        (
+            {25}let test_swap: bitstring = aead_dec(master_key,iv,ct,swapped_aad) in
+            {26}event SwappedRecordDecrypted(test_swap)
+        ) | (
+            {27}let test_poll_swap: bitstring = aead_dec(master_key,iv_poll,ct_poll,swapped_aad) in
+            {28}event SwappedRecordDecrypted(test_poll_swap)
+        ) | (
+            {29}let test_vote_swap: bitstring = aead_dec(master_key,iv_vote,ct_vote,aad_poll) in
+            {30}event SwappedRecordDecrypted(test_vote_swap)
+        ) | (
+            {32}in(c_public, (hdr: bitstring,tbl: bitstring,rid: bitstring,col: bitstring,iv_in: bitstring,ct_in: bitstring));
+            {33}if (hdr = tag_v2) then
+            {34}let aad_chk: bitstring = row_bound_aad(tbl,rid,col) in
+            {31}let master_key_1: bitstring = master_key in
+            {35}let pt_chk: bitstring = aead_dec(master_key_1,iv_in,ct_in,aad_chk) in
+            {36}event ValidRecordAccessed(tbl,rid,col,pt_chk);
+            {37}event LegacyDowngradeAccepted(pt_chk)
+        )
+    ) | (
+        {38}in(c_duress, =true);
+        {39}event DuressPinEntered;
+        {40}event MasterKeyDeleted;
+        {41}event DecoyModeActivated;
+        {42}out(c_public, harmless_decoy_notes)
+    )
+) | (
+    {43}out(c_duress, true)
+)
+
+-- Query not attacker(secret_db_payload[]) in process 1.
 Translating the process into Horn clauses...
 Completing...
 Starting query not attacker(secret_db_payload[])
 RESULT not attacker(secret_db_payload[]) is true.
--- Query inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted) in process 0.
+-- Query not attacker(secret_poll_payload[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not attacker(secret_poll_payload[])
+RESULT not attacker(secret_poll_payload[]) is true.
+-- Query not attacker(secret_vote_bitmask[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not attacker(secret_vote_bitmask[])
+RESULT not attacker(secret_vote_bitmask[]) is true.
+-- Query not attacker(secret_v1_plaintext[]) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not attacker(secret_v1_plaintext[])
+RESULT not attacker(secret_v1_plaintext[]) is true.
+-- Query inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted) in process 1.
 Translating the process into Horn clauses...
 Completing...
 Starting query inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted)
+goal reachable: b-inj-event(MasterKeyDeleted,@occ40[]) -> inj-event(DecoyModeActivated,@occ41[])
+The hypothesis occurs strictly before the conclusion.
 RESULT inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted) is true.
--- Query not attacker(secret_swapped_plaintext[]) in process 0.
+-- Query not attacker(secret_swapped_plaintext[]) in process 1.
 Translating the process into Horn clauses...
 Completing...
 Starting query not attacker(secret_swapped_plaintext[])
 RESULT not attacker(secret_swapped_plaintext[]) is true.
--- Query not event(SwappedRecordDecrypted(secret_db_payload[])) in process 0.
+-- Query not event(SwappedRecordDecrypted(secret_db_payload[])) in process 1.
 Translating the process into Horn clauses...
 Completing...
 Starting query not event(SwappedRecordDecrypted(secret_db_payload[]))
 RESULT not event(SwappedRecordDecrypted(secret_db_payload[])) is true.
+-- Query not event(SwappedRecordDecrypted(secret_poll_payload[])) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not event(SwappedRecordDecrypted(secret_poll_payload[]))
+RESULT not event(SwappedRecordDecrypted(secret_poll_payload[])) is true.
+-- Query not event(SwappedRecordDecrypted(secret_vote_bitmask[])) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not event(SwappedRecordDecrypted(secret_vote_bitmask[]))
+RESULT not event(SwappedRecordDecrypted(secret_vote_bitmask[])) is true.
+-- Query not event(LegacyDowngradeAccepted(secret_v1_plaintext[])) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query not event(LegacyDowngradeAccepted(secret_v1_plaintext[]))
+RESULT not event(LegacyDowngradeAccepted(secret_v1_plaintext[])) is true.
 
 --------------------------------------------------------------
 Verification summary:
 
 Query not attacker(secret_db_payload[]) is true.
+
+Query not attacker(secret_poll_payload[]) is true.
+
+Query not attacker(secret_vote_bitmask[]) is true.
+
+Query not attacker(secret_v1_plaintext[]) is true.
 
 Query inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted) is true.
 
@@ -1728,12 +1877,18 @@ Query not attacker(secret_swapped_plaintext[]) is true.
 
 Query not event(SwappedRecordDecrypted(secret_db_payload[])) is true.
 
+Query not event(SwappedRecordDecrypted(secret_poll_payload[])) is true.
+
+Query not event(SwappedRecordDecrypted(secret_vote_bitmask[])) is true.
+
+Query not event(LegacyDowngradeAccepted(secret_v1_plaintext[])) is true.
+
 --------------------------------------------------------------
 
 ==============================================================================
 FINAL AUDIT VERDICT:
 ==============================================================================
 STATUS: ALL LEMMAS FORMALLY PROVED (PASS)
-Total Lemmas Tested: 32
+Total Lemmas Tested: 38
 Failed: 0
 ==============================================================================

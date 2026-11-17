@@ -19,6 +19,13 @@ data class EncryptedBlob(
     fun copyOf(): ByteArray = raw.copyOf()
 
     /**
+     * Overwrites the wrapped plaintext/key bytes in memory with zeroes.
+     */
+    fun zeroSensitiveMemory() {
+        raw.fill(0)
+    }
+
+    /**
      * Validates that this ciphertext was bound to the expected table, row ID, and column.
      * Throws [AEADBadTagException] if a row-swap, table-swap, or column-swap attack occurred.
      */
@@ -163,13 +170,16 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseBlob(blob: ByteArray?): EncryptedBlob? {
         if (blob == null) return null
-        return try {
-            val result = KeystoreCrypto.decryptWithRowMetadata(blob)
-            result.plaintext?.let { EncryptedBlob(it, result.table, result.id, result.column) }
-                ?: EncryptedBlob(ByteArray(0), result.table, result.id, result.column)
-        } catch (_: Throwable) {
-            EncryptedBlob(ByteArray(0))
-        }
+        val result = KeystoreCrypto.decryptRowBoundV2(blob)
+        val plain = result.plaintext
+            ?: throw AEADBadTagException("Decrypted blob payload is null")
+        val table = result.table
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 table binding in blob column")
+        val id = result.id
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 row ID binding in blob column")
+        val column = result.column
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 column binding in blob column")
+        return EncryptedBlob(plain, table, id, column)
     }
 
     @TypeConverter
@@ -186,14 +196,17 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseText(textHex: String?): EncryptedText? {
         if (textHex == null) return null
-        return try {
-            val bytes = CryptoUtils.fromHex(textHex)
-            val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
-            result.plaintext?.let { EncryptedText(String(it, Charsets.UTF_8), result.table, result.id, result.column) }
-                ?: EncryptedText("", result.table, result.id, result.column)
-        } catch (_: Throwable) {
-            EncryptedText("")
-        }
+        val bytes = CryptoUtils.fromHex(textHex)
+        val result = KeystoreCrypto.decryptRowBoundV2(bytes)
+        val plain = result.plaintext
+            ?: throw AEADBadTagException("Decrypted text payload is null")
+        val table = result.table
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 table binding in text column")
+        val id = result.id
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 row ID binding in text column")
+        val column = result.column
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 column binding in text column")
+        return EncryptedText(String(plain, Charsets.UTF_8), table, id, column)
     }
 
     @TypeConverter
@@ -211,15 +224,20 @@ class KeystoreConverters {
     @TypeConverter
     fun fromDatabaseLong(textHex: String?): EncryptedLong? {
         if (textHex == null) return null
-        return try {
-            val bytes = CryptoUtils.fromHex(textHex)
-            val result = KeystoreCrypto.decryptWithRowMetadata(bytes)
-            result.plaintext?.let {
-                val longVal = java.nio.ByteBuffer.wrap(it).long
-                EncryptedLong(longVal, result.table, result.id, result.column)
-            } ?: EncryptedLong(0L, result.table, result.id, result.column)
-        } catch (_: Throwable) {
-            EncryptedLong(0L)
+        val bytes = CryptoUtils.fromHex(textHex)
+        val result = KeystoreCrypto.decryptRowBoundV2(bytes)
+        val plain = result.plaintext
+            ?: throw AEADBadTagException("Decrypted long payload is null")
+        if (plain.size < 8) {
+            throw AEADBadTagException("Corrupted EncryptedLong payload length (${plain.size} < 8 bytes)")
         }
+        val table = result.table
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 table binding in long column")
+        val id = result.id
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 row ID binding in long column")
+        val column = result.column
+            ?: throw AEADBadTagException("Missing MAGIC_ROW_BOUND_V2 column binding in long column")
+        val longVal = java.nio.ByteBuffer.wrap(plain).long
+        return EncryptedLong(longVal, table, id, column)
     }
 }

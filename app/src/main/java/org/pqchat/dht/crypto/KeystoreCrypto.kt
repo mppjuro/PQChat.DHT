@@ -37,32 +37,110 @@ object KeystoreCrypto {
     @Volatile
     private var isKeyWiped: Boolean = false
 
-    val INSTRUMENTED_TEST_MASTER_KEY: SecretKey = javax.crypto.spec.SecretKeySpec(
-        ByteArray(32) { (it * 31 + 17).toByte() },
-        "AES"
-    )
+    /**
+     * Test-only deterministic AES-256 SecretKey for Android instrumentation tests.
+     * Throws [SecurityException] outside verified JUnit / Android Instrumentation test environments.
+     */
+    val INSTRUMENTED_TEST_MASTER_KEY: SecretKey
+        get() {
+            enforceTestHookAllowed("INSTRUMENTED_TEST_MASTER_KEY")
+            return javax.crypto.spec.SecretKeySpec(
+                ByteArray(32) { (it * 31 + 17).toByte() },
+                "AES"
+            )
+        }
+
+    private fun isAndroidRuntime(): Boolean {
+        val vmName = System.getProperty("java.vm.name") ?: ""
+        if (vmName.contains("Dalvik", ignoreCase = true)) return true
+        val vendor = System.getProperty("java.vendor") ?: ""
+        if (vendor.contains("Android", ignoreCase = true)) return true
+        return false
+    }
+
+    private fun isJUnitPresent(): Boolean {
+        val loader = KeystoreCrypto::class.java.classLoader
+        return try {
+            Class.forName("org.junit.Test", false, loader)
+            true
+        } catch (_: Throwable) {
+            try {
+                Class.forName("org.junit.jupiter.api.Test", false, loader)
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
+    private fun isActiveAndroidInstrumentation(): Boolean {
+        return try {
+            val registryClass = Class.forName(
+                "androidx.test.platform.app.InstrumentationRegistry",
+                false,
+                KeystoreCrypto::class.java.classLoader
+            )
+            val getInst = registryClass.getMethod("getInstrumentation")
+            getInst.invoke(null) != null
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isDebuggableBuild(): Boolean {
+        return try {
+            val buildConfigClass = Class.forName(
+                "org.pqchat.dht.BuildConfig",
+                false,
+                KeystoreCrypto::class.java.classLoader
+            )
+            buildConfigClass.getField("DEBUG").getBoolean(null)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isTestEnvironmentAllowed(): Boolean {
+        if (isAndroidRuntime()) {
+            return isDebuggableBuild() && isJUnitPresent() && isActiveAndroidInstrumentation()
+        }
+        return isJUnitPresent()
+    }
+
+    private fun enforceTestHookAllowed(apiName: String) {
+        if (!isTestEnvironmentAllowed()) {
+            throw SecurityException(
+                "$apiName is forbidden in production Android runtime (requires active JUnit / Instrumentation test environment)"
+            )
+        }
+    }
 
     /**
-     * Injects a SecretKey provider for JVM unit tests where AndroidKeyStore is unavailable.
-     * In production, this must remain null to guarantee fail-closed security.
+     * Injects a SecretKey provider for JVM / Instrumentation unit tests where AndroidKeyStore is unavailable.
+     * Strictly throws [SecurityException] in production Android environments.
      */
     fun setTestKeyProvider(provider: (() -> SecretKey)?) {
+        enforceTestHookAllowed("setTestKeyProvider")
         isKeyWiped = false
         testKeyProvider = provider
     }
 
     /**
-     * Injects a static SecretKey for JVM unit tests.
+     * Injects a static SecretKey for JVM / Instrumentation unit tests.
+     * Strictly throws [SecurityException] in production Android environments.
      */
     fun setTestSecretKey(key: SecretKey?) {
+        enforceTestHookAllowed("setTestSecretKey")
         isKeyWiped = false
         testKeyProvider = if (key != null) { { key } } else null
     }
 
     /**
      * Resets the test provider to simulate production fail-closed state.
+     * Strictly throws [SecurityException] in production Android environments.
      */
     fun resetForTesting() {
+        enforceTestHookAllowed("resetForTesting")
         testKeyProvider = null
         isKeyWiped = false
     }
@@ -118,9 +196,10 @@ object KeystoreCrypto {
                 "AndroidKeyStore master key was permanently destroyed by Duress wipe. Fail-closed."
             )
         }
-        val providerKey = testKeyProvider?.invoke()
-        if (providerKey != null) {
-            return providerKey
+        val provider = testKeyProvider
+        if (provider != null) {
+            enforceTestHookAllowed("testKeyProvider")
+            return provider.invoke()
         }
         return try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE)
@@ -131,11 +210,16 @@ object KeystoreCrypto {
                 generateMasterKey()
             }
         } catch (_: Throwable) {
-            // AndroidKeyStore unavailable — check injected test provider (JVM unit tests only)
-            testKeyProvider?.invoke()
-                ?: throw IllegalStateException(
+            // AndroidKeyStore unavailable — check injected test provider (JVM / Instrumentation tests only)
+            val fallbackProvider = testKeyProvider
+            if (fallbackProvider != null) {
+                enforceTestHookAllowed("testKeyProvider")
+                fallbackProvider.invoke()
+            } else {
+                throw IllegalStateException(
                     "AndroidKeyStore is unavailable and no test key provider was registered. Fail-closed."
                 )
+            }
         }
     }
 
@@ -344,130 +428,169 @@ object KeystoreCrypto {
      * Decrypts ciphertext and extracts row and column metadata (table, id, column) from header if present.
      * Enforces fail-closed behavior: never returns raw input on authentication failure.
      */
-    fun decryptWithRowMetadata(
+    /**
+     * Decrypts ciphertext and validates strict MAGIC_ROW_BOUND_V2 (0x52) row+column AAD binding.
+     * Blocks any downgrade to legacy v1 (0x51) or unheaded raw ciphertext.
+     */
+    fun decryptRowBoundV2(
         encrypted: ByteArray?,
         expectedTable: String? = null,
         expectedId: String? = null,
         expectedColumn: String? = null
+    ): DecryptedRow = decryptWithRowMetadata(
+        encrypted = encrypted,
+        expectedTable = expectedTable,
+        expectedId = expectedId,
+        expectedColumn = expectedColumn,
+        requireV2 = true
+    )
+
+    /**
+     * Decrypts ciphertext and extracts row and column metadata (table, id, column) from header if present.
+     * When [requireV2] is true (or [expectedColumn] is non-null), enforces MAGIC_ROW_BOUND_V2 (0x52)
+     * strictly and blocks downgrade to legacy v1 (0x51) or raw unheaded ciphertext.
+     * Enforces fail-closed behavior: never returns raw input on authentication failure.
+     */
+    fun decryptWithRowMetadata(
+        encrypted: ByteArray?,
+        expectedTable: String? = null,
+        expectedId: String? = null,
+        expectedColumn: String? = null,
+        requireV2: Boolean = false
     ): DecryptedRow {
         if (encrypted == null) return DecryptedRow(null, null, null, null)
         if (encrypted.isEmpty()) {
             throw IllegalArgumentException("Ciphertext is empty")
         }
 
+        val strictV2 = requireV2 || (expectedColumn != null)
+
         if (encrypted[0] == MAGIC_ROW_BOUND_V2 && encrypted.size >= 1 + 1 + 2 + 1 + GCM_IV_LENGTH_BYTES + 16) {
             try {
                 var offset = 1
-            val tableLen = encrypted[offset++].toInt() and 0xFF
-            if (offset + tableLen > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound v2 header: table length exceeds payload")
-            }
-            val table = String(encrypted, offset, tableLen, Charsets.UTF_8)
-            offset += tableLen
+                val tableLen = encrypted[offset++].toInt() and 0xFF
+                if (offset + tableLen > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound v2 header: table length exceeds payload")
+                }
+                val table = String(encrypted, offset, tableLen, Charsets.UTF_8)
+                offset += tableLen
 
-            if (offset + 2 > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound v2 header: id length truncated")
-            }
-            val idLen = ((encrypted[offset++].toInt() and 0xFF) shl 8) or (encrypted[offset++].toInt() and 0xFF)
-            if (offset + idLen > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound v2 header: id exceeds payload")
-            }
-            val id = String(encrypted, offset, idLen, Charsets.UTF_8)
-            offset += idLen
+                if (offset + 2 > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound v2 header: id length truncated")
+                }
+                val idLen = ((encrypted[offset++].toInt() and 0xFF) shl 8) or (encrypted[offset++].toInt() and 0xFF)
+                if (offset + idLen > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound v2 header: id exceeds payload")
+                }
+                val id = String(encrypted, offset, idLen, Charsets.UTF_8)
+                offset += idLen
 
-            if (offset + 1 > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound v2 header: column length truncated")
-            }
-            val colLen = encrypted[offset++].toInt() and 0xFF
-            if (offset + colLen + GCM_IV_LENGTH_BYTES + 16 > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound v2 header: ciphertext payload truncated")
-            }
-            val column = String(encrypted, offset, colLen, Charsets.UTF_8)
-            offset += colLen
+                if (offset + 1 > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound v2 header: column length truncated")
+                }
+                val colLen = encrypted[offset++].toInt() and 0xFF
+                if (colLen <= 0) {
+                    throw AEADBadTagException("Malformed row-bound v2 header: column must be non-empty")
+                }
+                if (offset + colLen + GCM_IV_LENGTH_BYTES + 16 > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound v2 header: ciphertext payload truncated")
+                }
+                val column = String(encrypted, offset, colLen, Charsets.UTF_8)
+                offset += colLen
 
-            if (expectedTable != null && table != expectedTable) {
-                throw AEADBadTagException("Table mismatch: expected $expectedTable but found $table")
-            }
-            if (expectedId != null && id != expectedId) {
-                throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
-            }
-            if (expectedColumn != null && column != expectedColumn) {
-                throw AEADBadTagException("Column mismatch: expected $expectedColumn but found $column")
-            }
+                if (expectedTable != null && table != expectedTable) {
+                    throw AEADBadTagException("Table mismatch: expected $expectedTable but found $table")
+                }
+                if (expectedId != null && id != expectedId) {
+                    throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
+                }
+                if (expectedColumn != null && column != expectedColumn) {
+                    throw AEADBadTagException("Column mismatch: expected $expectedColumn but found $column")
+                }
 
-            val aad = buildRowAad(table, id, column)
+                val aad = buildRowAad(table, id, column)
+                val secretKey = getOrCreateSecretKey()
+                val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+                val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, offset, GCM_IV_LENGTH_BYTES)
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+                cipher.updateAAD(aad)
+                val cipherOffset = offset + GCM_IV_LENGTH_BYTES
+                val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
+                return DecryptedRow(plain, table, id, column)
+            } catch (e: Exception) {
+                if (!strictV2 && expectedTable == null && expectedId == null) {
+                    val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
+                    if (fallback != null) return fallback
+                }
+                throw e
+            }
+        } else if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
+            if (strictV2) {
+                throw AEADBadTagException(
+                    "Downgrade blocked: ciphertext uses legacy MAGIC_ROW_BOUND v1 (0x51), " +
+                    "but strict MAGIC_ROW_BOUND_V2 (0x52) with table+id+column AAD is required"
+                )
+            }
+            try {
+                var offset = 1
+                val tableLen = encrypted[offset++].toInt() and 0xFF
+                if (offset + tableLen > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound header: table length exceeds payload")
+                }
+                val table = String(encrypted, offset, tableLen, Charsets.UTF_8)
+                offset += tableLen
+
+                if (offset + 2 > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound header: id length truncated")
+                }
+                val idLen = ((encrypted[offset++].toInt() and 0xFF) shl 8) or (encrypted[offset++].toInt() and 0xFF)
+                if (offset + idLen + GCM_IV_LENGTH_BYTES + 16 > encrypted.size) {
+                    throw IllegalArgumentException("Malformed row-bound header: ciphertext payload truncated")
+                }
+                val id = String(encrypted, offset, idLen, Charsets.UTF_8)
+                offset += idLen
+
+                if (expectedTable != null && table != expectedTable) {
+                    throw AEADBadTagException("Table mismatch: expected $expectedTable but found $table")
+                }
+                if (expectedId != null && id != expectedId) {
+                    throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
+                }
+
+                val aad = buildRowAad(table, id)
+                val secretKey = getOrCreateSecretKey()
+                val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
+                val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, offset, GCM_IV_LENGTH_BYTES)
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+                cipher.updateAAD(aad)
+                val cipherOffset = offset + GCM_IV_LENGTH_BYTES
+                val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
+                return DecryptedRow(plain, table, id, null)
+            } catch (e: Exception) {
+                if (expectedTable == null && expectedId == null) {
+                    val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
+                    if (fallback != null) return fallback
+                }
+                throw e
+            }
+        } else {
+            if (strictV2 || expectedTable != null || expectedId != null) {
+                throw AEADBadTagException(
+                    "Downgrade blocked: ciphertext lacks required MAGIC_ROW_BOUND_V2 (0x52) header " +
+                    "for table=$expectedTable, id=$expectedId, column=$expectedColumn"
+                )
+            }
+            if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
+                throw IllegalArgumentException("Ciphertext too short (${encrypted.size} bytes) for IV and GCM tag")
+            }
             val secretKey = getOrCreateSecretKey()
             val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-            val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, offset, GCM_IV_LENGTH_BYTES)
+            val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            cipher.updateAAD(aad)
-            val cipherOffset = offset + GCM_IV_LENGTH_BYTES
-            val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
-            return DecryptedRow(plain, table, id, column)
-        } catch (e: Exception) {
-            val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
-            if (fallback != null) return fallback
-            throw e
+            val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
+            return DecryptedRow(plain, null, null, null)
         }
-    } else if (encrypted[0] == MAGIC_ROW_BOUND && encrypted.size >= 1 + 1 + 2 + GCM_IV_LENGTH_BYTES + 16) {
-        try {
-            var offset = 1
-            val tableLen = encrypted[offset++].toInt() and 0xFF
-            if (offset + tableLen > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound header: table length exceeds payload")
-            }
-            val table = String(encrypted, offset, tableLen, Charsets.UTF_8)
-            offset += tableLen
-
-            if (offset + 2 > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound header: id length truncated")
-            }
-            val idLen = ((encrypted[offset++].toInt() and 0xFF) shl 8) or (encrypted[offset++].toInt() and 0xFF)
-            if (offset + idLen + GCM_IV_LENGTH_BYTES + 16 > encrypted.size) {
-                throw IllegalArgumentException("Malformed row-bound header: ciphertext payload truncated")
-            }
-            val id = String(encrypted, offset, idLen, Charsets.UTF_8)
-            offset += idLen
-
-            if (expectedTable != null && table != expectedTable) {
-                throw AEADBadTagException("Table mismatch: expected $expectedTable but found $table")
-            }
-            if (expectedId != null && id != expectedId) {
-                throw AEADBadTagException("Row ID mismatch: expected $expectedId but found $id")
-            }
-            if (expectedColumn != null) {
-                throw AEADBadTagException("Column mismatch: expected $expectedColumn but ciphertext is legacy v1 without column binding")
-            }
-
-            val aad = buildRowAad(table, id)
-            val secretKey = getOrCreateSecretKey()
-            val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-            val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, offset, GCM_IV_LENGTH_BYTES)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            cipher.updateAAD(aad)
-            val cipherOffset = offset + GCM_IV_LENGTH_BYTES
-            val plain = cipher.doFinal(encrypted, cipherOffset, encrypted.size - cipherOffset)
-            return DecryptedRow(plain, table, id, null)
-        } catch (e: Exception) {
-            val fallback = tryDecryptRaw(encrypted, expectedTable, expectedId, expectedColumn)
-            if (fallback != null) return fallback
-            throw e
-        }
-    } else {
-        if (expectedTable != null || expectedId != null || expectedColumn != null) {
-            throw AEADBadTagException("Ciphertext lacks required row-bound AAD header for table=$expectedTable, id=$expectedId, column=$expectedColumn")
-        }
-        if (encrypted.size < GCM_IV_LENGTH_BYTES + 16) {
-            throw IllegalArgumentException("Ciphertext too short (${encrypted.size} bytes) for IV and GCM tag")
-        }
-        val secretKey = getOrCreateSecretKey()
-        val cipher = Cipher.getInstance(AES_GCM_TRANSFORMATION)
-        val spec = GCMParameterSpec(GCM_TAG_LENGTH_BITS, encrypted, 0, GCM_IV_LENGTH_BYTES)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-        val plain = cipher.doFinal(encrypted, GCM_IV_LENGTH_BYTES, encrypted.size - GCM_IV_LENGTH_BYTES)
-        return DecryptedRow(plain, null, null, null)
     }
-}
 
 private fun tryDecryptRaw(
     encrypted: ByteArray,
@@ -494,7 +617,13 @@ private fun tryDecryptRaw(
      */
     fun decrypt(encrypted: ByteArray?, table: String, id: String, column: String? = null): ByteArray? {
         if (encrypted == null) return null
-        return decryptWithRowMetadata(encrypted, expectedTable = table, expectedId = id, expectedColumn = column).plaintext
+        return decryptWithRowMetadata(
+            encrypted = encrypted,
+            expectedTable = table,
+            expectedId = id,
+            expectedColumn = column,
+            requireV2 = (column != null)
+        ).plaintext
     }
 
     /**

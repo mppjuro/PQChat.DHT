@@ -3270,11 +3270,13 @@ class ChatRepository(
                         org.pqchat.dht.traffic.PendingAck(
                             contactId = contactId,
                             messageId = "${pending.seqNum}",
-                            ratchetKey = pending.rawBaseMsgKey,
+                            ratchetKey = pending.rawBaseMsgKey.copyOf(),
                             seqNum = pending.seqNum
                         )
                     )
                 }
+                allChunks.forEach { it.zeroSensitiveMemory() }
+                pending.zeroSensitiveMemory()
 
                 // If this completed transfer is at counterIn, advance counterIn
                 val currentContact = contactDao.getContactById(contactId) ?: contact

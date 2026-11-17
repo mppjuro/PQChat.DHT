@@ -532,5 +532,87 @@ class KeystoreCryptoTest {
             KeystoreCrypto.decryptString(msg1TextHex, "messages", "contact_bob_0_1_false", "senderName")
         }
     }
+
+    @Test
+    fun testTestKeyHooksThrowSecurityExceptionInSimulatedAndroidProduction() {
+        val prevVm = System.getProperty("java.vm.name")
+        val prevVendor = System.getProperty("java.vendor")
+        try {
+            // Simulate Android ART/Dalvik runtime without active InstrumentationRegistry
+            System.setProperty("java.vm.name", "Dalvik")
+            System.setProperty("java.vendor", "The Android Project")
+
+            assertThrows(SecurityException::class.java) {
+                KeystoreCrypto.setTestSecretKey(testMasterKey)
+            }
+            assertThrows(SecurityException::class.java) {
+                KeystoreCrypto.setTestKeyProvider { testMasterKey }
+            }
+            assertThrows(SecurityException::class.java) {
+                KeystoreCrypto.resetForTesting()
+            }
+            assertThrows(SecurityException::class.java) {
+                KeystoreCrypto.INSTRUMENTED_TEST_MASTER_KEY
+            }
+        } finally {
+            if (prevVm != null) System.setProperty("java.vm.name", prevVm) else System.clearProperty("java.vm.name")
+            if (prevVendor != null) System.setProperty("java.vendor", prevVendor) else System.clearProperty("java.vendor")
+        }
+    }
+
+    @Test
+    fun testConvertersStrictlyRejectLegacyV1AndRawCiphertextDowngrade() {
+        val converters = KeystoreConverters()
+        val rowId = "alice_v2_only"
+
+        // 1. Legacy v1 (0x51) ciphertexts must be rejected by Room converters (no downgrade)
+        val v1Blob = KeystoreCrypto.encrypt(ByteArray(32) { 0x42 }, "contacts", rowId)!!
+        assertEquals(KeystoreCrypto.MAGIC_ROW_BOUND, v1Blob[0])
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseBlob(v1Blob)
+        }
+
+        val v1TextHex = org.pqchat.dht.crypto.CryptoUtils.toHex(v1Blob)
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseText(v1TextHex)
+        }
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseLong(v1TextHex)
+        }
+
+        // 2. Raw unheaded AES-GCM ciphertext (non-colliding IV) must be blocked with AEADBadTagException
+        val nonCollidingIv = ByteArray(KeystoreCrypto.GCM_IV_LENGTH_BYTES) { 0x01 }
+        val rawCipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        rawCipher.init(javax.crypto.Cipher.ENCRYPT_MODE, testMasterKey, javax.crypto.spec.GCMParameterSpec(128, nonCollidingIv))
+        val rawPlainBlob = nonCollidingIv + rawCipher.doFinal("Raw downgrade attempt".toByteArray())
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseBlob(rawPlainBlob)
+        }
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseText(org.pqchat.dht.crypto.CryptoUtils.toHex(rawPlainBlob))
+        }
+        assertThrows(AEADBadTagException::class.java) {
+            converters.fromDatabaseLong(org.pqchat.dht.crypto.CryptoUtils.toHex(rawPlainBlob))
+        }
+
+        // 3. Raw unheaded AES-GCM ciphertext whose IV[0] == 0x52 must also fail closed (never fall back to raw)
+        val collidingIv = org.pqchat.dht.crypto.CryptoUtils.secureRandomBytes(KeystoreCrypto.GCM_IV_LENGTH_BYTES)
+        collidingIv[0] = KeystoreCrypto.MAGIC_ROW_BOUND_V2
+        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, testMasterKey, javax.crypto.spec.GCMParameterSpec(128, collidingIv))
+        val rawCollidingBlob = collidingIv + cipher.doFinal("Raw downgrade attempt".toByteArray())
+        val exBlob = assertThrows(Exception::class.java) {
+            converters.fromDatabaseBlob(rawCollidingBlob)
+        }
+        assertTrue(exBlob is GeneralSecurityException || exBlob is IllegalArgumentException)
+        val exText = assertThrows(Exception::class.java) {
+            converters.fromDatabaseText(org.pqchat.dht.crypto.CryptoUtils.toHex(rawCollidingBlob))
+        }
+        assertTrue(exText is GeneralSecurityException || exText is IllegalArgumentException)
+        val exLong = assertThrows(Exception::class.java) {
+            converters.fromDatabaseLong(org.pqchat.dht.crypto.CryptoUtils.toHex(rawCollidingBlob))
+        }
+        assertTrue(exLong is GeneralSecurityException || exLong is IllegalArgumentException)
+    }
 }
 

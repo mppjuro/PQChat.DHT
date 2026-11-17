@@ -65,6 +65,7 @@ Eight fundamental security pillars were formally verified:
 * **Observational Equivalence (`pqchat_unlinkability.pv`):**
   * `Query Observational equivalence is true`
   * DHT nodes observing queries to $\text{Target}_i = \text{SHA-1}(pk_i)$ cannot distinguish queries of session $(Alice, Bob)$ from queries of session $(Charlie, Dave)$ (Metadata-Free Rendezvous).
+  * Ephemeral leaf `myNodeId` rotations emitted across network interface transitions (Wi-Fi / LTE / Tor circuits) remain unlinkable across sessions.
   * The rigid 900-byte Tombstone record (CSPRNG noise) written upon message receipt is mathematically indistinguishable from normal 900-byte AES-256-GCM ciphertexts and from 900-byte Poisson cover traffic dummy packets.
 
 ### (7) Group Chat Protocol and Key Rotation (Group Protocol & PCS/FS)
@@ -81,13 +82,20 @@ Eight fundamental security pillars were formally verified:
 ### (8) Duress Hardware Key Purge & Row-Bound V2 Integrity (`pqchat_duress_wipe.pv`)
 * **Secrecy of Database Ciphertexts & Master Key Erasure Irreversibility:**
   * `Query not attacker(secret_db_payload[]) is true`
+  * `Query not attacker(secret_poll_payload[]) is true` (`polls`)
+  * `Query not attacker(secret_vote_bitmask[]) is true` (`poll_votes`)
   * Deletion of master keys from Android Keystore permanently and irreversibly denies decryption of stored Room database ciphertexts.
 * **Decoy Mode Activation Correspondence:**
   * `Query inj-event(DecoyModeActivated) ==> inj-event(MasterKeyDeleted) is true`
   * Decoy Notes mode can only be engaged after the master encryption key is completely eliminated.
 * **Row/Column Swap Resistance via `MAGIC_ROW_BOUND_V2`:**
   * `Query not event(SwappedRecordDecrypted(secret_db_payload[])) is true`
-  * Tampering with or swapping database ciphertext blocks across different rows or columns fails decryption (`AEADBadTagException`) due to cryptographic context binding to $AAD = \text{table} \parallel \text{id} \parallel \text{column}$.
+  * `Query not event(SwappedRecordDecrypted(secret_poll_payload[])) is true`
+  * `Query not event(SwappedRecordDecrypted(secret_vote_bitmask[])) is true`
+  * Tampering with or swapping database ciphertext blocks across different tables, rows, or columns (`messages`, `polls`, `poll_votes`) fails decryption (`AEADBadTagException`) due to cryptographic context binding to $AAD = \text{table} \parallel \text{id} \parallel \text{column}$.
+* **Strict `MAGIC_ROW_BOUND_V2` Anti-Downgrade Enforcement:**
+  * `Query not event(LegacyDowngradeAccepted(secret_v1_plaintext[])) is true`
+  * Room `KeystoreConverters` reject legacy V1 (`0x51`) and unheaded raw ciphertext downgrades.
 
 ---
 
@@ -100,11 +108,11 @@ Eight fundamental security pillars were formally verified:
 | `pqchat_forward_secrecy.pv` | **Forward Secrecy Model:** Formal proof protecting past messages upon compromise of subsequent chain states in device RAM. (2 lemmas) |
 | `pqchat_post_compromise.pv` | **Post-Compromise Security (PCS) Model:** Formal proof of self-healing state recovery following hybrid X25519 + ML-KEM-512 rotation. (2 lemmas) |
 | `pqchat_replay.pv` | **Anti-Replay Model:** Proof of injective packet acceptance for handshake and data transmission with slot invalidation. (2 lemmas) |
-| `pqchat_unlinkability.pv` | **Unlinkability & Tombstones Model:** Proof of observational equivalence (`diff-equivalence`) for target hopping and indistinguishability of 900-byte tombstones from normal frames and cover traffic. (1 lemma) |
+| `pqchat_unlinkability.pv` | **Unlinkability & Tombstones Model:** Proof of observational equivalence (`diff-equivalence`) for target hopping, ephemeral `myNodeId` rotation, and indistinguishability of 900-byte tombstones from normal frames and cover traffic. (1 lemma) |
 | `pqchat_group_protocol.pv` | **Group Chat Protocol & Key Rotation Model:** Proof of secrecy of group sender key distribution in `0x06` frame via 1-on-1 channel (ML-KEM-512 + X25519), authenticity of group messages with AAD binding ($Target \parallel GroupID \parallel SenderMemberID$), and Forward Secrecy / Post-Compromise Security upon member departure ($groupEpoch + 1$). (4 lemmas) |
-| `pqchat_duress_wipe.pv` | **Duress Wipe & Row-Bound V2 Model:** Formal proof of master key erasure irreversibility, decoy mode activation correspondence, row/column swap resistance with AAD context binding ($AAD = table \parallel id \parallel col$), and non-decryptability of swapped ciphertexts. (4 lemmas) |
-| `verify_lemmas.py` | Python validator automating regex verification of all 32 lemmas against ProVerif output. |
-| `run_verification.sh` | Shell script automating execution of proofs in ProVerif across all 8 models, result aggregation, verification of all 32 lemmas, and generating `report.txt`. |
+| `pqchat_duress_wipe.pv` | **Duress Wipe & Row-Bound V2 Model:** Formal proof of master key erasure irreversibility, decoy mode activation correspondence, row/column swap resistance across all encrypted tables (`messages`, `polls`, `poll_votes`) with AAD context binding ($AAD = table \parallel id \parallel col$), and strict `MAGIC_ROW_BOUND_V2` anti-downgrade enforcement. (10 lemmas) |
+| `verify_lemmas.py` | Python validator automating regex verification of all 38 lemmas against ProVerif output. |
+| `run_verification.sh` | Shell script automating execution of proofs in ProVerif across all 8 models, result aggregation, verification of all 38 lemmas, and generating `report.txt`. |
 | `report.txt` | Full Dolev-Yao verification report generated by ProVerif. |
 
 ---
@@ -114,13 +122,13 @@ Eight fundamental security pillars were formally verified:
 Executing the formal models requires **ProVerif** (version $\ge 2.04$):
 
 ```bash
-# Execute full verification suite (32 lemmas across 8 models):
+# Execute full verification suite (38 lemmas across 8 models):
 bash docs/formal/run_verification.sh
 ```
 
 The script automatically:
 1. Detects ProVerif binaries in PATH, `/usr/local/bin`, WSL Ubuntu, or compiles from Inria sources in Linux/CI environments.
 2. Executes symbolic analysis across each of the 8 `.pv` models.
-3. Verifies exact lemma formulas (32/32 PASS).
+3. Verifies exact lemma formulas (38/38 PASS).
 4. Generates a detailed verification report in `docs/formal/report.txt`.
 5. Returns exit code `0` when all lemmas pass.
