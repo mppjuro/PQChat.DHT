@@ -4111,15 +4111,25 @@ class ChatRepository(
                                 }
                                 is BinaryFrameCodec.DecodedPayload.GroupPollVote -> {
                                     val pollIdStr = bytesToUuidString(pollPayload.pollId)
-                                    pollDao?.insertOrUpdateVote(
-                                        PollVoteEntity(
-                                            pollId = pollIdStr,
-                                            memberId = member.memberId,
-                                            memberName = member.rawMemberName,
-                                            selectedBitmask = pollPayload.selectedOptionsBitmask,
-                                            voteTimestamp = pollPayload.voteTimestamp
+                                    val existingPoll = pollDao?.getPoll(pollIdStr)
+                                    if (existingPoll != null && !existingPoll.isClosed && System.currentTimeMillis() <= existingPoll.expirationTimestamp) {
+                                        pollDao.insertOrUpdateVote(
+                                            PollVoteEntity(
+                                                pollId = pollIdStr,
+                                                memberId = member.memberId,
+                                                memberName = member.rawMemberName,
+                                                selectedBitmask = pollPayload.selectedOptionsBitmask,
+                                                voteTimestamp = pollPayload.voteTimestamp
+                                            )
                                         )
-                                    )
+                                    }
+                                }
+                                is BinaryFrameCodec.DecodedPayload.GroupPollClose -> {
+                                    val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                    val existingPoll = pollDao?.getPoll(pollIdStr)
+                                    if (existingPoll != null && (existingPoll.rawCreatorMemberId == member.memberId || existingPoll.rawCreatorMemberId.isEmpty())) {
+                                        pollDao.closePoll(pollIdStr)
+                                    }
                                 }
                                 else -> {}
                             }
@@ -6388,17 +6398,30 @@ class ChatRepository(
                     val placeholderMember = allMembers.firstOrNull { it.memberId == mkMemberId || (it.contactId == null && it.rawChainKeyIn.all { b -> b == 0.toByte() }) }
 
                     if (existingMember != null) {
-                        val sameOrOlder = isSameOrOlderChainState(
+                        val memberEpochKey = "${groupId}_${mkMemberId}"
+                        val knownEpoch = groupMemberLastRekeyEpoch[memberEpochKey] ?: 0L
+                        val staleEpoch = knownEpoch > 0L && control.groupEpoch < knownEpoch &&
+                            !existingMember.rawChainKeyIn.all { b -> b == 0.toByte() }
+                        val sameOrOlder = staleEpoch || isSameOrOlderChainState(
                             existingChainKey = existingMember.rawChainKeyIn,
                             existingCounter = existingMember.counterIn,
                             incomingChainKey = mk.chainKey,
                             incomingCounter = mk.counter.toInt()
                         )
+                        val isNewEpochChain = !sameOrOlder && (
+                            control.groupEpoch > knownEpoch ||
+                                mk.counter.toInt() < existingMember.counterIn
+                        )
+                        if (!staleEpoch && control.groupEpoch > 0L) {
+                            groupMemberLastRekeyEpoch[memberEpochKey] = maxOf(knownEpoch, control.groupEpoch)
+                        }
                         if (!sameOrOlder) {
                             anyNewKeys = true
                             val updated = existingMember.copy(
                                 chainKeyIn = EncryptedBlob(mk.chainKey, "group_members", "${groupId}_${mkMemberId}", "chainKeyIn"),
                                 counterIn = mk.counter.toInt(),
+                                receivedBitmapBase = if (isNewEpochChain) 0 else existingMember.receivedBitmapBase,
+                                receivedBitmap = if (isNewEpochChain) ByteArray(128) else existingMember.receivedBitmap,
                                 isActive = true
                             )
                             groupMemberDao.insertOrUpdate(updated)
@@ -6657,6 +6680,10 @@ class ChatRepository(
                         incomingChainKey = control.senderGroupChainKey,
                         incomingCounter = control.currentCounter.toInt()
                     )
+                    val isNewEpochChain = !sameOrOlder && (
+                        control.groupEpoch > knownEpoch ||
+                            control.currentCounter.toInt() < existingMember.counterIn
+                    )
                     if (!staleEpoch) {
                         groupMemberLastRekeyEpoch[memberEpochKey] = maxOf(knownEpoch, control.groupEpoch)
                     }
@@ -6669,6 +6696,8 @@ class ChatRepository(
                                 existingMember.chainKeyIn
                             },
                             counterIn = if (!sameOrOlder) control.currentCounter.toInt() else existingMember.counterIn,
+                            receivedBitmapBase = if (isNewEpochChain) 0 else existingMember.receivedBitmapBase,
+                            receivedBitmap = if (isNewEpochChain) ByteArray(128) else existingMember.receivedBitmap,
                             isActive = true
                         )
                         groupMemberDao.insertOrUpdate(updated)
@@ -7546,6 +7575,86 @@ class ChatRepository(
         }
     }
 
+    private suspend fun dispatchGroupControlOrPollPayloadLocked(
+        group: GroupEntity,
+        plaintext: ByteArray,
+        timestampMs: Long
+    ) {
+        val baseSlot = RatchetChain.deriveSlot(group.rawMyChainKeyOut, group.myCounterOut)
+        val groupIdBytes = uuidStringToBytes(group.groupId)
+        val myMemberIdBytes = uuidStringToBytes(group.myMemberId)
+
+        val activeMembers = groupMemberDao?.getMembersForGroup(group.groupId)?.filter {
+            it.memberId != group.myMemberId && it.isActive
+        } ?: emptyList()
+
+        val shuffledMembers = if (activeMembers.size > 1) {
+            activeMembers.shuffled(CryptoUtils.secureRandom)
+        } else {
+            activeMembers
+        }
+
+        val targetSlots = if (shuffledMembers.isNotEmpty()) {
+            shuffledMembers.map { member ->
+                val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                RatchetChain.deriveGroupRecipientSlot(
+                    chainKey = group.rawMyChainKeyOut,
+                    counter = group.myCounterOut,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes,
+                    recipientMemberId = recipientMemberIdBytes
+                )
+            }
+        } else {
+            listOf(baseSlot)
+        }
+
+        groupDao?.updateOutgoingState(
+            groupId = group.groupId,
+            counterOut = group.myCounterOut + 1,
+            chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", group.groupId, "myChainKeyOut"),
+            lastActive = System.currentTimeMillis()
+        )
+
+        val outboundFrames = targetSlots.map { slot ->
+            val frame = BinaryFrameCodec.packGroupAeadFrame(
+                key = slot.msgKey,
+                plaintext = plaintext,
+                target = slot.target,
+                groupId = groupIdBytes,
+                senderMemberId = myMemberIdBytes
+            )
+            org.pqchat.dht.traffic.OutboundPoissonFrame(
+                target = slot.target,
+                payload = frame,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = slot.edPrivateKeySeed,
+                skipLocalStore = false,
+                seqNum = group.myCounterOut,
+                contactId = group.groupId,
+                timestamp = timestampMs,
+                packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE
+            )
+        }
+
+        if (isStrictPoissonShaping()) {
+            outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
+        } else {
+            repositoryScope.launch {
+                outboundFrames.forEach { frame ->
+                    dhtLeafNode.putMutable(
+                        target = frame.target,
+                        v = frame.payload,
+                        seq = frame.seq,
+                        salt = frame.salt,
+                        sk = frame.sk
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun voteGroupPoll(
         groupId: String,
         pollId: String,
@@ -7563,9 +7672,6 @@ class ChatRepository(
             }
             val currentGroup = groupDao.getGroupById(groupId) ?: group
 
-            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
-            val groupIdBytes = uuidStringToBytes(groupId)
-            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
             val pollIdBytes = uuidStringToBytes(pollId)
             val voteTs = System.currentTimeMillis()
 
@@ -7589,76 +7695,44 @@ class ChatRepository(
                 )
             )
 
-            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
-                it.memberId != currentGroup.myMemberId && it.isActive
-            } ?: emptyList()
+            dispatchGroupControlOrPollPayloadLocked(currentGroup, plaintext, voteTs)
+            true
+        }
+    }
 
-            val shuffledMembers = if (activeMembers.size > 1) {
-                activeMembers.shuffled(CryptoUtils.secureRandom)
-            } else {
-                activeMembers
+    /**
+     * Closes an active group poll locally and broadcasts an authenticated `POLL_SUBTYPE_CLOSE`
+     * (`0x0A`) frame to all active group participants.
+     */
+    suspend fun closeGroupPoll(
+        groupId: String,
+        pollId: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            val poll = pollDao?.getPoll(pollId) ?: return@withLock false
+            if (poll.isClosed) return@withLock true
+
+            if (group.myCounterOut > 0 && group.myCounterOut % BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL == 0) {
+                rotateGroupSenderKeyInternal(group)
             }
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
 
-            val targetSlots = if (shuffledMembers.isNotEmpty()) {
-                shuffledMembers.map { member ->
-                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
-                    RatchetChain.deriveGroupRecipientSlot(
-                        chainKey = currentGroup.rawMyChainKeyOut,
-                        counter = currentGroup.myCounterOut,
-                        groupId = groupIdBytes,
-                        senderMemberId = myMemberIdBytes,
-                        recipientMemberId = recipientMemberIdBytes
-                    )
-                }
-            } else {
-                listOf(baseSlot)
-            }
-
-            groupDao.updateOutgoingState(
-                groupId = groupId,
-                counterOut = currentGroup.myCounterOut + 1,
-                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
-                lastActive = System.currentTimeMillis()
+            val pollIdBytes = uuidStringToBytes(pollId)
+            val closeTs = System.currentTimeMillis()
+            val plaintext = BinaryFrameCodec.encodeGroupPollClose(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = closeTs,
+                pollId = pollIdBytes,
+                closedTimestamp = closeTs,
+                obfuscateTimestamp = true
             )
 
-            val outboundFrames = targetSlots.map { slot ->
-                val frame = BinaryFrameCodec.packGroupAeadFrame(
-                    key = slot.msgKey,
-                    plaintext = plaintext,
-                    target = slot.target,
-                    groupId = groupIdBytes,
-                    senderMemberId = myMemberIdBytes
-                )
-                org.pqchat.dht.traffic.OutboundPoissonFrame(
-                    target = slot.target,
-                    payload = frame,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false,
-                    seqNum = currentGroup.myCounterOut,
-                    contactId = groupId,
-                    timestamp = voteTs,
-                    packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE
-                )
-            }
-
-            if (isStrictPoissonShaping()) {
-                outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
-            } else {
-                repositoryScope.launch {
-                    outboundFrames.forEach { frame ->
-                        dhtLeafNode.putMutable(
-                            target = frame.target,
-                            v = frame.payload,
-                            seq = frame.seq,
-                            salt = frame.salt,
-                            sk = frame.sk
-                        )
-                    }
-                }
-            }
-
+            pollDao.closePoll(pollId)
+            dispatchGroupControlOrPollPayloadLocked(currentGroup, plaintext, closeTs)
             true
         }
     }
@@ -7675,6 +7749,8 @@ class ChatRepository(
         val newChainKeyOut = CryptoUtils.secureRandomBytes(64)
         val newEpoch = group.groupEpoch + 1
         val newCounterOut = 0
+
+        logI("GroupKeySync", "GroupKeySync: Rotated sender key for group=${group.groupId} to epoch=$newEpoch (prevCounter=${group.myCounterOut})")
 
         groupDao?.updateRekeyedState(
             groupId = group.groupId,
@@ -7993,6 +8069,13 @@ class ChatRepository(
                                                     voteTimestamp = pollPayload.voteTimestamp
                                                 )
                                             )
+                                        }
+                                    }
+                                    is BinaryFrameCodec.DecodedPayload.GroupPollClose -> {
+                                        val pollIdStr = bytesToUuidString(pollPayload.pollId)
+                                        val poll = pollDao?.getPoll(pollIdStr)
+                                        if (poll != null && (poll.rawCreatorMemberId == freshMember.memberId || poll.rawCreatorMemberId.isEmpty())) {
+                                            pollDao.closePoll(pollIdStr)
                                         }
                                     }
                                     else -> {}

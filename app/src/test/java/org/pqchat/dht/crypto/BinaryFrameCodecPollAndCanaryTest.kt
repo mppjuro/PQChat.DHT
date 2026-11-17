@@ -165,6 +165,62 @@ class BinaryFrameCodecPollAndCanaryTest {
     }
 
     @Test
+    fun testGroupPollCloseEncodeDecodeAndAeadBinding() {
+        val key = CryptoUtils.secureRandomBytes(32)
+        val target = CryptoUtils.secureRandomBytes(20)
+        val groupId = CryptoUtils.secureRandomBytes(16)
+        val senderMemberId = CryptoUtils.secureRandomBytes(16)
+        val forgedSenderId = CryptoUtils.secureRandomBytes(16)
+        val pollId = CryptoUtils.secureRandomBytes(16)
+        val closeTs = 1771940500000L
+
+        val innerPayload = BinaryFrameCodec.encodeGroupPollClose(
+            seqNum = 12,
+            ackNum = 11,
+            timestampUTC = 1771940500000L,
+            pollId = pollId,
+            closedTimestamp = closeTs
+        )
+        assertEquals(BinaryFrameCodec.INNER_PAYLOAD_SIZE + BinaryFrameCodec.INNER_HEADER_SIZE, innerPayload.size)
+
+        val frame = BinaryFrameCodec.packGroupAeadFrame(
+            key = key,
+            plaintext = innerPayload,
+            target = target,
+            groupId = groupId,
+            senderMemberId = senderMemberId
+        )
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, frame.size)
+
+        val decoded = BinaryFrameCodec.unpackGroupAeadFrame(
+            key = key,
+            frame = frame,
+            target = target,
+            groupId = groupId,
+            senderMemberId = senderMemberId
+        )
+        assertEquals(BinaryFrameCodec.TYPE_GROUP_POLL, decoded.msgType)
+        assertTrue(decoded.payload is BinaryFrameCodec.DecodedPayload.GroupPollClose)
+        val closed = decoded.payload as BinaryFrameCodec.DecodedPayload.GroupPollClose
+        assertEquals(BinaryFrameCodec.POLL_SUBTYPE_CLOSE, closed.pollSubType)
+        assertArrayEquals(pollId, closed.pollId)
+        assertEquals(closeTs, closed.closedTimestamp)
+
+        try {
+            BinaryFrameCodec.unpackGroupAeadFrame(
+                key = key,
+                frame = frame,
+                target = target,
+                groupId = groupId,
+                senderMemberId = forgedSenderId
+            )
+            fail("Expected AEADBadTagException when Group AAD senderMemberId is forged")
+        } catch (_: AEADBadTagException) {
+            // Expected AAD failure
+        }
+    }
+
+    @Test
     fun testSafetyCanaryRoundtripAllReasonsAndExactSize() {
         val key = CryptoUtils.secureRandomBytes(32)
         val target = CryptoUtils.secureRandomBytes(20)

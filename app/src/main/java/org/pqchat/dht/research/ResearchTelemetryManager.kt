@@ -2201,7 +2201,7 @@ class ResearchTelemetryManager(
      * Strictly requires explicit user opt-in (isEnabled == true).
      */
     suspend fun forceFirebaseSync(): Boolean = withContext(Dispatchers.IO) {
-        if (!isEnabled || !firebaseSync.isFirebaseConfigured()) return@withContext false
+        if (!isEnabled) return@withContext false
         val payloads = computeChunkedSessionPayloads()
         firebaseSync.syncResearchSessionChunks(sessionId, payloads, isManual = true)
     }

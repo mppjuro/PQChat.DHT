@@ -14,6 +14,15 @@ import kotlin.math.max
 class VoicePlayer(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
+    companion object {
+        /**
+         * Enables silent timer-driven PCM playback progress for headless CI emulators
+         * running with `-noaudio` where hardware AudioTrack output is unavailable.
+         */
+        @Volatile
+        var isSyntheticAudioTestMode: Boolean = false
+    }
+
     private val isPlayingState = AtomicBoolean(false)
     private var playJob: Job? = null
     private var audioTrack: AudioTrack? = null
@@ -46,6 +55,29 @@ class VoicePlayer(
                 isPlayingState.set(false)
                 withContext(Dispatchers.Main) {
                     onCompletion?.invoke()
+                }
+                return@launch
+            }
+
+            if (isSyntheticAudioTestMode) {
+                val totalMs = ((pcmSamples.size * 1000L) / VoiceCodec.SAMPLE_RATE).coerceIn(600L, 1500L)
+                val steps = 12
+                val stepMs = (totalMs / steps).coerceAtLeast(30L)
+                try {
+                    for (step in 1..steps) {
+                        if (!isActive || !isPlayingState.get()) break
+                        delay(stepMs)
+                        val progress = (step.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
+                        withContext(Dispatchers.Main) {
+                            onProgress?.invoke(progress)
+                        }
+                    }
+                } finally {
+                    isPlayingState.set(false)
+                    withContext(Dispatchers.Main) {
+                        onProgress?.invoke(1f)
+                        onCompletion?.invoke()
+                    }
                 }
                 return@launch
             }

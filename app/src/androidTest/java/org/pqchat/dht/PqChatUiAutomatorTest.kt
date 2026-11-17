@@ -1,6 +1,7 @@
 package org.pqchat.dht
 
 import android.os.Build
+import android.view.WindowManager
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -10,11 +11,15 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.UiDevice
+import java.io.File
+import java.util.zip.ZipInputStream
 import javax.crypto.SecretKey
-import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -22,6 +27,12 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.pqchat.dht.PQChatApplication
+import org.pqchat.dht.crypto.BinaryFrameCodec
+import org.pqchat.dht.media.voice.VoicePlayer
+import org.pqchat.dht.media.voice.VoiceRecorder
+import org.pqchat.dht.service.ScreenStateReceiver
+import org.pqchat.dht.traffic.AdaptivePollingManager
 import org.pqchat.dht.ui.MainActivity
 import org.pqchat.dht.ui.util.SecureScreenConfig
 
@@ -54,12 +65,14 @@ class PqChatUiAutomatorTest {
     val permissionRule: GrantPermissionRule = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         GrantPermissionRule.grant(
             android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
             android.Manifest.permission.POST_NOTIFICATIONS,
             android.Manifest.permission.READ_MEDIA_IMAGES
         )
     } else {
         GrantPermissionRule.grant(
             android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
             android.Manifest.permission.READ_EXTERNAL_STORAGE
         )
     }
@@ -68,6 +81,8 @@ class PqChatUiAutomatorTest {
     val preTestStateCleanupRule = object : org.junit.rules.ExternalResource() {
         override fun before() {
             SecureScreenConfig.isEnabled = false
+            VoiceRecorder.isSyntheticAudioTestMode = true
+            VoicePlayer.isSyntheticAudioTestMode = true
             org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
             org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
 
@@ -75,7 +90,7 @@ class PqChatUiAutomatorTest {
             val prefs = context.getSharedPreferences("pqchat_settings", android.content.Context.MODE_PRIVATE)
             prefs.edit().clear().commit()
 
-            val app = context.applicationContext as? org.pqchat.dht.PQChatApplication
+            val app = context.applicationContext as? PQChatApplication
             app?.settingsManager?.let { sm ->
                 sm.clearDuressActive()
                 sm.setAppLockPin(null)
@@ -84,10 +99,14 @@ class PqChatUiAutomatorTest {
                 sm.setAnonymousStatsEnabled(false)
                 sm.setStrictPoissonShapingEnabled(false)
                 sm.setDeadManSwitchEnabled(false)
+                sm.setCanaryTriggered(false)
             }
         }
 
         override fun after() {
+            SecureScreenConfig.isEnabled = false
+            VoiceRecorder.isSyntheticAudioTestMode = false
+            VoicePlayer.isSyntheticAudioTestMode = false
             org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
             org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
             val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -174,7 +193,12 @@ class PqChatUiAutomatorTest {
     @Before
     fun setUp() {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
+        VoiceRecorder.isSyntheticAudioTestMode = true
+        VoicePlayer.isSyntheticAudioTestMode = true
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        runCatching { uiDevice.wakeUp() }
+        runCatching { uiDevice.setOrientationNatural() }
+        runCatching { uiDevice.unfreezeRotation() }
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
 
@@ -182,6 +206,8 @@ class PqChatUiAutomatorTest {
 
         try {
             composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.stopVoiceNote()
+                composeTestRule.activity.viewModel.stopAndSendVoiceRecording(cancel = true)
                 composeTestRule.activity.viewModel.unselectContact()
                 composeTestRule.activity.viewModel.resetHandshakeState()
                 composeTestRule.activity.viewModel.clearDuressActive()
@@ -189,6 +215,8 @@ class PqChatUiAutomatorTest {
                 composeTestRule.activity.viewModel.setDuressPin(null)
                 composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
                 composeTestRule.activity.viewModel.setAnonymousStatsEnabled(false)
+                composeTestRule.activity.viewModel.setDeadManSwitchEnabled(false)
+                composeTestRule.activity.viewModel.resetCanaryTriggered()
             }
         } catch (_: Throwable) {}
         try {
@@ -206,6 +234,12 @@ class PqChatUiAutomatorTest {
 
     @After
     fun tearDown() {
+        SecureScreenConfig.isEnabled = false
+        VoiceRecorder.isSyntheticAudioTestMode = false
+        VoicePlayer.isSyntheticAudioTestMode = false
+        runCatching { uiDevice.wakeUp() }
+        runCatching { uiDevice.setOrientationNatural() }
+        runCatching { uiDevice.unfreezeRotation() }
         org.pqchat.dht.crypto.KeystoreCrypto.setTestSecretKey(TEST_MASTER_KEY)
         org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
         try {
@@ -217,6 +251,8 @@ class PqChatUiAutomatorTest {
         } catch (_: Throwable) {}
         try {
             composeTestRule.activity.runOnUiThread {
+                composeTestRule.activity.viewModel.stopVoiceNote()
+                composeTestRule.activity.viewModel.stopAndSendVoiceRecording(cancel = true)
                 composeTestRule.activity.viewModel.unselectContact()
                 composeTestRule.activity.viewModel.resetHandshakeState()
                 composeTestRule.activity.viewModel.clearDuressActive()
@@ -224,6 +260,8 @@ class PqChatUiAutomatorTest {
                 composeTestRule.activity.viewModel.setDuressPin(null)
                 composeTestRule.activity.viewModel.setBiometricLockEnabled(false)
                 composeTestRule.activity.viewModel.setAnonymousStatsEnabled(false)
+                composeTestRule.activity.viewModel.setDeadManSwitchEnabled(false)
+                composeTestRule.activity.viewModel.resetCanaryTriggered()
             }
         } catch (_: Throwable) {}
         composeTestRule.waitForIdle()
@@ -382,6 +420,101 @@ class PqChatUiAutomatorTest {
             val tag = node.config.getOrElse(SemanticsProperties.TestTag) { "" }
             tag.contains(substring)
         }
+    }
+
+    private fun hasTestTagPrefixAndSuffix(prefix: String, suffix: String): SemanticsMatcher {
+        return SemanticsMatcher("TestTag starts with '$prefix' and ends with '$suffix'") { node ->
+            val tag = node.config.getOrElse(SemanticsProperties.TestTag) { "" }
+            tag.startsWith(prefix) && tag.endsWith(suffix)
+        }
+    }
+
+    /**
+     * Strictly executes a real physical screen tap via [UiDevice.click] at `(centerX, centerY)`
+     * derived from [SemanticsNode.boundsInScreen].
+     */
+    private fun clickBoundsInScreenPhysical(
+        matcher: SemanticsMatcher,
+        timeoutMillis: Long = 15_000,
+        scrollIntoView: Boolean = true
+    ): Rect {
+        dismissKeyboardAndWait()
+        composeTestRule.waitUntil(timeoutMillis = timeoutMillis) {
+            composeTestRule.onAllNodes(matcher, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        val nodeInteraction = composeTestRule.onAllNodes(matcher, useUnmergedTree = true).onFirst()
+        if (scrollIntoView) {
+            runCatching {
+                nodeInteraction.performScrollTo()
+                dismissKeyboardAndWait()
+            }
+        }
+        val semanticsNode = nodeInteraction.fetchSemanticsNode()
+        val bounds = semanticsNode.boundsInScreen
+        assertTrue("Expected positive screen bounds for $matcher, got $bounds", bounds.width > 0f && bounds.height > 0f)
+        val centerX = (bounds.left + bounds.width / 2f).toInt().coerceIn(1, uiDevice.displayWidth - 2)
+        val centerY = (bounds.top + bounds.height / 2f).toInt().coerceIn(1, uiDevice.displayHeight - 2)
+        val tapped = uiDevice.click(centerX, centerY)
+        assertTrue("Physical UiDevice.click failed at ($centerX, $centerY) bounds=$bounds", tapped)
+        uiDevice.waitForIdle()
+        composeTestRule.waitForIdle()
+        return bounds
+    }
+
+    /**
+     * Physically swipes a scrollable screen vertically until the node matched by [matcher] sits in
+     * an unobstructed middle band of the display (`18%..82%` of displayHeight), then returns its bounds.
+     */
+    private fun swipeUntilVisiblePhysical(
+        matcher: SemanticsMatcher,
+        maxSwipes: Int = 6
+    ): Rect {
+        dismissKeyboardAndWait()
+        for (attempt in 0 until maxSwipes) {
+            val nodes = composeTestRule.onAllNodes(matcher, useUnmergedTree = true).fetchSemanticsNodes()
+            if (nodes.isNotEmpty()) {
+                val b = nodes.first().boundsInScreen
+                val cy = b.top + b.height / 2f
+                val minSafeY = uiDevice.displayHeight * 0.16f
+                val maxSafeY = uiDevice.displayHeight * 0.84f
+                if (b.width > 0f && b.height > 0f && cy in minSafeY..maxSafeY) {
+                    return b
+                }
+                if (cy < minSafeY) {
+                    swipeDownPhysical(steps = 16)
+                    continue
+                }
+            }
+            swipeUpPhysical(steps = 18)
+        }
+        runCatching {
+            composeTestRule.onAllNodes(matcher, useUnmergedTree = true).onFirst().performScrollTo()
+        }
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodes(matcher, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        return composeTestRule.onAllNodes(matcher, useUnmergedTree = true).onFirst().fetchSemanticsNode().boundsInScreen
+    }
+
+    private fun getCurrentResumedActivity(): android.app.Activity? {
+        var resumed: android.app.Activity? = null
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val candidates = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+            resumed = candidates.firstOrNull()
+        }
+        return resumed
+    }
+
+    private fun currentWindowHasFlagSecure(): Boolean {
+        var secured = false
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val act = ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(Stage.RESUMED)
+                .firstOrNull()
+            val flags = act?.window?.attributes?.flags ?: 0
+            secured = (flags and WindowManager.LayoutParams.FLAG_SECURE) != 0
+        }
+        return secured
     }
 
     private fun clickRawScreenCoordinates(x: Int, y: Int) {
@@ -1341,5 +1474,413 @@ class PqChatUiAutomatorTest {
             composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
         }
         composeTestRule.onNodeWithText("PQChat.DHT").assertIsDisplayed()
+    }
+
+    // =========================================================================
+    // 12. MICRO-VOICE NOTES LPC-10 (0x09): PHYSICAL RECORD, SEND & PLAYBACK
+    // =========================================================================
+
+    @Test
+    fun testMicroVoiceNote_lpc10_recordSendAndPlayback_physicalClicks() {
+        // 1. Navigate physically via boundsInScreen to Self-Notes ChatScreen
+        clickBoundsInScreenPhysical(hasTestTag("contact_list_settings_button"), scrollIntoView = false)
+        swipeUntilVisiblePhysical(hasTestTag("settings_self_notes_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_self_notes_button"))
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("chat_voice_record_button").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // 2. Start Push-To-Talk recording with physical UiDevice coordinate tap
+        clickBoundsInScreenPhysical(hasTestTag("chat_voice_record_button"), scrollIntoView = false)
+
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("chat_voice_send_button").fetchSemanticsNodes().isNotEmpty() &&
+            composeTestRule.onAllNodesWithTag("chat_voice_budget_toggle").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("chat_voice_cancel_button").assertIsDisplayed()
+
+        // 3. Toggle frame budget physically (3F -> 1F -> 3F)
+        clickBoundsInScreenPhysical(hasTestTag("chat_voice_budget_toggle"), scrollIntoView = false)
+        assertEquals(1, composeTestRule.activity.viewModel.voiceMaxFrames.value)
+        clickBoundsInScreenPhysical(hasTestTag("chat_voice_budget_toggle"), scrollIntoView = false)
+        assertEquals(3, composeTestRule.activity.viewModel.voiceMaxFrames.value)
+
+        // Wait for synthetic 8 kHz PCM capture to accumulate encoded frames
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.activity.viewModel.recordingBytesCount.value > 0
+        }
+        Thread.sleep(350)
+
+        // 4. Send micro-voice note physically
+        clickBoundsInScreenPhysical(hasTestTag("chat_voice_send_button"), scrollIntoView = false)
+
+        val voiceBubbleMatcher = hasTestTagContaining("voice_note_bubble_")
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodes(voiceBubbleMatcher, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onAllNodesWithText("PTT", substring = true, useUnmergedTree = true).onFirst().assertExists()
+
+        // 5. Physically click Play on the voice note bubble and verify active playback
+        val playButtonMatcher = hasTestTagContaining("voice_note_play_button_")
+        clickBoundsInScreenPhysical(playButtonMatcher)
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.activity.viewModel.playingMessageId.value != null
+        }
+
+        // Wait for playback completion cleanly
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.activity.viewModel.playingMessageId.value == null
+        }
+
+        // 6. Return to ContactListScreen physically
+        clickBoundsInScreenPhysical(hasTestTag("chat_back_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    // =========================================================================
+    // 13. ENCRYPTED GROUP POLLS (0x0A): CREATE, PHYSICAL VOTE & CLOSE POLL
+    // =========================================================================
+
+    @Test
+    fun testGroupPoll_createPhysicalVoteOptionsAndClosePoll() {
+        clickBoundsInScreenPhysical(hasTestTag("new_group_fab"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("create_group_name_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("create_group_name_input").performTextInput("Physical Poll E2E Group")
+        clickBoundsInScreenPhysical(hasTestTag("create_group_confirm_button"), scrollIntoView = false)
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("chat_create_poll_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        clickBoundsInScreenPhysical(hasTestTag("chat_create_poll_button"), scrollIntoView = false)
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("poll_question_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("poll_question_input").performTextInput("Which KEM wins?")
+        composeTestRule.onNodeWithTag("poll_option_input_0").performTextInput("ML-KEM-512")
+        composeTestRule.onNodeWithTag("poll_option_input_1").performTextInput("X25519")
+        dismissKeyboardAndWait()
+
+        clickBoundsInScreenPhysical(hasTestTag("poll_add_option_button"))
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("poll_option_input_2").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("poll_option_input_2").performTextInput("AES-256-GCM")
+        dismissKeyboardAndWait()
+
+        clickBoundsInScreenPhysical(hasTestTag("poll_multichoice_switch"))
+        clickBoundsInScreenPhysical(hasTestTag("poll_create_confirm_button"), scrollIntoView = false)
+
+        val pollCardMatcher = hasTestTagContaining("group_poll_card_")
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodes(pollCardMatcher, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onAllNodesWithText("Active", substring = false, useUnmergedTree = true).onFirst().assertExists()
+
+        // Physically click Option 0 and Option 2 using boundsInScreen -> UiDevice.click
+        clickBoundsInScreenPhysical(hasTestTagPrefixAndSuffix("poll_option_", "_0"))
+        clickBoundsInScreenPhysical(hasTestTagPrefixAndSuffix("poll_option_", "_2"))
+
+        // Physically click Submit Vote button
+        val submitVoteMatcher = hasTestTagContaining("submit_vote_button_")
+        clickBoundsInScreenPhysical(submitVoteMatcher)
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("Total votes: 1", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onAllNodesWithText("Vote again", useUnmergedTree = true).onFirst().assertExists()
+
+        // Physically click Close Poll button and verify transition to Closed state
+        val closePollMatcher = hasTestTagContaining("close_poll_button_")
+        clickBoundsInScreenPhysical(closePollMatcher)
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("Closed", substring = false, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() &&
+            composeTestRule.onAllNodes(submitVoteMatcher, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
+
+        // Leave group physically
+        clickBoundsInScreenPhysical(hasTestTag("chat_group_members_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("leave_group_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        clickBoundsInScreenPhysical(hasTestTag("leave_group_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    // =========================================================================
+    // 14. SAFETY CANARY / DEAD MAN'S SWITCH (0x0B): CONFIG & TRIGGER
+    // =========================================================================
+
+    @Test
+    fun testSafetyCanaryAndDeadMansSwitch_configAndTrigger_physicalClicks() {
+        clickBoundsInScreenPhysical(hasTestTag("contact_list_settings_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("Settings").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // Enable Dead Man's Switch physically
+        swipeUntilVisiblePhysical(hasTestTag("settings_dead_man_switch_toggle"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_dead_man_switch_toggle"))
+        assertTrue(composeTestRule.activity.viewModel.isDeadManSwitchEnabled.value)
+
+        // Select 48h timeout physically via FilterChip boundsInScreen
+        swipeUntilVisiblePhysical(hasTestTag("settings_dead_man_timeout_48"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_dead_man_timeout_48"))
+        assertEquals(48, composeTestRule.activity.viewModel.deadManSwitchTimeoutHours.value)
+
+        // Set custom emergency canary note
+        swipeUntilVisiblePhysical(hasTestTag("settings_dead_man_note_input"))
+        composeTestRule.onNodeWithTag("settings_dead_man_note_input").performTextClearance()
+        composeTestRule.onNodeWithTag("settings_dead_man_note_input").performTextInput("Physical Canary SOS Note")
+        dismissKeyboardAndWait()
+
+        // Tap Check-In ("I'm OK / Check-In") physically
+        swipeUntilVisiblePhysical(hasTestTag("settings_dead_man_checkin_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_dead_man_checkin_button"))
+
+        // Trigger Manual SOS Canary (0x0B) physically and verify 900B frame queued
+        swipeUntilVisiblePhysical(hasTestTag("settings_emergency_sos_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_emergency_sos_button"))
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.activity.viewModel.isCanaryTriggered.value &&
+            composeTestRule.activity.viewModel.repository.canaryQueue.isNotEmpty()
+        }
+        val queuedFrame = composeTestRule.activity.viewModel.repository.canaryQueue.peek()
+        assertNotNull("Expected queued Safety Canary frame", queuedFrame)
+        assertEquals(BinaryFrameCodec.TOTAL_FRAME_SIZE, queuedFrame!!.payload.size)
+
+        // Verify Dead Man's Switch automatic timeout expiration trigger
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val app = context.applicationContext as PQChatApplication
+        app.settingsManager.setCanaryTriggered(false)
+        app.settingsManager.addDeadManTrustedContactId(org.pqchat.dht.data.repository.ChatRepository.SELF_CONTACT_ID)
+        app.settingsManager.recordUserActivity(System.currentTimeMillis() - 49L * 3600_000L)
+        val triggeredByTimeout = runBlocking {
+            composeTestRule.activity.viewModel.repository.checkAndTriggerDeadManSwitch()
+        }
+        assertTrue("Expired Dead Man's Switch must trigger automatic 0x0B canary", triggeredByTimeout)
+        assertTrue(composeTestRule.activity.viewModel.isCanaryTriggered.value)
+
+        // Reset & disable Dead Man's Switch cleanly
+        app.settingsManager.setCanaryTriggered(false)
+        app.settingsManager.setDeadManTrustedContactIds(emptySet())
+        swipeUntilVisiblePhysical(hasTestTag("settings_dead_man_switch_toggle"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_dead_man_switch_toggle"))
+        assertFalse(composeTestRule.activity.viewModel.isDeadManSwitchEnabled.value)
+
+        clickBoundsInScreenPhysical(hasTestTag("settings_back_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    // =========================================================================
+    // 15. RESEARCH TELEMETRY FULL FLOW: CONSENT, EVENTS, SYNC & ZIP EXPORT
+    // =========================================================================
+
+    @Test
+    fun testResearchTelemetry_consentGenerateEventsSyncAndZipExport_physicalClicks() {
+        // 1. Open Settings and trigger Informed Consent via physical swipe & tap
+        clickBoundsInScreenPhysical(hasTestTag("contact_list_settings_button"), scrollIntoView = false)
+        swipeUntilVisiblePhysical(hasTestTag("settings_research_telemetry_switch"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_research_telemetry_switch"))
+
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("research_consent_confirm_button").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithText("Informed Research Consent", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("ZERO LEAK GUARANTEE", substring = true).assertIsDisplayed()
+
+        // Confirm Informed Consent dialog physically
+        clickBoundsInScreenPhysical(hasTestTag("research_consent_confirm_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.activity.viewModel.isAnonymousStatsEnabled.value
+        }
+
+        // 2. Generate real packet events via Self-Notes chat
+        swipeUntilVisiblePhysical(hasTestTag("settings_self_notes_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_self_notes_button"))
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onNodeWithTag("chat_message_input").performTextInput("Telemetry Event Probe 1")
+        clickBoundsInScreenPhysical(hasTestTag("chat_send_button"), scrollIntoView = false)
+        clickBoundsInScreenPhysical(hasTestTag("chat_sync_chip"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.activity.viewModel.researchEventsCount.value > 0
+        }
+
+        // Return to SettingsScreen
+        clickBoundsInScreenPhysical(hasTestTag("chat_back_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+        clickBoundsInScreenPhysical(hasTestTag("contact_list_settings_button"), scrollIntoView = false)
+
+        // 3. Scroll down to Firebase Sync and physically tap it
+        swipeUntilVisiblePhysical(hasTestTag("settings_research_sync_firebase_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_research_sync_firebase_button"))
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            composeTestRule.onAllNodesWithTag("settings_research_status_text").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // 4. Clean previous .zip bundles and physically tap Export research package (.ZIP)
+        val telemetryDir = composeTestRule.activity.viewModel.researchTelemetry?.masterCsvFile?.parentFile
+        assertNotNull("Telemetry directory must exist", telemetryDir)
+        telemetryDir!!.listFiles { f -> f.name.endsWith(".zip") }?.forEach { it.delete() }
+
+        swipeUntilVisiblePhysical(hasTestTag("settings_research_export_zip_button"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_research_export_zip_button"))
+
+        composeTestRule.waitUntil(timeoutMillis = 10_000) {
+            (telemetryDir.listFiles { f -> f.name.endsWith(".zip") }?.isNotEmpty() == true)
+        }
+        val exportedZip = telemetryDir.listFiles { f -> f.name.endsWith(".zip") }!!.maxByOrNull { it.lastModified() }!!
+        assertTrue("Exported research ZIP bundle must be non-empty", exportedZip.length() > 0L)
+
+        // Inspect generated ZIP entries
+        val entries = mutableListOf<String>()
+        ZipInputStream(exportedZip.inputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                entries.add(entry.name)
+                entry = zis.nextEntry
+            }
+        }
+        assertTrue("Exported ZIP must include session_manifest.json", entries.contains("session_manifest.json"))
+        assertTrue("Exported ZIP must include CSV telemetry", entries.any { it.endsWith(".csv") })
+
+        // Dismiss system share chooser overlay and restore activity focus
+        runCatching { uiDevice.pressBack() }
+        ensureActivityInForeground()
+
+        // 5. Disable telemetry switch cleanly
+        swipeUntilVisiblePhysical(hasTestTag("settings_research_telemetry_switch"))
+        clickBoundsInScreenPhysical(hasTestTag("settings_research_telemetry_switch"))
+        assertFalse(composeTestRule.activity.viewModel.isAnonymousStatsEnabled.value)
+
+        clickBoundsInScreenPhysical(hasTestTag("settings_back_button"), scrollIntoView = false)
+        composeTestRule.waitUntil(timeoutMillis = 15_000) {
+            composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    // =========================================================================
+    // 16. FLAG_SECURE, SCREEN ROTATION & LIFECYCLE STATE TRANSITIONS
+    // =========================================================================
+
+    @Test
+    fun testFlagSecure_screenRotation_and_lifecycleTransitions() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val app = context.applicationContext as PQChatApplication
+
+        SecureScreenConfig.isEnabled = true
+        try {
+            // 1. ContactListScreen must NOT hold FLAG_SECURE
+            composeTestRule.waitForIdle()
+            assertFalse("ContactListScreen should not set FLAG_SECURE", currentWindowHasFlagSecure())
+
+            // 2. HandshakeScreen MUST attach FLAG_SECURE and detach on exit
+            clickBoundsInScreenPhysical(hasTestTag("new_chat_fab"), scrollIntoView = false)
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                composeTestRule.onAllNodesWithTag("handshake_back_button").fetchSemanticsNodes().isNotEmpty() &&
+                currentWindowHasFlagSecure()
+            }
+            assertTrue("HandshakeScreen must enforce FLAG_SECURE", currentWindowHasFlagSecure())
+
+            clickBoundsInScreenPhysical(hasTestTag("handshake_back_button"), scrollIntoView = false)
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty() &&
+                !currentWindowHasFlagSecure()
+            }
+
+            // 3. Enter Self-Notes ChatScreen -> FLAG_SECURE active and PollingState = FOREGROUND_CHAT
+            clickBoundsInScreenPhysical(hasTestTag("contact_list_settings_button"), scrollIntoView = false)
+            swipeUntilVisiblePhysical(hasTestTag("settings_self_notes_button"))
+            clickBoundsInScreenPhysical(hasTestTag("settings_self_notes_button"))
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty() &&
+                currentWindowHasFlagSecure() &&
+                app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.FOREGROUND_CHAT
+            }
+            assertTrue("ChatScreen must enforce FLAG_SECURE", currentWindowHasFlagSecure())
+            assertEquals(AdaptivePollingManager.PollingState.FOREGROUND_CHAT, app.lifecycleCoordinator.currentState)
+
+            // 4. Physical screen rotation (Landscape -> Natural Portrait) preserves ChatScreen & FLAG_SECURE
+            uiDevice.setOrientationLeft()
+            uiDevice.waitForIdle()
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                getCurrentResumedActivity() != null &&
+                composeTestRule.onAllNodesWithTag("chat_message_input").fetchSemanticsNodes().isNotEmpty() &&
+                currentWindowHasFlagSecure()
+            }
+            assertTrue("FLAG_SECURE must persist across orientation change", currentWindowHasFlagSecure())
+
+            uiDevice.setOrientationNatural()
+            uiDevice.unfreezeRotation()
+            uiDevice.waitForIdle()
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                getCurrentResumedActivity() != null &&
+                composeTestRule.onAllNodesWithTag("chat_back_button").fetchSemanticsNodes().isNotEmpty()
+            }
+
+            // Exit ChatScreen -> FLAG_SECURE clears and PollingState transitions to APP_ACTIVE_OTHER
+            clickBoundsInScreenPhysical(hasTestTag("chat_back_button"), scrollIntoView = false)
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty() &&
+                !currentWindowHasFlagSecure() &&
+                app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER
+            }
+
+            // 5. Lifecycle transitions: ON_STOP -> BACKGROUND_IDLE -> DOZE_SLEEP -> FOREGROUND
+            uiDevice.pressHome()
+            uiDevice.waitForIdle()
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.BACKGROUND_IDLE
+            }
+            assertEquals(AdaptivePollingManager.PollingState.BACKGROUND_IDLE, app.lifecycleCoordinator.currentState)
+
+            if (ScreenStateReceiver.isScreenInteractive(context)) {
+                uiDevice.sleep()
+            }
+            val sleepDeadline = System.currentTimeMillis() + 5_000L
+            while (System.currentTimeMillis() < sleepDeadline &&
+                app.lifecycleCoordinator.currentState != AdaptivePollingManager.PollingState.DOZE_SLEEP
+            ) {
+                Thread.sleep(150)
+            }
+            if (app.lifecycleCoordinator.currentState != AdaptivePollingManager.PollingState.DOZE_SLEEP) {
+                // Virtual headless display fallback if PowerManager refuses ACTION_SCREEN_OFF keyevent
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    app.lifecycleCoordinator.notifyScreenOff()
+                }
+            }
+            assertEquals(AdaptivePollingManager.PollingState.DOZE_SLEEP, app.lifecycleCoordinator.currentState)
+
+            // Wake device and bring app back to foreground -> APP_ACTIVE_OTHER
+            uiDevice.wakeUp()
+            runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+            ensureActivityInForeground()
+            composeTestRule.waitUntil(timeoutMillis = 15_000) {
+                app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.APP_ACTIVE_OTHER &&
+                composeTestRule.onAllNodesWithText("PQChat.DHT").fetchSemanticsNodes().isNotEmpty()
+            }
+        } finally {
+            SecureScreenConfig.isEnabled = false
+            runCatching { uiDevice.wakeUp() }
+            runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+            runCatching { uiDevice.setOrientationNatural() }
+            runCatching { uiDevice.unfreezeRotation() }
+            ensureActivityInForeground()
+        }
     }
 }

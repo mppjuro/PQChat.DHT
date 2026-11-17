@@ -89,6 +89,8 @@ class MainActivity : FragmentActivity() {
                 app.repository.blindRepublishPool.clear()
                 app.repository.delayedPutMaxMs = 0L
                 app.repository.decoyPutSlotsCount = 0
+                org.pqchat.dht.media.voice.VoiceRecorder.isSyntheticAudioTestMode = true
+                org.pqchat.dht.media.voice.VoicePlayer.isSyntheticAudioTestMode = true
 
                 if (useRealDht) {
                     app.repository.decoyTargetPool.isEnabled = false

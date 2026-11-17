@@ -1389,7 +1389,8 @@ fun SettingsScreen(
                             Text(
                                 text = researchSyncStatus,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (researchSyncStatus.contains("Synced") || researchSyncStatus.contains("Authenticated")) ElectricGreen else appColors.primary
+                                color = if (researchSyncStatus.contains("Synced") || researchSyncStatus.contains("Authenticated") || researchSyncStatus.contains("synchronized")) ElectricGreen else appColors.primary,
+                                modifier = Modifier.testTag("settings_research_status_text")
                             )
                         }
 
@@ -1481,7 +1482,9 @@ fun SettingsScreen(
                                 contentColor = Color.Black
                             ),
                             shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_research_export_zip_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Share,
@@ -1511,7 +1514,9 @@ fun SettingsScreen(
                                     }
                                 },
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_research_export_csv_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Download,
@@ -1528,7 +1533,9 @@ fun SettingsScreen(
                             OutlinedButton(
                                 onClick = { viewModel.triggerFirebaseSyncNow() },
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_research_sync_firebase_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.CloudUpload,

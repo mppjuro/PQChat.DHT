@@ -429,6 +429,12 @@ object MessageDebugLogger {
                 "voteTimestamp" to p.voteTimestamp,
                 "description" to "Single-frame cryptographic group poll vote sealed with Group AAD"
             )
+            is BinaryFrameCodec.DecodedPayload.GroupPollClose -> linkedMapOf<String, Any?>(
+                "type" to "GroupPollClose (0x0A:0x03)",
+                "pollId" to p.pollId.joinToString("") { "%02x".format(it) },
+                "closedTimestamp" to p.closedTimestamp,
+                "description" to "Single-frame cryptographic group poll closure sealed with Group AAD"
+            )
             is BinaryFrameCodec.DecodedPayload.SafetyCanary -> linkedMapOf<String, Any?>(
                 "type" to "SafetyCanary (0x0B)",
                 "triggerReason" to p.triggerReason,

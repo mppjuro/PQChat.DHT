@@ -2027,6 +2027,9 @@ fun GroupPollCard(
     }
 
     val currentPoll = poll!!
+    val groups by viewModel.groups.collectAsState()
+    val isCreator = currentPoll.rawCreatorName == "Me" ||
+        groups.firstOrNull { it.groupId == currentPoll.groupId }?.myMemberId == currentPoll.rawCreatorMemberId
     val options = currentPoll.optionsList
     val now = System.currentTimeMillis()
     val isExpired = currentPoll.isClosed || now > currentPoll.expirationTimestamp
@@ -2114,6 +2117,7 @@ fun GroupPollCard(
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(8.dp))
+                        .testTag("poll_option_${pollId}_${index}")
                         .clickable(enabled = !isExpired) {
                             if (currentPoll.isMultiChoice) {
                                 selectedBitmask = selectedBitmask xor mask
@@ -2231,6 +2235,25 @@ fun GroupPollCard(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                }
+            }
+
+            if (!isExpired && isCreator) {
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = { viewModel.closeGroupPoll(currentPoll.groupId, currentPoll.pollId) },
+                    border = BorderStroke(1.dp, CrimsonDanger.copy(alpha = 0.65f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CrimsonDanger),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("close_poll_button_${pollId}")
+                ) {
+                    Text(
+                        text = "Close Poll",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }

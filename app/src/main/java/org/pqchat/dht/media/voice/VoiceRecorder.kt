@@ -19,6 +19,15 @@ import kotlin.math.sqrt
 class VoiceRecorder(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
+    companion object {
+        /**
+         * Enables deterministic 8 kHz synthetic PCM-16 capture for headless CI emulators
+         * running with `-noaudio` or instrumented UI tests without physical microphone hardware.
+         */
+        @Volatile
+        var isSyntheticAudioTestMode: Boolean = false
+    }
+
     private val isRecording = AtomicBoolean(false)
     private var recordJob: Job? = null
     private var audioRecord: AudioRecord? = null
@@ -78,41 +87,74 @@ class VoiceRecorder(
         val maxSpeechFrames = maxCompressedBytes / VoiceCodec.BYTES_PER_FRAME // 210 or 630
         val maxSamples = maxSpeechFrames * VoiceCodec.FRAME_SIZE // 42,000 or 126,000 samples
 
-        val minBufferSize = AudioRecord.getMinBufferSize(
-            VoiceCodec.SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-        val bufferSize = max(minBufferSize, VoiceCodec.FRAME_SIZE * 2)
-
-        try {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+        val minBufferSize = try {
+            AudioRecord.getMinBufferSize(
                 VoiceCodec.SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
+                AudioFormat.ENCODING_PCM_16BIT
             )
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+        } catch (_: Throwable) {
+            AudioRecord.ERROR_BAD_VALUE
+        }
+        val bufferSize = max(minBufferSize, VoiceCodec.FRAME_SIZE * 2)
+
+        var usingSyntheticStream = isSyntheticAudioTestMode
+        if (!usingSyntheticStream) {
+            try {
+                audioRecord = AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    VoiceCodec.SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+                if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                    audioRecord?.release()
+                    audioRecord = null
+                    isRecording.set(false)
+                    return false
+                }
+                audioRecord?.startRecording()
+            } catch (_: Throwable) {
                 audioRecord?.release()
                 audioRecord = null
                 isRecording.set(false)
                 return false
             }
-            audioRecord?.startRecording()
-        } catch (_: Throwable) {
-            audioRecord?.release()
-            audioRecord = null
-            isRecording.set(false)
-            return false
+        } else {
+            // Seed at least one immediate speech frame so short automated taps produce valid LPC-10 audio.
+            val seedFrame = ShortArray(VoiceCodec.FRAME_SIZE) { i ->
+                val phase = (2.0 * Math.PI * 440.0 * i) / VoiceCodec.SAMPLE_RATE
+                (kotlin.math.sin(phase) * 9000.0).toInt().toShort()
+            }
+            synchronized(bufferLock) {
+                for (s in seedFrame) {
+                    sampleBuffer.add(s)
+                }
+            }
+            onAmplitude?.invoke(0.28f)
+            onProgress?.invoke(20, VoiceCodec.BYTES_PER_FRAME, 1)
         }
 
         recordJob = scope.launch {
             val readBuffer = ShortArray(VoiceCodec.FRAME_SIZE)
             var reachedLimit = false
+            var syntheticSampleCursor = VoiceCodec.FRAME_SIZE
 
             while (isActive && isRecording.get() && !reachedLimit) {
-                val readCount = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: -1
+                val readCount = if (usingSyntheticStream) {
+                    delay(20)
+                    if (!isRecording.get()) break
+                    for (i in readBuffer.indices) {
+                        val t = syntheticSampleCursor++
+                        val carrier = kotlin.math.sin(2.0 * Math.PI * 440.0 * t / VoiceCodec.SAMPLE_RATE)
+                        val overtone = 0.35 * kotlin.math.sin(2.0 * Math.PI * 880.0 * t / VoiceCodec.SAMPLE_RATE)
+                        readBuffer[i] = ((carrier + overtone) * 8000.0).toInt().toShort()
+                    }
+                    readBuffer.size
+                } else {
+                    audioRecord?.read(readBuffer, 0, readBuffer.size) ?: -1
+                }
                 if (readCount > 0) {
                     var sumSquare = 0.0
                     synchronized(bufferLock) {

@@ -1574,4 +1574,62 @@ class ThreeNodeGroupTest {
             dhtNode.stop()
         }
     }
+
+    @Test
+    fun testGroup50MessageAutoRekeyResetsBitmapAndContinuesDelivery() = runBlocking {
+        val dhtNode = FakeDht()
+        val alice = createRegressionPeer(dhtNode)
+        val bob = createRegressionPeer(dhtNode)
+        val charlie = createRegressionPeer(dhtNode)
+
+        try {
+            setupRegressionPairwiseChannel(alice, bob, "alice", "Alice", "bob", "Bob")
+            setupRegressionPairwiseChannel(alice, charlie, "alice", "Alice", "charlie", "Charlie")
+
+            val group = alice.repo.createGroup("Auto_Rekey_50_Group", listOf("bob", "charlie"))
+            val groupId = group.groupId
+            assertTrue(bob.repo.pollContactIncoming("alice"))
+            assertTrue(charlie.repo.pollContactIncoming("alice"))
+
+            // First message at Epoch 1, Counter 0 sets bit 0 in Bob's and Charlie's bitmaps
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch1_Counter0"))
+            assertTrue(bob.repo.pollGroupIncoming(groupId))
+            assertTrue(charlie.repo.pollGroupIncoming(groupId))
+            assertEquals(1, bob.messageDao.messages.count { it.textContent?.raw == "Epoch1_Counter0" && !it.isOutgoing })
+            assertEquals(1, charlie.messageDao.messages.count { it.textContent?.raw == "Epoch1_Counter0" && !it.isOutgoing })
+
+            // Send counters 1..49 in Epoch 1 (total 50 messages -> myCounterOut hits 50)
+            for (idx in 1 until org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL) {
+                assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch1_Msg_$idx"))
+            }
+            val groupBeforeRekey = alice.groupDao.getGroupById(groupId)!!
+            assertEquals(1L, groupBeforeRekey.groupEpoch)
+            assertEquals(org.pqchat.dht.crypto.BinaryFrameCodec.GROUP_REKEY_MESSAGE_INTERVAL, groupBeforeRekey.myCounterOut)
+
+            // Message #51 must automatically rotate sender keys to Epoch 2 and transmit at new Counter 0
+            assertTrue(alice.repo.sendGroupMessage(groupId, "Epoch2_Counter0_After_50"))
+            val groupAfterRekey = alice.groupDao.getGroupById(groupId)!!
+            assertEquals("Group epoch must auto-increment to 2 after 50 messages", 2L, groupAfterRekey.groupEpoch)
+            assertEquals("New epoch counterOut must advance from 0 to 1", 1, groupAfterRekey.myCounterOut)
+
+            // Bob and Charlie ingest GROUP_SUBTYPE_REKEY and must NOT skip Epoch 2 Counter 0 via stale Epoch 1 bitmap
+            assertTrue("Bob must ingest Epoch 2 REKEY control frame", bob.repo.pollContactIncoming("alice"))
+            assertTrue("Charlie must ingest Epoch 2 REKEY control frame", charlie.repo.pollContactIncoming("alice"))
+            assertTrue("Bob must decrypt Epoch 2 Counter 0 message", bob.repo.pollGroupIncoming(groupId))
+            assertTrue("Charlie must decrypt Epoch 2 Counter 0 message", charlie.repo.pollGroupIncoming(groupId))
+            assertEquals(
+                1,
+                bob.messageDao.messages.count { it.textContent?.raw == "Epoch2_Counter0_After_50" && !it.isOutgoing }
+            )
+            assertEquals(
+                1,
+                charlie.messageDao.messages.count { it.textContent?.raw == "Epoch2_Counter0_After_50" && !it.isOutgoing }
+            )
+        } finally {
+            alice.repo.close()
+            bob.repo.close()
+            charlie.repo.close()
+            dhtNode.stop()
+        }
+    }
 }

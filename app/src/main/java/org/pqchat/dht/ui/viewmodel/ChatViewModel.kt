@@ -669,6 +669,23 @@ class ChatViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Closes a group poll and broadcasts the closure frame (`0x0A` subtype `0x03`) to the group.
+     */
+    fun closeGroupPoll(
+        groupId: String,
+        pollId: String
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val success = repository.closeGroupPoll(groupId = groupId, pollId = pollId)
+            if (success) {
+                _statusNotification.value = "Group poll closed"
+            } else {
+                _statusNotification.value = "Failed to close group poll"
+            }
+        }
+    }
+
     fun initiateRekey() {
         val contactId = _selectedContactId.value ?: return
         viewModelScope.launch(Dispatchers.IO) {

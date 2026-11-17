@@ -826,6 +826,7 @@ jobs:
             --apk app/build/outputs/apk/debug/app-debug.apk \
             --output-dir "$OUTPUT_DIR" \
             --skip-debloat \
+            --e2e-fast-mode \
             $([ "${{ matrix.mode }}" = "testbed" ] && echo "--full")
 
       - name: Publish E2E Summary to GitHub Job Summary
@@ -936,7 +937,7 @@ jobs:
             - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
             - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
-            - **Multi-Emulator DHT Testbed E2E Tests:** Passed (3 & 4 nodes full lifecycle on an isolated 20-node DHT testbed)
+            - **Multi-Emulator DHT Testbed E2E Tests:** Passed (3 & 4 nodes full lifecycle: Handshake, Multi-turn, Group Polls 0x0A, Voice Notes 0x09, and 50-Message Auto-Rekey on an isolated 20-node DHT testbed)
             - **Multi-Emulator Real DHT Smoke Tests:** Passed (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT)
 
             ### Build Metadata:

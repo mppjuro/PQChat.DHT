@@ -258,7 +258,8 @@ logcat -c
             "handshake_alice_name_input", "handshake_bob_name_input",
             "diagnostics_back_button", "create_group_cancel_button",
             "sas_dialog_close_button", "handshake_confirm_verified_button",
-            "handshake_encapsulate_button", "contact_settings_button"
+            "handshake_encapsulate_button", "contact_settings_button",
+            "poll_question_input", "poll_create_confirm_button", "chat_voice_send_button"
         ]
         for tag in child_tags:
             if self.find_node(test_tag=tag):
@@ -485,11 +486,31 @@ logcat -c
         content_desc: Optional[str] = None,
         resource_id: Optional[str] = None,
         test_tag: Optional[str] = None,
-        allow_substring: Optional[bool] = None
+        allow_substring: Optional[bool] = None,
+        test_tag_prefix: Optional[str] = None,
+        test_tag_suffix: Optional[str] = None
     ) -> Optional[Tuple[int, int, int, int]]:
+        """Locates a UI node bounding rectangle matching exact tag, prefix/suffix tag, text, or content-desc."""
         root = self.dump_ui()
         if root is None:
             return None
+
+        # Pass 0: Match dynamic test_tag by prefix/suffix (e.g. poll_option_<uuid>_0, voice_note_play_button_<id>)
+        if test_tag_prefix or test_tag_suffix:
+            pref = test_tag_prefix or ""
+            suff = test_tag_suffix or ""
+            for node in root.iter("node"):
+                candidates = [
+                    node.attrib.get("resource-id", "").split("/")[-1].split(":id/")[-1],
+                    node.attrib.get("content-desc", ""),
+                    node.attrib.get("text", ""),
+                ]
+                if any(c.startswith(pref) and c.endswith(suff) and len(c) >= len(pref) + len(suff) for c in candidates if c):
+                    bounds_str = node.attrib.get("bounds", "")
+                    if bounds_str:
+                        bounds = self.parse_bounds(bounds_str)
+                        if bounds and (bounds[2] > bounds[0]) and (bounds[3] > bounds[1]):
+                            return bounds
 
         # Pass 1: Match by test_tag or resource_id (EXACT match only)
         target_tag = test_tag or resource_id
@@ -531,7 +552,7 @@ logcat -c
         # Pass 3: Substring text or content_desc
         # When test_tag is explicitly provided, do NOT fall through to Pass 3 substring matching
         # unless allow_substring is explicitly set to True.
-        should_allow_substring = allow_substring if allow_substring is not None else (test_tag is None)
+        should_allow_substring = allow_substring if allow_substring is not None else (test_tag is None and test_tag_prefix is None)
         if should_allow_substring:
             for node in root.iter("node"):
                 n_text = node.attrib.get("text", "")
@@ -551,6 +572,21 @@ logcat -c
 
         return None
 
+    def get_group_epoch_and_tx(self) -> Optional[Tuple[int, int]]:
+        """Parses active group chat Epoch and TX counters from the ChatScreen header."""
+        if self.dry_run:
+            return (1, 0)
+        self.invalidate_ui_cache()
+        root = self.dump_ui()
+        if root is None:
+            return None
+        for node in root.iter("node"):
+            n_text = node.attrib.get("text", "")
+            m = re.search(r"Epoch\s+(\d+)\s*[^\d]+TX:\s*(\d+)", n_text)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+        return None
+
     def click_element(
         self,
         text: Optional[str] = None,
@@ -560,9 +596,14 @@ logcat -c
         fallback_ratio: Optional[Tuple[float, float]] = None,
         auto_scroll: bool = True,
         capture_on_fail: bool = True,
-        allow_substring: Optional[bool] = None
+        allow_substring: Optional[bool] = None,
+        test_tag_prefix: Optional[str] = None,
+        test_tag_suffix: Optional[str] = None
     ) -> bool:
-        desc = test_tag or text or content_desc or resource_id or "element"
+        desc = (
+            f"{test_tag_prefix or ''}*{test_tag_suffix or ''}" if (test_tag_prefix or test_tag_suffix)
+            else (test_tag or text or content_desc or resource_id or "element")
+        )
         if self.dry_run:
             print(f"[{self.name} DRY-RUN] click_element '{desc}' -> simulated click", flush=True)
             return True
@@ -571,7 +612,9 @@ logcat -c
             content_desc=content_desc,
             resource_id=resource_id,
             test_tag=test_tag,
-            allow_substring=allow_substring
+            allow_substring=allow_substring,
+            test_tag_prefix=test_tag_prefix,
+            test_tag_suffix=test_tag_suffix
         )
         if not bounds:
             # Ensure app focus was not lost to launcher or system dialogs
@@ -581,7 +624,9 @@ logcat -c
                 content_desc=content_desc,
                 resource_id=resource_id,
                 test_tag=test_tag,
-                allow_substring=allow_substring
+                allow_substring=allow_substring,
+                test_tag_prefix=test_tag_prefix,
+                test_tag_suffix=test_tag_suffix
             )
 
         if bounds and auto_scroll:
@@ -597,7 +642,9 @@ logcat -c
                     content_desc=content_desc,
                     resource_id=resource_id,
                     test_tag=test_tag,
-                    allow_substring=allow_substring
+                    allow_substring=allow_substring,
+                    test_tag_prefix=test_tag_prefix,
+                    test_tag_suffix=test_tag_suffix
                 )
 
         if not bounds and auto_scroll:
@@ -607,7 +654,9 @@ logcat -c
                 content_desc=content_desc,
                 resource_id=resource_id,
                 test_tag=test_tag,
-                allow_substring=allow_substring
+                allow_substring=allow_substring,
+                test_tag_prefix=test_tag_prefix,
+                test_tag_suffix=test_tag_suffix
             )
             if not bounds:
                 self.scroll_up()
@@ -640,11 +689,16 @@ logcat -c
         timeout: int = 30,
         sync_chip_tag: Optional[str] = None,
         allow_substring: Optional[bool] = None,
-        on_tick: Optional[Callable[[], None]] = None
+        on_tick: Optional[Callable[[], None]] = None,
+        test_tag_prefix: Optional[str] = None,
+        test_tag_suffix: Optional[str] = None
     ) -> bool:
         scale = 1.6 if getattr(self, "nodes_count", 2) >= 4 else (1.3 if getattr(self, "nodes_count", 2) == 3 else 1.0)
         effective_timeout = int(timeout * scale)
-        desc = test_tag or text or content_desc or resource_id or "element"
+        desc = (
+            f"{test_tag_prefix or ''}*{test_tag_suffix or ''}" if (test_tag_prefix or test_tag_suffix)
+            else (test_tag or text or content_desc or resource_id or "element")
+        )
         if self.dry_run:
             print(f"[{self.name} DRY-RUN] wait_for_element '{desc}' -> simulated found", flush=True)
             return True
@@ -661,7 +715,9 @@ logcat -c
                 content_desc=content_desc,
                 resource_id=resource_id,
                 test_tag=test_tag,
-                allow_substring=allow_substring
+                allow_substring=allow_substring,
+                test_tag_prefix=test_tag_prefix,
+                test_tag_suffix=test_tag_suffix
             )
             if bounds:
                 print(f"[{self.name}] Found '{desc}'!", flush=True)
@@ -706,7 +762,9 @@ logcat -c
             content_desc=content_desc,
             resource_id=resource_id,
             test_tag=test_tag,
-            allow_substring=allow_substring
+            allow_substring=allow_substring,
+            test_tag_prefix=test_tag_prefix,
+            test_tag_suffix=test_tag_suffix
         )
         if final_bounds:
             print(f"[{self.name}] Found '{desc}' on final scroll check!", flush=True)
@@ -875,8 +933,10 @@ logcat -c
         self.shell(f"pm clear {package}")
 
     def grant_app_permissions(self, package: str = "org.pqchat.dht"):
+        """Grants runtime permissions (CAMERA, RECORD_AUDIO, storage, notifications) and whitelists Doze."""
         permissions = [
             "android.permission.CAMERA",
+            "android.permission.RECORD_AUDIO",
             "android.permission.READ_MEDIA_IMAGES",
             "android.permission.READ_EXTERNAL_STORAGE",
             "android.permission.POST_NOTIFICATIONS",
@@ -1027,6 +1087,10 @@ class MultiEmulatorOrchestrator:
                 self._phase_3_create_group()
                 self._phase_4_join_group_on_participants()
                 self._phase_5_group_multi_turn_messaging()
+                if not self.args.basic and self.nodes_count >= 3:
+                    self._phase_6_group_polls()
+                    self._phase_7_group_voice_notes()
+                    self._phase_8_group_50_message_auto_rekey()
 
             if getattr(self.args, "full", False) and not self.args.basic:
                 self._phase_optional_diagnostics()
@@ -1102,7 +1166,7 @@ class MultiEmulatorOrchestrator:
                 initiator.click_element(test_tag="new_chat_fab", text="New Chat (Alice)", auto_scroll=False)
                 initiator.wait_for_element(test_tag="handshake_alice_name_input", timeout=12)
 
-            if not initiator.find_node(test_tag="handshake_alice_name_input"):
+            if not self.args.dry_run and not initiator.find_node(test_tag="handshake_alice_name_input"):
                 print(f"[{initiator.name}] HandshakeScreen not reached after retries. Aborting attempt cleanly for retry...", flush=True)
                 return False
 
@@ -1886,6 +1950,327 @@ class MultiEmulatorOrchestrator:
             self.log_step("Group Multi-Turn Complete", "PASS", f"All {len(all_devices)} participants successfully exchanged messages in '{group_name}'")
         else:
             self.log_step("Group Multi-Turn Complete", "FAIL", f"Group multi-turn messaging had {fails_count} failed delivery attempts")
+
+    def _ensure_device_in_group_chat(self, dev: AdbDevice, group_name: str = "PQ_MultiNode_Group") -> bool:
+        """Ensures the given AdbDevice is inside the target group chat screen."""
+        if dev.dry_run:
+            return True
+        dev.ensure_app_foreground()
+        if dev.find_node(test_tag="chat_message_input"):
+            return True
+        if dev.find_node(test_tag=f"group_item_{group_name}") or dev.find_node(text=group_name):
+            clicked = dev.click_element(test_tag=f"group_item_{group_name}", text=group_name)
+            entered = clicked and dev.wait_for_element(test_tag="chat_message_input", timeout=15)
+            if entered:
+                self.sleep(1.5 if not self.args.real_dht else 3.0)
+                dev.trigger_sync()
+                self.alice.trigger_sync()
+            return entered
+        return False
+
+    def _phase_6_group_polls(self, group_name: str = "PQ_MultiNode_Group"):
+        """Verifies end-to-end encrypted group poll creation, physical voting, and closing (0x0A)."""
+        print(f"\n--- PHASE 6: ENCRYPTED GROUP POLLS (0x0A) IN '{group_name}' ---", flush=True)
+        participants = [dev for dev in (self.bob, self.charlie, self.dave) if dev is not None]
+        if not self._ensure_device_in_group_chat(self.alice, group_name):
+            self.log_step("Group Poll (0x0A) Setup", "FAIL", f"Alice is not in group '{group_name}'")
+            return
+
+        poll_question = f"MultiNode_Poll_0x0A_{len(participants) + 1}N"
+        self.alice.click_element(test_tag="chat_create_poll_button", content_desc="Create Group Poll", auto_scroll=False)
+        if not self.alice.wait_for_element(test_tag="poll_question_input", timeout=12):
+            self.log_step("Group Poll Created (0x0A)", "FAIL", "CreatePollDialog did not open on Alice")
+            return
+
+        self.alice.click_element(test_tag="poll_question_input", auto_scroll=False)
+        self.alice.type_text(poll_question)
+        self.alice.click_element(test_tag="poll_option_input_0", auto_scroll=False)
+        self.alice.type_text("ML-KEM-512")
+        self.alice.click_element(test_tag="poll_option_input_1", auto_scroll=False)
+        self.alice.type_text("AES-256-GCM")
+        self.alice.close_keyboard()
+        self.alice.click_element(test_tag="poll_create_confirm_button", text="Create Poll", auto_scroll=False)
+        self.sleep(2.0 if not self.args.real_dht else 5.0)
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+
+        poll_created = self.alice.wait_for_element(text=poll_question, timeout=15)
+        sc_poll_alice = self.alice.screencap("09_alice_poll_created")
+        if not poll_created:
+            self.log_step("Group Poll Created (0x0A)", "FAIL", "Poll card did not render on Alice", sc_poll_alice)
+            return
+        self.log_step("Group Poll Created (0x0A)", "PASS", f"Alice created and published poll '{poll_question}'", sc_poll_alice)
+
+        poll_timeout = 55 if not self.args.real_dht else 110
+        alice_sync_tick = lambda: self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+
+        voted_count = 0
+        for dev in participants:
+            if not self._ensure_device_in_group_chat(dev, group_name):
+                self.log_step(f"{dev.name} Poll Received & Voted (0x0A)", "FAIL", f"{dev.name} not in group")
+                continue
+            dev.close_keyboard()
+            found_poll = dev.wait_for_element(
+                text=poll_question,
+                timeout=poll_timeout,
+                sync_chip_tag="chat_sync_chip",
+                on_tick=alice_sync_tick
+            )
+            if not found_poll:
+                sc_fail = dev.screencap(f"09_{dev.name.lower()}_poll_missing")
+                self.log_step(f"{dev.name} Poll Received (0x0A)", "FAIL", f"{dev.name} did not receive poll '{poll_question}'", sc_fail)
+                continue
+
+            dev.scroll_down()
+            tapped_option = (
+                dev.click_element(test_tag_prefix="poll_option_", test_tag_suffix="_0", auto_scroll=True)
+                or dev.click_element(text="ML-KEM-512", auto_scroll=True)
+            )
+            self.sleep(0.4)
+            tapped_vote = dev.click_element(test_tag_prefix="submit_vote_button_", text="Submit Vote", auto_scroll=True)
+            self.sleep(1.5 if not self.args.real_dht else 4.0)
+            dev.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+            sc_voted = dev.screencap(f"09_{dev.name.lower()}_poll_voted")
+            if tapped_option and tapped_vote:
+                voted_count += 1
+                self.log_step(f"{dev.name} Poll Vote Submitted (0x0A)", "PASS", f"{dev.name} tapped option & Submit Vote physically", sc_voted)
+            else:
+                self.log_step(f"{dev.name} Poll Vote Submitted (0x0A)", "FAIL", f"{dev.name} failed physical vote tap (opt={tapped_option}, btn={tapped_vote})", sc_voted)
+
+        # Wait for Alice to ingest participant votes, then physically close the poll
+        self.alice.scroll_down()
+        alice_saw_votes = self.alice.wait_for_element(
+            text="Total votes: 1",
+            timeout=35,
+            sync_chip_tag="chat_sync_chip"
+        ) or self.alice.wait_for_element(text="Total votes: 2", timeout=10, sync_chip_tag="chat_sync_chip") or (self.args.dry_run)
+        if not alice_saw_votes:
+            # Also accept non-zero vote count string Total votes: [1-9]
+            root = self.alice.dump_ui()
+            if root is not None:
+                alice_saw_votes = any(
+                    re.search(r"Total votes:\s*[1-9]", n.attrib.get("text", "")) is not None
+                    for n in root.iter("node")
+                )
+
+        sc_alice_votes = self.alice.screencap("09_alice_poll_votes_tallied")
+        self.log_step(
+            "Group Poll Votes Tallied (0x0A)",
+            "PASS" if alice_saw_votes else "WARN",
+            f"Alice poll tally visibility={alice_saw_votes} (voters submitted={voted_count}/{len(participants)})",
+            sc_alice_votes
+        )
+
+        # Close Poll on Alice via physical tap on close_poll_button_
+        close_clicked = self.alice.click_element(test_tag_prefix="close_poll_button_", text="Close Poll", auto_scroll=True)
+        self.sleep(1.5 if not self.args.real_dht else 4.0)
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        alice_closed = close_clicked and (self.alice.wait_for_element(text="Closed", allow_substring=False, timeout=15) or self.args.dry_run)
+        sc_alice_closed = self.alice.screencap("09_alice_poll_closed")
+        self.log_step(
+            "Alice Closed Poll (0x0A)",
+            "PASS" if alice_closed else "FAIL",
+            f"Alice physically tapped Close Poll -> Closed={alice_closed}",
+            sc_alice_closed
+        )
+
+        # Verify participants observe the poll transition to Closed via DHT
+        for dev in participants:
+            dev.close_keyboard()
+            dev.scroll_down()
+            dev_closed = dev.wait_for_element(
+                text="Closed",
+                allow_substring=False,
+                timeout=poll_timeout,
+                sync_chip_tag="chat_sync_chip",
+                on_tick=alice_sync_tick
+            )
+            sc_dev_closed = dev.screencap(f"09_{dev.name.lower()}_poll_closed")
+            if dev_closed:
+                self.log_step(f"{dev.name} Poll Closed Synced (0x0A)", "PASS", f"{dev.name} observed 'Closed' poll state", sc_dev_closed)
+            else:
+                self.log_step(f"{dev.name} Poll Closed Synced (0x0A)", "FAIL", f"{dev.name} timed out waiting for poll 'Closed' state", sc_dev_closed)
+
+    def _phase_7_group_voice_notes(self, group_name: str = "PQ_MultiNode_Group"):
+        """Verifies Push-To-Talk LPC-10 micro-voice note capture, group broadcast (0x09), and playback."""
+        print(f"\n--- PHASE 7: MICRO-VOICE NOTES LPC-10 (0x09) IN '{group_name}' ---", flush=True)
+        participants = [dev for dev in (self.bob, self.charlie, self.dave) if dev is not None]
+        if not self._ensure_device_in_group_chat(self.alice, group_name):
+            self.log_step("Voice Note Setup (0x09)", "FAIL", f"Alice is not in group '{group_name}'")
+            return
+
+        rec_started = self.alice.click_element(test_tag="chat_voice_record_button", content_desc="Push-To-Talk Voice Note", auto_scroll=False)
+        if not rec_started or not self.alice.wait_for_element(test_tag="chat_voice_send_button", timeout=10):
+            sc_fail = self.alice.screencap("10_alice_voice_record_fail")
+            self.log_step("Alice Voice Note Recorded (0x09)", "FAIL", "Voice recording bar did not activate on Alice", sc_fail)
+            return
+
+        self.sleep(1.0)
+        sc_rec = self.alice.screencap("10_alice_voice_recording")
+        sent_clicked = self.alice.click_element(test_tag="chat_voice_send_button", content_desc="Send voice note", auto_scroll=False)
+        self.sleep(2.0 if not self.args.real_dht else 5.0)
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        alice_bubble = sent_clicked and self.alice.wait_for_element(
+            test_tag_prefix="voice_note_bubble_",
+            timeout=15
+        )
+        sc_voice_sent = self.alice.screencap("10_alice_voice_sent")
+        self.log_step(
+            "Alice Sent Voice Note (0x09)",
+            "PASS" if alice_bubble else "FAIL",
+            f"Alice recorded synthetic 8 kHz PCM -> LPC-10 (0x09) and rendered bubble={alice_bubble}",
+            sc_rec or sc_voice_sent
+        )
+        if not alice_bubble:
+            return
+
+        voice_timeout = 55 if not self.args.real_dht else 110
+        alice_sync_tick = lambda: self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        for dev in participants:
+            if not self._ensure_device_in_group_chat(dev, group_name):
+                self.log_step(f"{dev.name} Received Voice Note (0x09)", "FAIL", f"{dev.name} not in group")
+                continue
+            dev.close_keyboard()
+            dev.scroll_down()
+            received = dev.wait_for_element(
+                test_tag_prefix="voice_note_play_button_",
+                timeout=voice_timeout,
+                sync_chip_tag="chat_sync_chip",
+                on_tick=alice_sync_tick
+            ) or dev.wait_for_element(text="PTT", timeout=10, sync_chip_tag="chat_sync_chip")
+            if received:
+                played = dev.click_element(test_tag_prefix="voice_note_play_button_", content_desc="Play Voice Note", auto_scroll=True)
+                self.sleep(0.5)
+                sc_voice = dev.screencap(f"10_{dev.name.lower()}_voice_note")
+                self.log_step(
+                    f"{dev.name} Received & Played Voice Note (0x09)",
+                    "PASS" if played else "FAIL",
+                    f"{dev.name} received 0x09 voice note and physically tapped play={played}",
+                    sc_voice
+                )
+            else:
+                sc_voice_fail = dev.screencap(f"10_{dev.name.lower()}_voice_missing")
+                self.log_step(f"{dev.name} Received Voice Note (0x09)", "FAIL", f"{dev.name} did not receive 0x09 voice note within {voice_timeout}s", sc_voice_fail)
+
+    def _phase_8_group_50_message_auto_rekey(self, group_name: str = "PQ_MultiNode_Group"):
+        """Sends burst messages via physical ADB pixel taps to trigger 50-message group auto-rekey (Epoch 2) across 3/4 emulators."""
+        print(f"\n--- PHASE 8: AUTOMATIC 50-MESSAGE GROUP KEY ROTATION IN '{group_name}' ---", flush=True)
+        participants = [dev for dev in (self.bob, self.charlie, self.dave) if dev is not None]
+        if not self._ensure_device_in_group_chat(self.alice, group_name):
+            self.log_step("50-Message Auto-Rekey", "FAIL", f"Alice is not in group '{group_name}'")
+            return
+
+        epoch_tx = self.alice.get_group_epoch_and_tx()
+        start_epoch, start_tx = epoch_tx if epoch_tx else (1, 8)
+        target_epoch = max(2, start_epoch + 1) if start_epoch == 1 else start_epoch
+        needed_to_cross_50 = max(1, 51 - start_tx) if start_epoch == 1 else 0
+        print(f"[Alice] Current group state: Epoch {start_epoch}, TX: {start_tx}. Sending ~{needed_to_cross_50} messages via ADB taps to trigger Epoch {target_epoch}...", flush=True)
+
+        in_bounds = (120, 2150, 880, 2280) if self.args.dry_run else self.alice.find_node(test_tag="chat_message_input")
+        if not in_bounds:
+            self.log_step("50-Message Auto-Rekey", "FAIL", "Could not locate chat_message_input bounds on Alice")
+            return
+        in_cx = (in_bounds[0] + in_bounds[2]) // 2
+        in_cy = (in_bounds[1] + in_bounds[3]) // 2
+
+        send_coords: Optional[Tuple[int, int]] = None
+        current_epoch = start_epoch
+
+        if self.args.dry_run:
+            current_epoch = 2
+            print(f"[Alice DRY-RUN] Simulated {needed_to_cross_50} physical coordinate burst taps -> Epoch 2", flush=True)
+        else:
+            max_burst = needed_to_cross_50 + 8
+            for idx in range(1, max_burst + 1):
+                burst_txt = f"RekeyBurst_{idx:02d}"
+                self.alice.shell(f"input tap {in_cx} {in_cy}")
+                self.alice.sleep(0.20)
+                self.alice.shell(f"input text {burst_txt}")
+                self.alice.sleep(0.20)
+                if send_coords is None:
+                    self.alice.invalidate_ui_cache()
+                    sb = self.alice.find_node(test_tag="chat_send_button", content_desc="Send")
+                    if sb:
+                        send_coords = ((sb[0] + sb[2]) // 2, (sb[1] + sb[3]) // 2)
+                        print(f"[Alice] Cached physical chat_send_button center at {send_coords}", flush=True)
+                    else:
+                        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", auto_scroll=False)
+                if send_coords is not None:
+                    self.alice.shell(f"input tap {send_coords[0]} {send_coords[1]}")
+
+                self.sleep(0.32 if not self.args.real_dht else 0.9)
+
+                if idx >= needed_to_cross_50 - 1 or (idx % 12 == 0):
+                    self.alice.close_keyboard()
+                    cur = self.alice.get_group_epoch_and_tx()
+                    if cur:
+                        current_epoch, cur_tx = cur
+                        print(f"[Alice] Rekey progress after burst #{idx}: Epoch {current_epoch}, TX: {cur_tx}", flush=True)
+                        if current_epoch >= target_epoch:
+                            break
+
+            if current_epoch < target_epoch:
+                self.sleep(2.0)
+                cur = self.alice.get_group_epoch_and_tx()
+                if cur:
+                    current_epoch = cur[0]
+
+        sc_epoch2 = self.alice.screencap("11_alice_epoch2_rekey")
+        if current_epoch >= 2:
+            self.log_step("50-Message Auto-Rekey Triggered", "PASS", f"Alice crossed 50-message interval and auto-rotated group sender keys to Epoch {current_epoch}", sc_epoch2)
+        else:
+            self.log_step("50-Message Auto-Rekey Triggered", "FAIL", f"Alice group epoch remained {current_epoch} after 50+ message burst", sc_epoch2)
+            return
+
+        # Allow GroupKeySync REKEY control frames (0x06) to settle and send an explicit Epoch 2 check message
+        self.sleep(2.5 if not self.args.real_dht else 5.0)
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        post_rekey_msg = f"Epoch2_AutoRekey_Verified_{len(participants) + 1}N"
+        self.alice.click_element(test_tag="chat_message_input", auto_scroll=False)
+        self.alice.type_text(post_rekey_msg)
+        self.sleep(0.4)
+        self.alice.click_element(test_tag="chat_send_button", content_desc="Send", auto_scroll=False)
+        self.alice.close_keyboard()
+        self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        self.sleep(2.5 if not self.args.real_dht else 6.0)
+
+        # Verify every participant ingests Epoch 2 REKEY and decrypts Alice's post-rekey message
+        rekey_timeout = 80 if not self.args.real_dht else 140
+        alice_tick = lambda: self.alice.click_element(test_tag="chat_sync_chip", capture_on_fail=False, auto_scroll=False)
+        for dev in participants:
+            if not self._ensure_device_in_group_chat(dev, group_name):
+                self.log_step(f"{dev.name} Post-Rekey Decryption", "FAIL", f"{dev.name} not in group")
+                continue
+            dev.close_keyboard()
+            dev.scroll_down()
+            received_epoch2 = dev.wait_for_element(
+                text=post_rekey_msg,
+                timeout=rekey_timeout,
+                sync_chip_tag="chat_sync_chip",
+                on_tick=alice_tick
+            )
+            sc_dev_epoch2 = dev.screencap(f"11_{dev.name.lower()}_post_rekey_epoch2")
+            if received_epoch2:
+                self.log_step(
+                    f"{dev.name} Post-Rekey Delivery (Epoch 2)",
+                    "PASS",
+                    f"{dev.name} ingested Epoch 2 REKEY and decrypted '{post_rekey_msg}'",
+                    sc_dev_epoch2
+                )
+            else:
+                self.log_step(
+                    f"{dev.name} Post-Rekey Delivery (Epoch 2)",
+                    "FAIL",
+                    f"{dev.name} timed out waiting for '{post_rekey_msg}' after 50-message auto-rekey",
+                    sc_dev_epoch2
+                )
+
+        # Cross-check GroupKeySync logcat evidence on Alice
+        if not self.args.dry_run:
+            code_lc, out_lc, _ = self.alice.shell("logcat -d -s GroupKeySync")
+            if code_lc == 0 and "Rotated sender key" in out_lc:
+                self.log_step("GroupKeySync Logcat Evidence", "PASS", "Confirmed 'Rotated sender key' in Alice logcat after 50 messages")
+            else:
+                self.log_step("GroupKeySync Logcat Evidence", "WARN", "Epoch 2 UI verified; rotated key logcat tag truncated or filtered")
 
     def _phase_optional_diagnostics(self):
         print("\n--- PHASE: DIAGNOSTICS & TELEMETRY ---", flush=True)

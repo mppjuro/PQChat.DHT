@@ -42,6 +42,7 @@ object BinaryFrameCodec {
 
     const val POLL_SUBTYPE_CREATE: Byte = 0x01
     const val POLL_SUBTYPE_VOTE: Byte = 0x02
+    const val POLL_SUBTYPE_CLOSE: Byte = 0x03
 
     const val POLL_FLAG_MULTI_CHOICE: Byte = 0x01
     const val POLL_MAX_QUESTION_SIZE = 200
@@ -377,6 +378,26 @@ object BinaryFrameCodec {
                 var result = pollId.contentHashCode()
                 result = 31 * result + selectedOptionsBitmask
                 result = 31 * result + voteTimestamp.hashCode()
+                return result
+            }
+        }
+
+        data class GroupPollClose(
+            val pollId: ByteArray, // 16 bytes UUID
+            val closedTimestamp: Long
+        ) : DecodedPayload() {
+            val pollSubType: Byte get() = POLL_SUBTYPE_CLOSE
+
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is GroupPollClose) return false
+                return pollId.contentEquals(other.pollId) &&
+                        closedTimestamp == other.closedTimestamp
+            }
+
+            override fun hashCode(): Int {
+                var result = pollId.contentHashCode()
+                result = 31 * result + closedTimestamp.hashCode()
                 return result
             }
         }
@@ -930,6 +951,32 @@ object BinaryFrameCodec {
         return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
+    /**
+     * Encodes a poll close frame (`TYPE_GROUP_POLL` / `POLL_SUBTYPE_CLOSE`) padded to 859 bytes.
+     */
+    fun encodeGroupPollClose(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        pollId: ByteArray,
+        closedTimestamp: Long,
+        obfuscateTimestamp: Boolean = false
+    ): ByteArray {
+        require(pollId.size == 16) { "PollId must be exactly 16 bytes (UUID)" }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(POLL_SUBTYPE_CLOSE)
+        buffer.put(pollId)
+        buffer.putLong(closedTimestamp)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_GROUP_POLL, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
+    }
+
     fun encodeSafetyCanary(
         seqNum: Int,
         ackNum: Int,
@@ -1301,6 +1348,18 @@ object BinaryFrameCodec {
                                 pollId = pId,
                                 selectedOptionsBitmask = bitmask,
                                 voteTimestamp = voteTs
+                            )
+                        }
+                        POLL_SUBTYPE_CLOSE -> {
+                            require(buffer.remaining() >= 16 + 8) {
+                                "Malformed poll close payload: expected at least 24 bytes"
+                            }
+                            val pId = ByteArray(16)
+                            buffer.get(pId)
+                            val closedTs = buffer.long
+                            DecodedPayload.GroupPollClose(
+                                pollId = pId,
+                                closedTimestamp = closedTs
                             )
                         }
                         else -> throw IllegalArgumentException("Unknown group poll subtype: 0x%02X".format(subType))
