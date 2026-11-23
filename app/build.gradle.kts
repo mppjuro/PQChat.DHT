@@ -196,7 +196,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.0")
 
     // Compose
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -223,14 +223,14 @@ dependencies {
     implementation("com.google.zxing:core:3.5.4")
 
     // Biometric Authentication (Optional App Lock)
-    implementation("androidx.biometric:biometric:1.4.0-beta01")
+    implementation("androidx.biometric:biometric:1.4.0-rc01")
 
 
     // CameraX (16 KB page-size aligned since 1.4.0+)
-    implementation("androidx.camera:camera-core:1.4.1")
-    implementation("androidx.camera:camera-camera2:1.4.1")
-    implementation("androidx.camera:camera-lifecycle:1.4.1")
-    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("androidx.camera:camera-core:1.7.0")
+    implementation("androidx.camera:camera-camera2:1.7.0")
+    implementation("androidx.camera:camera-lifecycle:1.7.0")
+    implementation("androidx.camera:camera-view:1.7.0")
 
     // Firebase (Master's Thesis Anonymous Research Telemetry - Firestore & Auth only)
     implementation(platform("com.google.firebase:firebase-bom:35.2.0"))
