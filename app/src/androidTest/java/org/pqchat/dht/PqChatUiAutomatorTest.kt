@@ -60,6 +60,9 @@ class PqChatUiAutomatorTest {
 
     companion object {
         val TEST_MASTER_KEY: SecretKey get() = org.pqchat.dht.crypto.KeystoreCrypto.INSTRUMENTED_TEST_MASTER_KEY
+
+        @Volatile
+        private var deviceSettingsConfigured = false
     }
 
     @get:Rule(order = 0)
@@ -136,6 +139,24 @@ class PqChatUiAutomatorTest {
         }
     }
 
+    private fun dismissSystemOverlaysIfNeeded() {
+        runCatching {
+            uiDevice.findObject(By.res("android", "aerr_wait"))?.click()
+        }
+        runCatching {
+            uiDevice.findObject(By.res("android", "aerr_close"))?.click()
+        }
+        runCatching {
+            uiDevice.executeShellCommand("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+        }
+        runCatching {
+            uiDevice.executeShellCommand("cmd statusbar collapse")
+        }
+        runCatching {
+            uiDevice.executeShellCommand("wm dismiss-keyguard")
+        }
+    }
+
     private fun ensureActivityInForeground() {
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -151,8 +172,23 @@ class PqChatUiAutomatorTest {
                 }
             }
             var activity = getCurrentResumedActivity() as? MainActivity
-            if (activity != null && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
+            var hasFocus = false
+            if (activity != null) {
+                instrumentation.runOnMainSync {
+                    hasFocus = activity?.hasWindowFocus() == true
+                }
+            }
+            if (activity != null && hasFocus && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
                 return
+            }
+            if (activity != null && !hasFocus) {
+                dismissSystemOverlaysIfNeeded()
+                instrumentation.runOnMainSync {
+                    hasFocus = activity?.hasWindowFocus() == true
+                }
+                if (hasFocus && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
+                    return
+                }
             }
             val intent = createMatchingMainIntent(context)
             context.startActivity(intent)
@@ -160,14 +196,21 @@ class PqChatUiAutomatorTest {
             var attempts = 0
             while (attempts < 50) {
                 activity = getCurrentResumedActivity() as? MainActivity
-                if (activity != null && km?.isKeyguardLocked != true) break
-                if (attempts == 15 || attempts == 30) {
+                if (activity != null) {
+                    instrumentation.runOnMainSync {
+                        hasFocus = activity?.hasWindowFocus() == true
+                    }
+                }
+                if (activity != null && hasFocus && km?.isKeyguardLocked != true) break
+                if (attempts == 10 || attempts == 25) {
                     runCatching { uiDevice.wakeUp() }
-                    runCatching { uiDevice.executeShellCommand("wm dismiss-keyguard") }
+                    dismissSystemOverlaysIfNeeded()
                     if (km?.isKeyguardLocked == true) {
                         runCatching { uiDevice.executeShellCommand("input keyevent 82") }
                     }
-                    context.startActivity(intent)
+                    if (activity == null) {
+                        context.startActivity(intent)
+                    }
                 }
                 Thread.sleep(100)
                 attempts++
@@ -176,9 +219,10 @@ class PqChatUiAutomatorTest {
     }
 
     /**
-     * Waits until MainActivity settles in a steady [Stage.RESUMED] lifecycle state with no
-     * transient [Stage.STARTED]/[Stage.CREATED]/[Stage.RESTARTED] transitions pending and the
-     * keyguard unlocked, preventing `ActivityScenario.close()` NPE ("Last stage = STARTED").
+     * Waits until MainActivity settles in a steady [Stage.RESUMED] lifecycle state with window focus,
+     * no transient [Stage.STARTED]/[Stage.CREATED]/[Stage.RESTARTED] transitions pending, and the
+     * keyguard unlocked, preventing `ActivityScenario.close()` NPE ("Last stage = STARTED") and
+     * dropped physical [UiDevice.click] inputs.
      */
     private fun awaitSteadyResumedMainActivity(timeoutMs: Long = 15_000L) {
         try {
@@ -187,6 +231,7 @@ class PqChatUiAutomatorTest {
             val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
             val deadline = System.currentTimeMillis() + timeoutMs
             var lastRelaunchMs = 0L
+            var lastOverlayDismissMs = 0L
             while (System.currentTimeMillis() < deadline) {
                 if (!uiDevice.isScreenOn || km?.isKeyguardLocked == true) {
                     runCatching { uiDevice.wakeUp() }
@@ -196,10 +241,13 @@ class PqChatUiAutomatorTest {
                     }
                 }
                 var hasResumedMain = false
+                var hasWindowFocus = false
                 var hasTransientStage = false
                 instrumentation.runOnMainSync {
                     val monitor = ActivityLifecycleMonitorRegistry.getInstance()
-                    hasResumedMain = monitor.getActivitiesInStage(Stage.RESUMED).any { it is MainActivity }
+                    val resumedMains = monitor.getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>()
+                    hasResumedMain = resumedMains.isNotEmpty()
+                    hasWindowFocus = resumedMains.any { it.hasWindowFocus() }
                     val transientStages = listOf(
                         Stage.PRE_ON_CREATE,
                         Stage.CREATED,
@@ -210,13 +258,17 @@ class PqChatUiAutomatorTest {
                         monitor.getActivitiesInStage(stage).any { it is MainActivity }
                     }
                 }
-                if (hasResumedMain && !hasTransientStage && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
+                if (hasResumedMain && hasWindowFocus && !hasTransientStage && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
                     instrumentation.waitForIdleSync()
                     return
                 }
                 val now = System.currentTimeMillis()
-                if (!hasResumedMain && !hasTransientStage && now - lastRelaunchMs >= 1_500L) {
+                if (hasResumedMain && !hasWindowFocus && now - lastOverlayDismissMs >= 800L) {
+                    lastOverlayDismissMs = now
+                    dismissSystemOverlaysIfNeeded()
+                } else if (!hasResumedMain && !hasTransientStage && now - lastRelaunchMs >= 1_500L) {
                     lastRelaunchMs = now
+                    dismissSystemOverlaysIfNeeded()
                     val intent = createMatchingMainIntent(context)
                     runCatching { context.startActivity(intent) }
                 }
@@ -269,7 +321,20 @@ class PqChatUiAutomatorTest {
         SecureScreenConfig.isEnabled = false // Allow screen interaction and capture during UI automation
         VoiceRecorder.isSyntheticAudioTestMode = true
         VoicePlayer.isSyntheticAudioTestMode = true
+        androidx.test.uiautomator.Configurator.getInstance().apply {
+            waitForIdleTimeout = 500L
+            actionAcknowledgmentTimeout = 500L
+            scrollAcknowledgmentTimeout = 200L
+        }
         uiDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        if (!deviceSettingsConfigured) {
+            deviceSettingsConfigured = true
+            runCatching { uiDevice.executeShellCommand("settings put global hide_error_dialogs 1") }
+            runCatching { uiDevice.executeShellCommand("settings put global heads_up_notifications_enabled 0") }
+            runCatching { uiDevice.executeShellCommand("settings put secure immersive_mode_confirmations confirmed") }
+            runCatching { uiDevice.executeShellCommand("settings put system screen_off_timeout 2147483647") }
+            runCatching { uiDevice.executeShellCommand("svc power stayon true") }
+        }
         runCatching { uiDevice.wakeUp() }
         if (uiDevice.displayRotation != android.view.Surface.ROTATION_0) {
             runCatching { uiDevice.setOrientationNatural() }
@@ -392,8 +457,15 @@ class PqChatUiAutomatorTest {
             if (view != null) {
                 val locationOnScreen = IntArray(2)
                 val locationInWindow = IntArray(2)
-                view.getLocationOnScreen(locationOnScreen)
-                view.getLocationInWindow(locationInWindow)
+                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                    view.getLocationOnScreen(locationOnScreen)
+                    view.getLocationInWindow(locationInWindow)
+                } else {
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                        view.getLocationOnScreen(locationOnScreen)
+                        view.getLocationInWindow(locationInWindow)
+                    }
+                }
                 val offsetX = (locationOnScreen[0] - locationInWindow[0]).toFloat()
                 val offsetY = (locationOnScreen[1] - locationInWindow[1]).toFloat()
                 return Rect(
@@ -523,7 +595,8 @@ class PqChatUiAutomatorTest {
 
     /**
      * Strictly executes a real physical screen tap via [UiDevice.click] at `(centerX, centerY)`
-     * derived from [SemanticsNode.boundsInScreen].
+     * derived from [SemanticsNode.boundsInScreen], ensuring the enclosing Compose window holds
+     * active input focus before injecting touch coordinates.
      */
     private fun clickBoundsInScreenPhysical(
         matcher: SemanticsMatcher,
@@ -542,22 +615,32 @@ class PqChatUiAutomatorTest {
             }
         }
         composeTestRule.waitForIdle()
-        val semanticsNode = nodeInteraction.fetchSemanticsNode()
+        var semanticsNode = nodeInteraction.fetchSemanticsNode()
+        val hostView = semanticsNode.root as? android.view.View
+        val focusDeadline = System.currentTimeMillis() + 3_000L
+        var dismissedOverlays = false
+        while (System.currentTimeMillis() < focusDeadline) {
+            var windowFocused = false
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val resumedAct = ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(Stage.RESUMED)
+                    .firstOrNull()
+                windowFocused = (hostView?.hasWindowFocus() == true) || (resumedAct?.hasWindowFocus() == true)
+            }
+            if (windowFocused) break
+            if (!dismissedOverlays) {
+                dismissedOverlays = true
+                dismissSystemOverlaysIfNeeded()
+            }
+            Thread.sleep(80)
+        }
+        composeTestRule.waitForIdle()
+        semanticsNode = nodeInteraction.fetchSemanticsNode()
         val bounds = semanticsNode.boundsInScreen
         assertTrue("Expected positive screen bounds for $matcher, got $bounds", bounds.width > 0f && bounds.height > 0f)
-        val testTag = semanticsNode.config.getOrElse(SemanticsProperties.TestTag) { "" }
-        val accessibilityCenter = if (testTag.isNotEmpty()) {
-            runCatching {
-                uiDevice.findObject(By.res(testTag))?.takeIf {
-                    it.visibleBounds.width() > 0 && it.visibleBounds.height() > 0
-                }?.visibleCenter
-            }.getOrNull()
-        } else {
-            null
-        }
-        val centerX = (accessibilityCenter?.x ?: (bounds.left + bounds.width / 2f).toInt())
+        val centerX = (bounds.left + bounds.width / 2f).toInt()
             .coerceIn(1, uiDevice.displayWidth - 2)
-        val centerY = (accessibilityCenter?.y ?: (bounds.top + bounds.height / 2f).toInt())
+        val centerY = (bounds.top + bounds.height / 2f).toInt()
             .coerceIn(1, uiDevice.displayHeight - 2)
         val tapped = uiDevice.click(centerX, centerY)
         assertTrue("Physical UiDevice.click failed at ($centerX, $centerY) bounds=$bounds", tapped)
@@ -1933,7 +2016,7 @@ class PqChatUiAutomatorTest {
 
             // 4. Physical screen rotation (Landscape -> Natural Portrait) preserves ChatScreen & FLAG_SECURE
             uiDevice.setOrientationLeft()
-            uiDevice.waitForIdle()
+            runCatching { uiDevice.waitForIdle(1_000L) }
             composeTestRule.waitForIdle()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 getCurrentResumedActivity() != null &&
@@ -1944,7 +2027,7 @@ class PqChatUiAutomatorTest {
 
             uiDevice.setOrientationNatural()
             uiDevice.unfreezeRotation()
-            uiDevice.waitForIdle()
+            runCatching { uiDevice.waitForIdle(1_000L) }
             composeTestRule.waitForIdle()
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 getCurrentResumedActivity() != null &&
@@ -1961,7 +2044,7 @@ class PqChatUiAutomatorTest {
 
             // 5. Lifecycle transitions: ON_STOP -> BACKGROUND_IDLE -> DOZE_SLEEP -> FOREGROUND
             uiDevice.pressHome()
-            uiDevice.waitForIdle()
+            runCatching { uiDevice.waitForIdle(1_000L) }
             composeTestRule.waitUntil(timeoutMillis = 15_000) {
                 app.lifecycleCoordinator.currentState == AdaptivePollingManager.PollingState.BACKGROUND_IDLE
             }
