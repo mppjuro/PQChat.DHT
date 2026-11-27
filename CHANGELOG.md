@@ -76,6 +76,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`e9aad14`](https://github.com/mppjuro/PQChat.DHT/commit/e9aad145f12307f5ef50ab32394061f5d3ff7aa3) (2026-11-27) — **tests**: commit test fixed - intent is now not overridden
 - [`dfcdb24`](https://github.com/mppjuro/PQChat.DHT/commit/dfcdb24164a6ef2d6fc6bf315b8b95e3a299ecbe) (2026-11-17) — false-positive hex ciphertext collision in RowBoundEncryptionAuditTest
 - [`f46fefc`](https://github.com/mppjuro/PQChat.DHT/commit/f46fefc60ddf67642dff57a1045a72fe7f492331) (2026-11-17) — voice recording idle blocking, lifecycle teardown NPE, and group Epoch 2 rekey race
 - [`407bd7a`](https://github.com/mppjuro/PQChat.DHT/commit/407bd7aaff6b818a508db8e9e370529b94244469) (2026-11-17) — rememberSaveable PIN lock reset, bounded UiDevice idle waits, and RESUMED teardown sync
@@ -198,6 +199,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`b883316`](https://github.com/mppjuro/PQChat.DHT/commit/b883316e122b2ee2ee9e2148b922f48044148b0a) (2026-11-27) — **android**: update compileSdk to 37.2 for Compose 1.13.0 AAR metadata
+- [`608b020`](https://github.com/mppjuro/PQChat.DHT/commit/608b020c398bf290645eb8b029d48bf6a93397f7) (2026-11-23) — **deps**: bump gradle-wrapper from 9.9.1 to 9.9.2
 - [`094f0cf`](https://github.com/mppjuro/PQChat.DHT/commit/094f0cf6ea20b20719ce79650a939d7770cb8831) (2026-11-16) — **deps**: bump gradle-wrapper from 9.9.0 to 9.9.1
 - [`c41f46f`](https://github.com/mppjuro/PQChat.DHT/commit/c41f46febeefa14c3920fda4d92e60ba6855b48a) (2026-11-09) — **deps**: bump gradle-wrapper from 9.8.2 to 9.9.0
 - [`b453515`](https://github.com/mppjuro/PQChat.DHT/commit/b453515dc9716d853e279fe6fdece6e765e7db37) (2026-11-08) — add real dht emulator smoke tests
@@ -269,6 +272,10 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`8b25a65`](https://github.com/mppjuro/PQChat.DHT/commit/8b25a6506757da0deb7739a17aeaa08fbf4c3293) (2026-11-23) — **deps**: bump com.android.application from 9.5.1 to 9.5.2
+- [`a65340b`](https://github.com/mppjuro/PQChat.DHT/commit/a65340b154be6e22d0585faabe73194f77748236) (2026-11-23) — **deps**: bump org.robolectric:robolectric from 4.18 to 4.18.1
+- [`1120758`](https://github.com/mppjuro/PQChat.DHT/commit/1120758b38e653de56aef43af24c7390001b6f15) (2026-11-23) — **deps**: bump the androidx-and-compose group with 6 updates
+- [`f8d2d74`](https://github.com/mppjuro/PQChat.DHT/commit/f8d2d745f85ffb2d30ec1cd99bd445f19918f4d1) (2026-11-23) — **deps**: update numpy requirement in /tools/threat_sim
 - [`ba09059`](https://github.com/mppjuro/PQChat.DHT/commit/ba0905994c6b9667e2648365b46297ab77f6ad84) (2026-11-17) — Byzantine DHT attack simulations, protocol defenses, and nightly CI threshold assertions
 - [`e6e362b`](https://github.com/mppjuro/PQChat.DHT/commit/e6e362bd419e3a0f2f81eac5fc15016c93651abc) (2026-11-16) — **deps**: bump com.google.devtools.ksp from 2.3.13 to 2.3.14
 - [`fdb76c9`](https://github.com/mppjuro/PQChat.DHT/commit/fdb76c9b1ebebe647f042927b672414089427abe) (2026-11-16) — **deps**: bump org.robolectric:robolectric from 4.17 to 4.18
