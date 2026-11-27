@@ -11,7 +11,11 @@ if (file("google-services.json").exists()) {
 
 android {
     namespace = "org.pqchat.dht"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         applicationId = "org.pqchat.dht"
