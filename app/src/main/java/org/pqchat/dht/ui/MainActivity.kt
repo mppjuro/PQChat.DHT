@@ -105,8 +105,15 @@ class MainActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
-        applyCustomBootstrap(intent)
+        val hasBootstrapExtras = intent.hasExtra("use_real_dht") ||
+            intent.hasExtra("is_local_testbed") ||
+            intent.hasExtra("dht_bootstrap_port") ||
+            intent.hasExtra("dht_bootstrap_host") ||
+            intent.hasExtra("e2e_fast_mode")
+        if (hasBootstrapExtras) {
+            setIntent(intent)
+            applyCustomBootstrap(intent)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -121,6 +121,21 @@ class PqChatUiAutomatorTest {
 
     private lateinit var uiDevice: UiDevice
 
+    /**
+     * Builds a foreground-restoration Intent matching [androidx.test.core.app.ActivityScenario]'s
+     * launcher Intent (`ACTION_MAIN` + `CATEGORY_LAUNCHER`), preventing `onNewIntent`/`setIntent`
+     * from causing `ActivityScenario.activityMatchesIntent()` to drop lifecycle events.
+     */
+    private fun createMatchingMainIntent(context: android.content.Context): android.content.Intent {
+        return android.content.Intent.makeMainActivity(
+            android.content.ComponentName(context, MainActivity::class.java)
+        ).apply {
+            flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+    }
+
     private fun ensureActivityInForeground() {
         try {
             val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -139,11 +154,7 @@ class PqChatUiAutomatorTest {
             if (activity != null && uiDevice.isScreenOn && km?.isKeyguardLocked != true) {
                 return
             }
-            val intent = android.content.Intent(context, MainActivity::class.java).apply {
-                flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                        android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-            }
+            val intent = createMatchingMainIntent(context)
             context.startActivity(intent)
             runCatching { uiDevice.waitForIdle(500L) }
             var attempts = 0
@@ -206,11 +217,7 @@ class PqChatUiAutomatorTest {
                 val now = System.currentTimeMillis()
                 if (!hasResumedMain && !hasTransientStage && now - lastRelaunchMs >= 1_500L) {
                     lastRelaunchMs = now
-                    val intent = android.content.Intent(context, MainActivity::class.java).apply {
-                        flags = android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
+                    val intent = createMatchingMainIntent(context)
                     runCatching { context.startActivity(intent) }
                 }
                 Thread.sleep(100)
