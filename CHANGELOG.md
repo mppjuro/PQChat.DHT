@@ -251,6 +251,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🧪 Tests
 
+- [`aa68f9f`](https://github.com/mppjuro/PQChat.DHT/commit/aa68f9f484aa787255d6c9b908eac2eb5af54e95) (2026-11-28) — **ui,ci**: harden physical click window focus, UiAutomator timeouts, and single-AVD CI setup
 - [`843350d`](https://github.com/mppjuro/PQChat.DHT/commit/843350dac112f1adddab4334fc1e058f4ad6ec9c) (2026-11-17) — **ui,e2e**: expand physical pixel UI Automator and 3/4-node orchestrator CI coverage
 - [`4c83e8a`](https://github.com/mppjuro/PQChat.DHT/commit/4c83e8a1cc379718049d8b3696ab5ee5a4f60294) (2026-11-04) — remove API 35 Robolectric dependency in chat head timeout test
 - [`878f670`](https://github.com/mppjuro/PQChat.DHT/commit/878f670255c881851543536baea2a885cdd34588) (2026-11-01) — **e2e**: fix pixel coordinate bounds in UI Automator and automate full multi-emulator E2E scenario
