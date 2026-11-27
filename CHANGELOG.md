@@ -199,6 +199,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`d905165`](https://github.com/mppjuro/PQChat.DHT/commit/d905165686591f186e886124bac2cf6e4c618db0) (2026-11-28) — **workflow**: use single-line commands in android-emulator-runner script
 - [`b883316`](https://github.com/mppjuro/PQChat.DHT/commit/b883316e122b2ee2ee9e2148b922f48044148b0a) (2026-11-27) — **android**: update compileSdk to 37.2 for Compose 1.13.0 AAR metadata
 - [`608b020`](https://github.com/mppjuro/PQChat.DHT/commit/608b020c398bf290645eb8b029d48bf6a93397f7) (2026-11-23) — **deps**: bump gradle-wrapper from 9.9.1 to 9.9.2
 - [`094f0cf`](https://github.com/mppjuro/PQChat.DHT/commit/094f0cf6ea20b20719ce79650a939d7770cb8831) (2026-11-16) — **deps**: bump gradle-wrapper from 9.9.0 to 9.9.1
