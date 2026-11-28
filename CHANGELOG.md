@@ -77,6 +77,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🐛 Bug Fixes
 
+- [`9b9add9`](https://github.com/mppjuro/PQChat.DHT/commit/9b9add9f7b584103ff32b0ae7c1649e3ad9f59ce) (2026-11-28) — **ci,dht,e2e**: default nightly workflow to real DHT and harden live DHT reliability
 - [`e9aad14`](https://github.com/mppjuro/PQChat.DHT/commit/e9aad145f12307f5ef50ab32394061f5d3ff7aa3) (2026-11-27) — **tests**: commit test fixed - intent is now not overridden
 - [`dfcdb24`](https://github.com/mppjuro/PQChat.DHT/commit/dfcdb24164a6ef2d6fc6bf315b8b95e3a299ecbe) (2026-11-17) — false-positive hex ciphertext collision in RowBoundEncryptionAuditTest
 - [`f46fefc`](https://github.com/mppjuro/PQChat.DHT/commit/f46fefc60ddf67642dff57a1045a72fe7f492331) (2026-11-17) — voice recording idle blocking, lifecycle teardown NPE, and group Epoch 2 rekey race
