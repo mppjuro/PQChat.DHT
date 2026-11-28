@@ -25,6 +25,8 @@ object Png8Compressor {
 
     val STEG_MAGIC = byteArrayOf(0x50.toByte(), 0x51.toByte(), 0x53.toByte(), 0x54.toByte()) // "PQST"
     const val STEG_HEADER_OVERHEAD = 10 // 4B magic ("PQST") + 2B length UInt16 + 4B CRC32
+    const val MAX_STEGO_PNG_DIMENSION = 4096
+    const val MAX_STEGO_SCANLINES_BYTES = 16 * 1024 * 1024L
 
     private val CHUNK_IHDR = "IHDR".toByteArray(Charsets.US_ASCII)
     private val CHUNK_PLTE = "PLTE".toByteArray(Charsets.US_ASCII)
@@ -158,14 +160,16 @@ object Png8Compressor {
         stegoPayload: ByteArray? = null
     ): ByteArray {
         require(width > 0 && height > 0) { "Width and height must be positive" }
-        require(argbPixels.size >= width * height) { "Pixel array size does not match width * height" }
+        val totalPixelsLong = width.toLong() * height.toLong()
+        require(totalPixelsLong <= Int.MAX_VALUE.toLong()) { "Image dimensions overflow pixel buffer" }
+        require(argbPixels.size.toLong() >= totalPixelsLong) { "Pixel array size does not match width * height" }
         val targetColors = maxColors.coerceIn(2, 256)
 
         val stegoEnvelope = stegoPayload?.let { packStegoEnvelope(it) }
         val totalStegoBits = stegoEnvelope?.let { it.size * 8 } ?: 0
         if (totalStegoBits > 0) {
-            require(width * height >= totalStegoBits) {
-                "Carrier image has insufficient capacity (${width * height} pixels), but steganography requires at least $totalStegoBits pixels"
+            require(totalPixelsLong >= totalStegoBits.toLong()) {
+                "Carrier image has insufficient capacity ($totalPixelsLong pixels), but steganography requires at least $totalStegoBits pixels"
             }
         }
 
@@ -463,7 +467,8 @@ object Png8Compressor {
                 ((pngBytes[offset + 2].toInt() and 0xFF) shl 8) or
                 (pngBytes[offset + 3].toInt() and 0xFF)
             )
-            if (chunkLen < 0 || offset + 8 + chunkLen + 4 > pngBytes.size) break
+            val chunkLenLong = chunkLen.toLong()
+            if (chunkLen < 0 || offset.toLong() + 12L + chunkLenLong > pngBytes.size.toLong()) break
             val typeStr = String(pngBytes, offset + 4, 4, Charsets.US_ASCII)
             val dataOffset = offset + 8
 
@@ -485,26 +490,44 @@ object Png8Compressor {
                     }
                 }
                 "IDAT" -> {
+                    if (idatBaos.size().toLong() + chunkLenLong > MAX_STEGO_SCANLINES_BYTES) {
+                        return null
+                    }
                     idatBaos.write(pngBytes, dataOffset, chunkLen)
                 }
                 "IEND" -> {
                     break
                 }
             }
-            offset += 8 + chunkLen + 4 // chunk header (8) + data + crc (4)
+            offset += 12 + chunkLen // chunk header (8) + data + crc (4)
         }
 
-        if (width <= 0 || height <= 0 || idatBaos.size() == 0) return null
+        if (width !in 1..MAX_STEGO_PNG_DIMENSION || height !in 1..MAX_STEGO_PNG_DIMENSION || idatBaos.size() == 0) {
+            return null
+        }
+
+        val expectedScanlinesLenLong = height.toLong() * (width.toLong() + 1L)
+        if (expectedScanlinesLenLong <= 0L || expectedScanlinesLenLong > MAX_STEGO_SCANLINES_BYTES) {
+            return null
+        }
+        val totalPixelsLong = width.toLong() * height.toLong()
+        if (totalPixelsLong < STEG_HEADER_OVERHEAD.toLong() * 8L) return null
 
         val idatBytes = idatBaos.toByteArray()
         val inflater = Inflater()
         inflater.setInput(idatBytes)
-        val scanlinesBaos = ByteArrayOutputStream(height * (width + 1))
+        val scanlinesBaos = ByteArrayOutputStream(minOf(expectedScanlinesLenLong.toInt(), 65536))
         val buffer = ByteArray(16384)
         try {
             while (!inflater.finished()) {
                 val count = inflater.inflate(buffer)
-                if (count == 0 && inflater.needsInput()) break
+                if (count == 0) {
+                    if (inflater.needsInput() || inflater.needsDictionary()) break
+                    continue
+                }
+                if (scanlinesBaos.size().toLong() + count.toLong() > expectedScanlinesLenLong) {
+                    return null
+                }
                 scanlinesBaos.write(buffer, 0, count)
             }
         } catch (_: Exception) {
@@ -514,31 +537,12 @@ object Png8Compressor {
         }
 
         val scanlines = scanlinesBaos.toByteArray()
-        val expectedScanlinesLen = height * (width + 1)
-        if (scanlines.size < expectedScanlinesLen) return null
-
-        val totalPixels = width * height
-        if (totalPixels < STEG_HEADER_OVERHEAD * 8) return null
-
-        // Extract bits row by row, skipping filter bytes at start of each line
-        val bits = ArrayList<Int>(minOf(totalPixels, 65536 * 8))
-        for (y in 0 until height) {
-            val rowOffset = y * (width + 1)
-            for (x in 0 until width) {
-                val idxByte = scanlines[rowOffset + 1 + x].toInt() and 0xFF
-                bits.add(idxByte and 1)
-            }
-        }
+        if (scanlines.size.toLong() < expectedScanlinesLenLong) return null
 
         // Fast reject check: first 4 bytes (32 bits) must match STEG_MAGIC
-        if (bits.size < 32) return null
         val magic = ByteArray(4)
         for (b in 0 until 4) {
-            var byteVal = 0
-            for (k in 0 until 8) {
-                byteVal = (byteVal shl 1) or bits[b * 8 + k]
-            }
-            magic[b] = byteVal.toByte()
+            magic[b] = readStegoByte(scanlines, width, b).toByte()
         }
         if (magic[0] != STEG_MAGIC[0] ||
             magic[1] != STEG_MAGIC[1] ||
@@ -549,33 +553,41 @@ object Png8Compressor {
         }
 
         // Read payload length (bytes 4..5)
-        if (bits.size < 48) return null
-        var lenVal = 0
-        for (k in 0 until 16) {
-            lenVal = (lenVal shl 1) or bits[32 + k]
-        }
+        val lenHi = readStegoByte(scanlines, width, 4)
+        val lenLo = readStegoByte(scanlines, width, 5)
+        val lenVal = (lenHi shl 8) or lenLo
         if (lenVal <= 0 || lenVal > 65535) return null
 
         val totalBytes = STEG_HEADER_OVERHEAD + lenVal
-        if (bits.size < totalBytes * 8) return null
+        if (totalPixelsLong < totalBytes.toLong() * 8L) return null
 
         val envelope = ByteArray(totalBytes)
         envelope[0] = magic[0]
         envelope[1] = magic[1]
         envelope[2] = magic[2]
         envelope[3] = magic[3]
-        envelope[4] = ((lenVal ushr 8) and 0xFF).toByte()
-        envelope[5] = (lenVal and 0xFF).toByte()
+        envelope[4] = lenHi.toByte()
+        envelope[5] = lenLo.toByte()
 
         for (b in 6 until totalBytes) {
-            var byteVal = 0
-            for (k in 0 until 8) {
-                byteVal = (byteVal shl 1) or bits[b * 8 + k]
-            }
-            envelope[b] = byteVal.toByte()
+            envelope[b] = readStegoByte(scanlines, width, b).toByte()
         }
 
         return unpackStegoEnvelope(envelope)
+    }
+
+    private fun readStegoByte(scanlines: ByteArray, width: Int, byteIndex: Int): Int {
+        var byteVal = 0
+        val baseBit = byteIndex * 8
+        for (k in 0 until 8) {
+            val pixelIndex = baseBit + k
+            val y = pixelIndex / width
+            val x = pixelIndex % width
+            val rowOffset = y * (width + 1)
+            val bit = scanlines[rowOffset + 1 + x].toInt() and 1
+            byteVal = (byteVal shl 1) or bit
+        }
+        return byteVal
     }
 
     /**
@@ -603,8 +615,9 @@ object Png8Compressor {
      * Extracts and authenticates an embedded payload from the LSB of the Blue channel of ARGB pixels.
      */
     fun extractFromArgbPixels(width: Int, height: Int, argbPixels: IntArray): ByteArray? {
-        val totalPixels = minOf(width * height, argbPixels.size)
-        if (totalPixels < STEG_HEADER_OVERHEAD * 8) return null
+        if (width <= 0 || height <= 0) return null
+        val totalPixelsLong = minOf(width.toLong() * height.toLong(), argbPixels.size.toLong())
+        if (totalPixelsLong < STEG_HEADER_OVERHEAD.toLong() * 8L) return null
 
         // Read first 6 bytes (48 bits) to inspect magic & length
         val headerBytes = ByteArray(6)
@@ -628,7 +641,7 @@ object Png8Compressor {
         val len = ((headerBytes[4].toInt() and 0xFF) shl 8) or (headerBytes[5].toInt() and 0xFF)
         if (len <= 0 || len > 65535) return null
         val totalBytes = STEG_HEADER_OVERHEAD + len
-        if (totalPixels < totalBytes * 8) return null
+        if (totalPixelsLong < totalBytes.toLong() * 8L) return null
 
         val envelope = ByteArray(totalBytes)
         System.arraycopy(headerBytes, 0, envelope, 0, 6)

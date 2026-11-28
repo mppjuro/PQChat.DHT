@@ -654,6 +654,9 @@ class ResearchDataset:
         self.traffic_intervals: List[Dict[str, Any]] = []
         self.kademlia_convergence: List[Dict[str, Any]] = []
         self.adversarial_events: List[Dict[str, Any]] = []
+        self.loopback_rows: List[Dict[str, Any]] = []
+        self.testbed_correlation_rows: List[Dict[str, Any]] = []
+        self.adversarial_sim_rows: List[Dict[str, Any]] = []
         self.manifest: Optional[Dict[str, Any]] = None
         self.manifests: List[Dict[str, Any]] = []
         self.chunk_manifests: List[Dict[str, Any]] = []
@@ -881,6 +884,30 @@ class ResearchDataset:
                 if key not in self._seen_keys["resource_profile"]:
                     self._seen_keys["resource_profile"].add(key)
                     self.resource_samples.append(row)
+        elif "metrics_dht_loopback_measured" in filename or "loopback_all" in filename:
+            for idx, row in enumerate(reader):
+                key = (
+                    f"{row.get('data_source', '')}|{row.get('network_environment', '')}|"
+                    f"{row.get('measurement_id') or row.get('iteration') or row.get('timestamp_epoch_ms') or idx}"
+                )
+                if key not in self._seen_keys["loopback_rows"]:
+                    self._seen_keys["loopback_rows"].add(key)
+                    self.loopback_rows.append(row)
+        elif "metrics_testbed_correlation" in filename:
+            for idx, row in enumerate(reader):
+                key = (
+                    f"{row.get('posture', '')}|{row.get('trial_id') or row.get('seed') or row.get('run_id') or idx}|"
+                    f"{row.get('top1_accuracy', '')}|{row.get('entropy_ratio', '')}"
+                )
+                if key not in self._seen_keys["testbed_correlation_rows"]:
+                    self._seen_keys["testbed_correlation_rows"].add(key)
+                    self.testbed_correlation_rows.append(row)
+        elif "adversarial_simulation_results" in filename:
+            for idx, row in enumerate(reader):
+                key = f"{row.get('metric_category', '')}|{row.get('attack_parameter', '')}|{row.get('value', idx)}"
+                if key not in self._seen_keys["adversarial_sim_rows"]:
+                    self._seen_keys["adversarial_sim_rows"].add(key)
+                    self.adversarial_sim_rows.append(row)
         elif "master" in filename:
             for row in reader:
                 rec_type = row.get("record_type", "")
@@ -1099,6 +1126,17 @@ class ResearchAnalyzer:
             rtt = _safe_float(p.get("rttMs") or p.get("rtt_ms"), 0.0)
             if rtt > 0.0:
                 by_network[net].append(rtt)
+
+        if not by_network and self.dataset.loopback_rows:
+            for row in self.dataset.loopback_rows:
+                if row.get("data_source", "MEASURED").upper() != "MEASURED":
+                    continue
+                if not _parse_bool(row.get("delivery_success"), False):
+                    continue
+                net = row.get("network_environment") or "UNKNOWN"
+                rtt = _safe_float(row.get("rtt_total_ms"), 0.0)
+                if rtt > 0.0:
+                    by_network[net].append(rtt)
 
         return {net: compute_percentiles(rtts) for net, rtts in by_network.items()}
 
@@ -1757,6 +1795,59 @@ class ResearchAnalyzer:
             f.write(f"- **Battery energy drain:** `{hardware['battery_drain_uah_per_hour']:.1f} uAh/h` (`{hardware['battery_pct_per_hour']:.2f}%/h`)\n")
             f.write(f"- **Energy overhead per delivered real message:** `{hardware['energy_overhead_uah_per_delivered_msg']:.2f} +/- {oh_ci['ci95_half']:.2f} uAh/msg`\n\n")
 
+            if self.dataset.loopback_rows or self.dataset.testbed_correlation_rows or self.dataset.adversarial_sim_rows:
+                f.write("## CI Empirical & Simulation Benchmarks\n\n")
+                if self.dataset.loopback_rows:
+                    f.write(f"- **Real DHT Loopback Samples:** `{len(self.dataset.loopback_rows)}`\n")
+                if self.dataset.testbed_correlation_rows:
+                    f.write(f"- **Testbed Correlation Trials (150 Nodes):** `{len(self.dataset.testbed_correlation_rows)}`\n")
+                if self.dataset.adversarial_sim_rows:
+                    f.write(f"- **Adversarial Simulation Metrics:** `{len(self.dataset.adversarial_sim_rows)}`\n")
+                f.write("\n")
+
+        # 10. Optional CI Empirical Benchmarks LaTeX table (Loopback, 150-Node Testbed, Adversarial Suite)
+        if self.dataset.loopback_rows or self.dataset.testbed_correlation_rows or self.dataset.adversarial_sim_rows:
+            table_ci = os.path.join(self.output_dir, "table_ci_empirical_benchmarks.tex")
+            with open(table_ci, "w", encoding="utf-8") as f:
+                f.write("% Requires \\usepackage{booktabs} in LaTeX preamble\n")
+                f.write("\\begin{table}[htbp]\n\\centering\\small\n")
+                f.write("\\caption{CI Nightly empirical benchmarks: live Mainline DHT loopback and 150-node testbed analysis}\n")
+                f.write("\\label{tab:ci_empirical_benchmarks}\n")
+                f.write("\\begin{tabular}{llrr}\n\\toprule\n")
+                f.write("\\textbf{Benchmark Domain} & \\textbf{Scenario / Environment} & \\textbf{Samples} & \\textbf{Primary Metric (95\\% CI)} \\\\\n\\midrule\n")
+
+                if self.dataset.loopback_rows:
+                    by_env: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+                    for row in self.dataset.loopback_rows:
+                        if row.get("data_source", "MEASURED").upper() == "MEASURED":
+                            by_env[row.get("network_environment") or "UNKNOWN"].append(row)
+                    for env, rows in sorted(by_env.items()):
+                        succ = sum(1 for r in rows if _parse_bool(r.get("delivery_success"), False))
+                        rtts = [_safe_float(r.get("rtt_total_ms"), 0.0) for r in rows if _parse_bool(r.get("delivery_success"), False)]
+                        rtt_ci = compute_mean_ci95([x for x in rtts if x > 0.0])
+                        safe_env = env.replace("_", "\\_")
+                        rate = (succ / len(rows) * 100.0) if rows else 0.0
+                        f.write(f"Live DHT Loopback & {safe_env} ({rate:.1f}\\% succ.) & {len(rows)} & {_format_ci95(rtt_ci['mean'], rtt_ci['ci95_half'], 1, 'ms')} \\\\\n")
+
+                if self.dataset.testbed_correlation_rows:
+                    by_posture: Dict[str, List[float]] = defaultdict(list)
+                    for row in self.dataset.testbed_correlation_rows:
+                        posture = row.get("posture") or "UNKNOWN"
+                        by_posture[posture].append(_safe_float(row.get("top1_accuracy"), 0.0) * 100.0)
+                    for posture, vals in sorted(by_posture.items()):
+                        p_ci = compute_mean_ci95(vals)
+                        safe_posture = posture.replace("_", "\\_")
+                        f.write(f"150-Node Testbed & {safe_posture} (Top-1) & {len(vals)} & {_format_ci95(p_ci['mean'], p_ci['ci95_half'], 1, '\\%')} \\\\\n")
+
+                for row in self.dataset.adversarial_sim_rows:
+                    cat = (row.get("metric_category") or "UNKNOWN").replace("_", "\\_")
+                    param = (row.get("attack_parameter") or "metric").replace("_", "\\_")
+                    val = str(row.get("value") or "0")
+                    mit = str(row.get("mitigated") or "--")
+                    f.write(f"Adversarial Suite & {cat}: {param} & 1 & {val} (mitigated={mit}) \\\\\n")
+
+                f.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
+
     def _save_figure(self, fig: Any, base_name: str) -> List[str]:
         """Saves a matplotlib figure in both vector PDF and 300 DPI PNG formats."""
         saved = []
@@ -2119,6 +2210,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "adversarial": adversarial,
                 "hardware": hardware,
                 "generated_plots": plot_files,
+                "ci_benchmarks": {
+                    "loopback_rows": len(dataset.loopback_rows),
+                    "testbed_correlation_rows": len(dataset.testbed_correlation_rows),
+                    "adversarial_sim_rows": len(dataset.adversarial_sim_rows),
+                },
                 "checksum_failures": dataset.checksum_failures,
             },
             f,

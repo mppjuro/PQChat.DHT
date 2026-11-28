@@ -874,11 +874,237 @@ jobs:
             adb -s emulator-$port emu kill 2>/dev/null || true
           done
 
+  continuous-fuzzing:
+    name: Continuous Fuzzing (Jazzer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
+
+      - name: Restore Jazzer Fuzzing Corpus
+        uses: actions/cache@v6
+        with:
+          path: app/.cifuzz-corpus
+          key: jazzer-corpus-${{ runner.os }}-${{ hashFiles('app/src/test/java/org/pqchat/dht/dht/fuzz/**') }}
+          restore-keys: |
+            jazzer-corpus-${{ runner.os }}-
+
+      - name: Run Continuous Jazzer Fuzz Targets
+        env:
+          JAZZER_FUZZ: "1"
+        run: |
+          mkdir -p app/.cifuzz-corpus
+          ./gradlew testDebugUnitTest \
+            --tests "org.pqchat.dht.dht.fuzz.JazzerFuzzTest" \
+            -Djazzer.max_duration=15s
+
+      - name: Publish Continuous Fuzzing Summary to GitHub Job Summary
+        if: always()
+        run: |
+          echo "## Continuous Fuzzing Summary (Jazzer)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Targets Verified:** \`BencodeFuzzTarget\`, \`KrpcMessageFuzzTarget\`, \`BinaryFrameCodecFuzzTarget\` (0x01..0x0C + Cover-ACK), \`Png8CompressorFuzzTarget\`, \`KeystoreCryptoFuzzTarget\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Corpus Directory:** \`app/.cifuzz-corpus\` (cached via \`actions/cache@v6\`)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Jazzer Fuzzing Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jazzer-fuzzing-report
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+
+  network-chaos-resilience:
+    name: Network Chaos & Partition Resilience
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Decode Google Services JSON (Optional)
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+            echo "Decoded app/google-services.json from GitHub Secrets."
+          else
+            echo "GOOGLE_SERVICES_JSON_BASE64 secret not set; using BuildConfig fallback or offline mode."
+          fi
+
+      - name: Run Network Chaos & Resilience Suite
+        run: |
+          ./gradlew testDebugUnitTest \
+            --tests "org.pqchat.dht.chaos.NetworkChaosResilienceTest" \
+            --tests "org.pqchat.dht.network.tor.TorFailClosedTest" \
+            --tests "org.pqchat.dht.protocol.ChunkTransferResumptionTest"
+
+      - name: Publish Network Chaos Summary to GitHub Job Summary
+        if: always()
+        run: |
+          echo "## Network Chaos & Partition Resilience Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **UDP Loss (10%-40%) & Mid-Transfer Partition (0x05):** Verified chunk persistence and lossless reassembly" >> $GITHUB_STEP_SUMMARY
+          echo "- **PQC Rekey Under Partition (0x03/0x04):** Verified pending offer retention, epoch sync, and outbox draining" >> $GITHUB_STEP_SUMMARY
+          echo "- **CGNAT Port Rebinding:** Verified adaptive K=16, keepalive recovery, and live DhtLeafNode UDP socket rebinding" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tor Circuit Restart (Fail-Closed):** Verified zero clearnet UDP leaks during SOCKS5 outage and clean recovery" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Network Chaos Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-chaos-resilience-results
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+
+  generate-thesis-artifacts:
+    name: Generate Master's Thesis LaTeX & Charts
+    runs-on: ubuntu-latest
+    needs: [real-dht-measurements, dht-testbed, adversarial-dht-simulation]
+    if: always() && (needs.real-dht-measurements.result == 'success' || needs.dht-testbed.result == 'success' || needs.adversarial-dht-simulation.result == 'success')
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python Plotting & Analysis Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy matplotlib
+
+      - name: Download Real DHT Measurement Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: real-dht-measurements
+          path: build/ci_telemetry/real_dht
+
+      - name: Download DHT Testbed Correlation Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: dht-testbed-correlation-artifacts
+          path: build/ci_telemetry/testbed
+
+      - name: Download Adversarial Simulation Artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: adversarial-simulation-results
+          path: build/ci_telemetry/adversarial
+
+      - name: Generate LaTeX Tables, 300 DPI Charts, and Markdown Summaries
+        run: |
+          mkdir -p build/thesis_bundle/tables build/thesis_bundle/charts build/thesis_bundle/summaries build/thesis_bundle/raw_csv build/thesis_bundle/analysis
+
+          if [ -s build/ci_telemetry/real_dht/docs/metrics_dht_loopback_measured.csv ]; then
+            cp build/ci_telemetry/real_dht/docs/metrics_dht_loopback_measured.csv docs/measurements/loopback_all.csv
+          elif [ -s build/ci_telemetry/real_dht/metrics_dht_loopback_measured.csv ]; then
+            cp build/ci_telemetry/real_dht/metrics_dht_loopback_measured.csv docs/measurements/loopback_all.csv
+          fi
+
+          if [ -s build/ci_telemetry/testbed/tools/testbed/metrics_testbed_correlation.csv ]; then
+            cp build/ci_telemetry/testbed/tools/testbed/metrics_testbed_correlation.csv docs/measurements/metrics_testbed_correlation.csv
+          elif [ -s build/ci_telemetry/testbed/metrics_testbed_correlation.csv ]; then
+            cp build/ci_telemetry/testbed/metrics_testbed_correlation.csv docs/measurements/metrics_testbed_correlation.csv
+          fi
+
+          python3 tools/research_analyzer.py \
+            --input-dir build/ci_telemetry \
+            --input-dir docs/measurements \
+            --output-dir build/thesis_bundle/analysis
+
+          python3 scripts/generate_docs_tables.py
+
+          find build/thesis_bundle/analysis -maxdepth 1 -name '*.tex' -exec cp {} build/thesis_bundle/tables/ \;
+          find build/thesis_bundle/analysis -maxdepth 1 \( -name '*.pdf' -o -name '*.png' \) -exec cp {} build/thesis_bundle/charts/ \;
+          find build/ci_telemetry -type f -name '*.png' -exec cp {} build/thesis_bundle/charts/ \;
+          find build/ci_telemetry -type f -name '*.pdf' -exec cp {} build/thesis_bundle/charts/ \;
+          find build/ci_telemetry -type f -name '*.csv' -exec cp {} build/thesis_bundle/raw_csv/ \;
+
+          cp build/thesis_bundle/analysis/markdown_summary.md build/thesis_bundle/summaries/markdown_summary.md
+          cp build/thesis_bundle/analysis/research_summary.json build/thesis_bundle/summaries/research_summary.json
+          [ -f docs/dht_retention_report.md ] && cp docs/dht_retention_report.md build/thesis_bundle/summaries/
+          [ -f docs/threat_model.md ] && cp docs/threat_model.md build/thesis_bundle/summaries/
+
+          python3 - << 'EOF'
+          import os, zipfile
+
+          bundle_root = "build/thesis_bundle"
+          zip_path = "build/master-thesis-latex-and-charts.zip"
+          with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+              for root, _, files in os.walk(bundle_root):
+                  for fname in sorted(files):
+                      full_path = os.path.join(root, fname)
+                      rel_path = os.path.relpath(full_path, bundle_root)
+                      zf.write(full_path, rel_path)
+          print(f"Created {zip_path} ({os.path.getsize(zip_path)} bytes)")
+          EOF
+
+      - name: Publish Thesis Artifacts Summary to GitHub Job Summary
+        if: always()
+        run: |
+          echo "## Master's Thesis LaTeX Tables & 300 DPI Charts Bundle" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f build/thesis_bundle/summaries/markdown_summary.md ]; then
+            cat build/thesis_bundle/summaries/markdown_summary.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Master's Thesis Bundle Archive
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: master-thesis-latex-and-charts
+          path: build/master-thesis-latex-and-charts.zip
+
   nightly-release:
     name: Build & Publish Nightly Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [fast-unit-tests, slow-repository-tests, slow-statistical-tests, remote-dht-tests, real-dht-measurements, dht-testbed, e2e-two-devices-test, adversarial-dht-simulation, multi-emulator-dht-real-e2e]
+    needs: [fast-unit-tests, slow-repository-tests, slow-statistical-tests, remote-dht-tests, real-dht-measurements, dht-testbed, e2e-two-devices-test, adversarial-dht-simulation, multi-emulator-dht-real-e2e, continuous-fuzzing, network-chaos-resilience]
     if: success() && (inputs.skip_release != true)
     permissions:
       contents: write
@@ -945,6 +1171,8 @@ jobs:
             - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
             - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
+            - **Continuous Fuzzing (Jazzer):** Passed (Bencode, KRPC, BinaryFrameCodec 0x01-0x0C + Cover-ACK, Png8Compressor, KeystoreCrypto)
+            - **Network Chaos & Partition Resilience:** Passed (10%-40% UDP loss, mid-transfer partition, PQC rekey outage, CGNAT socket rebind, Tor fail-closed restart)
             - **Multi-Emulator Real DHT E2E Tests:** Passed by default (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT; simulated 20-node testbed available via manual `use_fake_dht` opt-in)
 
             ### Build Metadata:

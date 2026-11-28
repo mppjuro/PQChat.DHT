@@ -1474,6 +1474,7 @@ object BinaryFrameCodec {
                     buffer.get(nameBytes)
                     val gName = String(nameBytes, Charsets.UTF_8)
                     if (subType == GROUP_SUBTYPE_KEY_BUNDLE) {
+                        require(buffer.remaining() >= 2) { "Malformed group key bundle: missing key count" }
                         val keyCount = buffer.short.toInt() and 0xFFFF
                         val memberKeysList = mutableListOf<DecodedPayload.GroupMemberKey>()
                         for (i in 0 until keyCount) {
@@ -1497,6 +1498,7 @@ object BinaryFrameCodec {
                             memberKeys = memberKeysList
                         )
                     } else {
+                        require(buffer.remaining() >= 2) { "Malformed group control: missing member count" }
                         val mCount = buffer.short.toInt() and 0xFFFF
                         require(mCount <= 64) { "Member count $mCount exceeds maximum allowed 64" }
                         val memberList = mutableListOf<DecodedPayload.GroupMemberSummary>()

@@ -101,14 +101,14 @@ android {
             isIncludeAndroidResources = true
             all {
                 it.maxHeapSize = "2048m"
-                listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations").forEach { prop ->
+                listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations", "jazzer.max_duration", "jazzer.corpus", "jazzer.keep_going").forEach { prop ->
                     System.getProperty(prop)?.let { value -> it.systemProperty(prop, value) }
                 }
                 it.systemProperty("junit.jupiter.execution.timeout.default", "5m")
                 it.systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
                 it.systemProperty(
                     "jazzer.instrument",
-                    "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+                    "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**,org.pqchat.dht.crypto.**,org.pqchat.dht.media.**,org.pqchat.dht.protocol.**"
                 )
                 it.testLogging {
                     events("passed", "skipped", "failed", "standardOut", "standardError")
@@ -135,14 +135,14 @@ android {
 
 tasks.withType<Test>().configureEach {
     maxHeapSize = "2048m"
-    listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations").forEach { prop ->
+    listOf("runSlowTests", "runNightlyTests", "runRealDhtTests", "useFakeDht", "measuredIterations", "jazzer.max_duration", "jazzer.corpus", "jazzer.keep_going").forEach { prop ->
         System.getProperty(prop)?.let { systemProperty(prop, it) }
     }
     systemProperty("junit.jupiter.execution.timeout.default", "5m")
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
     systemProperty(
         "jazzer.instrument",
-        "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+        "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**,org.pqchat.dht.crypto.**,org.pqchat.dht.media.**,org.pqchat.dht.protocol.**"
     )
     testLogging {
         events("passed", "skipped", "failed", "standardOut", "standardError")
