@@ -190,11 +190,16 @@ class ChatViewModel @JvmOverloads constructor(
     val isDuressPinSet: StateFlow<Boolean> = settingsManager.isDuressPinSet
     val isDuressActive: StateFlow<Boolean> = settingsManager.isDuressActive
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = settingsManager.isStrictPoissonShapingEnabled
+    val isReadReceiptsEnabled: StateFlow<Boolean> = settingsManager.isReadReceiptsEnabled
     val torState: StateFlow<org.pqchat.dht.network.tor.TorState> =
         app?.embeddedTorManager?.state ?: MutableStateFlow(org.pqchat.dht.network.tor.TorState.Disconnected)
 
     fun setTorEnabled(enabled: Boolean) {
         settingsManager.setTorEnabled(enabled)
+    }
+
+    fun setReadReceiptsEnabled(enabled: Boolean) {
+        settingsManager.setReadReceiptsEnabled(enabled)
     }
 
     fun setBiometricLockEnabled(enabled: Boolean) {
@@ -603,6 +608,71 @@ class ChatViewModel @JvmOverloads constructor(
                 _statusNotification.value = "Error sending location pin"
             }
         }
+    }
+
+    fun markCurrentChatRead(contactId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.markIncomingMessagesAsRead(contactId)
+        }
+    }
+
+    fun sendCompressedMicroDoc(
+        title: String,
+        markdownBody: String,
+        targetContactId: String? = null
+    ) {
+        val contactId = targetContactId ?: _selectedContactId.value ?: return
+        if (markdownBody.isBlank()) return
+        val ttl = _ephemeralTtlSeconds.value
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Compressing & sending Type 0x0C micro-doc..."
+            val group = repository.getGroup(contactId)
+            val success = runCatching {
+                if (group != null) {
+                    repository.sendGroupCompressedMicroDoc(contactId, title.trim(), markdownBody, ttl)
+                } else {
+                    repository.sendCompressedMicroDoc(contactId, title.trim(), markdownBody, ttl)
+                }
+            }.getOrDefault(false)
+            _statusNotification.value = if (success) {
+                "Compressed micro-doc sent in 1 DHT frame"
+            } else {
+                "Error: micro-doc exceeds single 900 B frame or send failed"
+            }
+        }
+    }
+
+    fun sendContactIntroducer(
+        introducedName: String,
+        qrPayloadBase64: String,
+        targetContactId: String? = null
+    ) {
+        val contactId = targetContactId ?: _selectedContactId.value ?: return
+        val qrBytes = runCatching {
+            android.util.Base64.decode(qrPayloadBase64.trim(), android.util.Base64.DEFAULT)
+        }.getOrNull()
+        if (qrBytes == null || qrBytes.size != HandshakeManager.QR_DATA_SIZE) {
+            _statusNotification.value = "Invalid contact QR payload (expected ${HandshakeManager.QR_DATA_SIZE} B)"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _statusNotification.value = "Packing Trusted Introducer Card (0x0C)..."
+            val success = runCatching {
+                repository.sendContactIntroducer(contactId, introducedName.trim(), qrBytes)
+            }.getOrDefault(false)
+            _statusNotification.value = if (success) {
+                "Trusted Contact Introducer sent in 1 DHT frame"
+            } else {
+                "Failed to send Contact Introducer"
+            }
+        }
+    }
+
+    fun acceptContactIntroducer(introducerData: org.pqchat.dht.protocol.ContactIntroducerData) {
+        processBobHandshake(
+            qrBytes = introducerData.qrPayload,
+            contactName = introducerData.introducedName.ifBlank { "Introduced Contact" }
+        )
     }
 
     fun resendMessage(messageId: Long) {

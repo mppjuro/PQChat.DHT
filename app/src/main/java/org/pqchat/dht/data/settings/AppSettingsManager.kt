@@ -229,6 +229,12 @@ class AppSettingsManager(
     )
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = _isStrictPoissonShapingEnabled.asStateFlow()
 
+    // Zero-overhead Cover-ACK Read Receipts (default TRUE; user can opt out for read-status privacy)
+    private val _isReadReceiptsEnabled = MutableStateFlow(
+        prefs?.getBoolean(KEY_READ_RECEIPTS_ENABLED, true) ?: true
+    )
+    val isReadReceiptsEnabled: StateFlow<Boolean> = _isReadReceiptsEnabled.asStateFlow()
+
     // Dead Man's Switch / Safety Canary configuration
     private val _isDeadManSwitchEnabled = MutableStateFlow(
         prefs?.getBoolean(KEY_DEAD_MAN_SWITCH_ENABLED, false) ?: false
@@ -568,6 +574,11 @@ class AppSettingsManager(
         _deadManSwitchTimeoutHours.value = clamped
     }
 
+    fun setReadReceiptsEnabled(enabled: Boolean) {
+        prefs?.edit()?.putBoolean(KEY_READ_RECEIPTS_ENABLED, enabled)?.apply()
+        _isReadReceiptsEnabled.value = enabled
+    }
+
     fun setDeadManTrustedContactIds(ids: Set<String>) {
         prefs?.edit()?.putStringSet(KEY_DEAD_MAN_TRUSTED_CONTACTS, ids)?.apply()
         _deadManTrustedContactIds.value = ids
@@ -642,6 +653,7 @@ class AppSettingsManager(
         private const val KEY_ANONYMOUS_STATS = "anonymous_stats_enabled"
         private const val KEY_STATS_PROBE_INTERVAL = "stats_probe_interval"
         private const val KEY_STRICT_POISSON_SHAPING = "strict_poisson_shaping_enabled"
+        private const val KEY_READ_RECEIPTS_ENABLED = "read_receipts_enabled"
         private const val KEY_DEAD_MAN_SWITCH_ENABLED = "dead_man_switch_enabled"
         private const val KEY_DEAD_MAN_TIMEOUT_HOURS = "dead_man_timeout_hours"
         private const val KEY_DEAD_MAN_TRUSTED_CONTACTS = "dead_man_trusted_contacts"

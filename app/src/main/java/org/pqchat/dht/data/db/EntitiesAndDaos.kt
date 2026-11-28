@@ -1004,6 +1004,15 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT') ORDER BY id ASC")
     suspend fun getAllPendingDeliveryMessages(): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND isOutgoing = 0 ORDER BY seqNum DESC LIMIT 64")
+    suspend fun getRecentIncomingMessagesForContact(contactId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE contactId = :contactId AND isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT', 'DELIVERED') ORDER BY id ASC")
+    suspend fun getAwaitingAckOrReadMessagesForContact(contactId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE isOutgoing = 1 AND status IN ('PENDING_DELIVERY', 'SENT_DHT', 'DELIVERED') ORDER BY id ASC")
+    suspend fun getAllAwaitingAckOrReadMessages(): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: Long): MessageEntity?
 

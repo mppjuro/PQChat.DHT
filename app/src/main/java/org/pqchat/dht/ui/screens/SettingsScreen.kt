@@ -79,6 +79,7 @@ fun SettingsScreen(
     var showResearchConsentDialog by remember { mutableStateOf(false) }
 
     val isStrictPoissonShapingEnabled by viewModel.isStrictPoissonShapingEnabled.collectAsState()
+    val isReadReceiptsEnabled by viewModel.isReadReceiptsEnabled.collectAsState()
     val torState by viewModel.torState.collectAsState()
 
     val isAnonymousStatsEnabled by viewModel.isAnonymousStatsEnabled.collectAsState()
@@ -921,6 +922,42 @@ fun SettingsScreen(
                         Switch(
                             checked = isStrictPoissonShapingEnabled,
                             onCheckedChange = { viewModel.setStrictPoissonShapingEnabled(it) }
+                        )
+                    }
+
+                    HorizontalDivider(
+                        color = appColors.border,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    // Switch: Zero-Overhead Cover-ACK Read Receipts (default enabled)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Send Read Receipts (Zero-Overhead)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = appColors.textPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isReadReceiptsEnabled) {
+                                    "Enabled — embeds an encrypted read-status bitmap inside unused CSPRNG bytes of Cover-ACK frames with zero extra DHT packets."
+                                } else {
+                                    "Disabled — delivery confirmations still work normally, but contacts are never informed when you read their messages."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isReadReceiptsEnabled) appColors.primary else appColors.textSecondary,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = isReadReceiptsEnabled,
+                            onCheckedChange = { viewModel.setReadReceiptsEnabled(it) },
+                            modifier = Modifier.testTag("settings_read_receipts_switch")
                         )
                     }
 

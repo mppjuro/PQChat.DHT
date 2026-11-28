@@ -11,7 +11,10 @@ class PendingAck(
     val messageId: String,
     ratchetKey: ByteArray,
     val seqNum: Int,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val readBaseSeq: Int? = null,
+    val readSeqBitmap: Long = 0L,
+    val dhtSeq: Long = org.pqchat.dht.dht.leaf.DhtClient.DEFAULT_MUTABLE_SEQ
 ) {
     val ratchetKey: ByteArray = ratchetKey.copyOf()
 
@@ -19,13 +22,28 @@ class PendingAck(
         ratchetKey.fill(0)
     }
 
+    fun withReadReceipt(readBaseSeq: Int, readSeqBitmap: Long): PendingAck =
+        PendingAck(
+            contactId = contactId,
+            messageId = messageId,
+            ratchetKey = ratchetKey,
+            seqNum = seqNum,
+            timestamp = timestamp,
+            readBaseSeq = readBaseSeq,
+            readSeqBitmap = readSeqBitmap,
+            dhtSeq = dhtSeq
+        )
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PendingAck) return false
         return contactId == other.contactId &&
                 messageId == other.messageId &&
                 ratchetKey.contentEquals(other.ratchetKey) &&
-                seqNum == other.seqNum
+                seqNum == other.seqNum &&
+                readBaseSeq == other.readBaseSeq &&
+                readSeqBitmap == other.readSeqBitmap &&
+                dhtSeq == other.dhtSeq
     }
 
     override fun hashCode(): Int {
@@ -33,6 +51,9 @@ class PendingAck(
         result = 31 * result + messageId.hashCode()
         result = 31 * result + ratchetKey.contentHashCode()
         result = 31 * result + seqNum
+        result = 31 * result + (readBaseSeq ?: 0)
+        result = 31 * result + readSeqBitmap.hashCode()
+        result = 31 * result + dhtSeq.hashCode()
         return result
     }
 }
@@ -77,6 +98,31 @@ class PendingAckQueue {
             }
         }
         return removed
+    }
+
+    /**
+     * Attaches or updates a zero-overhead read receipt bitmap on any queued ACKs for [contactId].
+     *
+     * @return Number of queued ACKs updated in place.
+     */
+    @Synchronized
+    fun attachReadReceiptForContact(contactId: String, readBaseSeq: Int, readSeqBitmap: Long): Int {
+        if (queue.isEmpty() || readSeqBitmap == 0L) return 0
+        var updated = 0
+        val snapshot = ArrayList<PendingAck>(queue.size)
+        while (true) {
+            val item = queue.poll() ?: break
+            if (item.contactId == contactId) {
+                val upgraded = item.withReadReceipt(readBaseSeq, readSeqBitmap)
+                item.zeroSensitiveMemory()
+                snapshot.add(upgraded)
+                updated++
+            } else {
+                snapshot.add(item)
+            }
+        }
+        snapshot.forEach { queue.add(it) }
+        return updated
     }
 
     fun getAll(): List<PendingAck> = queue.toList()

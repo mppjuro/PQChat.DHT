@@ -1,7 +1,12 @@
 package org.pqchat.dht.crypto
 
+import java.io.ByteArrayOutputStream
+import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.DataFormatException
+import java.util.zip.Deflater
+import java.util.zip.Inflater
 
 object BinaryFrameCodec {
     /**
@@ -33,6 +38,29 @@ object BinaryFrameCodec {
     const val TYPE_VOICE_NOTE: Byte = 0x09
     const val TYPE_GROUP_POLL: Byte = 0x0A
     const val TYPE_SAFETY_CANARY: Byte = 0x0B
+    const val TYPE_COMPRESSED_MICRO_DOC: Byte = 0x0C
+
+    const val MICRO_DOC_SUBTYPE_MARKDOWN: Byte = 0x01
+    const val MICRO_DOC_SUBTYPE_INTRODUCER: Byte = 0x02
+    const val MICRO_DOC_COMPRESSION_NONE: Byte = 0x00
+    const val MICRO_DOC_COMPRESSION_DEFLATE: Byte = 0x01
+    const val MICRO_DOC_COMPRESSION_MLKEM512_BASE3329: Byte = 0x02
+    const val MICRO_DOC_MAX_DECOMPRESSED_BYTES = 8192
+    const val MICRO_DOC_MARKDOWN_HEADER_SIZE = 10 // subType(1) + alg(1) + uncompressedLen(2) + encodedLen(2) + ttl(4)
+    const val MICRO_DOC_MAX_ENCODED_BYTES = INNER_PAYLOAD_SIZE - MICRO_DOC_MARKDOWN_HEADER_SIZE // 849
+    const val MICRO_DOC_MAX_TITLE_BYTES = 128
+
+    // ML-KEM-512 public key = 768 bytes encoding 512 coefficients in [0, 3328] + 32B rho.
+    // Packing all 512 mod-3329 coefficients in radix 3329 requires ceil(512 * log2(3329) / 8) = 749 bytes lossless.
+    const val MICRO_DOC_INTRODUCER_MLKEM_Q = 3329
+    const val MICRO_DOC_INTRODUCER_MLKEM_COEFFS = 512
+    const val MICRO_DOC_INTRODUCER_RAW_T_SIZE = 768
+    const val MICRO_DOC_INTRODUCER_PACKED_T_SIZE = 749
+    const val MICRO_DOC_INTRODUCER_TAIL_SIZE = 96 // 32B rho + 32B X25519 pk + 32B Seed_init
+    const val MICRO_DOC_INTRODUCER_RAW_QR_SIZE = MICRO_DOC_INTRODUCER_RAW_T_SIZE + MICRO_DOC_INTRODUCER_TAIL_SIZE // 864
+    const val MICRO_DOC_INTRODUCER_PACKED_QR_SIZE = MICRO_DOC_INTRODUCER_PACKED_T_SIZE + MICRO_DOC_INTRODUCER_TAIL_SIZE // 845
+    const val MICRO_DOC_INTRODUCER_HEADER_SIZE = 3 // subType(1) + alg(1) + nameLen(1)
+    const val MICRO_DOC_INTRODUCER_MAX_NAME_BYTES = INNER_PAYLOAD_SIZE - MICRO_DOC_INTRODUCER_HEADER_SIZE - MICRO_DOC_INTRODUCER_PACKED_QR_SIZE // 11
 
     const val GROUP_SUBTYPE_INVITE: Byte = 0x01
     const val GROUP_SUBTYPE_REKEY: Byte = 0x02
@@ -430,6 +458,26 @@ object BinaryFrameCodec {
                 result = 31 * result + note.hashCode()
                 return result
             }
+        }
+
+        data class CompressedMicroDoc(
+            val title: String,
+            val markdownBody: String,
+            val ephemeralTtlSeconds: Long = 0L,
+            val compressionAlg: Byte = MICRO_DOC_COMPRESSION_DEFLATE
+        ) : DecodedPayload()
+
+        data class ContactIntroducer(
+            val introducedName: String,
+            val qrPayload: ByteArray
+        ) : DecodedPayload() {
+            override fun equals(other: Any?): Boolean {
+                if (this === other) return true
+                if (other !is ContactIntroducer) return false
+                return introducedName == other.introducedName && qrPayload.contentEquals(other.qrPayload)
+            }
+
+            override fun hashCode(): Int = 31 * introducedName.hashCode() + qrPayload.contentHashCode()
         }
     }
 
@@ -1012,6 +1060,238 @@ object BinaryFrameCodec {
         return packPlaintext(TYPE_SAFETY_CANARY, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
     }
 
+    /**
+     * Losslessly packs an 864-byte hybrid handshake QR payload (`800 B ML-KEM-512 pk + 32 B X25519 pk + 32 B Seed_init`)
+     * into 845 bytes by representing the 512 12-bit polynomial coefficients (`q = 3329`) in radix 3329 (`749 B`)
+     * followed by the remaining 96 high-entropy bytes (`rho + X25519 pk + Seed_init`).
+     */
+    fun packIntroducerQrPayload(qrPayload: ByteArray): ByteArray {
+        require(qrPayload.size == MICRO_DOC_INTRODUCER_RAW_QR_SIZE) {
+            "Introducer QR payload must be $MICRO_DOC_INTRODUCER_RAW_QR_SIZE bytes, got ${qrPayload.size}"
+        }
+        val base = BigInteger.valueOf(MICRO_DOC_INTRODUCER_MLKEM_Q.toLong())
+        var acc = BigInteger.ZERO
+        for (pairIdx in 0 until MICRO_DOC_INTRODUCER_MLKEM_COEFFS / 2) {
+            val offset = pairIdx * 3
+            val b0 = qrPayload[offset].toInt() and 0xFF
+            val b1 = qrPayload[offset + 1].toInt() and 0xFF
+            val b2 = qrPayload[offset + 2].toInt() and 0xFF
+            val c0 = b0 or ((b1 and 0x0F) shl 8)
+            val c1 = (b1 ushr 4) or (b2 shl 4)
+            require(c0 < MICRO_DOC_INTRODUCER_MLKEM_Q && c1 < MICRO_DOC_INTRODUCER_MLKEM_Q) {
+                "Invalid ML-KEM-512 coefficient out of mod-$MICRO_DOC_INTRODUCER_MLKEM_Q range"
+            }
+            acc = acc.multiply(base).add(BigInteger.valueOf(c0.toLong()))
+            acc = acc.multiply(base).add(BigInteger.valueOf(c1.toLong()))
+        }
+        val rawBig = acc.toByteArray()
+        val srcOffset = if (rawBig.size > 1 && rawBig[0] == 0.toByte()) 1 else 0
+        val sigBytes = rawBig.size - srcOffset
+        require(sigBytes <= MICRO_DOC_INTRODUCER_PACKED_T_SIZE) {
+            "Packed polynomial exceeds $MICRO_DOC_INTRODUCER_PACKED_T_SIZE bytes ($sigBytes)"
+        }
+        val out = ByteArray(MICRO_DOC_INTRODUCER_PACKED_QR_SIZE)
+        System.arraycopy(rawBig, srcOffset, out, MICRO_DOC_INTRODUCER_PACKED_T_SIZE - sigBytes, sigBytes)
+        System.arraycopy(
+            qrPayload,
+            MICRO_DOC_INTRODUCER_RAW_T_SIZE,
+            out,
+            MICRO_DOC_INTRODUCER_PACKED_T_SIZE,
+            MICRO_DOC_INTRODUCER_TAIL_SIZE
+        )
+        return out
+    }
+
+    /**
+     * Reconstructs the exact 864-byte hybrid handshake QR payload from an 845-byte base-3329 packed form.
+     */
+    fun unpackIntroducerQrPayload(packed: ByteArray): ByteArray {
+        require(packed.size == MICRO_DOC_INTRODUCER_PACKED_QR_SIZE) {
+            "Packed introducer payload must be $MICRO_DOC_INTRODUCER_PACKED_QR_SIZE bytes, got ${packed.size}"
+        }
+        val base = BigInteger.valueOf(MICRO_DOC_INTRODUCER_MLKEM_Q.toLong())
+        var acc = BigInteger(1, packed.copyOfRange(0, MICRO_DOC_INTRODUCER_PACKED_T_SIZE))
+        val coeffs = IntArray(MICRO_DOC_INTRODUCER_MLKEM_COEFFS)
+        for (i in MICRO_DOC_INTRODUCER_MLKEM_COEFFS - 1 downTo 0) {
+            val divRem = acc.divideAndRemainder(base)
+            acc = divRem[0]
+            coeffs[i] = divRem[1].toInt()
+        }
+        require(acc == BigInteger.ZERO) {
+            "Malformed packed introducer payload: value exceeds 3329^512 bound"
+        }
+
+        val qrOut = ByteArray(MICRO_DOC_INTRODUCER_RAW_QR_SIZE)
+        for (pairIdx in 0 until MICRO_DOC_INTRODUCER_MLKEM_COEFFS / 2) {
+            val c0 = coeffs[pairIdx * 2]
+            val c1 = coeffs[pairIdx * 2 + 1]
+            val offset = pairIdx * 3
+            qrOut[offset] = (c0 and 0xFF).toByte()
+            qrOut[offset + 1] = (((c0 ushr 8) and 0x0F) or ((c1 and 0x0F) shl 4)).toByte()
+            qrOut[offset + 2] = ((c1 ushr 4) and 0xFF).toByte()
+        }
+        System.arraycopy(
+            packed,
+            MICRO_DOC_INTRODUCER_PACKED_T_SIZE,
+            qrOut,
+            MICRO_DOC_INTRODUCER_RAW_T_SIZE,
+            MICRO_DOC_INTRODUCER_TAIL_SIZE
+        )
+        return qrOut
+    }
+
+    /**
+     * Compresses a structured Markdown/code micro-document (`title` + `markdownBody`) using Deflate
+     * into a single 900-byte BEP 44 Type `0x0C` frame, enforcing an 8 KB decompressed cap.
+     */
+    fun encodeCompressedMicroDoc(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        title: String,
+        markdownBody: String,
+        ephemeralTtlSeconds: Long = 0L,
+        obfuscateTimestamp: Boolean = false
+    ): ByteArray {
+        val titleBytes = title.toByteArray(Charsets.UTF_8)
+        require(titleBytes.size <= MICRO_DOC_MAX_TITLE_BYTES) {
+            "Micro-doc title length ${titleBytes.size} exceeds maximum $MICRO_DOC_MAX_TITLE_BYTES bytes"
+        }
+        val bodyBytes = markdownBody.toByteArray(Charsets.UTF_8)
+        val rawSize = 2 + titleBytes.size + bodyBytes.size
+        require(rawSize in 1..MICRO_DOC_MAX_DECOMPRESSED_BYTES) {
+            "Micro-doc uncompressed size $rawSize exceeds hard limit of $MICRO_DOC_MAX_DECOMPRESSED_BYTES bytes"
+        }
+
+        val rawStream = ByteArray(rawSize)
+        rawStream[0] = ((titleBytes.size ushr 8) and 0xFF).toByte()
+        rawStream[1] = (titleBytes.size and 0xFF).toByte()
+        System.arraycopy(titleBytes, 0, rawStream, 2, titleBytes.size)
+        System.arraycopy(bodyBytes, 0, rawStream, 2 + titleBytes.size, bodyBytes.size)
+
+        val deflated = deflateBytes(rawStream)
+        val useDeflate = deflated.size < rawStream.size
+        val encodedBytes = if (useDeflate) deflated else rawStream
+        val alg = if (useDeflate) MICRO_DOC_COMPRESSION_DEFLATE else MICRO_DOC_COMPRESSION_NONE
+        require(encodedBytes.size <= MICRO_DOC_MAX_ENCODED_BYTES) {
+            "Compressed micro-doc size ${encodedBytes.size} exceeds single-frame capacity $MICRO_DOC_MAX_ENCODED_BYTES bytes"
+        }
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(MICRO_DOC_SUBTYPE_MARKDOWN)
+        buffer.put(alg)
+        buffer.putShort(rawSize.toShort())
+        buffer.putShort(encodedBytes.size.toShort())
+        buffer.putInt(ephemeralTtlSeconds.toInt())
+        buffer.put(encodedBytes)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_COMPRESSED_MICRO_DOC, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
+    }
+
+    /**
+     * Encodes a Trusted Contact Introducer card (`pk_C || Seed_init`, 864 B losslessly packed to 845 B)
+     * into a single 900-byte BEP 44 Type `0x0C` frame for QR-less friend introduction.
+     */
+    fun encodeContactIntroducer(
+        seqNum: Int,
+        ackNum: Int,
+        timestampUTC: Long,
+        introducedName: String,
+        qrPayload: ByteArray,
+        obfuscateTimestamp: Boolean = false
+    ): ByteArray {
+        val nameBytes = truncateUtf8ToMaxBytes(introducedName.ifBlank { "Contact" }, MICRO_DOC_INTRODUCER_MAX_NAME_BYTES)
+        val packedQr = packIntroducerQrPayload(qrPayload)
+
+        val buffer = ByteBuffer.allocate(INNER_PAYLOAD_SIZE).order(ByteOrder.BIG_ENDIAN)
+        buffer.put(MICRO_DOC_SUBTYPE_INTRODUCER)
+        buffer.put(MICRO_DOC_COMPRESSION_MLKEM512_BASE3329)
+        buffer.put(nameBytes.size.toByte())
+        buffer.put(nameBytes)
+        buffer.put(packedQr)
+
+        val paddingNeeded = INNER_PAYLOAD_SIZE - buffer.position()
+        if (paddingNeeded > 0) {
+            buffer.put(CryptoUtils.secureRandomBytes(paddingNeeded))
+        }
+
+        return packPlaintext(TYPE_COMPRESSED_MICRO_DOC, seqNum, ackNum, timestampUTC, buffer.array(), obfuscateTimestamp)
+    }
+
+    internal fun deflateBytes(input: ByteArray): ByteArray {
+        val deflater = Deflater(Deflater.BEST_COMPRESSION)
+        return try {
+            deflater.setInput(input)
+            deflater.finish()
+            val out = ByteArrayOutputStream(input.size.coerceAtLeast(32))
+            val chunk = ByteArray(1024)
+            while (!deflater.finished()) {
+                val count = deflater.deflate(chunk)
+                if (count == 0 && deflater.needsInput()) break
+                out.write(chunk, 0, count)
+            }
+            out.toByteArray()
+        } finally {
+            deflater.end()
+        }
+    }
+
+    /**
+     * Decompresses [compressed] using bounded Deflate with strict Zip-Bomb protection:
+     * aborts immediately if inflated output exceeds [maxBytes] (regardless of any header length claim).
+     */
+    internal fun inflateBounded(
+        compressed: ByteArray,
+        expectedUncompressedLen: Int,
+        maxBytes: Int = MICRO_DOC_MAX_DECOMPRESSED_BYTES
+    ): ByteArray {
+        require(expectedUncompressedLen in 1..maxBytes) {
+            "Uncompressed length $expectedUncompressedLen outside permitted bounds 1..$maxBytes"
+        }
+        val inflater = Inflater()
+        return try {
+            inflater.setInput(compressed)
+            val out = ByteArrayOutputStream(expectedUncompressedLen)
+            val buf = ByteArray(512)
+            var total = 0
+            while (!inflater.finished()) {
+                if (inflater.needsDictionary()) {
+                    throw IllegalArgumentException("Preset zlib dictionary is not permitted")
+                }
+                val count = try {
+                    inflater.inflate(buf)
+                } catch (e: DataFormatException) {
+                    throw IllegalArgumentException("Invalid Deflate stream: ${e.message}", e)
+                }
+                if (count == 0) {
+                    if (inflater.needsInput()) {
+                        throw IllegalArgumentException("Truncated Deflate stream")
+                    }
+                    continue
+                }
+                if (total + count > maxBytes) {
+                    throw IllegalArgumentException(
+                        "Zip bomb protection: decompressed payload exceeds hard limit of $maxBytes bytes"
+                    )
+                }
+                out.write(buf, 0, count)
+                total += count
+            }
+            val result = out.toByteArray()
+            require(result.size == expectedUncompressedLen) {
+                "Decompressed length ${result.size} does not match declared length $expectedUncompressedLen"
+            }
+            result
+        } finally {
+            inflater.end()
+        }
+    }
+
     private fun packPlaintext(
         msgType: Byte,
         seqNum: Int,
@@ -1108,6 +1388,9 @@ object BinaryFrameCodec {
 
             val payload = when (msgType) {
                 TYPE_HANDSHAKE_FINALIZE -> {
+                    require(buffer.remaining() >= T1_CIPHERTEXT_SIZE + T1_SALT_SIZE + T1_CONFIRMATION_TAG_SIZE) {
+                        "Malformed handshake finalize payload"
+                    }
                     val ct = ByteArray(T1_CIPHERTEXT_SIZE)
                     val salt = ByteArray(T1_SALT_SIZE)
                     val confTag = ByteArray(T1_CONFIRMATION_TAG_SIZE)
@@ -1117,8 +1400,11 @@ object BinaryFrameCodec {
                     DecodedPayload.HandshakeFinalize(ct, salt, confTag)
                 }
                 TYPE_TEXT_MESSAGE -> {
+                    require(buffer.remaining() >= 2) { "Malformed text message: missing length" }
                     val len = buffer.short.toInt() and 0xFFFF
-                    require(len <= T2_MAX_TEXT_SIZE) { "Text length $len exceeds $T2_MAX_TEXT_SIZE" }
+                    require(len in 0..T2_MAX_TEXT_SIZE && len <= buffer.remaining()) {
+                        "Text length $len exceeds bounds (max $T2_MAX_TEXT_SIZE, remaining ${buffer.remaining()})"
+                    }
                     val textBytes = ByteArray(len)
                     buffer.get(textBytes)
                     var ttl = 0L
@@ -1134,24 +1420,29 @@ object BinaryFrameCodec {
                     DecodedPayload.TextMessage(String(textBytes, Charsets.UTF_8), ttl)
                 }
                 TYPE_REKEY_OFFER -> {
+                    require(buffer.remaining() >= 4 + T3_PUBLIC_KEY_SIZE) { "Malformed rekey offer payload" }
                     val epoch = buffer.int.toLong() and 0xFFFFFFFFL
                     val pk = ByteArray(T3_PUBLIC_KEY_SIZE)
                     buffer.get(pk)
                     DecodedPayload.RekeyOffer(epoch, pk)
                 }
                 TYPE_REKEY_RESPONSE -> {
+                    require(buffer.remaining() >= 4 + T4_CIPHERTEXT_SIZE) { "Malformed rekey response payload" }
                     val epoch = buffer.int.toLong() and 0xFFFFFFFFL
                     val ct = ByteArray(T4_CIPHERTEXT_SIZE)
                     buffer.get(ct)
                     DecodedPayload.RekeyResponse(epoch, ct)
                 }
                 TYPE_CHUNK_DATA -> {
+                    require(buffer.remaining() >= T5_TRANSFER_ID_SIZE + 6) { "Malformed chunk data header" }
                     val transferId = ByteArray(T5_TRANSFER_ID_SIZE)
                     buffer.get(transferId)
                     val chunkIndex = buffer.short.toInt() and 0xFFFF
                     val totalChunks = buffer.short.toInt() and 0xFFFF
                     val chunkLen = buffer.short.toInt() and 0xFFFF
-                    require(chunkLen <= T5_MAX_CHUNK_SIZE) { "Chunk length $chunkLen exceeds $T5_MAX_CHUNK_SIZE" }
+                    require(chunkLen in 0..T5_MAX_CHUNK_SIZE && chunkLen <= buffer.remaining()) {
+                        "Chunk length $chunkLen exceeds bounds (max $T5_MAX_CHUNK_SIZE, remaining ${buffer.remaining()})"
+                    }
                     val data = ByteArray(chunkLen)
                     buffer.get(data)
                     var ttl = 0L
@@ -1167,6 +1458,7 @@ object BinaryFrameCodec {
                     DecodedPayload.ChunkData(transferId, chunkIndex, totalChunks, data, ttl)
                 }
                 TYPE_GROUP_CONTROL -> {
+                    require(buffer.remaining() >= 1 + 16 + 4 + 16 + 64 + 4 + 2) { "Malformed group control header" }
                     val subType = buffer.get()
                     val gId = ByteArray(16)
                     buffer.get(gId)
@@ -1391,6 +1683,81 @@ object BinaryFrameCodec {
                         longitude = lon,
                         note = noteStr
                     )
+                }
+                TYPE_COMPRESSED_MICRO_DOC -> {
+                    require(buffer.remaining() >= MICRO_DOC_INTRODUCER_HEADER_SIZE) {
+                        "Malformed Type 0x0C micro-doc payload: missing header"
+                    }
+                    val subType = buffer.get()
+                    when (subType) {
+                        MICRO_DOC_SUBTYPE_MARKDOWN -> {
+                            require(buffer.remaining() >= MICRO_DOC_MARKDOWN_HEADER_SIZE - 1) {
+                                "Malformed compressed micro-doc header"
+                            }
+                            val alg = buffer.get()
+                            val uncompressedLen = buffer.short.toInt() and 0xFFFF
+                            val encodedLen = buffer.short.toInt() and 0xFFFF
+                            val ttl = buffer.int.toLong() and 0xFFFFFFFFL
+                            require(uncompressedLen in 1..MICRO_DOC_MAX_DECOMPRESSED_BYTES) {
+                                "Declared uncompressed length $uncompressedLen exceeds hard cap $MICRO_DOC_MAX_DECOMPRESSED_BYTES"
+                            }
+                            require(encodedLen in 1..MICRO_DOC_MAX_ENCODED_BYTES && encodedLen <= buffer.remaining()) {
+                                "Invalid encoded micro-doc length $encodedLen (remaining ${buffer.remaining()})"
+                            }
+                            val encodedBytes = ByteArray(encodedLen)
+                            buffer.get(encodedBytes)
+                            val rawStream = when (alg) {
+                                MICRO_DOC_COMPRESSION_DEFLATE -> inflateBounded(
+                                    compressed = encodedBytes,
+                                    expectedUncompressedLen = uncompressedLen,
+                                    maxBytes = MICRO_DOC_MAX_DECOMPRESSED_BYTES
+                                )
+                                MICRO_DOC_COMPRESSION_NONE -> {
+                                    require(encodedBytes.size == uncompressedLen) {
+                                        "Uncompressed length mismatch: header=$uncompressedLen actual=${encodedBytes.size}"
+                                    }
+                                    encodedBytes
+                                }
+                                else -> throw IllegalArgumentException("Unsupported micro-doc compression alg: 0x%02X".format(alg))
+                            }
+                            require(rawStream.size >= 2) { "Malformed micro-doc inner stream" }
+                            val titleLen = ((rawStream[0].toInt() and 0xFF) shl 8) or (rawStream[1].toInt() and 0xFF)
+                            require(titleLen in 0..MICRO_DOC_MAX_TITLE_BYTES && 2 + titleLen <= rawStream.size) {
+                                "Invalid micro-doc title length $titleLen"
+                            }
+                            val title = String(rawStream, 2, titleLen, Charsets.UTF_8)
+                            val body = String(rawStream, 2 + titleLen, rawStream.size - 2 - titleLen, Charsets.UTF_8)
+                            DecodedPayload.CompressedMicroDoc(
+                                title = title,
+                                markdownBody = body,
+                                ephemeralTtlSeconds = ttl,
+                                compressionAlg = alg
+                            )
+                        }
+                        MICRO_DOC_SUBTYPE_INTRODUCER -> {
+                            val alg = buffer.get()
+                            require(alg == MICRO_DOC_COMPRESSION_MLKEM512_BASE3329) {
+                                "Unsupported contact introducer compression alg: 0x%02X".format(alg)
+                            }
+                            val nameLen = buffer.get().toInt() and 0xFF
+                            require(nameLen in 0..MICRO_DOC_INTRODUCER_MAX_NAME_BYTES) {
+                                "Introducer name length $nameLen exceeds maximum $MICRO_DOC_INTRODUCER_MAX_NAME_BYTES"
+                            }
+                            require(buffer.remaining() >= nameLen + MICRO_DOC_INTRODUCER_PACKED_QR_SIZE) {
+                                "Truncated contact introducer payload"
+                            }
+                            val nameBytes = ByteArray(nameLen)
+                            buffer.get(nameBytes)
+                            val packedQr = ByteArray(MICRO_DOC_INTRODUCER_PACKED_QR_SIZE)
+                            buffer.get(packedQr)
+                            val restoredQr = unpackIntroducerQrPayload(packedQr)
+                            DecodedPayload.ContactIntroducer(
+                                introducedName = String(nameBytes, Charsets.UTF_8),
+                                qrPayload = restoredQr
+                            )
+                        }
+                        else -> throw IllegalArgumentException("Unknown Type 0x0C micro-doc subtype: 0x%02X".format(subType))
+                    }
                 }
                 else -> throw IllegalArgumentException("Unknown message type: 0x%02X".format(msgType))
             }

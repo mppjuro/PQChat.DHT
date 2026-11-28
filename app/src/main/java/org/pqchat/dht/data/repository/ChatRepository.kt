@@ -32,6 +32,8 @@ class ChatRepository(
     val outboundPoissonQueue: org.pqchat.dht.traffic.OutboundPoissonQueue = org.pqchat.dht.traffic.OutboundPoissonQueue(),
     var isStrictPoissonShapingEnabled: Boolean = false,
     var strictPoissonShapingEnabledProvider: (() -> Boolean)? = null,
+    var isReadReceiptsEnabled: Boolean = true,
+    var readReceiptsEnabledProvider: (() -> Boolean)? = null,
     var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
         try {
             org.pqchat.dht.PQChatApplication.instance.researchTelemetryManager
@@ -53,6 +55,52 @@ class ChatRepository(
         else strictPoissonShapingEnabledProvider?.invoke()
             ?: settingsManager?.isStrictPoissonShapingEnabled?.value
             ?: isStrictPoissonShapingEnabled
+
+    fun areReadReceiptsEnabled(): Boolean =
+        readReceiptsEnabledProvider?.invoke()
+            ?: settingsManager?.isReadReceiptsEnabled?.value
+            ?: isReadReceiptsEnabled
+
+    private val readIncomingSeqsByContact = ConcurrentHashMap<String, MutableSet<Int>>()
+    private val lastPublishedReadBitmapByContact = ConcurrentHashMap<String, Pair<Int, Long>>()
+
+    private fun recordReadSeqs(contactId: String, seqNums: Collection<Int>) {
+        if (seqNums.isEmpty()) return
+        val set = readIncomingSeqsByContact.computeIfAbsent(contactId) {
+            java.util.Collections.synchronizedSet(HashSet())
+        }
+        synchronized(set) {
+            set.addAll(seqNums.filter { it >= 0 })
+        }
+    }
+
+    private fun currentReadReceiptWindow(contactId: String): Pair<Int, Long>? {
+        if (!areReadReceiptsEnabled() || contactId == SELF_CONTACT_ID) return null
+        val set = readIncomingSeqsByContact[contactId] ?: return null
+        val snapshot = synchronized(set) { set.toList() }
+        return org.pqchat.dht.protocol.CoverAckProtocol.buildReadReceiptWindow(snapshot)
+    }
+
+    private fun enqueueCoverAck(
+        contactId: String,
+        messageId: String,
+        ratchetKey: ByteArray,
+        seqNum: Int,
+        dhtSeq: Long = DhtClient.DEFAULT_MUTABLE_SEQ
+    ) {
+        val window = currentReadReceiptWindow(contactId)
+        pendingAckQueue.enqueue(
+            org.pqchat.dht.traffic.PendingAck(
+                contactId = contactId,
+                messageId = messageId,
+                ratchetKey = ratchetKey,
+                seqNum = seqNum,
+                readBaseSeq = window?.first,
+                readSeqBitmap = window?.second ?: 0L,
+                dhtSeq = dhtSeq
+            )
+        )
+    }
 
     val canaryQueue = java.util.concurrent.ConcurrentLinkedQueue<org.pqchat.dht.traffic.OutboundPoissonFrame>()
 
@@ -1207,6 +1255,170 @@ class ChatRepository(
     }
 
     /**
+     * Sends a Type `0x0C` Compressed Micro-Doc (Markdown/code note, Deflate-compressed up to 8 KB uncompressed)
+     * inside a single 900-byte BEP 44 record without chunking.
+     */
+    suspend fun sendCompressedMicroDoc(
+        contactId: String,
+        title: String,
+        markdownBody: String,
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean {
+        val docText = org.pqchat.dht.protocol.CompressedMicroDocData(title, markdownBody).toPayloadText()
+        return sendSingleFrameMicroDocPayload(contactId, docText, ephemeralTtlSeconds) { seq, ack ->
+            BinaryFrameCodec.encodeCompressedMicroDoc(
+                seqNum = seq,
+                ackNum = ack,
+                timestampUTC = System.currentTimeMillis(),
+                title = title,
+                markdownBody = markdownBody,
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
+            )
+        }
+    }
+
+    /**
+     * Sends a Type `0x0C` Trusted Contact Introducer card (`pk_C || Seed_init` losslessly packed in base 3329)
+     * inside a single 900-byte BEP 44 record, enabling QR-less session initiation via a mutual friend.
+     */
+    suspend fun sendContactIntroducer(
+        contactId: String,
+        introducedName: String,
+        qrPayload: ByteArray
+    ): Boolean {
+        if (contactId == SELF_CONTACT_ID) return false
+        val cleanName = introducedName.trim().ifEmpty { "Contact" }.take(32)
+        val introText = org.pqchat.dht.protocol.ContactIntroducerData(cleanName, qrPayload).toPayloadText()
+        return sendSingleFrameMicroDocPayload(contactId, introText, 0L) { seq, ack ->
+            BinaryFrameCodec.encodeContactIntroducer(
+                seqNum = seq,
+                ackNum = ack,
+                timestampUTC = System.currentTimeMillis(),
+                introducedName = cleanName,
+                qrPayload = qrPayload,
+                obfuscateTimestamp = true
+            )
+        }
+    }
+
+    private suspend fun sendSingleFrameMicroDocPayload(
+        contactId: String,
+        storedPayloadText: String,
+        ephemeralTtlSeconds: Long,
+        encodePlaintext: (seq: Int, ack: Int) -> ByteArray
+    ): Boolean = withContext(Dispatchers.IO) {
+        getContactMutex(contactId).withLock {
+            val isSelf = contactId == SELF_CONTACT_ID
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+
+            if (isSelf) {
+                val currentContact = contactDao.getContactById(contactId)
+                val seqNum = currentContact?.counterOut ?: 0
+                messageDao.insertMessage(
+                    MessageEntity(
+                        contactId = contactId,
+                        isOutgoing = true,
+                        seqEpoch = seqNum / 65536,
+                        seqNum = seqNum,
+                        ackNum = 0,
+                        timestamp = System.currentTimeMillis(),
+                        textContent = storedPayloadText,
+                        status = "SENT_DHT",
+                        ephemeralTtlSeconds = ephemeralTtlSeconds,
+                        expiresAtTimestamp = expiresAt
+                    )
+                )
+                if (currentContact != null) {
+                    contactDao.updateOutgoingState(
+                        id = contactId,
+                        counterOut = seqNum + 1,
+                        chainKeyOut = currentContact.chainKeyOut
+                    )
+                }
+                recordSelfNoteTelemetryIfEnabled(seqNum)
+                return@withLock true
+            }
+
+            val contact = contactDao.getContactById(contactId) ?: return@withLock false
+            val slot = RatchetChain.deriveSlot(contact.chainKeyOut, contact.counterOut)
+            val plaintext = encodePlaintext(contact.counterOut and 0xFFFF, contact.counterIn and 0xFFFF)
+            val frame = try {
+                BinaryFrameCodec.packAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    direction = contact.outboundDirection
+                )
+            } finally {
+                plaintext.fill(0)
+            }
+            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${contact.counterOut}")
+
+            val msgId = messageDao.insertMessage(
+                MessageEntity(
+                    contactId = contactId,
+                    isOutgoing = true,
+                    seqEpoch = contact.counterOut / 65536,
+                    seqNum = contact.counterOut,
+                    ackNum = contact.counterIn,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = storedPayloadText,
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENDING",
+                    ackTarget = targetAck,
+                    ackRatchetKey = slot.msgKey,
+                    slotTarget = slot.target,
+                    slotEdSeed = slot.edPrivateKeySeed,
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
+                )
+            )
+
+            contactDao.updateOutgoingState(
+                id = contactId,
+                counterOut = contact.counterOut + 1,
+                chainKeyOut = slot.nextChainKey
+            )
+
+            if (isStrictPoissonShaping()) {
+                outboundPoissonQueue.enqueue(
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
+                        seqNum = contact.counterOut,
+                        messageId = msgId,
+                        contactId = contactId,
+                        onSent = { success ->
+                            if (success) {
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                                messageDao.updateStatus(msgId, "PENDING_DELIVERY")
+                            } else {
+                                messageDao.updateStatus(msgId, "EXPIRED_DHT")
+                            }
+                        }
+                    )
+                )
+                true
+            } else {
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = true
+                )
+                messageDao.updateStatus(msgId, if (success) "PENDING_DELIVERY" else "EXPIRED_DHT")
+                success
+            }
+        }
+    }
+
+    /**
      * Sends an ultra-low-bitrate micro-voice note over DHT fitting in 1 to 3 BEP 44 frames (900 B).
      */
     suspend fun sendVoiceNote(
@@ -2297,6 +2509,64 @@ class ChatRepository(
                         }
                         anyProcessed = true
                     }
+                    BinaryFrameCodec.TYPE_COMPRESSED_MICRO_DOC -> {
+                        val payloadText = when (val docPayload = frameMsg.payload) {
+                            is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc ->
+                                org.pqchat.dht.protocol.CompressedMicroDocData(docPayload.title, docPayload.markdownBody).toPayloadText()
+                            is BinaryFrameCodec.DecodedPayload.ContactIntroducer ->
+                                org.pqchat.dht.protocol.ContactIntroducerData(docPayload.introducedName, docPayload.qrPayload).toPayloadText()
+                            else -> null
+                        }
+                        val ttl = (frameMsg.payload as? BinaryFrameCodec.DecodedPayload.CompressedMicroDoc)?.ephemeralTtlSeconds ?: 0L
+                        val preview = when (val docPayload = frameMsg.payload) {
+                            is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc -> "[Micro-Doc] ${docPayload.title}"
+                            is BinaryFrameCodec.DecodedPayload.ContactIntroducer -> "[Contact Introducer] ${docPayload.introducedName}"
+                            else -> "[Micro-Doc]"
+                        }
+                        val seqEpoch = sk.slotIndex / 65536
+                        if (payloadText != null && !messageDao.existsMessageWithEpoch(contactId, seqEpoch, sk.slotIndex, false)) {
+                            val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(sk.rawMsgKey, "${sk.slotIndex}")
+                            messageDao.insertMessage(
+                                MessageEntity(
+                                    contactId = contactId,
+                                    isOutgoing = false,
+                                    seqEpoch = seqEpoch,
+                                    seqNum = sk.slotIndex,
+                                    ackNum = frameMsg.ackNum,
+                                    timestamp = frameMsg.timestampUTC,
+                                    textContent = payloadText,
+                                    status = "DELIVERED",
+                                    ackTarget = targetAck,
+                                    ackRatchetKey = sk.rawMsgKey,
+                                    slotTarget = sk.target,
+                                    slotEdSeed = sk.rawEdPrivateKeySeed,
+                                    ephemeralTtlSeconds = ttl,
+                                    expiresAtTimestamp = null
+                                )
+                            )
+                            onIncomingMessageDelivered?.invoke(contactId, preview, false)
+                        }
+                        bitmap.markReceived(sk.slotIndex)
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = contact.counterIn,
+                            chainKeyIn = contact.chainKeyIn,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        val rawRatchetKey = sk.rawMsgKey.copyOf()
+                        sk.destroy()
+                        skippedKeyDao.deleteSkippedKey(contactId, sk.slotIndex)
+                        if (!isSelf) {
+                            enqueueCoverAck(
+                                contactId = contactId,
+                                messageId = "${sk.slotIndex}",
+                                ratchetKey = rawRatchetKey,
+                                seqNum = sk.slotIndex
+                            )
+                        }
+                        anyProcessed = true
+                    }
                     else -> {}
                 }
             } catch (_: Exception) {
@@ -2627,13 +2897,11 @@ class ChatRepository(
                             onIncomingMessageDelivered?.invoke(contactId, textPayload.text, false)
 
                             if (!isSelf) {
-                                pendingAckQueue.enqueue(
-                                    org.pqchat.dht.traffic.PendingAck(
-                                        contactId = contactId,
-                                        messageId = "${slot.counter}",
-                                        ratchetKey = slot.msgKey,
-                                        seqNum = slot.counter
-                                    )
+                                enqueueCoverAck(
+                                    contactId = contactId,
+                                    messageId = "${slot.counter}",
+                                    ratchetKey = slot.msgKey,
+                                    seqNum = slot.counter
                                 )
                             }
                         }
@@ -3032,6 +3300,62 @@ class ChatRepository(
                                 seqNum = slot.counter
                             )
                         )
+                    }
+                    true
+                }
+                BinaryFrameCodec.TYPE_COMPRESSED_MICRO_DOC -> {
+                    val payloadText = when (val docPayload = frameMsg.payload) {
+                        is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc ->
+                            org.pqchat.dht.protocol.CompressedMicroDocData(docPayload.title, docPayload.markdownBody).toPayloadText()
+                        is BinaryFrameCodec.DecodedPayload.ContactIntroducer ->
+                            org.pqchat.dht.protocol.ContactIntroducerData(docPayload.introducedName, docPayload.qrPayload).toPayloadText()
+                        else -> null
+                    }
+                    val ttl = (frameMsg.payload as? BinaryFrameCodec.DecodedPayload.CompressedMicroDoc)?.ephemeralTtlSeconds ?: 0L
+                    val preview = when (val docPayload = frameMsg.payload) {
+                        is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc -> "[Micro-Doc] ${docPayload.title}"
+                        is BinaryFrameCodec.DecodedPayload.ContactIntroducer -> "[Contact Introducer] ${docPayload.introducedName}"
+                        else -> "[Micro-Doc]"
+                    }
+                    bitmap.markReceived(slot.counter)
+                    val seqEpoch = slot.counter / 65536
+                    if (payloadText != null && !messageDao.existsMessageWithEpoch(contactId, seqEpoch, slot.counter, false)) {
+                        val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(slot.msgKey, "${slot.counter}")
+                        messageDao.insertMessage(
+                            MessageEntity(
+                                contactId = contactId,
+                                isOutgoing = false,
+                                seqEpoch = seqEpoch,
+                                seqNum = slot.counter,
+                                ackNum = frameMsg.ackNum,
+                                timestamp = frameMsg.timestampUTC,
+                                textContent = payloadText,
+                                status = "DELIVERED",
+                                ackTarget = targetAck,
+                                ackRatchetKey = slot.msgKey,
+                                slotTarget = slot.target,
+                                slotEdSeed = slot.edPrivateKeySeed,
+                                ephemeralTtlSeconds = ttl,
+                                expiresAtTimestamp = null
+                            )
+                        )
+                        contactDao.updateIncomingStateWithBitmap(
+                            id = contactId,
+                            counterIn = slot.counter + 1,
+                            chainKeyIn = slot.nextChainKey,
+                            bitmapBase = bitmap.windowBase,
+                            bitmap = bitmap.toByteArray()
+                        )
+                        preWarmNextIncomingTarget(slot.nextChainKey, slot.counter + 1)
+                        onIncomingMessageDelivered?.invoke(contactId, preview, false)
+                        if (!isSelf) {
+                            enqueueCoverAck(
+                                contactId = contactId,
+                                messageId = "${slot.counter}",
+                                ratchetKey = slot.msgKey,
+                                seqNum = slot.counter
+                            )
+                        }
                     }
                     true
                 }
@@ -3484,23 +3808,23 @@ class ChatRepository(
     }
 
     /**
-     * Checks Target_ACK ephemeral slots for messages in PENDING_DELIVERY (or SENT_DHT) status.
-     * When a valid Cover-Traffic ACK is detected:
-     * - Updates Room DB message status to DELIVERED
-     * - Unregisters cyclic republish task in DhtWorker
-     * - Optionally emits a BEP 44 tombstone (empty record) on the transmission slot
+     * Checks Target_ACK ephemeral slots for messages in PENDING_DELIVERY, SENT_DHT, or DELIVERED status
+     * (also observing piggybacked zero-overhead read receipt bitmaps).
      */
     suspend fun checkPendingAcks(contactId: String? = null): Int = withContext(Dispatchers.IO) {
-        val pending = if (contactId != null) {
-            messageDao.getPendingDeliveryMessagesForContact(contactId)
+        val candidates = if (contactId != null) {
+            messageDao.getAwaitingAckOrReadMessagesForContact(contactId)
         } else {
-            messageDao.getAllPendingDeliveryMessages()
+            messageDao.getAllAwaitingAckOrReadMessages()
         }
         val controlAcks = checkPendingGroupControlAcks(contactId)
-        if (pending.isEmpty()) return@withContext controlAcks
+        if (candidates.isEmpty()) return@withContext controlAcks
 
         var acksFound = controlAcks
-        val checkBatch = pending.takeLast(3)
+        val pendingDelivery = candidates.filter { it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT" }.takeLast(3)
+        val awaitingRead = candidates.filter { it.status == "DELIVERED" }.takeLast(2)
+        val checkBatch = (pendingDelivery + awaitingRead).distinctBy { it.id }
+
         for (msg in checkBatch) {
             val targetAck = msg.ackTarget ?: continue
             val ratchetKey = msg.ackRatchetKey?.raw ?: continue
@@ -3508,46 +3832,80 @@ class ChatRepository(
             val isSelf = msg.contactId == SELF_CONTACT_ID
 
             val ackItem = dhtLeafNode.getMutable(targetAck, skipLocalStore = isSelf) ?: continue
-            val isValid = org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(
+            val parsedAck = org.pqchat.dht.protocol.CoverAckProtocol.parseAckPayload(
                 ratchetKey = ratchetKey,
                 frame = ackItem.v,
                 expectedMessageId = msgIdStr,
                 expectedSeqNum = msg.seqNum
-            )
+            ) ?: continue
 
-            if (isValid) {
-                messageDao.updateStatus(msg.id, "DELIVERED")
-                org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(msg.id)
-                onRepublishTaskUpdated?.invoke()
-
-                val slotTarget = msg.slotTarget
-                if (slotTarget != null) {
-                    researchTelemetry?.recordDeliveryAck(slotTarget)
-                }
-
-                val slotEdSeed = msg.slotEdSeed?.raw
-                if (slotTarget != null && slotEdSeed != null) {
-                    try {
-                        val tombOk = dhtLeafNode.putMutable(
-                            target = slotTarget,
-                            v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
-                            seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
-                            salt = null,
-                            sk = slotEdSeed,
-                            skipLocalStore = true
-                        )
-                        researchTelemetry?.recordPacketEvent(
-                            role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
-                            target = slotTarget,
-                            payloadBytes = 900,
-                            success = tombOk
-                        )
-                    } catch (_: Exception) {}
-                }
+            if (applyParsedAckUpdate(msg, parsedAck)) {
                 acksFound++
             }
         }
         acksFound
+    }
+
+    private suspend fun applyParsedAckUpdate(
+        msg: MessageEntity,
+        parsedAck: org.pqchat.dht.protocol.CoverAckProtocol.ParsedAck
+    ): Boolean {
+        var changed = false
+        val wasUndelivered = msg.status != "DELIVERED" && msg.status != "READ"
+        val primaryRead = parsedAck.isSeqRead(msg.seqNum)
+
+        if (wasUndelivered) {
+            val targetStatus = if (primaryRead) "READ" else "DELIVERED"
+            messageDao.updateStatus(msg.id, targetStatus)
+            org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(msg.id)
+            PollingWorker.unregisterRepublishTask(msg.id)
+            onRepublishTaskUpdated?.invoke()
+
+            val slotTarget = msg.slotTarget
+            if (slotTarget != null) {
+                researchTelemetry?.recordDeliveryAck(slotTarget)
+            }
+
+            val slotEdSeed = msg.slotEdSeed?.raw
+            if (slotTarget != null && slotEdSeed != null) {
+                try {
+                    val tombOk = dhtLeafNode.putMutable(
+                        target = slotTarget,
+                        v = org.pqchat.dht.crypto.BinaryFrameCodec.createTombstonePayload(),
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
+                        salt = null,
+                        sk = slotEdSeed,
+                        skipLocalStore = true
+                    )
+                    researchTelemetry?.recordPacketEvent(
+                        role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
+                        target = slotTarget,
+                        payloadBytes = 900,
+                        success = tombOk
+                    )
+                } catch (_: Exception) {}
+            }
+            changed = true
+        } else if (primaryRead && msg.status != "READ") {
+            messageDao.updateStatus(msg.id, "READ")
+            changed = true
+        }
+
+        if (parsedAck.hasReadReceipt) {
+            val readSeqs = parsedAck.extractReadSequenceNumbers().toSet()
+            if (readSeqs.isNotEmpty()) {
+                val awaiting = messageDao.getAwaitingAckOrReadMessagesForContact(msg.contactId)
+                for (candidate in awaiting) {
+                    if (candidate.seqNum in readSeqs && candidate.status != "READ") {
+                        messageDao.updateStatus(candidate.id, "READ")
+                        org.pqchat.dht.service.DhtWorker.unregisterRepublishTask(candidate.id)
+                        PollingWorker.unregisterRepublishTask(candidate.id)
+                        changed = true
+                    }
+                }
+            }
+        }
+        return changed
     }
 
     /**
@@ -3974,13 +4332,69 @@ class ChatRepository(
                             skippedKey.destroy()
                             skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
                             if (!isSelf) {
-                                pendingAckQueue.enqueue(
-                                    org.pqchat.dht.traffic.PendingAck(
+                                enqueueCoverAck(
+                                    contactId = contactId,
+                                    messageId = "${skippedKey.slotIndex}",
+                                    ratchetKey = rawRatchetKey,
+                                    seqNum = skippedKey.slotIndex
+                                )
+                            }
+                            true
+                        }
+                        BinaryFrameCodec.TYPE_COMPRESSED_MICRO_DOC -> {
+                            val payloadText = when (val docPayload = frameMsg.payload) {
+                                is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc ->
+                                    org.pqchat.dht.protocol.CompressedMicroDocData(docPayload.title, docPayload.markdownBody).toPayloadText()
+                                is BinaryFrameCodec.DecodedPayload.ContactIntroducer ->
+                                    org.pqchat.dht.protocol.ContactIntroducerData(docPayload.introducedName, docPayload.qrPayload).toPayloadText()
+                                else -> null
+                            }
+                            val ttl = (frameMsg.payload as? BinaryFrameCodec.DecodedPayload.CompressedMicroDoc)?.ephemeralTtlSeconds ?: 0L
+                            val preview = when (val docPayload = frameMsg.payload) {
+                                is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc -> "[Micro-Doc] ${docPayload.title}"
+                                is BinaryFrameCodec.DecodedPayload.ContactIntroducer -> "[Contact Introducer] ${docPayload.introducedName}"
+                                else -> "[Micro-Doc]"
+                            }
+                            val seqEpoch = skippedKey.slotIndex / 65536
+                            if (payloadText != null && !messageDao.existsMessageWithEpoch(contactId, seqEpoch, skippedKey.slotIndex, false)) {
+                                val targetAck = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(skippedKey.rawMsgKey, "${skippedKey.slotIndex}")
+                                messageDao.insertMessage(
+                                    MessageEntity(
                                         contactId = contactId,
-                                        messageId = "${skippedKey.slotIndex}",
-                                        ratchetKey = rawRatchetKey,
-                                        seqNum = skippedKey.slotIndex
+                                        isOutgoing = false,
+                                        seqEpoch = seqEpoch,
+                                        seqNum = skippedKey.slotIndex,
+                                        ackNum = frameMsg.ackNum,
+                                        timestamp = frameMsg.timestampUTC,
+                                        textContent = payloadText,
+                                        status = "DELIVERED",
+                                        ackTarget = targetAck,
+                                        ackRatchetKey = skippedKey.rawMsgKey,
+                                        slotTarget = skippedKey.target,
+                                        slotEdSeed = skippedKey.rawEdPrivateKeySeed,
+                                        ephemeralTtlSeconds = ttl,
+                                        expiresAtTimestamp = null
                                     )
+                                )
+                                onIncomingMessageDelivered?.invoke(contactId, preview, false)
+                            }
+                            bitmap.markReceived(skippedKey.slotIndex)
+                            contactDao.updateIncomingStateWithBitmap(
+                                id = contactId,
+                                counterIn = contact.counterIn,
+                                chainKeyIn = contact.chainKeyIn,
+                                bitmapBase = bitmap.windowBase,
+                                bitmap = bitmap.toByteArray()
+                            )
+                            val rawRatchetKey = skippedKey.rawMsgKey.copyOf()
+                            skippedKey.destroy()
+                            skippedKeyDao?.deleteSkippedKey(contactId, skippedKey.slotIndex)
+                            if (!isSelf) {
+                                enqueueCoverAck(
+                                    contactId = contactId,
+                                    messageId = "${skippedKey.slotIndex}",
+                                    ratchetKey = rawRatchetKey,
+                                    seqNum = skippedKey.slotIndex
                                 )
                             }
                             true
@@ -4234,6 +4648,43 @@ class ChatRepository(
                     else -> {}
                 }
             }
+            BinaryFrameCodec.TYPE_COMPRESSED_MICRO_DOC -> {
+                val payloadText = when (val docPayload = frameMsg.payload) {
+                    is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc ->
+                        org.pqchat.dht.protocol.CompressedMicroDocData(docPayload.title, docPayload.markdownBody).toPayloadText()
+                    is BinaryFrameCodec.DecodedPayload.ContactIntroducer ->
+                        org.pqchat.dht.protocol.ContactIntroducerData(docPayload.introducedName, docPayload.qrPayload).toPayloadText()
+                    else -> null
+                }
+                val ttl = (frameMsg.payload as? BinaryFrameCodec.DecodedPayload.CompressedMicroDoc)?.ephemeralTtlSeconds ?: 0L
+                val preview = when (val docPayload = frameMsg.payload) {
+                    is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc -> "[Micro-Doc] ${docPayload.title}"
+                    is BinaryFrameCodec.DecodedPayload.ContactIntroducer -> "[Contact Introducer] ${docPayload.introducedName}"
+                    else -> "[Micro-Doc]"
+                }
+                val seqEpoch = slot.counter / 65536
+                if (payloadText != null && !messageDao.existsMessageWithSlotTarget(slot.target)) {
+                    messageDao.insertMessage(
+                        MessageEntity(
+                            contactId = groupId,
+                            isOutgoing = false,
+                            seqEpoch = seqEpoch,
+                            seqNum = slot.counter,
+                            ackNum = frameMsg.ackNum,
+                            timestamp = frameMsg.timestampUTC,
+                            textContent = payloadText,
+                            status = "DELIVERED",
+                            slotTarget = slot.target,
+                            slotEdSeed = slot.edPrivateKeySeed,
+                            senderMemberId = senderMember.memberId,
+                            senderName = senderMember.rawMemberName,
+                            ephemeralTtlSeconds = ttl,
+                            expiresAtTimestamp = null
+                        )
+                    )
+                    return Pair(preview, false)
+                }
+            }
             else -> {}
         }
         return null
@@ -4379,30 +4830,20 @@ class ChatRepository(
 
         override suspend fun execute(item: DhtLeafNode.MutableItem?): Boolean {
             if (item == null) return false
-            val isValid = org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(
+            val parsedAck = org.pqchat.dht.protocol.CoverAckProtocol.parseAckPayload(
                 ratchetKey = ratchetKey,
                 frame = item.v,
                 expectedMessageId = "$seqNumInt",
                 expectedSeqNum = seqNumInt
             )
-            if (isValid) {
-                messageDao.updateStatus(messageId, "DELIVERED")
-                PollingWorker.unregisterRepublishTask(messageId)
-                onRepublishTaskUpdated?.invoke()
-                if (slotTarget != null) {
-                    researchTelemetry?.recordDeliveryAck(slotTarget)
-                    if (slotEdSeed != null) {
-                        try {
-                            dhtLeafNode.putMutable(
-                                target = slotTarget,
-                                v = BinaryFrameCodec.createTombstonePayload(),
-                                seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
-                                salt = null,
-                                sk = slotEdSeed,
-                                skipLocalStore = true
-                            )
-                        } catch (_: Exception) {}
-                    }
+            if (parsedAck != null) {
+                val msg = messageDao.getMessageById(messageId)
+                if (msg != null) {
+                    applyParsedAckUpdate(msg, parsedAck)
+                } else {
+                    messageDao.updateStatus(messageId, if (parsedAck.isSeqRead(seqNumInt)) "READ" else "DELIVERED")
+                    PollingWorker.unregisterRepublishTask(messageId)
+                    onRepublishTaskUpdated?.invoke()
                 }
                 return true
             }
@@ -4960,11 +5401,11 @@ class ChatRepository(
             }
         }
 
-        // 1c. Gather pending ACK slots (1-on-1 delivery ACKs and group control ACKs)
+        // 1c. Gather pending ACK & read-receipt slots (1-on-1 delivery ACKs and group control ACKs)
         val pendingMsgs = if (focusContactId != null) {
-            messageDao.getPendingDeliveryMessagesForContact(focusContactId)
+            messageDao.getAwaitingAckOrReadMessagesForContact(focusContactId)
         } else {
-            messageDao.getAllPendingDeliveryMessages()
+            messageDao.getAllAwaitingAckOrReadMessages()
         }
         for (msg in pendingMsgs) {
             val targetAck = msg.ackTarget ?: continue
@@ -7632,6 +8073,150 @@ class ChatRepository(
         }
     }
 
+    /**
+     * Sends a Type `0x0C` Compressed Micro-Doc (Markdown/code note) to a group chat using per-recipient PQ Sender Keys.
+     */
+    suspend fun sendGroupCompressedMicroDoc(
+        groupId: String,
+        title: String,
+        markdownBody: String,
+        ephemeralTtlSeconds: Long = 0L
+    ): Boolean = withContext(Dispatchers.IO) {
+        val docText = org.pqchat.dht.protocol.CompressedMicroDocData(title, markdownBody).toPayloadText()
+        getGroupMutex(groupId).withLock {
+            val group = groupDao?.getGroupById(groupId) ?: return@withLock false
+            if (!group.isActive) return@withLock false
+
+            val currentGroup = groupDao.getGroupById(groupId) ?: group
+            val baseSlot = RatchetChain.deriveSlot(currentGroup.rawMyChainKeyOut, currentGroup.myCounterOut)
+            val groupIdBytes = uuidStringToBytes(groupId)
+            val myMemberIdBytes = uuidStringToBytes(currentGroup.myMemberId)
+            val expiresAt = if (ephemeralTtlSeconds > 0L) System.currentTimeMillis() + ephemeralTtlSeconds * 1000L else null
+
+            val plaintext = BinaryFrameCodec.encodeCompressedMicroDoc(
+                seqNum = currentGroup.myCounterOut and 0xFFFF,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                title = title,
+                markdownBody = markdownBody,
+                ephemeralTtlSeconds = ephemeralTtlSeconds,
+                obfuscateTimestamp = true
+            )
+
+            val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
+                it.memberId != currentGroup.myMemberId && it.isActive
+            } ?: emptyList()
+
+            val targetSlots = if (activeMembers.isNotEmpty()) {
+                activeMembers.map { member ->
+                    val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
+                    RatchetChain.deriveGroupRecipientSlot(
+                        chainKey = currentGroup.rawMyChainKeyOut,
+                        counter = currentGroup.myCounterOut,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes,
+                        recipientMemberId = recipientMemberIdBytes
+                    )
+                }
+            } else {
+                listOf(baseSlot)
+            }
+
+            val msgId = messageDao.insertMessage(
+                MessageEntity(
+                    contactId = groupId,
+                    isOutgoing = true,
+                    seqEpoch = currentGroup.myCounterOut / 65536,
+                    seqNum = currentGroup.myCounterOut,
+                    ackNum = 0,
+                    timestamp = System.currentTimeMillis(),
+                    textContent = docText,
+                    status = if (isStrictPoissonShaping()) "QUEUED_POISSON" else "SENT_DHT",
+                    senderMemberId = currentGroup.myMemberId,
+                    senderName = "Me",
+                    ephemeralTtlSeconds = ephemeralTtlSeconds,
+                    expiresAtTimestamp = expiresAt
+                )
+            )
+
+            groupDao.updateOutgoingState(
+                groupId = groupId,
+                counterOut = currentGroup.myCounterOut + 1,
+                chainKeyOut = EncryptedBlob(baseSlot.nextChainKey, "groups", groupId, "myChainKeyOut"),
+                lastActive = System.currentTimeMillis()
+            )
+
+            if (isStrictPoissonShaping()) {
+                val framesRemaining = java.util.concurrent.atomic.AtomicInteger(targetSlots.size)
+                val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+                val outboundFrames = targetSlots.map { slot ->
+                    val frame = BinaryFrameCodec.packGroupAeadFrame(
+                        key = slot.msgKey,
+                        plaintext = plaintext,
+                        target = slot.target,
+                        groupId = groupIdBytes,
+                        senderMemberId = myMemberIdBytes
+                    )
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
+                        seqNum = currentGroup.myCounterOut,
+                        messageId = msgId,
+                        contactId = groupId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
+                        onSent = { success ->
+                            if (success) {
+                                anySuccess.set(true)
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                            if (framesRemaining.decrementAndGet() == 0 && anySuccess.get()) {
+                                messageDao.updateStatus(msgId, "SENT_DHT")
+                            }
+                        }
+                    )
+                }
+                outboundPoissonQueue.enqueueInterleaved(outboundFrames)
+                return@withLock true
+            }
+
+            var overallSuccess = false
+            for ((idx, slot) in targetSlots.withIndex()) {
+                if (idx > 0) {
+                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    kotlinx.coroutines.delay(jitterMs)
+                }
+                val frame = BinaryFrameCodec.packGroupAeadFrame(
+                    key = slot.msgKey,
+                    plaintext = plaintext,
+                    target = slot.target,
+                    groupId = groupIdBytes,
+                    senderMemberId = myMemberIdBytes
+                )
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = true
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    overallSuccess = true
+                }
+            }
+            plaintext.fill(0)
+            if (overallSuccess) {
+                messageDao.updateStatus(msgId, "SENT_DHT")
+            }
+            overallSuccess
+        }
+    }
+
     suspend fun sendGroupVoiceNote(
         groupId: String,
         pcm16Samples: ShortArray,
@@ -8583,6 +9168,35 @@ class ChatRepository(
             val expiresAt = now + msg.ephemeralTtlSeconds * 1000L
             messageDao.markMessageReadAndStartTtl(msg.id, expiresAt)
         }
+
+        val recentIncoming = messageDao.getRecentIncomingMessagesForContact(contactId)
+        if (recentIncoming.isEmpty()) return@withContext
+        recordReadSeqs(contactId, recentIncoming.map { it.seqNum })
+
+        if (!areReadReceiptsEnabled() || contactId == SELF_CONTACT_ID) return@withContext
+
+        val window = currentReadReceiptWindow(contactId) ?: return@withContext
+        val updatedInQueue = pendingAckQueue.attachReadReceiptForContact(contactId, window.first, window.second)
+        if (updatedInQueue > 0) {
+            lastPublishedReadBitmapByContact[contactId] = window
+            return@withContext
+        }
+        if (lastPublishedReadBitmapByContact[contactId] == window) return@withContext
+
+        val anchorMsg = recentIncoming.firstOrNull { it.ackRatchetKey != null } ?: return@withContext
+        val ratchetKey = anchorMsg.ackRatchetKey?.raw ?: return@withContext
+        pendingAckQueue.enqueue(
+            org.pqchat.dht.traffic.PendingAck(
+                contactId = contactId,
+                messageId = "${anchorMsg.seqNum}",
+                ratchetKey = ratchetKey,
+                seqNum = anchorMsg.seqNum,
+                readBaseSeq = window.first,
+                readSeqBitmap = window.second,
+                dhtSeq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L
+            )
+        )
+        lastPublishedReadBitmapByContact[contactId] = window
     }
 
     /**

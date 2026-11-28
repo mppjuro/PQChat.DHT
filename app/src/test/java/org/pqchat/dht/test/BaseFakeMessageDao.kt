@@ -88,6 +88,23 @@ open class BaseFakeMessageDao : MessageDao {
         messages.filter { it.isOutgoing && (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT") }
             .sortedBy { it.id }
 
+    override suspend fun getRecentIncomingMessagesForContact(contactId: String): List<MessageEntity> =
+        messages.filter { it.contactId == contactId && !it.isOutgoing }
+            .sortedByDescending { it.seqNum }
+            .take(64)
+
+    override suspend fun getAwaitingAckOrReadMessagesForContact(contactId: String): List<MessageEntity> =
+        messages.filter {
+            it.contactId == contactId && it.isOutgoing &&
+                (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT" || it.status == "DELIVERED")
+        }.sortedBy { it.id }
+
+    override suspend fun getAllAwaitingAckOrReadMessages(): List<MessageEntity> =
+        messages.filter {
+            it.isOutgoing &&
+                (it.status == "PENDING_DELIVERY" || it.status == "SENT_DHT" || it.status == "DELIVERED")
+        }.sortedBy { it.id }
+
     override suspend fun getMessageById(id: Long): MessageEntity? =
         messages.firstOrNull { it.id == id }
 

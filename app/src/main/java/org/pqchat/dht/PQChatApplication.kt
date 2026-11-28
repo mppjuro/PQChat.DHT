@@ -97,6 +97,7 @@ class PQChatApplication : Application() {
             blindRepublishPool = repository.blindRepublishPool,
             outboundPoissonQueue = outboundPoissonQueue,
             crowdsourcedRepublishEnabledProvider = { settingsManager.isCrowdsourcedRepublishEnabled.value },
+            readReceiptsEnabledProvider = { settingsManager.isReadReceiptsEnabled.value },
             safetyCanaryProvider = { repository.pollPendingSafetyCanary() },
             researchTelemetryProvider = { if (::researchTelemetryManager.isInitialized) researchTelemetryManager else null }
         ).apply { start() }

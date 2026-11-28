@@ -26,6 +26,8 @@ class PoissonTrafficGenerator(
     val blindRepublishPool: BlindRepublishPool = BlindRepublishPool.defaultInstance,
     var isCrowdsourcedRepublishEnabled: Boolean = true,
     var crowdsourcedRepublishEnabledProvider: (() -> Boolean)? = null,
+    var isReadReceiptsEnabled: Boolean = true,
+    var readReceiptsEnabledProvider: (() -> Boolean)? = null,
     var safetyCanaryProvider: (suspend () -> OutboundPoissonFrame?)? = null,
     var researchTelemetryProvider: (() -> org.pqchat.dht.research.ResearchTelemetryManager?)? = {
         try {
@@ -48,6 +50,9 @@ class PoissonTrafficGenerator(
 
     fun isCrowdsourcedEnabled(): Boolean =
         crowdsourcedRepublishEnabledProvider?.invoke() ?: isCrowdsourcedRepublishEnabled
+
+    fun areReadReceiptsEnabled(): Boolean =
+        readReceiptsEnabledProvider?.invoke() ?: isReadReceiptsEnabled
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _eventFlow = MutableSharedFlow<CoverEvent>(replay = 50)
@@ -102,10 +107,13 @@ class PoissonTrafficGenerator(
                 try {
                     ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
                     ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
+                    val receiptsEnabled = areReadReceiptsEnabled()
                     ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
                         ratchetKey = pendingAck.ratchetKey,
                         messageId = pendingAck.messageId,
-                        seqNum = pendingAck.seqNum
+                        seqNum = pendingAck.seqNum,
+                        readBaseSeq = if (receiptsEnabled) pendingAck.readBaseSeq else null,
+                        readSeqBitmap = if (receiptsEnabled) pendingAck.readSeqBitmap else 0L
                     )
                 } finally {
                     pendingAck.zeroSensitiveMemory()
@@ -113,7 +121,7 @@ class PoissonTrafficGenerator(
                 return@cover OutboundPoissonFrame(
                     target = ackTarget,
                     payload = ackPayload,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    seq = pendingAck.dhtSeq,
                     salt = null,
                     sk = ackSeed,
                     skipLocalStore = true,

@@ -63,6 +63,8 @@ import java.util.*
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
 import org.pqchat.dht.data.repository.ChatRepository
+import org.pqchat.dht.protocol.CompressedMicroDocData
+import org.pqchat.dht.protocol.ContactIntroducerData
 import org.pqchat.dht.protocol.LocationPinData
 import org.pqchat.dht.ui.util.SecureScreenEffect
 
@@ -102,6 +104,7 @@ fun ChatScreen(
     val ephemeralTtlSeconds by viewModel.ephemeralTtlSeconds.collectAsState()
     var showEphemeralMenu by remember { mutableStateOf(false) }
     var showLocationPinDialog by remember { mutableStateOf(false) }
+    var showMicroDocDialog by remember { mutableStateOf(false) }
     var showCreatePollDialog by remember { mutableStateOf(false) }
 
     val isRecordingVoice by viewModel.isRecordingVoice.collectAsState()
@@ -156,6 +159,12 @@ fun ChatScreen(
 
     LaunchedEffect(contactId) {
         viewModel.selectContact(contactId)
+    }
+
+    LaunchedEffect(contactId, messages.size) {
+        if (messages.any { !it.isOutgoing }) {
+            viewModel.markCurrentChatRead(contactId)
+        }
     }
 
     val hostActivity = LocalContext.current.let { initialContext ->
@@ -692,13 +701,27 @@ fun ChatScreen(
                             IconButton(
                                 onClick = { showLocationPinDialog = true },
                                 modifier = Modifier
-                                    .size(40.dp)
+                                    .size(36.dp)
                                     .testTag("chat_location_pin_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Place,
                                     contentDescription = "Location Pin",
                                     tint = ElectricGreen
+                                )
+                            }
+
+                            // Type 0x0C Compressed Micro-Doc / Trusted Contact Introducer button
+                            IconButton(
+                                onClick = { showMicroDocDialog = true },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("chat_micro_doc_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Description,
+                                    contentDescription = "Micro-Doc or Trusted Introducer",
+                                    tint = CryptoPurple
                                 )
                             }
 
@@ -1201,6 +1224,21 @@ fun ChatScreen(
             )
         }
 
+        if (showMicroDocDialog) {
+            MicroDocAndIntroducerDialog(
+                allowIntroducer = !isGroup && contactId != ChatRepository.SELF_CONTACT_ID,
+                onDismiss = { showMicroDocDialog = false },
+                onSendMicroDoc = { title, body ->
+                    viewModel.sendCompressedMicroDoc(title, body, targetContactId = contactId)
+                    showMicroDocDialog = false
+                },
+                onSendIntroducer = { alias, qrBase64 ->
+                    viewModel.sendContactIntroducer(alias, qrBase64, targetContactId = contactId)
+                    showMicroDocDialog = false
+                }
+            )
+        }
+
         if (showCreatePollDialog) {
             CreatePollDialog(
                 groupId = contactId,
@@ -1240,6 +1278,12 @@ fun MessageBubble(
     }
 
     var showReactionPicker by remember { mutableStateOf(false) }
+    val microDocData: CompressedMicroDocData? = remember(message.rawTextContent) {
+        CompressedMicroDocData.parse(message.rawTextContent)
+    }
+    val introducerData: ContactIntroducerData? = remember(message.rawTextContent) {
+        ContactIntroducerData.parse(message.rawTextContent)
+    }
     val locationPin: LocationPinData? = remember(message.rawTextContent) {
         LocationPinData.parse(message.rawTextContent)
     }
@@ -1468,6 +1512,105 @@ fun MessageBubble(
                         viewModel = viewModel,
                         isGroup = isGroup
                     )
+                } else if (microDocData != null) {
+                    Surface(
+                        color = appColors.surfaceVariant.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, CryptoPurple.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("micro_doc_card_${message.id}")
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Description,
+                                    contentDescription = null,
+                                    tint = CryptoPurple,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = microDocData.title.ifBlank { "Compressed Micro-Doc (0x0C)" },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CryptoPurple
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Surface(
+                                color = appColors.surface,
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = microDocData.markdownBody,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = appColors.textPrimary,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+                    }
+                } else if (introducerData != null) {
+                    Surface(
+                        color = appColors.surfaceVariant.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, ElectricGreen.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("contact_introducer_card_${message.id}")
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.PersonAdd,
+                                    contentDescription = null,
+                                    tint = ElectricGreen,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Trusted Contact Introducer",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ElectricGreen
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Contact: ${introducerData.introducedName}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = appColors.textPrimary
+                            )
+                            Text(
+                                text = "PK Hash: ${introducerData.fingerprintPreview}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = appColors.textSecondary
+                            )
+                            if (!isOut && viewModel != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = { viewModel.acceptContactIntroducer(introducerData) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = ElectricGreen,
+                                        contentColor = Color.Black
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("accept_introducer_button_${message.id}")
+                                ) {
+                                    Text("Establish PQ Session", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
                 } else if (locationPin != null) {
                     Surface(
                         color = appColors.surfaceVariant.copy(alpha = 0.6f),
@@ -1625,13 +1768,15 @@ fun MessageBubble(
 
                     val isExpired = message.status == "EXPIRED_OFFLINE" || message.status == "EXPIRED_DHT"
                     val isQueuedPoisson = message.status == "QUEUED_POISSON"
+                    val isRead = message.status == "READ"
                     val statusText = when {
                         isExpired -> "Expired in DHT"
                         isQueuedPoisson -> "Queued in Poisson shaper"
+                        isRead -> "Read"
                         else -> message.status
                     }
                     val statusColor = when {
-                        message.status == "CONFIRMED_DHT" -> ElectricGreen
+                        isRead || message.status == "CONFIRMED_DHT" -> ElectricGreen
                         message.status in listOf("DELIVERED", "SENT_DHT", "PENDING_DELIVERY") -> appColors.primary
                         isQueuedPoisson -> NeonCyan
                         isExpired -> Color(0xFFFF5252)
@@ -1663,6 +1808,17 @@ fun MessageBubble(
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        if (isRead) {
+                            Icon(
+                                imageVector = Icons.Default.DoneAll,
+                                contentDescription = "Read",
+                                tint = ElectricGreen,
+                                modifier = Modifier
+                                    .size(13.dp)
+                                    .testTag("message_status_read_${message.id}")
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
                         }
                         Text(
                             text = statusText,
@@ -2443,6 +2599,148 @@ fun CreatePollDialog(
                 Text("Cancel")
             }
         }
+    )
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun MicroDocAndIntroducerDialog(
+    allowIntroducer: Boolean,
+    onDismiss: () -> Unit,
+    onSendMicroDoc: (title: String, markdownBody: String) -> Unit,
+    onSendIntroducer: (introducedName: String, qrBase64: String) -> Unit
+) {
+    val appColors = LocalAppColors.current
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var docTitle by remember { mutableStateOf("") }
+    var docBody by remember { mutableStateOf("") }
+    var introAlias by remember { mutableStateOf("") }
+    var introQrBase64 by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Description,
+                    contentDescription = null,
+                    tint = CryptoPurple
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Type 0x0C Single-Frame Payload",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = appColors.textPrimary
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (allowIntroducer) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            label = { Text("Markdown Note", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            label = { Text("Introducer Card", fontSize = 12.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                if (selectedTab == 0) {
+                    Text(
+                        text = "Deflate-compressed note/code snippet (max 8 KB raw) packed into one 900 B DHT record.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = docTitle,
+                        onValueChange = { if (it.length <= 64) docTitle = it },
+                        label = { Text("Title / Filename") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("micro_doc_title_input")
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = docBody,
+                        onValueChange = { docBody = it },
+                        label = { Text("Markdown / Code") },
+                        minLines = 4,
+                        maxLines = 8,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("micro_doc_body_input")
+                    )
+                } else {
+                    Text(
+                        text = "Packs a contact's 864 B Hybrid ML-KEM QR payload losslessly into a single 900 B frame for QR-less mutual introduction.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appColors.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = introAlias,
+                        onValueChange = { if (it.length <= 24) introAlias = it },
+                        label = { Text("Friend Alias") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("introducer_alias_input")
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = introQrBase64,
+                        onValueChange = { introQrBase64 = it },
+                        label = { Text("Contact QR Payload (Base64, 864 B)") },
+                        minLines = 3,
+                        maxLines = 5,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("introducer_qr_input")
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (selectedTab == 0) {
+                        onSendMicroDoc(docTitle.trim(), docBody)
+                    } else {
+                        onSendIntroducer(introAlias.trim(), introQrBase64.trim())
+                    }
+                },
+                enabled = if (selectedTab == 0) docBody.isNotBlank() else introQrBase64.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = CryptoPurple),
+                modifier = Modifier.testTag("micro_doc_send_confirm_button")
+            ) {
+                Text(if (selectedTab == 0) "Send Micro-Doc" else "Send Introducer")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = appColors.textSecondary)
+            }
+        },
+        containerColor = appColors.surface
     )
 }
 

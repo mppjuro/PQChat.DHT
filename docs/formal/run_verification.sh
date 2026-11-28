@@ -125,6 +125,12 @@ Summary of Verified Security Lemmas:
     - Lemma 1.10: Injective Message Delivery (Track B -> A)
     - Lemma 1.11: Authenticity and AAD Binding of Reaction (Type 0x07)
     - Lemma 1.12: Authenticity and AAD Binding of Location Pin (Type 0x08)
+    - Lemma 1.13: Secrecy of Compressed Micro-Doc Payload (Type 0x0C)
+    - Lemma 1.14: Secrecy of Trusted Contact Introducer Card (Type 0x0C)
+    - Lemma 1.15: Secrecy of Cover-ACK Zero-Overhead Read Receipt Bitmap
+    - Lemma 1.16: Authenticity and AAD Binding of Compressed Micro-Doc (Type 0x0C)
+    - Lemma 1.17: Authenticity and AAD Binding of Contact Introducer (Type 0x0C)
+    - Lemma 1.18: Integrity and Authenticity of Cover-ACK Read Receipt
 (2) pqchat_secrecy.pv (Dedicated Secrecy & Confirmation):
     - Lemma 2.1: Secrecy of ChainKey A -> B
     - Lemma 2.2: Secrecy of ChainKey B -> A
@@ -225,7 +231,7 @@ echo "==========================================================================
 OUT_DURESS="$(run_model "pqchat_duress_wipe.pv" 2>&1)"
 echo "${OUT_DURESS}" >> "${REPORT_FILE}"
 
-# Validation of all 38 lemmas
+# Validation of all 44 lemmas
 if command -v python3 >/dev/null 2>&1; then
     python3 "${SCRIPT_DIR}/verify_lemmas.py" "${REPORT_FILE}"
 else

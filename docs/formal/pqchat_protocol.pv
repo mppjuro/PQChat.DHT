@@ -10,6 +10,8 @@
 (* 6. Micro-Payload Authenticity & AAD Binding:                                   *)
 (*    - Type 0x07: Message Reaction (emoji bound to targetSeqEpoch & targetSeqNum)*)
 (*    - Type 0x08: Location Pin / Safety Status (coordinates & note)              *)
+(*    - Type 0x0C: Compressed Micro-Doc & Trusted Contact Introducer Card        *)
+(*    - Cover-ACK Zero-Overhead Read Receipt Bitmap (encrypted inside CSPRNG pad) *)
 (*                                                                                *)
 (* Cryptographic Primitives:                                                      *)
 (* - Hybrid KEM: ML-KEM-512 IND-CCA2 + classical X25519 ECDH                       *)
@@ -80,6 +82,11 @@ const MSG_TYPE_REKEY_OFFER: bitstring.
 const MSG_TYPE_REKEY_RESP: bitstring.
 const MSG_TYPE_REACTION: bitstring.
 const MSG_TYPE_LOCATION_PIN: bitstring.
+const MSG_TYPE_MICRO_DOC: bitstring.
+const MSG_TYPE_INTRODUCER: bitstring.
+const TAG_STEP_2: bitstring.
+const TAG_ACK: bitstring.
+const TAG_ACK_AES: bitstring.
 
 (* --- Channels --- *)
 free c_dht: channel.             (* Public untrusted DHT transport (Dolev-Yao attacker) *)
@@ -93,6 +100,9 @@ free secret_msg_A2B: bitstring [private].
 free secret_msg_B2A: bitstring [private].
 free secret_reaction_emoji: bitstring [private].
 free secret_location_pin: bitstring [private].
+free secret_micro_doc: bitstring [private].
+free secret_introducer_card: bitstring [private].
+free secret_read_bitmap: bitstring [private].
 
 (* --- Correspondence Events for Authentication & Replay Protection --- *)
 event AliceStarted(kem_pkey, x_pkey, bitstring).
@@ -106,6 +116,12 @@ event AliceSentReaction(bitstring, bitstring, bitstring).
 event BobRecvReaction(bitstring, bitstring, bitstring).
 event BobSentLocationPin(bitstring, bitstring, bitstring).
 event AliceRecvLocationPin(bitstring, bitstring, bitstring).
+event AliceSentMicroDoc(bitstring, bitstring, bitstring).
+event BobRecvMicroDoc(bitstring, bitstring, bitstring).
+event BobSentIntroducer(bitstring, bitstring, bitstring).
+event AliceRecvIntroducer(bitstring, bitstring, bitstring).
+event BobSentReadReceipt(bitstring, bitstring, bitstring).
+event AliceRecvReadReceipt(bitstring, bitstring, bitstring).
 
 (* ============================================================================== *)
 (* SECURITY QUERIES                                                               *)
@@ -119,6 +135,9 @@ query attacker(secret_msg_A2B).
 query attacker(secret_msg_B2A).
 query attacker(secret_reaction_emoji).
 query attacker(secret_location_pin).
+query attacker(secret_micro_doc).
+query attacker(secret_introducer_card).
+query attacker(secret_read_bitmap).
 
 (* (2) Mutual Authentication with Transcript & SAS Binding *)
 query pkA_kem: kem_pkey, pkA_x: x_pkey, seed: bitstring, ckA2B: bitstring, ckB2A: bitstring, sas: bitstring;
@@ -132,12 +151,21 @@ query target: bitstring, seq: bitstring, msg: bitstring;
 query target: bitstring, seq: bitstring, msg: bitstring;
   inj-event(AliceRecvReply(target, seq, msg)) ==> inj-event(BobSentReply(target, seq, msg)).
 
-(* (4) Micro-Payload Authenticity & AAD Binding (Type 0x07 Reaction & Type 0x08 Location Pin) *)
+(* (4) Micro-Payload Authenticity & AAD Binding (0x07 Reaction, 0x08 Location Pin, 0x0C Micro-Doc/Introducer, Cover-ACK Read Receipt) *)
 query target: bitstring, seq: bitstring, emoji: bitstring;
   inj-event(BobRecvReaction(target, seq, emoji)) ==> inj-event(AliceSentReaction(target, seq, emoji)).
 
 query target: bitstring, seq: bitstring, loc: bitstring;
   inj-event(AliceRecvLocationPin(target, seq, loc)) ==> inj-event(BobSentLocationPin(target, seq, loc)).
+
+query target: bitstring, seq: bitstring, doc: bitstring;
+  inj-event(BobRecvMicroDoc(target, seq, doc)) ==> inj-event(AliceSentMicroDoc(target, seq, doc)).
+
+query target: bitstring, seq: bitstring, card: bitstring;
+  inj-event(AliceRecvIntroducer(target, seq, card)) ==> inj-event(BobSentIntroducer(target, seq, card)).
+
+query ackTarget: bitstring, seq: bitstring, rbm: bitstring;
+  inj-event(AliceRecvReadReceipt(ackTarget, seq, rbm)) ==> inj-event(BobSentReadReceipt(ackTarget, seq, rbm)).
 
 (* ============================================================================== *)
 (* PROTOCOL ROLES                                                                 *)
@@ -177,83 +205,97 @@ let processAlice =
   let chain_key_A2B = hkdf_expand(master_key, TAG_A2B) in
   let chain_key_B2A = hkdf_expand(master_key, TAG_B2A) in
   event AliceFinished(pk_kem_A, pk_x_A, seed_init, chain_key_A2B, chain_key_B2A, sas);
-  
-  (* 7. Alice initiates Track A -> B: Message 0 (Seq = 0) *)
-  let seq_0 = TAG_STEP_0 in
-  let entropy_0 = hkdf_expand(chain_key_A2B, seq_0) in
-  let msg_key_0 = get_msg_key(entropy_0) in
-  let ed_seed_0 = get_ed_seed(entropy_0) in
+
+  (* Pre-derive unidirectional chain steps deterministically *)
+  let entropy_0 = hkdf_expand(chain_key_A2B, TAG_STEP_0) in
   let next_chain_A2B = get_next_chain(entropy_0) in
-  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
-  let ed_pk_0 = ed_pk(ed_sk_0) in
-  let target_1 = sha1(ed_pk_0) in
-  
-  new iv_0: bitstring;
-  let aad_0 = (target_1, TAG_A2B) in
-  let ciphertext_0 = aead_enc(msg_key_0, iv_0, secret_msg_A2B, aad_0) in
-  let sig_0 = ed_sign(ed_sk_0, (target_1, ciphertext_0)) in
-  
-  event AliceSentMsg(target_1, seq_0, secret_msg_A2B);
-  out(c_dht, (target_1, ciphertext_0, iv_0, sig_0));
-  
-  (* Canaries to test secrecy of derived keys *)
-  new iv_canary_0: bitstring;
-  new iv_canary_1: bitstring;
-  new iv_canary_2: bitstring;
-  out(c_dht, aead_enc(master_key, iv_canary_0, secret_master_key, TAG_KEY_CONFIRM));
-  out(c_dht, aead_enc(chain_key_A2B, iv_canary_1, secret_chain_A2B, TAG_A2B));
-  out(c_dht, aead_enc(chain_key_B2A, iv_canary_2, secret_chain_B2A, TAG_B2A));
+  let entropy_1 = hkdf_expand(next_chain_A2B, TAG_STEP_1) in
+  let next_chain_A2B_1 = get_next_chain(entropy_1) in
+  let entropy_2 = hkdf_expand(next_chain_A2B_1, TAG_STEP_2) in
 
-  (* 8. Alice receives reply from Bob on Track B -> A *)
-  let seq_B0 = TAG_STEP_0 in
-  let entropy_B0 = hkdf_expand(chain_key_B2A, seq_B0) in
-  let msg_key_B0 = get_msg_key(entropy_B0) in
-  let ed_seed_B0 = get_ed_seed(entropy_B0) in
+  let entropy_B0 = hkdf_expand(chain_key_B2A, TAG_STEP_0) in
   let next_chain_B2A = get_next_chain(entropy_B0) in
-  let ed_sk_B0 = ed_derive_sk(ed_seed_B0) in
-  let ed_pk_B0 = ed_pk(ed_sk_B0) in
-  let target_B1 = sha1(ed_pk_B0) in
-  
-  in(c_dht, (=target_B1, ciphertext_B0: bitstring, iv_B0: bitstring, sig_B0: bitstring));
-  if ed_verify(ed_pk_B0, (target_B1, ciphertext_B0), sig_B0) = true then
-  let aad_B0 = (target_B1, TAG_B2A) in
-  let recv_reply = aead_dec(msg_key_B0, iv_B0, ciphertext_B0, aad_B0) in
-  event AliceRecvReply(target_B1, seq_B0, recv_reply);
-  
-  (* Safe Tombstone Overwrite (900-byte CSPRNG noise) destroys consumed ciphertext *)
-  new tombstone_noise_A: bitstring;
-  out(c_dht, (target_B1, tombstone_noise_A));
+  let entropy_B1 = hkdf_expand(next_chain_B2A, TAG_STEP_1) in
+  let next_chain_B2A_1 = get_next_chain(entropy_B1) in
+  let entropy_B2 = hkdf_expand(next_chain_B2A_1, TAG_STEP_2) in
 
-  (* 9. Alice sends Type 0x07 Reaction on Track A -> B (Seq = 1) *)
-  let seq_1 = TAG_STEP_1 in
-  let entropy_1 = hkdf_expand(next_chain_A2B, seq_1) in
-  let msg_key_1 = get_msg_key(entropy_1) in
-  let ed_seed_1 = get_ed_seed(entropy_1) in
-  let ed_sk_1 = ed_derive_sk(ed_seed_1) in
-  let ed_pk_1 = ed_pk(ed_sk_1) in
-  let target_2 = sha1(ed_pk_1) in
-  
-  new iv_1: bitstring;
-  let aad_1 = (target_2, TAG_A2B) in
-  let ciphertext_1 = aead_enc(msg_key_1, iv_1, (MSG_TYPE_REACTION, secret_reaction_emoji), aad_1) in
-  let sig_1 = ed_sign(ed_sk_1, (target_2, ciphertext_1)) in
-  event AliceSentReaction(target_2, seq_1, secret_reaction_emoji);
-  out(c_dht, (target_2, ciphertext_1, iv_1, sig_1));
-
-  (* 10. Alice receives Type 0x08 Location Pin from Bob on Track B -> A (Seq = 1) *)
-  let seq_B1 = TAG_STEP_1 in
-  let entropy_B1 = hkdf_expand(next_chain_B2A, seq_B1) in
-  let msg_key_B1 = get_msg_key(entropy_B1) in
-  let ed_seed_B1 = get_ed_seed(entropy_B1) in
-  let ed_sk_B1 = ed_derive_sk(ed_seed_B1) in
-  let ed_pk_B1 = ed_pk(ed_sk_B1) in
-  let target_B2 = sha1(ed_pk_B1) in
-  
-  in(c_dht, (=target_B2, ciphertext_B1: bitstring, iv_B1: bitstring, sig_B1: bitstring));
-  if ed_verify(ed_pk_B1, (target_B2, ciphertext_B1), sig_B1) = true then
-  let aad_B1 = (target_B2, TAG_B2A) in
-  let (=MSG_TYPE_LOCATION_PIN, recv_loc: bitstring) = aead_dec(msg_key_B1, iv_B1, ciphertext_B1, aad_B1) in
-  event AliceRecvLocationPin(target_B2, seq_B1, recv_loc).
+  (* Post-handshake asynchronous tracks modelled as flat sibling branches *)
+  (
+    (* 7. Alice initiates Track A -> B: Message 0 (Seq = 0) *)
+    let msg_key_0 = get_msg_key(entropy_0) in
+    let ed_sk_0 = ed_derive_sk(get_ed_seed(entropy_0)) in
+    let target_1 = sha1(ed_pk(ed_sk_0)) in
+    new iv_0: bitstring;
+    let ciphertext_0 = aead_enc(msg_key_0, iv_0, secret_msg_A2B, (target_1, TAG_A2B)) in
+    let sig_0 = ed_sign(ed_sk_0, (target_1, ciphertext_0)) in
+    event AliceSentMsg(target_1, TAG_STEP_0, secret_msg_A2B);
+    out(c_dht, (target_1, ciphertext_0, iv_0, sig_0));
+    (* Canaries to test secrecy of derived keys *)
+    new iv_canary_0: bitstring;
+    new iv_canary_1: bitstring;
+    new iv_canary_2: bitstring;
+    out(c_dht, aead_enc(master_key, iv_canary_0, secret_master_key, TAG_KEY_CONFIRM));
+    out(c_dht, aead_enc(chain_key_A2B, iv_canary_1, secret_chain_A2B, TAG_A2B));
+    out(c_dht, aead_enc(chain_key_B2A, iv_canary_2, secret_chain_B2A, TAG_B2A))
+  ) | (
+    (* 8. Alice receives reply from Bob on Track B -> A *)
+    let msg_key_B0 = get_msg_key(entropy_B0) in
+    let ed_pk_B0 = ed_pk(ed_derive_sk(get_ed_seed(entropy_B0))) in
+    let target_B1 = sha1(ed_pk_B0) in
+    in(c_dht, (=target_B1, ciphertext_B0: bitstring, iv_B0: bitstring, sig_B0: bitstring));
+    if ed_verify(ed_pk_B0, (target_B1, ciphertext_B0), sig_B0) = true then
+    let recv_reply = aead_dec(msg_key_B0, iv_B0, ciphertext_B0, (target_B1, TAG_B2A)) in
+    event AliceRecvReply(target_B1, TAG_STEP_0, recv_reply);
+    (* Safe Tombstone Overwrite (900-byte CSPRNG noise) destroys consumed ciphertext *)
+    new tombstone_noise_A: bitstring;
+    out(c_dht, (target_B1, tombstone_noise_A))
+  ) | (
+    (* 9. Alice sends Type 0x07 Reaction on Track A -> B (Seq = 1) *)
+    let msg_key_1 = get_msg_key(entropy_1) in
+    let ed_sk_1 = ed_derive_sk(get_ed_seed(entropy_1)) in
+    let target_2 = sha1(ed_pk(ed_sk_1)) in
+    new iv_1: bitstring;
+    let ciphertext_1 = aead_enc(msg_key_1, iv_1, (MSG_TYPE_REACTION, secret_reaction_emoji), (target_2, TAG_A2B)) in
+    let sig_1 = ed_sign(ed_sk_1, (target_2, ciphertext_1)) in
+    event AliceSentReaction(target_2, TAG_STEP_1, secret_reaction_emoji);
+    out(c_dht, (target_2, ciphertext_1, iv_1, sig_1))
+  ) | (
+    (* 10. Alice receives Type 0x08 Location Pin from Bob on Track B -> A (Seq = 1) *)
+    let msg_key_B1 = get_msg_key(entropy_B1) in
+    let ed_pk_B1 = ed_pk(ed_derive_sk(get_ed_seed(entropy_B1))) in
+    let target_B2 = sha1(ed_pk_B1) in
+    in(c_dht, (=target_B2, ciphertext_B1: bitstring, iv_B1: bitstring, sig_B1: bitstring));
+    if ed_verify(ed_pk_B1, (target_B2, ciphertext_B1), sig_B1) = true then
+    let (=MSG_TYPE_LOCATION_PIN, recv_loc: bitstring) = aead_dec(msg_key_B1, iv_B1, ciphertext_B1, (target_B2, TAG_B2A)) in
+    event AliceRecvLocationPin(target_B2, TAG_STEP_1, recv_loc)
+  ) | (
+    (* 11. Alice sends Type 0x0C Compressed Micro-Doc on Track A -> B (Seq = 2) *)
+    let msg_key_2 = get_msg_key(entropy_2) in
+    let ed_sk_2 = ed_derive_sk(get_ed_seed(entropy_2)) in
+    let target_3 = sha1(ed_pk(ed_sk_2)) in
+    new iv_2: bitstring;
+    let ciphertext_2 = aead_enc(msg_key_2, iv_2, (MSG_TYPE_MICRO_DOC, secret_micro_doc), (target_3, TAG_A2B)) in
+    let sig_2 = ed_sign(ed_sk_2, (target_3, ciphertext_2)) in
+    event AliceSentMicroDoc(target_3, TAG_STEP_2, secret_micro_doc);
+    out(c_dht, (target_3, ciphertext_2, iv_2, sig_2))
+  ) | (
+    (* 12. Alice receives Type 0x0C Trusted Contact Introducer from Bob on Track B -> A (Seq = 2) *)
+    let msg_key_B2 = get_msg_key(entropy_B2) in
+    let ed_pk_B2 = ed_pk(ed_derive_sk(get_ed_seed(entropy_B2))) in
+    let target_B3 = sha1(ed_pk_B2) in
+    in(c_dht, (=target_B3, ciphertext_B2: bitstring, iv_B2: bitstring, sig_B2: bitstring));
+    if ed_verify(ed_pk_B2, (target_B3, ciphertext_B2), sig_B2) = true then
+    let (=MSG_TYPE_INTRODUCER, recv_card: bitstring) = aead_dec(msg_key_B2, iv_B2, ciphertext_B2, (target_B3, TAG_B2A)) in
+    event AliceRecvIntroducer(target_B3, TAG_STEP_2, recv_card)
+  ) | (
+    (* 13. Alice verifies Zero-Overhead Cover-ACK Read Receipt emitted inside Cover-ACK for Seq = 2 *)
+    let msg_key_2 = get_msg_key(entropy_2) in
+    let ack_target_2 = sha1(ed_pk(ed_derive_sk(hmac(msg_key_2, (TAG_ACK, TAG_STEP_2))))) in
+    let ack_aes_2 = hmac(msg_key_2, (TAG_ACK_AES, TAG_STEP_2)) in
+    in(c_dht, (=ack_target_2, ack_ct_2: bitstring, ack_iv_2: bitstring));
+    let (=TAG_STEP_2, recv_rbm: bitstring) = aead_dec(ack_aes_2, ack_iv_2, ack_ct_2, (ack_target_2, TAG_ACK)) in
+    event AliceRecvReadReceipt(ack_target_2, TAG_STEP_2, recv_rbm)
+  ).
 
 let processBob =
   (* 1. Bob scans QR code *)
@@ -284,72 +326,89 @@ let processBob =
   (* 4. Bob publishes Handshake packet to Target_0 *)
   let target_0 = sha1(ed_pk(ed_derive_sk(hmac(seed_init, TAG_RENDEZVOUS)))) in
   out(c_dht, (target_0, ct_kem_B, pk_x_B, salt, confirm_tag));
-  
-  (* 5. Bob receives Message 0 on Track A -> B *)
-  let seq_0 = TAG_STEP_0 in
-  let entropy_0 = hkdf_expand(chain_key_A2B, seq_0) in
-  let msg_key_0 = get_msg_key(entropy_0) in
-  let ed_seed_0 = get_ed_seed(entropy_0) in
+
+  (* Pre-derive unidirectional chain steps deterministically *)
+  let entropy_0 = hkdf_expand(chain_key_A2B, TAG_STEP_0) in
   let next_chain_A2B = get_next_chain(entropy_0) in
-  let ed_sk_0 = ed_derive_sk(ed_seed_0) in
-  let ed_pk_0 = ed_pk(ed_sk_0) in
-  let target_1 = sha1(ed_pk_0) in
-  
-  in(c_dht, (=target_1, ciphertext_0: bitstring, iv_0: bitstring, sig_0: bitstring));
-  if ed_verify(ed_pk_0, (target_1, ciphertext_0), sig_0) = true then
-  let aad_0 = (target_1, TAG_A2B) in
-  let recv_msg = aead_dec(msg_key_0, iv_0, ciphertext_0, aad_0) in
-  event BobRecvMsg(target_1, seq_0, recv_msg);
-  
-  (* 6. Safe Tombstone Overwrite (900-byte CSPRNG noise) *)
-  new tombstone_noise_B: bitstring;
-  out(c_dht, (target_1, tombstone_noise_B));
-  
-  (* 7. Bob sends reply Message 0 on Track B -> A *)
-  let seq_B0 = TAG_STEP_0 in
-  let entropy_B0 = hkdf_expand(chain_key_B2A, seq_B0) in
-  let msg_key_B0 = get_msg_key(entropy_B0) in
-  let ed_seed_B0 = get_ed_seed(entropy_B0) in
+  let entropy_1 = hkdf_expand(next_chain_A2B, TAG_STEP_1) in
+  let next_chain_A2B_1 = get_next_chain(entropy_1) in
+  let entropy_2 = hkdf_expand(next_chain_A2B_1, TAG_STEP_2) in
+
+  let entropy_B0 = hkdf_expand(chain_key_B2A, TAG_STEP_0) in
   let next_chain_B2A = get_next_chain(entropy_B0) in
-  let ed_sk_B0 = ed_derive_sk(ed_seed_B0) in
-  let ed_pk_B0 = ed_pk(ed_sk_B0) in
-  let target_B1 = sha1(ed_pk_B0) in
-  new iv_B0: bitstring;
-  let aad_B0 = (target_B1, TAG_B2A) in
-  let ciphertext_B0 = aead_enc(msg_key_B0, iv_B0, secret_msg_B2A, aad_B0) in
-  let sig_B0 = ed_sign(ed_sk_B0, (target_B1, ciphertext_B0)) in
-  event BobSentReply(target_B1, seq_B0, secret_msg_B2A);
-  out(c_dht, (target_B1, ciphertext_B0, iv_B0, sig_B0));
+  let entropy_B1 = hkdf_expand(next_chain_B2A, TAG_STEP_1) in
+  let next_chain_B2A_1 = get_next_chain(entropy_B1) in
+  let entropy_B2 = hkdf_expand(next_chain_B2A_1, TAG_STEP_2) in
 
-  (* 8. Bob receives Type 0x07 Reaction on Track A -> B (Seq = 1) *)
-  let seq_1 = TAG_STEP_1 in
-  let entropy_1 = hkdf_expand(next_chain_A2B, seq_1) in
-  let msg_key_1 = get_msg_key(entropy_1) in
-  let ed_seed_1 = get_ed_seed(entropy_1) in
-  let ed_sk_1 = ed_derive_sk(ed_seed_1) in
-  let ed_pk_1 = ed_pk(ed_sk_1) in
-  let target_2 = sha1(ed_pk_1) in
-  
-  in(c_dht, (=target_2, ciphertext_1: bitstring, iv_1: bitstring, sig_1: bitstring));
-  if ed_verify(ed_pk_1, (target_2, ciphertext_1), sig_1) = true then
-  let aad_1 = (target_2, TAG_A2B) in
-  let (=MSG_TYPE_REACTION, recv_emoji: bitstring) = aead_dec(msg_key_1, iv_1, ciphertext_1, aad_1) in
-  event BobRecvReaction(target_2, seq_1, recv_emoji);
+  (* Post-handshake asynchronous tracks matching Alice *)
+  (
+    (* 5. Bob receives Message 0 on Track A -> B *)
+    let msg_key_0 = get_msg_key(entropy_0) in
+    let ed_pk_0 = ed_pk(ed_derive_sk(get_ed_seed(entropy_0))) in
+    let target_1 = sha1(ed_pk_0) in
+    in(c_dht, (=target_1, ciphertext_0: bitstring, iv_0: bitstring, sig_0: bitstring));
+    if ed_verify(ed_pk_0, (target_1, ciphertext_0), sig_0) = true then
+    let recv_msg = aead_dec(msg_key_0, iv_0, ciphertext_0, (target_1, TAG_A2B)) in
+    event BobRecvMsg(target_1, TAG_STEP_0, recv_msg);
+    (* Safe Tombstone Overwrite (900-byte CSPRNG noise) *)
+    new tombstone_noise_B: bitstring;
+    out(c_dht, (target_1, tombstone_noise_B))
+  ) | (
+    (* 6. Bob sends reply Message 0 on Track B -> A *)
+    let msg_key_B0 = get_msg_key(entropy_B0) in
+    let ed_sk_B0 = ed_derive_sk(get_ed_seed(entropy_B0)) in
+    let target_B1 = sha1(ed_pk(ed_sk_B0)) in
+    new iv_B0: bitstring;
+    let ciphertext_B0 = aead_enc(msg_key_B0, iv_B0, secret_msg_B2A, (target_B1, TAG_B2A)) in
+    let sig_B0 = ed_sign(ed_sk_B0, (target_B1, ciphertext_B0)) in
+    event BobSentReply(target_B1, TAG_STEP_0, secret_msg_B2A);
+    out(c_dht, (target_B1, ciphertext_B0, iv_B0, sig_B0))
+  ) | (
+    (* 7. Bob receives Type 0x07 Reaction on Track A -> B (Seq = 1) *)
+    let msg_key_1 = get_msg_key(entropy_1) in
+    let ed_pk_1 = ed_pk(ed_derive_sk(get_ed_seed(entropy_1))) in
+    let target_2 = sha1(ed_pk_1) in
+    in(c_dht, (=target_2, ciphertext_1: bitstring, iv_1: bitstring, sig_1: bitstring));
+    if ed_verify(ed_pk_1, (target_2, ciphertext_1), sig_1) = true then
+    let (=MSG_TYPE_REACTION, recv_emoji: bitstring) = aead_dec(msg_key_1, iv_1, ciphertext_1, (target_2, TAG_A2B)) in
+    event BobRecvReaction(target_2, TAG_STEP_1, recv_emoji)
+  ) | (
+    (* 8. Bob sends Type 0x08 Location Pin on Track B -> A (Seq = 1) *)
+    let msg_key_B1 = get_msg_key(entropy_B1) in
+    let ed_sk_B1 = ed_derive_sk(get_ed_seed(entropy_B1)) in
+    let target_B2 = sha1(ed_pk(ed_sk_B1)) in
+    new iv_B1: bitstring;
+    let ciphertext_B1 = aead_enc(msg_key_B1, iv_B1, (MSG_TYPE_LOCATION_PIN, secret_location_pin), (target_B2, TAG_B2A)) in
+    let sig_B1 = ed_sign(ed_sk_B1, (target_B2, ciphertext_B1)) in
+    event BobSentLocationPin(target_B2, TAG_STEP_1, secret_location_pin);
+    out(c_dht, (target_B2, ciphertext_B1, iv_B1, sig_B1))
+  ) | (
+    (* 9. Bob receives Type 0x0C Compressed Micro-Doc on Track A -> B (Seq = 2) and emits Cover-ACK Read Receipt *)
+    let msg_key_2 = get_msg_key(entropy_2) in
+    let ed_pk_2 = ed_pk(ed_derive_sk(get_ed_seed(entropy_2))) in
+    let target_3 = sha1(ed_pk_2) in
+    in(c_dht, (=target_3, ciphertext_2: bitstring, iv_2: bitstring, sig_2: bitstring));
+    if ed_verify(ed_pk_2, (target_3, ciphertext_2), sig_2) = true then
+    let (=MSG_TYPE_MICRO_DOC, recv_doc: bitstring) = aead_dec(msg_key_2, iv_2, ciphertext_2, (target_3, TAG_A2B)) in
+    event BobRecvMicroDoc(target_3, TAG_STEP_2, recv_doc);
 
-  (* 9. Bob sends Type 0x08 Location Pin on Track B -> A (Seq = 1) *)
-  let seq_B1 = TAG_STEP_1 in
-  let entropy_B1 = hkdf_expand(next_chain_B2A, seq_B1) in
-  let msg_key_B1 = get_msg_key(entropy_B1) in
-  let ed_seed_B1 = get_ed_seed(entropy_B1) in
-  let ed_sk_B1 = ed_derive_sk(ed_seed_B1) in
-  let ed_pk_B1 = ed_pk(ed_sk_B1) in
-  let target_B2 = sha1(ed_pk_B1) in
-  new iv_B1: bitstring;
-  let aad_B1 = (target_B2, TAG_B2A) in
-  let ciphertext_B1 = aead_enc(msg_key_B1, iv_B1, (MSG_TYPE_LOCATION_PIN, secret_location_pin), aad_B1) in
-  let sig_B1 = ed_sign(ed_sk_B1, (target_B2, ciphertext_B1)) in
-  event BobSentLocationPin(target_B2, seq_B1, secret_location_pin);
-  out(c_dht, (target_B2, ciphertext_B1, iv_B1, sig_B1)).
+    let ack_target_2 = sha1(ed_pk(ed_derive_sk(hmac(msg_key_2, (TAG_ACK, TAG_STEP_2))))) in
+    let ack_aes_2 = hmac(msg_key_2, (TAG_ACK_AES, TAG_STEP_2)) in
+    new ack_iv_2: bitstring;
+    let ack_ct_2 = aead_enc(ack_aes_2, ack_iv_2, (TAG_STEP_2, secret_read_bitmap), (ack_target_2, TAG_ACK)) in
+    event BobSentReadReceipt(ack_target_2, TAG_STEP_2, secret_read_bitmap);
+    out(c_dht, (ack_target_2, ack_ct_2, ack_iv_2))
+  ) | (
+    (* 10. Bob sends Type 0x0C Trusted Contact Introducer on Track B -> A (Seq = 2) *)
+    let msg_key_B2 = get_msg_key(entropy_B2) in
+    let ed_sk_B2 = ed_derive_sk(get_ed_seed(entropy_B2)) in
+    let target_B3 = sha1(ed_pk(ed_sk_B2)) in
+    new iv_B2: bitstring;
+    let ciphertext_B2 = aead_enc(msg_key_B2, iv_B2, (MSG_TYPE_INTRODUCER, secret_introducer_card), (target_B3, TAG_B2A)) in
+    let sig_B2 = ed_sign(ed_sk_B2, (target_B3, ciphertext_B2)) in
+    event BobSentIntroducer(target_B3, TAG_STEP_2, secret_introducer_card);
+    out(c_dht, (target_B3, ciphertext_B2, iv_B2, sig_B2))
+  ).
 
 process
   (!processAlice) | (!processBob)

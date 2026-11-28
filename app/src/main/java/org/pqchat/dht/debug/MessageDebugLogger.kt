@@ -445,6 +445,19 @@ object MessageDebugLogger {
                 "note" to p.note,
                 "description" to "Dead Man's Switch / Duress safety canary alarm frame"
             )
+            is BinaryFrameCodec.DecodedPayload.CompressedMicroDoc -> linkedMapOf<String, Any?>(
+                "type" to "CompressedMicroDoc (0x0C:0x01)",
+                "titleByteLength" to p.title.toByteArray(Charsets.UTF_8).size,
+                "bodyByteLength" to p.markdownBody.toByteArray(Charsets.UTF_8).size,
+                "compressionAlg" to p.compressionAlg,
+                "ephemeralTtlSeconds" to p.ephemeralTtlSeconds,
+                "description" to "Single-frame Deflate compressed Markdown/code micro-doc (content omitted)"
+            )
+            is BinaryFrameCodec.DecodedPayload.ContactIntroducer -> linkedMapOf<String, Any?>(
+                "type" to "ContactIntroducer (0x0C:0x02)",
+                "qrPayloadByteLength" to p.qrPayload.size,
+                "description" to "Single-frame Trusted Contact Introducer card (keys/seed omitted)"
+            )
         }
 
         val pqcAnalysis = when (frameMsg.msgType) {
@@ -481,6 +494,7 @@ object MessageDebugLogger {
             BinaryFrameCodec.TYPE_REACTION -> "EMOJI REACTION"
             BinaryFrameCodec.TYPE_LOCATION_PIN -> "LOCATION PIN"
             BinaryFrameCodec.TYPE_VOICE_NOTE -> "VOICE NOTE"
+            BinaryFrameCodec.TYPE_COMPRESSED_MICRO_DOC -> "COMPRESSED MICRO-DOC / INTRODUCER"
             else -> "TYPE 0x%02X".format(frameMsg.msgType)
         }
 
