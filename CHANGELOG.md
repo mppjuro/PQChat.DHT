@@ -7,6 +7,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🚀 Features
 
+- [`ee00793`](https://github.com/mppjuro/PQChat.DHT/commit/ee00793fb9a7dbb8a8844c83b72c28af1c9b6bc8) (2026-11-28) — **protocol**: add Type 0x0C micro-docs/introducer, zero-overhead read receipts, and privacy toggle
 - [`29ef632`](https://github.com/mppjuro/PQChat.DHT/commit/29ef632a6ef24ae2b410642a9efcf625e750af8b) (2026-11-17) — **research**: expand thesis telemetry metrics, chunked Firestore bundles, and LaTeX/PDF analyzer
 - [`5f6f247`](https://github.com/mppjuro/PQChat.DHT/commit/5f6f247f1cee538b45516e7d1e53125844ac87bb) (2026-10-23) — **ui**: visible Bob handshake status indicator on HandshakeScreen
 - [`4b8c98e`](https://github.com/mppjuro/PQChat.DHT/commit/4b8c98e6787ab5e1f1bf8ed9c9e04a3838543148) (2026-10-23) — **viewmodel**: network-verified Bob republish loop
@@ -201,6 +202,8 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 📦 Build & Dependencies
 
+- [`b1f59e3`](https://github.com/mppjuro/PQChat.DHT/commit/b1f59e3c33dc4f094607521a1ca95c7964792830) (2026-11-28) — **changelog**: remove bot commit duplication on main and add changelog deduplication
+- [`ecac5e3`](https://github.com/mppjuro/PQChat.DHT/commit/ecac5e36e7e452e575f09dbd92fc7ac0c60aa54e) (2026-11-28) — **security**: add Jazzer continuous fuzzing, network chaos resilience tests, and thesis artifacts pipeline
 - [`d905165`](https://github.com/mppjuro/PQChat.DHT/commit/d905165686591f186e886124bac2cf6e4c618db0) (2026-11-28) — **workflow**: use single-line commands in android-emulator-runner script
 - [`b883316`](https://github.com/mppjuro/PQChat.DHT/commit/b883316e122b2ee2ee9e2148b922f48044148b0a) (2026-11-27) — **android**: update compileSdk to 37.2 for Compose 1.13.0 AAR metadata
 - [`608b020`](https://github.com/mppjuro/PQChat.DHT/commit/608b020c398bf290645eb8b029d48bf6a93397f7) (2026-11-23) — **deps**: bump gradle-wrapper from 9.9.1 to 9.9.2
@@ -228,10 +231,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 - [`cb57ef9`](https://github.com/mppjuro/PQChat.DHT/commit/cb57ef9f091605d792d894678d9e94ce2ebe22f3) (2026-10-14) — consolidate workflows into commit fast tests, nightly tests with release, and manual release
 - [`6f52b71`](https://github.com/mppjuro/PQChat.DHT/commit/6f52b712fb0b428342413077a86fc719a7e69b24) (2026-10-14) — **deps**: bump org.junit.jupiter:junit-jupiter from 5.10.2 to 6.1.3
 - [`4d30697`](https://github.com/mppjuro/PQChat.DHT/commit/4d30697426e01a08418bb892b83e63a57c3aab66) (2026-10-14) — **deps**: bump org.robolectric:robolectric from 4.14.1 to 4.17
-- [`abd61bf`](https://github.com/mppjuro/PQChat.DHT/commit/abd61bfbace24185d9585288a16ae94a81c4f1ae) (2026-10-14) — **deps**: bump the androidx-and-compose group with 2 updates
 - [`506dd06`](https://github.com/mppjuro/PQChat.DHT/commit/506dd064cdf065fa76ef4ec970c6ab7386c6c5a3) (2026-10-14) — **deps**: bump softprops/action-gh-release from 2 to 3
-- [`8effc75`](https://github.com/mppjuro/PQChat.DHT/commit/8effc7594ff5373e56a12211f48780c7fd19ef67) (2026-10-14) — **deps**: update numpy requirement in /tools/threat_sim
-- [`9435074`](https://github.com/mppjuro/PQChat.DHT/commit/943507403309dfb5ff37e63f63e89adbedff9084) (2026-10-14) — **deps**: bump actions/setup-python from 5 to 7
 - [`b37de1c`](https://github.com/mppjuro/PQChat.DHT/commit/b37de1c7549ee707d8f29e5d0281922612f371d2) (2026-10-12) — add issue and PR templates, nightly build and release workflows, and changelog automation
 - [`f59c21c`](https://github.com/mppjuro/PQChat.DHT/commit/f59c21cccc38cfb44bcec54bce7b6891df601c7c) (2026-10-12) — **dependencies**: updated dependencies in build.gradle.kts to last version
 - [`2cd09c8`](https://github.com/mppjuro/PQChat.DHT/commit/2cd09c87041220e27b52df471740bbf512323f9f) (2026-10-12) — **deps**: bump org.jetbrains.kotlinx:kotlinx-coroutines-android
@@ -244,7 +244,6 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 - [`7b3cc7a`](https://github.com/mppjuro/PQChat.DHT/commit/7b3cc7a37b6b43b31cafd928e9519f815e16e2d1) (2026-10-12) — **deps**: bump com.code-intelligence:jazzer-api from 0.23.0 to 0.30.0
 - [`978bf67`](https://github.com/mppjuro/PQChat.DHT/commit/978bf67bc1bc91fb0b6b396be02d11ab64fa8f68) (2026-10-12) — **deps**: bump gradle-wrapper from 8.7 to 9.8.1
 - [`b411e78`](https://github.com/mppjuro/PQChat.DHT/commit/b411e7869d5442cb5bd4fb0024e5552ff28880d7) (2026-10-12) — **deps**: update scipy requirement in /tools/threat_sim
-- [`0e28665`](https://github.com/mppjuro/PQChat.DHT/commit/0e286658af64622d35b1c4a3c4e9cbdd7d6d383e) (2026-10-12) — **deps**: update numpy requirement in /tools/threat_sim
 - [`779df60`](https://github.com/mppjuro/PQChat.DHT/commit/779df60e8b8c7a347059065e4faff7f9ea834db2) (2026-10-12) — **deps**: bump actions/upload-artifact from 6 to 7
 - [`1164f08`](https://github.com/mppjuro/PQChat.DHT/commit/1164f08978f16df506dcc05fe522782dce8f5f1b) (2026-10-12) — **deps**: bump actions/setup-java from 5 to 6
 - [`dea6985`](https://github.com/mppjuro/PQChat.DHT/commit/dea6985d105ebd1b8a5256c4d0b88672b02a73a4) (2026-10-12) — **deps**: bump actions/checkout from 5 to 7

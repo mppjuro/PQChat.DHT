@@ -1,9 +1,19 @@
 #!/bin/sh
-# Auto-update CHANGELOG.md after each commit (skipping automated and [skip ci] commits)
+# Optional post-commit changelog refresh (disabled by default to avoid dirtying main).
+# Enable explicitly with: git config --bool pqchat.autoChangelogOnCommit true
+AUTO_CHANGELOG=$(git config --bool --get pqchat.autoChangelogOnCommit 2>/dev/null || echo "false")
+if [ "$AUTO_CHANGELOG" != "true" ]; then
+    exit 0
+fi
+
 LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
 if echo "$LAST_COMMIT_MSG" | grep -qiE "auto-update CHANGELOG\.md|\[skip ci\]"; then
     echo "Skipping changelog generation for automated/skip-ci commit."
     exit 0
 fi
 
-python scripts/generate_changelog.py
+if command -v python3 >/dev/null 2>&1; then
+    python3 scripts/generate_changelog.py
+else
+    python scripts/generate_changelog.py
+fi

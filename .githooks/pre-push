@@ -1,0 +1,31 @@
+#!/bin/sh
+# Optional pre-push hook for release tags (refs/tags/v*).
+# Enable via: scripts/setup-hooks.sh --with-release-tag-changelog (or setup-hooks.ps1 -WithReleaseTagChangelog)
+ENABLE_HOOK=$(git config --bool --get pqchat.changelogOnReleaseTag 2>/dev/null || echo "false")
+if [ "$ENABLE_HOOK" != "true" ]; then
+    exit 0
+fi
+
+PUSHING_RELEASE_TAG=0
+while read -r local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/tags/v*)
+            PUSHING_RELEASE_TAG=1
+            ;;
+    esac
+done
+
+if [ "$PUSHING_RELEASE_TAG" -eq 0 ]; then
+    exit 0
+fi
+
+PY_CMD="python3"
+if ! command -v python3 >/dev/null 2>&1; then
+    PY_CMD="python"
+fi
+
+echo "[pre-push] Release tag push detected; validating deduplicated CHANGELOG.md..."
+if ! "$PY_CMD" scripts/generate_changelog.py --check --require-synced; then
+    echo "[pre-push] Hint: Run '$PY_CMD scripts/generate_changelog.py' and commit CHANGELOG.md before pushing the release tag." >&2
+    exit 1
+fi

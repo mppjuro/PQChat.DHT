@@ -29,12 +29,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -76,24 +83,48 @@ jobs:
           name: ${{ env.APK_NAME }}
           path: ${{ env.APK_NAME }}
 
+      - name: Generate Release Changelog (Full Delta Since Previous Release)
+        run: |
+          mkdir -p build
+          python3 scripts/generate_changelog.py --output build/CHANGELOG.md
+          PREV_TAG=$(git tag --list 'v*' --sort=-creatordate | grep -vx "${TAG_NAME}" | head -n 1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            echo "Generating release delta since tag: $PREV_TAG"
+            python3 scripts/generate_changelog.py --since "$PREV_TAG" --no-header --output build/release_delta.md
+            DELTA_HEADING="### Changes Since ${PREV_TAG}"
+          else
+            python3 scripts/generate_changelog.py --no-header --output build/release_delta.md
+            DELTA_HEADING="### Changelog"
+          fi
+          cat << EOF > build/release_body.md
+          ## 🚀 PQChat.DHT v${VERSION}
+
+          Official release of **PQChat.DHT** — decentralized P2P messenger with post-quantum cryptography (ML-KEM-512) and traffic shaping over BitTorrent Mainline DHT.
+
+          - **Version:** \`v${VERSION}\`
+          - **Commit:** [\`${GITHUB_SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})
+          - **Included APK package:** \`${APK_NAME}\`
+
+          ${DELTA_HEADING}
+
+          EOF
+          if [ -s build/release_delta.md ]; then
+            cat build/release_delta.md >> build/release_body.md
+          else
+            echo "_No new commits since previous release._" >> build/release_body.md
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           name: "PQChat.DHT v${{ env.VERSION }}"
-          body: |
-            ## 🚀 PQChat.DHT v${{ env.VERSION }}
-
-            Official release of **PQChat.DHT** — decentralized P2P messenger with post-quantum cryptography (ML-KEM-512) and traffic shaping over BitTorrent Mainline DHT.
-
-            - **Version:** `v${{ env.VERSION }}`
-            - **Commit:** [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            - **Included APK package:** `${{ env.APK_NAME }}`
-
-            Detailed list of changes is available in [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+          body_path: build/release_body.md
           prerelease: ${{ inputs.prerelease }}
-          generate_release_notes: true
-          files: ${{ env.APK_NAME }}
+          generate_release_notes: false
+          files: |
+            ${{ env.APK_NAME }}
+            build/CHANGELOG.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

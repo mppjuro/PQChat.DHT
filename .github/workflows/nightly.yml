@@ -1111,12 +1111,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -1153,37 +1160,64 @@ jobs:
           name: ${{ env.APK_NAME }}
           path: ${{ env.APK_NAME }}
 
+      - name: Generate Nightly Changelog (Full Delta Since Last Successful Nightly)
+        run: |
+          mkdir -p build
+          python3 scripts/generate_changelog.py --output build/CHANGELOG.md
+          PREV_NIGHTLY=$(git rev-parse --verify "refs/tags/nightly^{commit}" 2>/dev/null || true)
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ -n "$PREV_NIGHTLY" ] && [ "$PREV_NIGHTLY" != "$HEAD_SHA" ]; then
+            echo "Generating nightly delta since previous successful nightly commit: $PREV_NIGHTLY"
+            python3 scripts/generate_changelog.py --since "$PREV_NIGHTLY" --no-header --output build/nightly_delta.md
+          else
+            python3 scripts/generate_changelog.py --since-last-tag "v*" --no-header --output build/nightly_delta.md
+          fi
+          cat << EOF > build/nightly_release_body.md
+          ## 🌙 PQChat.DHT Nightly Build
+
+          Automated daily developer build (\`app-debug.apk\`) after passing the full nightly test suite:
+          - **Fast Unit Tests:** Passed (standard unit test suite)
+          - **Slow Repository & Rekey Tests:** Passed (PQC Rekey, ChatRepository Concurrency, Polling, Property)
+          - **Slow Statistical & Tor Tests:** Passed (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
+          - **Two Devices End-to-End Lifecycle:** Passed (Handshake, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, Real DhtLeafNode by default; FakeDht available via manual opt-in)
+          - **Real BEP 44 Remote Integration Tests:** Passed (Live Mainline DHT)
+          - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
+          - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
+          - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
+          - **Continuous Fuzzing (Jazzer):** Passed (Bencode, KRPC, BinaryFrameCodec 0x01-0x0C + Cover-ACK, Png8Compressor, KeystoreCrypto)
+          - **Network Chaos & Partition Resilience:** Passed (10%-40% UDP loss, mid-transfer partition, PQC rekey outage, CGNAT socket rebind, Tor fail-closed restart)
+          - **Multi-Emulator Real DHT E2E Tests:** Passed by default (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT; simulated 20-node testbed available via manual \`use_fake_dht\` opt-in)
+
+          ### Build Metadata:
+          - **Commit:** [\`${SHORT_SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})
+          - **Release Date:** ${BUILD_DATE}
+          - **APK Package:** ${APK_NAME}
+
+          ### Changes Since Last Successful Nightly:
+
+          EOF
+          if [ -s build/nightly_delta.md ]; then
+            cat build/nightly_delta.md >> build/nightly_release_body.md
+          else
+            echo "_No new commits since the previous nightly build._" >> build/nightly_release_body.md
+          fi
+          cat << 'EOF' >> build/nightly_release_body.md
+
+          > [!NOTE]
+          > This APK package is a developer build signed with a public debug key. Requires enabling installation from unknown sources on Android.
+          EOF
+
       - name: Publish Nightly Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
           target_commitish: ${{ github.sha }}
           name: "Nightly Build (${{ env.DATE_TAG }}-${{ env.SHORT_SHA }})"
-          body: |
-            ## 🌙 PQChat.DHT Nightly Build
-
-            Automated daily developer build (`app-debug.apk`) after passing the full nightly test suite:
-            - **Fast Unit Tests:** Passed (standard unit test suite)
-            - **Slow Repository & Rekey Tests:** Passed (PQC Rekey, ChatRepository Concurrency, Polling, Property)
-            - **Slow Statistical & Tor Tests:** Passed (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
-            - **Two Devices End-to-End Lifecycle:** Passed (Handshake, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, Real DhtLeafNode by default; FakeDht available via manual opt-in)
-            - **Real BEP 44 Remote Integration Tests:** Passed (Live Mainline DHT)
-            - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
-            - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
-            - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
-            - **Continuous Fuzzing (Jazzer):** Passed (Bencode, KRPC, BinaryFrameCodec 0x01-0x0C + Cover-ACK, Png8Compressor, KeystoreCrypto)
-            - **Network Chaos & Partition Resilience:** Passed (10%-40% UDP loss, mid-transfer partition, PQC rekey outage, CGNAT socket rebind, Tor fail-closed restart)
-            - **Multi-Emulator Real DHT E2E Tests:** Passed by default (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT; simulated 20-node testbed available via manual `use_fake_dht` opt-in)
-
-            ### Build Metadata:
-            - **Commit:** [`${{ env.SHORT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            - **Release Date:** ${{ env.BUILD_DATE }}
-            - **APK Package:** ${{ env.APK_NAME }}
-
-            > [!NOTE]
-            > This APK package is a developer build signed with a public debug key. Requires enabling installation from unknown sources on Android.
+          body_path: build/nightly_release_body.md
           prerelease: true
-          files: ${{ env.APK_NAME }}
+          files: |
+            ${{ env.APK_NAME }}
+            build/CHANGELOG.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

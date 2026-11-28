@@ -33,7 +33,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   ANDROID_HOME: /usr/local/lib/android/sdk
@@ -53,6 +53,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -89,6 +91,9 @@ jobs:
       - name: Verify 100% English Language Unification
         run: python3 scripts/check_language_unification.py
 
+      - name: Validate Changelog Generation & Deduplication
+        run: python3 scripts/generate_changelog.py --check
+
       - name: Verify Firebase Research Telemetry Schema & Live Sync
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
@@ -124,6 +129,7 @@ jobs:
             echo "| Android Lint | ✅ Completed |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "| Language Unification (EN) | ✅ Verified (0 Polish characters) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Changelog Validation | ✅ Verified (deduplicated, no bot commits) |" >> $GITHUB_STEP_SUMMARY
           echo "| Room Schema Consistency | ✅ Synchronized |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Test Report
@@ -148,6 +154,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -261,6 +269,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -600,35 +610,4 @@ jobs:
           for port in 5554 5556 5558 5560; do
             adb -s emulator-$port emu kill 2>/dev/null || true
           done
-
-  update-changelog:
-    name: Generate & Update Changelog
-    runs-on: ubuntu-latest
-    needs: [fast-unit-tests-and-lint]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Generate Changelog
-        run: python scripts/generate_changelog.py
-
-      - name: Commit & Push updated CHANGELOG
-        run: |
-          if ! git diff --quiet CHANGELOG.md; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add CHANGELOG.md
-            git commit -m "docs(changelog): auto-update CHANGELOG.md [skip ci]"
-            git push
-          else
-            echo "CHANGELOG.md is already up to date."
-          fi
 
