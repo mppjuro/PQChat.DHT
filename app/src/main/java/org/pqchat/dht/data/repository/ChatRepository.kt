@@ -885,7 +885,8 @@ class ChatRepository(
             // 7. Put to DHT under Target_i
             val tStart = System.currentTimeMillis()
             var success = false
-            val maxPutAttempts = if (isFastTestMode) 3 else 1
+            val isLiveDht = !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive() && dhtLeafNode is DhtLeafNode
+            val maxPutAttempts = if (isFastTestMode || isLiveDht) 3 else 1
             withContext(NonCancellable) {
                 for (attempt in 1..maxPutAttempts) {
                     success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 20_000L else 25_000L) {
@@ -899,7 +900,7 @@ class ChatRepository(
                         )
                     } ?: false
                     if (success) break
-                    if (attempt < maxPutAttempts) delay(500L)
+                    if (attempt < maxPutAttempts) delay(if (isLiveDht) 1500L * attempt else 500L)
                 }
                 val rttMs = System.currentTimeMillis() - tStart
                 researchTelemetry?.recordPacketEvent(
@@ -934,24 +935,19 @@ class ChatRepository(
 
                         if (isFastTestMode) {
                             repositoryScope.launch {
-                                delay(3000L)
-                                dhtLeafNode.putMutable(
-                                    target = slot.target,
-                                    v = frame,
-                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                    salt = null,
-                                    sk = slot.edPrivateKeySeed,
-                                    skipLocalStore = true
-                                )
-                                delay(3000L)
-                                dhtLeafNode.putMutable(
-                                    target = slot.target,
-                                    v = frame,
-                                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                                    salt = null,
-                                    sk = slot.edPrivateKeySeed,
-                                    skipLocalStore = true
-                                )
+                                val republishDelays = if (isLiveDht) listOf(4000L, 10000L) else listOf(3000L, 3000L)
+                                for (republishDelayMs in republishDelays) {
+                                    delay(republishDelayMs)
+                                    if (messageDao.getMessageById(msgId)?.status != "PENDING_DELIVERY") break
+                                    dhtLeafNode.putMutable(
+                                        target = slot.target,
+                                        v = frame,
+                                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                                        salt = null,
+                                        sk = slot.edPrivateKeySeed,
+                                        skipLocalStore = true
+                                    )
+                                }
                             }
                         }
                     }
@@ -1623,6 +1619,18 @@ class ChatRepository(
         }
     }
 
+    /**
+     * Drains QUEUED outgoing messages across all contacts that currently have pending outbox entries.
+     */
+    suspend fun drainAllOutboxes(force: Boolean = false): Int = withContext(Dispatchers.IO) {
+        val contactIds = messageDao.getAllQueuedMessages().map { it.contactId }.distinct()
+        var totalSent = 0
+        for (contactId in contactIds) {
+            totalSent += drainOutbox(contactId, force)
+        }
+        totalSent
+    }
+
     private suspend fun drainOutboxInternal(contactId: String, force: Boolean): Int {
         if (contactDao.getContactById(contactId) == null) return 0
         val queued = messageDao.getQueuedMessagesForContact(contactId)
@@ -2017,7 +2025,7 @@ class ChatRepository(
      * then queries the current slot counterIn.
      */
     suspend fun pollContactIncoming(contactId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastLocalTestbedMode) 15_000L else 25_000L) {
+        withTimeoutOrNull(if (isFastLocalTestbedMode) 15_000L else 40_000L) {
             getContactMutex(contactId).withLock {
                 pollContactIncomingInternal(contactId)
             }
@@ -2348,44 +2356,50 @@ class ChatRepository(
             var initialFrameMsg: BinaryFrameCodec.FrameMessage? = null
 
             if (item == null) {
-                // If single message target is empty, probe chunk targets for this slot (probe 0 and 1)
-                for (probeIdx in 0..1) {
-                    val chunkTarget = ChunkingEngine.deriveChunkTarget(currentSlot.edPrivateKeySeed, probeIdx)
-                    val tChunkStart = System.currentTimeMillis()
-                    val chunkItem = dhtLeafNode.getMutable(chunkTarget, skipLocalStore = isSelf)
-                    val chunkRttMs = System.currentTimeMillis() - tChunkStart
-                    if (chunkItem != null) {
-                        researchTelemetry?.recordPacketEvent(
-                            role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
-                            target = chunkTarget,
-                            seqNum = contact.counterIn.toLong(),
-                            payloadBytes = chunkItem.v.size,
-                            rttMs = chunkRttMs,
-                            nodesQueried = chunkItem.nodesQueried.takeIf { it > 0 } ?: dhtLeafNode.lastNodesQueried,
-                            nodesResponded = chunkItem.nodesResponded.takeIf { it > 0 } ?: dhtLeafNode.lastNodesResponded,
-                            lookupHops = chunkItem.lookupHops.takeIf { it > 0 } ?: dhtLeafNode.lastLookupHops,
-                            success = true
-                        )
-                    }
-                    if (chunkItem != null) {
-                        val chunkKey = ChunkingEngine.deriveChunkMsgKey(currentSlot.msgKey, probeIdx)
-                        try {
-                            val decoded = BinaryFrameCodec.unpackAeadFrame(
-                                key = chunkKey,
-                                frame = chunkItem.v,
-                                target = chunkTarget,
-                                direction = contact.inboundDirection
-                            )
-                            if (decoded.msgType == BinaryFrameCodec.TYPE_CHUNK_DATA) {
-                                item = chunkItem
-                                isChunkTransfer = true
-                                initialChunkPayload = decoded.payload as BinaryFrameCodec.DecodedPayload.ChunkData
-                                initialChunkIndex = probeIdx
-                                initialFrameMsg = decoded
-                                break
+                // If single message target is empty, probe chunk targets 0 and 1 concurrently
+                val probeResults = coroutineScope {
+                    (0..1).map { probeIdx ->
+                        async {
+                            val chunkTarget = ChunkingEngine.deriveChunkTarget(currentSlot.edPrivateKeySeed, probeIdx)
+                            val tChunkStart = System.currentTimeMillis()
+                            val chunkItem = dhtLeafNode.getMutable(chunkTarget, skipLocalStore = isSelf)
+                            val chunkRttMs = System.currentTimeMillis() - tChunkStart
+                            if (chunkItem != null) {
+                                researchTelemetry?.recordPacketEvent(
+                                    role = org.pqchat.dht.research.PacketRole.PACKET_RECEIVED,
+                                    target = chunkTarget,
+                                    seqNum = contact.counterIn.toLong(),
+                                    payloadBytes = chunkItem.v.size,
+                                    rttMs = chunkRttMs,
+                                    nodesQueried = chunkItem.nodesQueried.takeIf { it > 0 } ?: dhtLeafNode.lastNodesQueried,
+                                    nodesResponded = chunkItem.nodesResponded.takeIf { it > 0 } ?: dhtLeafNode.lastNodesResponded,
+                                    lookupHops = chunkItem.lookupHops.takeIf { it > 0 } ?: dhtLeafNode.lastLookupHops,
+                                    success = true
+                                )
+                                val chunkKey = ChunkingEngine.deriveChunkMsgKey(currentSlot.msgKey, probeIdx)
+                                try {
+                                    val decoded = BinaryFrameCodec.unpackAeadFrame(
+                                        key = chunkKey,
+                                        frame = chunkItem.v,
+                                        target = chunkTarget,
+                                        direction = contact.inboundDirection
+                                    )
+                                    if (decoded.msgType == BinaryFrameCodec.TYPE_CHUNK_DATA) {
+                                        return@async Triple(probeIdx, chunkItem, decoded)
+                                    }
+                                } catch (_: Exception) {}
                             }
-                        } catch (_: Exception) {}
-                    }
+                            null
+                        }
+                    }.awaitAll()
+                }
+                val matchedProbe = probeResults.filterNotNull().minByOrNull { it.first }
+                if (matchedProbe != null) {
+                    initialChunkIndex = matchedProbe.first
+                    item = matchedProbe.second
+                    initialFrameMsg = matchedProbe.third
+                    initialChunkPayload = matchedProbe.third.payload as BinaryFrameCodec.DecodedPayload.ChunkData
+                    isChunkTransfer = true
                 }
             }
 
@@ -5014,7 +5028,7 @@ class ChatRepository(
 
         // 5. Execute batch sequentially with bounded timeouts and intra-batch jitter
         var anyReceived = false
-        val taskTimeout = if (isFastLocalTestbedMode) 6_000L else 15_000L
+        val taskTimeout = if (isFastLocalTestbedMode) 6_000L else 20_000L
         for (i in finalTasks.indices) {
             val task = finalTasks[i]
             try {
@@ -5738,7 +5752,8 @@ class ChatRepository(
         }
 
         var success = false
-        val maxAttempts = if (isFastTestMode) 3 else 1
+        val isLiveDht = !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive() && dhtLeafNode is DhtLeafNode
+        val maxAttempts = if (isFastTestMode || isLiveDht) 3 else 1
         withContext(NonCancellable) {
             for (attempt in 1..maxAttempts) {
                 success = withTimeoutOrNull(if (isFastTestMode && !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()) 25_000L else if (isFastTestMode) 10_000L else 20_000L) {
@@ -5752,7 +5767,7 @@ class ChatRepository(
                     )
                 } ?: false
                 if (success) break
-                if (attempt < maxAttempts) delay(500L)
+                if (attempt < maxAttempts) delay(if (isLiveDht) 1500L * attempt else 500L)
             }
 
             // Always advance local counter_out and ratchet chain_out so subsequent messages get next sequence slot
@@ -5769,7 +5784,9 @@ class ChatRepository(
         if (!isSelf) {
             // Background extra republishes for high reliability under UDP packet drops
             repositoryScope.launch {
-                val intervals = if (isFastTestMode) {
+                val intervals = if (isFastTestMode && isLiveDht) {
+                    listOf(3000L, 7000L, 13000L, 20000L)
+                } else if (isFastTestMode) {
                     listOf(1500L, 4000L, 8000L, 14000L)
                 } else {
                     listOf(3000L, 8000L, 18000L)
@@ -6469,9 +6486,21 @@ class ChatRepository(
         policy: org.pqchat.dht.traffic.RepublishPolicy = org.pqchat.dht.traffic.RepublishPolicy(),
         currentTimeMs: Long = System.currentTimeMillis()
     ): Int = withContext(Dispatchers.IO) {
+        val effectivePolicy = if (isFastTestMode && policy == org.pqchat.dht.traffic.RepublishPolicy()) {
+            org.pqchat.dht.traffic.RepublishPolicy(
+                tier1IntervalMs = 10_000L,
+                tier1ThresholdMs = 60_000L,
+                tier2IntervalMs = 20_000L,
+                tier2ThresholdMs = 120_000L,
+                tier3IntervalMs = 40_000L,
+                maxTtlMs = 600_000L
+            )
+        } else {
+            policy
+        }
         org.pqchat.dht.traffic.PollingWorker.executeRepublishPass(
             dhtClient = dhtLeafNode,
-            policy = policy,
+            policy = effectivePolicy,
             currentTimeMs = currentTimeMs,
             onMessageExpired = { messageId -> markMessageExpiredOffline(messageId) }
         )
@@ -8416,7 +8445,7 @@ class ChatRepository(
     }
 
     suspend fun pollGroupIncoming(groupId: String): Boolean = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(if (isFastLocalTestbedMode) 25_000L else 35_000L) {
+        withTimeoutOrNull(if (isFastLocalTestbedMode) 25_000L else 50_000L) {
             val group = groupDao?.getGroupById(groupId) ?: return@withTimeoutOrNull false
             val initialMembers = groupMemberDao?.getMembersForGroup(groupId) ?: return@withTimeoutOrNull false
             val groupIdBytes = uuidStringToBytes(groupId)

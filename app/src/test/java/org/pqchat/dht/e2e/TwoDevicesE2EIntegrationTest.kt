@@ -57,8 +57,8 @@ class TwoDevicesE2EIntegrationTest {
             val runReal = System.getProperty("runRealDhtTests")?.equals("true", ignoreCase = true) == true ||
                           System.getenv("RUN_REAL_DHT_TESTS")?.equals("true", ignoreCase = true) == true
             if (runReal) return false
-            return System.getProperty("useFakeDht")?.equals("false", ignoreCase = true) != true &&
-                   System.getenv("USE_FAKE_DHT")?.equals("false", ignoreCase = true) != true
+            return System.getProperty("useFakeDht")?.equals("true", ignoreCase = true) == true ||
+                   System.getenv("USE_FAKE_DHT")?.equals("true", ignoreCase = true) == true
         }
     }
 

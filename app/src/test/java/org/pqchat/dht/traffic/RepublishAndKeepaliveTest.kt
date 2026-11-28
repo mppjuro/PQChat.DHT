@@ -340,4 +340,79 @@ class RepublishAndKeepaliveTest {
         assertEquals("PQChatRepublishPeriodicWorker", RepublishWorker.WORK_NAME)
         assertEquals("republish_work", RepublishWorker.TAG_REPUBLISH)
     }
+
+    @Test
+    fun testRepublishUnacknowledgedMessagesUsesFastIntervalInFastTestMode() = runBlocking {
+        val seed = CryptoUtils.secureRandomBytes(32)
+        val kp = Ed25519Engine.generateKeyPairFromSeed(seed)
+        val target = Ed25519Engine.computeTarget(kp.publicKey)
+        val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+        val now = System.currentTimeMillis()
+
+        PollingWorker.registerRepublishTask(
+            PollingWorker.RepublishTask(
+                messageId = 4242L,
+                contactId = "alice-fast-republish",
+                target = target,
+                payload = payload,
+                edPrivateKeySeed = seed,
+                initialSentTimestamp = now - 15_000L,
+                lastRepublishedTimestamp = now - 15_000L
+            )
+        )
+
+        val prevFastMode = repository.isFastTestMode
+        try {
+            repository.isFastTestMode = false
+            assertEquals(
+                "Default policy must not republish a 15s-old message when isFastTestMode=false",
+                0,
+                repository.republishUnacknowledgedMessages(currentTimeMs = now)
+            )
+
+            repository.isFastTestMode = true
+            assertEquals(
+                "Fast test mode must republish a 15s-old unacknowledged message",
+                1,
+                repository.republishUnacknowledgedMessages(currentTimeMs = now)
+            )
+            assertNotNull("Republished item must exist in FakeDht", fakeDht.getMutable(target))
+        } finally {
+            repository.isFastTestMode = prevFastMode
+        }
+    }
+
+    @Test
+    fun testDrainAllOutboxesRetriesQueuedMessagesAfterDhtRecovery() = runBlocking {
+        val contactId = UUID.randomUUID().toString()
+        val contact = ContactEntity(
+            id = contactId,
+            name = "Dave",
+            counterOut = 0,
+            counterIn = 0,
+            chainKeyOut = EncryptedBlob(CryptoUtils.secureRandomBytes(64), "contacts", contactId),
+            chainKeyIn = EncryptedBlob(CryptoUtils.secureRandomBytes(64), "contacts", contactId)
+        )
+        contactDao.insertOrUpdate(contact)
+
+        repository.delayedPutMaxMs = 0L
+        repository.decoyPutSlotsCount = 0
+        repository.isFastTestMode = false
+
+        fakeDht.dropProbability = 1.0
+        val sentInitially = repository.sendTextMessage(contactId, "Queued during transient failure")
+        assertFalse("Initial send must fail and queue message when DHT drops all puts", sentInitially)
+
+        val queued = messageDao.getAllQueuedMessages()
+        assertEquals("Message must be queued in outbox", 1, queued.size)
+
+        fakeDht.dropProbability = 0.0
+        val drained = repository.drainAllOutboxes(force = true)
+        assertEquals("drainAllOutboxes must deliver the queued message after recovery", 1, drained)
+        assertTrue("Outbox must be empty after drain", messageDao.getAllQueuedMessages().isEmpty())
+
+        val pending = messageDao.getPendingDeliveryMessagesForContact(contactId)
+        assertEquals(1, pending.size)
+        assertEquals("PENDING_DELIVERY", pending[0].status)
+    }
 }

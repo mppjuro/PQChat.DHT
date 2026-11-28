@@ -47,7 +47,14 @@ open class DhtLeafNode(
         const val K = DEFAULT_K
         const val TIMEOUT_MS = 3000L
         const val FAST_GET_TIMEOUT_MS = 600L
+        const val LIVE_GET_TIMEOUT_MS = 2000L
         const val BOOTSTRAP_TIMEOUT_MS = 2500L
+
+        internal fun resolveEffectiveGetQueryTimeoutMs(requestedTimeoutMs: Long, isLiveNetwork: Boolean): Long =
+            if (isLiveNetwork) maxOf(requestedTimeoutMs, LIVE_GET_TIMEOUT_MS) else requestedTimeoutMs
+
+        internal fun resolveFastTerminationEmptyQuorum(isLiveNetwork: Boolean): Int =
+            if (isLiveNetwork) 8 else 3
         const val DEFAULT_NODE_ID_ROTATION_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes
 
         /**
@@ -1772,7 +1779,9 @@ open class DhtLeafNode(
 
         val isLiveNetwork = !isLocalMode && candidatePool.values.any { !isLoopbackOrLocal(it.address) }
         val minHops = if (isLiveNetwork) 4 else 1
-        val maxHops = if (isLiveNetwork) 5 else 2
+        val maxHops = if (isLiveNetwork) 6 else 2
+        val effectiveQueryTimeoutMs = resolveEffectiveGetQueryTimeoutMs(timeoutMs, isLiveNetwork)
+        val fastTermQuorum = resolveFastTerminationEmptyQuorum(isLiveNetwork)
 
         val queriedAddresses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
         val emptyResponses = ConcurrentHashMap.newKeySet<InetSocketAddress>()
@@ -1794,7 +1803,7 @@ open class DhtLeafNode(
 
             if (unqueried.isEmpty()) break
 
-            val batchCount = if (hop == 1) minOf(20, unqueried.size) else minOf(8, unqueried.size)
+            val batchCount = if (hop == 1) minOf(20, unqueried.size) else if (isLiveNetwork) minOf(12, unqueried.size) else minOf(8, unqueried.size)
             val currentHopNodes = if (isLiveNetwork) {
                 diversifyCandidatesBySubnet(unqueried, count = batchCount, maxPerSubnet = 2)
             } else {
@@ -1812,7 +1821,7 @@ open class DhtLeafNode(
                     launch {
                         try {
                             val query = KrpcMessage.createBep44GetQuery(myNodeId, target)
-                            val resp = sendQuery(peer.address, query, timeoutMs = timeoutMs) ?: return@launch
+                            val resp = sendQuery(peer.address, query, timeoutMs = effectiveQueryTimeoutMs) ?: return@launch
                             totalResponses.incrementAndGet()
 
                             val respId = resp.responseData["id"] as? ByteArray
@@ -1870,9 +1879,9 @@ open class DhtLeafNode(
                             } else {
                                 emptyResponses.add(peer.address)
 
-                                // In-batch Fast Termination check only if we've reached minHops and no fresh item found
+                                // In-batch Fast Termination check only on non-live networks when we've reached minHops and no fresh item found
                                 val hasFreshItem = foundItem.get() != null && (minSeq < 0L || foundItem.get()!!.seq > minSeq)
-                                if (!probeAllReplicas && hop >= minHops && !hasFreshItem && foundItem.get() == null) {
+                                if (!isLiveNetwork && !probeAllReplicas && hop >= minHops && !hasFreshItem && foundItem.get() == null) {
                                     val eligible = candidatePool.values.filter { !isBootstrapRouter(it.address) }
                                     val top3 = eligible.sortedWith { a, b ->
                                         val distA = xorDistance(a.nodeId, target)
@@ -1906,14 +1915,14 @@ open class DhtLeafNode(
             // Fast-Termination evaluation
             if (!probeAllReplicas && foundItem.get() == null) {
                 val eligiblePeers = candidatePool.values.filter { !isBootstrapRouter(it.address) }
-                val top3Overall = eligiblePeers.sortedWith { a, b ->
+                val topClosestOverall = eligiblePeers.sortedWith { a, b ->
                     val distA = xorDistance(a.nodeId, target)
                     val distB = xorDistance(b.nodeId, target)
                     compareBytes(distA, distB)
-                }.take(3)
+                }.take(fastTermQuorum)
 
-                val top3Count = minOf(3, eligiblePeers.size)
-                val allTop3Empty = top3Overall.size >= top3Count && top3Overall.take(top3Count).all { it.address in emptyResponses }
+                val topCount = minOf(fastTermQuorum, eligiblePeers.size)
+                val allTopEmpty = topClosestOverall.size >= topCount && topClosestOverall.take(topCount).all { it.address in emptyResponses }
 
                 val storedAddrs = storedPeers.map { it.address }.toSet()
                 val storedPending = storedAddrs.any { it !in emptyResponses }
@@ -1937,8 +1946,8 @@ open class DhtLeafNode(
 
                 val canFastTerminate = (hop >= minHops || !hasCloserUnqueried || unqueriedPeers.isEmpty())
 
-                if (canFastTerminate && allTop3Empty && !storedPending) {
-                    println("[PQChat] Fast Termination: $top3Count closest nodes from pool returned no 'v', no closer candidates in queue (hop=$hop, minHops=$minHops) for target=$targetHex")
+                if (canFastTerminate && allTopEmpty && !storedPending) {
+                    println("[PQChat] Fast Termination: $topCount closest nodes from pool returned no 'v', no closer candidates in queue (hop=$hop, minHops=$minHops) for target=$targetHex")
                     break
                 }
             }
@@ -2400,7 +2409,7 @@ open class DhtLeafNode(
                             salt = salt,
                             readOnly = false
                         )
-                        val res = sendQueryWithResult(peer.address, putQuery, timeoutMs = if (isLocalMode) 1000L else 2500L)
+                        val res = sendQueryWithResult(peer.address, putQuery, timeoutMs = if (isLocalMode) 1000L else 3000L)
                         when (res) {
                             is QueryResult.Success -> {
                                 putAcks.incrementAndGet()
@@ -2425,7 +2434,7 @@ open class DhtLeafNode(
             }
 
             val startPut = System.currentTimeMillis()
-            val maxPutWait = if (isLocalMode) 1000L else 3500L
+            val maxPutWait = if (isLocalMode) 1000L else 4500L
             val requiredAcks = when {
                 isLocalMode -> minOf(3, targetPutNodes.size)
                 isLiveNetwork -> minOf(12, targetPutNodes.size)

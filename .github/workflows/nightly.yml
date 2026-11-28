@@ -17,12 +17,12 @@ on:
         required: false
         default: false
       use_fake_dht:
-        description: 'Use FakeDht in two-device end-to-end test (default true = faster reliable CI)'
+        description: 'Use simulated/fake DHT instead of real Mainline DHT (manual opt-in only; default false = real DHT)'
         type: boolean
         required: false
-        default: true
+        default: false
       nodes:
-        description: 'Number of emulator instances for real DHT E2E (3, 4, or all)'
+        description: 'Number of emulator instances for multi-emulator E2E (2, 3, 4, or all)'
         type: choice
         required: false
         default: 'all'
@@ -404,17 +404,16 @@ jobs:
 
       - name: Run Two Devices End-to-End Test
         run: |
-          USE_FAKE="${{ inputs.use_fake_dht || 'true' }}"
-          if [ "$USE_FAKE" = "false" ]; then
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.use_fake_dht == true }}" = "true" ]; then
+            echo "Running Two Devices E2E Integration Test using FakeDht (manual opt-in)..."
+            ./gradlew testDebugUnitTest -DrunSlowTests=true -DuseFakeDht=true --tests "org.pqchat.dht.e2e.TwoDevicesE2EIntegrationTest"
+          else
             echo "Running Two Devices E2E Integration Test using Real DhtLeafNode..."
             ./gradlew testDebugUnitTest -DrunSlowTests=true -DuseFakeDht=false --tests "org.pqchat.dht.e2e.TwoDevicesE2EIntegrationTest"
-          else
-            echo "Running Two Devices E2E Integration Test using FakeDht..."
-            ./gradlew testDebugUnitTest -DrunSlowTests=true -DuseFakeDht=true --tests "org.pqchat.dht.e2e.TwoDevicesE2EIntegrationTest"
           fi
         env:
           RUN_SLOW_TESTS: "true"
-          USE_FAKE_DHT: "${{ inputs.use_fake_dht || 'true' }}"
+          USE_FAKE_DHT: "${{ github.event_name == 'workflow_dispatch' && inputs.use_fake_dht == true }}"
 
       - name: Upload E2E Test Report
         if: always()
@@ -514,13 +513,9 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 1
-      matrix: >-
-        ${{ fromJSON(
-          (github.event_name == 'workflow_dispatch' && inputs.nodes == '2' && '{"include":[{"nodes":"2","mode":"real"}]}') ||
-          (github.event_name == 'workflow_dispatch' && inputs.nodes == '3' && '{"include":[{"nodes":"3","mode":"testbed"},{"nodes":"3","mode":"real"}]}') ||
-          (github.event_name == 'workflow_dispatch' && inputs.nodes == '4' && '{"include":[{"nodes":"4","mode":"testbed"},{"nodes":"4","mode":"real"}]}') ||
-          '{"include":[{"nodes":"3","mode":"testbed"},{"nodes":"4","mode":"testbed"},{"nodes":"2","mode":"real"},{"nodes":"3","mode":"real"},{"nodes":"4","mode":"real"}]}'
-        ) }}
+      matrix:
+        mode: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.use_fake_dht == true && '["testbed"]') || '["real"]') }}
+        nodes: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.nodes != '' && inputs.nodes != 'all' && format('["{0}"]', inputs.nodes)) || '["2","3","4"]') }}
 
     steps:
       - name: Checkout repository
@@ -945,13 +940,12 @@ jobs:
             - **Fast Unit Tests:** Passed (standard unit test suite)
             - **Slow Repository & Rekey Tests:** Passed (PQC Rekey, ChatRepository Concurrency, Polling, Property)
             - **Slow Statistical & Tor Tests:** Passed (Monte Carlo, Tor SOCKS5 fail-closed, Loopback Harness)
-            - **Two Devices End-to-End Lifecycle:** Passed (Handshake, >10 Msg, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, DhtLeafNode / FakeDht)
+            - **Two Devices End-to-End Lifecycle:** Passed (Handshake, Rekey after 50 messages, Out-of-Order / SlidingWindowBitmap, Real DhtLeafNode by default; FakeDht available via manual opt-in)
             - **Real BEP 44 Remote Integration Tests:** Passed (Live Mainline DHT)
             - **Real DHT Loopback & Retention Suite:** Passed (500 iterations per environment, live Mainline DHT)
             - **DHT Real Traffic Testbed & Threat Analysis:** Passed (150 Kademlia nodes)
             - **Byzantine & Adversarial DHT Attack Simulation:** Passed (Sybil / Eclipse /24 subnet bucketing, Active Bit-Flipper & Tampering rejection, BEP 44 Sequence Rollback & Tombstone suppression, Global Timing Correlation Analysis)
-            - **Multi-Emulator DHT Testbed E2E Tests:** Passed (3 & 4 nodes full lifecycle: Handshake, Multi-turn, Group Polls 0x0A, Voice Notes 0x09, and 50-Message Auto-Rekey on an isolated 20-node DHT testbed)
-            - **Multi-Emulator Real DHT Smoke Tests:** Passed (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT)
+            - **Multi-Emulator Real DHT E2E Tests:** Passed by default (2-node direct chat, 3-node group chat, and 4-node group chat on live Mainline DHT; simulated 20-node testbed available via manual `use_fake_dht` opt-in)
 
             ### Build Metadata:
             - **Commit:** [`${{ env.SHORT_SHA }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})

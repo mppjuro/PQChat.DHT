@@ -709,7 +709,7 @@ logcat -c
         last_on_tick_time = start
         last_scroll_time = start
         last_fg_time = start
-        sync_cadence = 15.0 if self.real_dht else 12.0
+        sync_cadence = 18.0 if self.real_dht else 12.0
         while time.time() - start < effective_timeout:
             bounds = self.find_node(
                 text=text,
@@ -804,6 +804,31 @@ logcat -c
             self.sleep(1.0)
         print(f"[{self.name}] ContactListScreen readiness timeout.", flush=True)
         return False
+
+    def wait_for_dht_peers(self, min_peers: int = 4, timeout: float = 20.0) -> int:
+        """Waits for the DHT status badge on ContactListScreen to report at least min_peers."""
+        if self.dry_run:
+            return min_peers
+        start = time.time()
+        max_seen = 0
+        print(f"[{self.name}] Waiting for >= {min_peers} DHT peers (timeout={timeout}s)...", flush=True)
+        while time.time() - start < timeout:
+            self.invalidate_ui_cache()
+            root = self.dump_ui()
+            if root is not None:
+                for node in root.iter("node"):
+                    n_text = node.attrib.get("text", "")
+                    m = re.search(r"DHT:\s*(\d+)\s+Peers", n_text)
+                    if m:
+                        count = int(m.group(1))
+                        if count > max_seen:
+                            max_seen = count
+                        if count >= min_peers:
+                            print(f"[{self.name}] DHT peers ready: {count}", flush=True)
+                            return count
+            self.sleep(1.5)
+        print(f"[{self.name}] DHT peer warmup finished with {max_seen} peers.", flush=True)
+        return max_seen
 
     def is_on_contact_list(self) -> bool:
         """Determines if the device is currently displaying ContactListScreen."""
@@ -1151,13 +1176,29 @@ class MultiEmulatorOrchestrator:
         self.sleep(3.0 if self.args.real_dht else 2.0)
         for dev in self.active_devices:
             dev.ensure_app_foreground()
-            dev.wait_for_contact_list_ready(timeout=25.0)
+            ready = dev.wait_for_contact_list_ready(timeout=45.0)
+            if not ready:
+                print(f"[{dev.name}] ContactListScreen not ready on initial check; recovering foreground...", flush=True)
+                dev.wake_and_unlock()
+                dev.shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+                dev.grant_app_permissions()
+                dev.start_app()
+                ready = dev.wait_for_contact_list_ready(timeout=30.0)
+            peer_info = ""
+            if self.args.real_dht:
+                peers = dev.wait_for_dht_peers(min_peers=4, timeout=20.0)
+                peer_info = f" (DHT peers={peers})"
             dev.shell("logcat -G 16M && logcat -c")
             sc = dev.screencap(f"00_{dev.name.lower()}_started")
-            self.log_step(f"Init {dev.name}", "PASS", f"{dev.name} clean install & launch verified", sc)
+            if ready:
+                self.log_step(f"Init {dev.name}", "PASS", f"{dev.name} clean install & launch verified{peer_info}", sc)
+            else:
+                self.log_step(f"Init {dev.name}", "WARN", f"{dev.name} launch timed out waiting for ContactListScreen{peer_info}", sc)
 
-    def _perform_pair_handshake(self, initiator: AdbDevice, responder: AdbDevice, step_num: str, pair_label: str) -> bool:
+    def _perform_pair_handshake(self, initiator: AdbDevice, responder: AdbDevice, step_num: str, pair_label: str, is_retryable: bool = False) -> bool:
         print(f"\n--- PAIR HANDSHAKE: {initiator.name} & {responder.name} ({pair_label}) ---", flush=True)
+        fail_status = "WARN" if is_retryable else "FAIL"
+        retry_note = " (will retry)" if is_retryable else ""
 
         initiator.wake_and_unlock()
         initiator.ensure_app_foreground()
@@ -1208,7 +1249,7 @@ class MultiEmulatorOrchestrator:
             if qr_gen_ok:
                 self.log_step(f"{initiator.name} QR Generated ({pair_label})", "PASS", f"{initiator.name} generated hybrid ML-KEM-512 QR (864 B)", qr_sc)
             else:
-                self.log_step(f"{initiator.name} QR Generated ({pair_label})", "FAIL", f"Failed to generate QR code on {initiator.name} within timeout", qr_sc)
+                self.log_step(f"{initiator.name} QR Generated ({pair_label})", fail_status, f"Failed to generate QR code on {initiator.name} within timeout{retry_note}", qr_sc)
                 return False
 
             # 2. Push key material to responder
@@ -1230,6 +1271,7 @@ class MultiEmulatorOrchestrator:
             responder.ensure_app_foreground()
             if not responder.find_node(test_tag="handshake_bob_tab"):
                 responder.navigate_to_contact_list()
+                responder.wait_for_contact_list_ready(timeout=20.0)
                 responder.click_element(test_tag="join_chat_fab", text="Scan / Join (Bob)")
                 self.sleep(1.5)
 
@@ -1297,7 +1339,7 @@ class MultiEmulatorOrchestrator:
             if valid_qr:
                 self.log_step(f"{responder.name} Verified QR ({pair_label})", "PASS", f"Decoded 864 bytes hybrid key for {pair_label}", sc_resp_verified)
             else:
-                self.log_step(f"{responder.name} Verified QR ({pair_label})", "FAIL", f"Failed to decode or validate 864 bytes hybrid key for {pair_label}", sc_resp_verified)
+                self.log_step(f"{responder.name} Verified QR ({pair_label})", fail_status, f"Failed to decode or validate 864 bytes hybrid key for {pair_label}{retry_note}", sc_resp_verified)
                 return False
 
             # Close keyboard and scroll to make Encapsulate button visible
@@ -1311,13 +1353,13 @@ class MultiEmulatorOrchestrator:
                 responder.scroll_down()
                 encapsulate_clicked = responder.click_element(test_tag="handshake_encapsulate_button", text="Encapsulate & Put to DHT")
             if not encapsulate_clicked:
-                self.log_step(f"Encapsulate Clicked ({pair_label})", "FAIL", "Failed to locate and click 'handshake_encapsulate_button'")
+                self.log_step(f"Encapsulate Clicked ({pair_label})", fail_status, f"Failed to locate and click 'handshake_encapsulate_button'{retry_note}")
                 return False
 
             self.sleep(2.0)
 
             # 4. Concurrent SAS verification polling on both devices
-            sas_timeout = 120 if self.args.real_dht else 60
+            sas_timeout = 150 if self.args.real_dht else 60
             print(f"[Orchestrator] Concurrently polling SAS verification on {initiator.name} and {responder.name} (timeout={sas_timeout}s)...", flush=True)
             start_sas = time.time()
             init_sas = False
@@ -1358,7 +1400,7 @@ class MultiEmulatorOrchestrator:
                 self.log_step(f"SAS Verified ({pair_label})", "PASS", f"SAS verification completed on {initiator.name} and {responder.name}", sc_sas)
                 handshake_ok = True
             else:
-                self.log_step(f"SAS Verified ({pair_label})", "FAIL", f"SAS verification not reached within timeout (initiator={init_sas}, responder={resp_sas})", sc_sas)
+                self.log_step(f"SAS Verified ({pair_label})", fail_status, f"SAS verification not reached within timeout (initiator={init_sas}, responder={resp_sas}){retry_note}", sc_sas)
                 handshake_ok = False
 
         finally:
@@ -1381,20 +1423,20 @@ class MultiEmulatorOrchestrator:
             self.log_step(f"Handshake Complete ({pair_label})", "PASS", f"Cryptographic pairwise handshake verified between {initiator.name} and {responder.name}", sc_init_contacts)
             return True
         else:
-            self.log_step(f"Handshake Complete ({pair_label})", "FAIL", f"Pairwise handshake failed between {initiator.name} and {responder.name}")
+            self.log_step(f"Handshake Complete ({pair_label})", fail_status, f"Pairwise handshake failed between {initiator.name} and {responder.name}{retry_note}")
             return False
 
     def _phase_1_handshakes(self) -> bool:
         print("\n--- PHASE 1: PAIRWISE HANDSHAKES ---", flush=True)
 
         # 1. Alice <-> Bob (with 1 retry attempt if initial attempt fails)
-        ok_ab = self._perform_pair_handshake(self.alice, self.bob, "01", "alice_bob")
+        ok_ab = self._perform_pair_handshake(self.alice, self.bob, "01", "alice_bob", is_retryable=True)
         if not ok_ab:
             print("[Orchestrator] Alice-Bob handshake attempt 1 failed. Resetting screens to ContactListScreen and retrying (attempt 2)...", flush=True)
             self.alice.navigate_to_contact_list()
             self.bob.navigate_to_contact_list()
             self.sleep(2.0)
-            ok_ab = self._perform_pair_handshake(self.alice, self.bob, "01b", "alice_bob_retry")
+            ok_ab = self._perform_pair_handshake(self.alice, self.bob, "01b", "alice_bob_retry", is_retryable=False)
 
         if not ok_ab:
             print("[Orchestrator] ERROR: Alice-Bob handshake failed after retry. Stopping pairwise handshakes.", flush=True)
@@ -1402,25 +1444,25 @@ class MultiEmulatorOrchestrator:
 
         # 2. Alice <-> Charlie (if nodes >= 3)
         if self.charlie:
-            ok_ac = self._perform_pair_handshake(self.alice, self.charlie, "02", "alice_charlie")
+            ok_ac = self._perform_pair_handshake(self.alice, self.charlie, "02", "alice_charlie", is_retryable=True)
             if not ok_ac:
                 print("[Orchestrator] Alice-Charlie handshake attempt 1 failed. Retrying (attempt 2)...", flush=True)
                 self.alice.navigate_to_contact_list()
                 self.charlie.navigate_to_contact_list()
                 self.sleep(2.0)
-                ok_ac = self._perform_pair_handshake(self.alice, self.charlie, "02b", "alice_charlie_retry")
+                ok_ac = self._perform_pair_handshake(self.alice, self.charlie, "02b", "alice_charlie_retry", is_retryable=False)
             if not ok_ac:
                 return False
 
         # 3. Alice <-> Dave (if nodes >= 4)
         if self.dave:
-            ok_ad = self._perform_pair_handshake(self.alice, self.dave, "03", "alice_dave")
+            ok_ad = self._perform_pair_handshake(self.alice, self.dave, "03", "alice_dave", is_retryable=True)
             if not ok_ad:
                 print("[Orchestrator] Alice-Dave handshake attempt 1 failed. Retrying (attempt 2)...", flush=True)
                 self.alice.navigate_to_contact_list()
                 self.dave.navigate_to_contact_list()
                 self.sleep(2.0)
-                ok_ad = self._perform_pair_handshake(self.alice, self.dave, "03b", "alice_dave_retry")
+                ok_ad = self._perform_pair_handshake(self.alice, self.dave, "03b", "alice_dave_retry", is_retryable=False)
             if not ok_ad:
                 return False
 
@@ -1455,8 +1497,8 @@ class MultiEmulatorOrchestrator:
         self.sleep(1.0)
         self.bob.screencap("02_bob_direct_chat")
 
-        dm_timeout = 120 if self.args.real_dht else (75 if self.args.nodes >= 3 else 45)
-        send_settle = 2.0 if not self.args.real_dht else 6.0
+        dm_timeout = 150 if self.args.real_dht else (75 if self.args.nodes >= 3 else 45)
+        send_settle = 8.0 if self.args.real_dht else 2.0
 
         # Turn 1: Alice sends direct message to Bob
         direct_msg = "Hello_Bob_PQ_Direct_Message"
@@ -1653,7 +1695,7 @@ class MultiEmulatorOrchestrator:
         if self.dave:
             participants.append(self.dave)
 
-        invite_timeout = 75 if not self.args.real_dht else 150
+        invite_timeout = 75 if not self.args.real_dht else 180
         all_participants_joined = True
         missing_participants = []
 
@@ -1673,7 +1715,7 @@ class MultiEmulatorOrchestrator:
 
         while time.time() - start_wait < invite_timeout and len(joined_devs) < len(participants):
             elapsed = time.time() - start_wait
-            sync_delay = 12.0 if self.args.real_dht else 8.0
+            sync_delay = 15.0 if self.args.real_dht else 8.0
             if (time.time() - last_sync_chip) >= sync_delay:
                 self.alice.trigger_sync()
                 for dev in participants:
@@ -1840,8 +1882,8 @@ class MultiEmulatorOrchestrator:
 
         all_turns_ok = True
         fails_count = 0
-        msg_timeout = 45 if not self.args.real_dht else 105
-        send_settle = 2.0 if not self.args.real_dht else 6.0
+        msg_timeout = 45 if not self.args.real_dht else 135
+        send_settle = 8.0 if self.args.real_dht else 2.0
 
         def execute_group_turn(
             turn_num: int,

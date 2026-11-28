@@ -526,6 +526,7 @@ class ChatViewModel @JvmOverloads constructor(
                             repository.pollAllContactsIncoming()
                         }
                         repository.flushOutboundPoissonQueue()
+                        repository.drainAllOutboxes(force = true)
                         repository.republishUnacknowledgedMessages()
                         repository.retransmitUnconfirmedGroupControls()
                     } while (hasPendingSync.get())
@@ -747,13 +748,21 @@ class ChatViewModel @JvmOverloads constructor(
             var attempts = 0
             val maxAttempts = 300 // Extended handshake polling window
             while (_isHandshaking.value && attempts < maxAttempts) {
-                val delayMs = if (org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) 1500L else 2500L
+                val isLive = !org.pqchat.dht.dht.leaf.DhtLeafNode.isLocalTestbedActive()
+                val delayMs = if (org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) (if (isLive) 3000L else 1500L) else 2500L
                 delay(delayMs)
                 attempts++
                 if (attempts % 2 == 0) {
                     dhtLeafNode.targetRouteCache.remove(aliceInit.target0)
                 }
-                val item = dhtLeafNode.getMutable(target = aliceInit.target0, skipLocalStore = true)
+                if (isLive && attempts % 4 == 0 && dhtLeafNode.getActivePeerCount() < org.pqchat.dht.dht.leaf.DhtLeafNode.MIN_HEALTHY_ROUTING_TABLE_SIZE) {
+                    dhtLeafNode.rebootstrap(force = true)
+                }
+                val item = dhtLeafNode.getMutable(
+                    target = aliceInit.target0,
+                    skipLocalStore = true,
+                    timeoutMs = if (isLive) 3000L else org.pqchat.dht.dht.leaf.DhtLeafNode.FAST_GET_TIMEOUT_MS
+                )
                 if (item != null) {
                     try {
                         val session = HandshakeManager.aliceFinalize(

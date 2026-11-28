@@ -196,5 +196,14 @@ class FastTerminationTest {
             nodeB3.stop()
         }
     }
+
+    @Test
+    fun testLiveNetworkGetTimeoutAndFastTerminationQuorum() {
+        assertEquals(600L, DhtLeafNode.resolveEffectiveGetQueryTimeoutMs(600L, isLiveNetwork = false))
+        assertEquals(DhtLeafNode.LIVE_GET_TIMEOUT_MS, DhtLeafNode.resolveEffectiveGetQueryTimeoutMs(600L, isLiveNetwork = true))
+        assertEquals(8000L, DhtLeafNode.resolveEffectiveGetQueryTimeoutMs(8000L, isLiveNetwork = true))
+        assertEquals(3, DhtLeafNode.resolveFastTerminationEmptyQuorum(isLiveNetwork = false))
+        assertEquals(8, DhtLeafNode.resolveFastTerminationEmptyQuorum(isLiveNetwork = true))
+    }
 }
 
