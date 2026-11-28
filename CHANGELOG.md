@@ -69,6 +69,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🔒 Security & Cryptography
 
+- [`e99c3aa`](https://github.com/mppjuro/PQChat.DHT/commit/e99c3aaf6187af5f16a63e4b724230850f1192e1) (2026-11-28) — leaf-only isolation, traffic metadata protection, RAM hygiene, and EN unification
 - [`e078692`](https://github.com/mppjuro/PQChat.DHT/commit/e078692f9ba1bb6c7cb79fa6c46b0c2bf280f193) (2026-10-21) — **traffic**: enforce constant-budget polling and weighted fair stratified sampling across direct and group chats
 - [`71889c3`](https://github.com/mppjuro/PQChat.DHT/commit/71889c377019859d32df9e28d3096573edca3e61) (2026-10-21) — **db**: eliminate Column-Swap and Intra-Row Swap vulnerabilities and encrypt social graph metadata
 - [`d073c44`](https://github.com/mppjuro/PQChat.DHT/commit/d073c4454b531a032f250c989b6ac3ac37f15243) (2026-10-08) — Bencode and KRPC parsing against untrusted UDP inputs and add Jazzer fuzzing
@@ -274,6 +275,7 @@ The format is based on the [Conventional Commits](https://www.conventionalcommit
 
 ## 🛠️ Other Changes
 
+- [`b5031fa`](https://github.com/mppjuro/PQChat.DHT/commit/b5031fa3072da26f8361c628c50e5103fd51c804) (2026-11-28) — **changelog**: Merge with new commit
 - [`8b25a65`](https://github.com/mppjuro/PQChat.DHT/commit/8b25a6506757da0deb7739a17aeaa08fbf4c3293) (2026-11-23) — **deps**: bump com.android.application from 9.5.1 to 9.5.2
 - [`a65340b`](https://github.com/mppjuro/PQChat.DHT/commit/a65340b154be6e22d0585faabe73194f77748236) (2026-11-23) — **deps**: bump org.robolectric:robolectric from 4.18 to 4.18.1
 - [`1120758`](https://github.com/mppjuro/PQChat.DHT/commit/1120758b38e653de56aef43af24c7390001b6f15) (2026-11-23) — **deps**: bump the androidx-and-compose group with 6 updates
