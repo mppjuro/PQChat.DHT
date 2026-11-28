@@ -35,8 +35,14 @@ object CoverAckProtocol {
      */
     fun computeAckTarget(ratchetKey: ByteArray, messageId: String): ByteArray {
         val seed = deriveAckSeed(ratchetKey, messageId)
-        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
-        return Ed25519Engine.computeTarget(keyPair.publicKey)
+        var keyPair: Ed25519Engine.KeyPair? = null
+        return try {
+            keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+            Ed25519Engine.computeTarget(keyPair.publicKey)
+        } finally {
+            seed.fill(0)
+            keyPair?.seed?.fill(0)
+        }
     }
 
     /**
@@ -64,25 +70,31 @@ object CoverAckProtocol {
         seqNum: Int,
         timestampUTC: Long = BinaryFrameCodec.obfuscateTimestamp(System.currentTimeMillis())
     ): ByteArray {
-        val aesKey = deriveAckAesKey(ratchetKey, messageId)
         val msgIdBytes = messageId.toByteArray(Charsets.UTF_8)
         require(msgIdBytes.size <= 64) { "messageId exceeds maximum length of 64 bytes" }
 
-        val plaintext = ByteBuffer.allocate(BinaryFrameCodec.CIPHERTEXT_SIZE).order(ByteOrder.BIG_ENDIAN)
-        plaintext.put(ACK_MAGIC)
-        plaintext.putInt(seqNum)
-        plaintext.putLong(timestampUTC)
-        plaintext.putShort(msgIdBytes.size.toShort())
-        plaintext.put(msgIdBytes)
+        val aesKey = deriveAckAesKey(ratchetKey, messageId)
+        val plaintextBytes = ByteArray(BinaryFrameCodec.CIPHERTEXT_SIZE)
+        return try {
+            val plaintext = ByteBuffer.wrap(plaintextBytes).order(ByteOrder.BIG_ENDIAN)
+            plaintext.put(ACK_MAGIC)
+            plaintext.putInt(seqNum)
+            plaintext.putLong(timestampUTC)
+            plaintext.putShort(msgIdBytes.size.toShort())
+            plaintext.put(msgIdBytes)
 
-        val paddingSize = BinaryFrameCodec.CIPHERTEXT_SIZE - plaintext.position()
-        if (paddingSize > 0) {
-            plaintext.put(CryptoUtils.secureRandomBytes(paddingSize))
+            val paddingSize = BinaryFrameCodec.CIPHERTEXT_SIZE - plaintext.position()
+            if (paddingSize > 0) {
+                plaintext.put(CryptoUtils.secureRandomBytes(paddingSize))
+            }
+
+            val ackTarget = computeAckTarget(ratchetKey, messageId)
+            val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
+            BinaryFrameCodec.packAeadFrame(aesKey, plaintextBytes, aad)
+        } finally {
+            aesKey.fill(0)
+            plaintextBytes.fill(0)
         }
-
-        val ackTarget = computeAckTarget(ratchetKey, messageId)
-        val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
-        return BinaryFrameCodec.packAeadFrame(aesKey, plaintext.array(), aad)
     }
 
     /**
@@ -96,44 +108,49 @@ object CoverAckProtocol {
     ): Boolean {
         if (frame.size != BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES) return false
         val aesKey = deriveAckAesKey(ratchetKey, expectedMessageId)
+        var plaintextBytes: ByteArray? = null
+        return try {
+            val iv = ByteArray(BinaryFrameCodec.IV_SIZE)
+            val tag = ByteArray(BinaryFrameCodec.TAG_SIZE)
+            val ciphertext = ByteArray(BinaryFrameCodec.CIPHERTEXT_SIZE)
 
-        val iv = ByteArray(BinaryFrameCodec.IV_SIZE)
-        val tag = ByteArray(BinaryFrameCodec.TAG_SIZE)
-        val ciphertext = ByteArray(BinaryFrameCodec.CIPHERTEXT_SIZE)
+            System.arraycopy(frame, 0, iv, 0, BinaryFrameCodec.IV_SIZE)
+            System.arraycopy(frame, BinaryFrameCodec.IV_SIZE, tag, 0, BinaryFrameCodec.TAG_SIZE)
+            System.arraycopy(frame, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE, ciphertext, 0, BinaryFrameCodec.CIPHERTEXT_SIZE)
 
-        System.arraycopy(frame, 0, iv, 0, BinaryFrameCodec.IV_SIZE)
-        System.arraycopy(frame, BinaryFrameCodec.IV_SIZE, tag, 0, BinaryFrameCodec.TAG_SIZE)
-        System.arraycopy(frame, BinaryFrameCodec.IV_SIZE + BinaryFrameCodec.TAG_SIZE, ciphertext, 0, BinaryFrameCodec.CIPHERTEXT_SIZE)
+            val ackTarget = computeAckTarget(ratchetKey, expectedMessageId)
+            val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
 
-        val ackTarget = computeAckTarget(ratchetKey, expectedMessageId)
-        val aad = BinaryFrameCodec.buildAad(ackTarget, "ACK")
+            plaintextBytes = try {
+                AesGcmEngine.decrypt(aesKey, iv, tag, ciphertext, aad)
+            } catch (_: Exception) {
+                return false
+            }
 
-        val plaintextBytes = try {
-            AesGcmEngine.decrypt(aesKey, iv, tag, ciphertext, aad)
-        } catch (_: Exception) {
-            return false
+            if (plaintextBytes.size != BinaryFrameCodec.CIPHERTEXT_SIZE) return false
+
+            val buf = ByteBuffer.wrap(plaintextBytes).order(ByteOrder.BIG_ENDIAN)
+            val magic = ByteArray(ACK_MAGIC.size)
+            buf.get(magic)
+            if (!CryptoUtils.constantTimeEquals(magic, ACK_MAGIC)) return false
+
+            val seq = buf.int
+            if (expectedSeqNum != null && seq != expectedSeqNum) return false
+
+            val ts = buf.long
+            if (ts <= 0) return false
+
+            val msgIdLen = buf.short.toInt() and 0xFFFF
+            if (msgIdLen <= 0 || msgIdLen > 64 || msgIdLen > buf.remaining()) return false
+
+            val msgIdBytes = ByteArray(msgIdLen)
+            buf.get(msgIdBytes)
+            val parsedMsgId = String(msgIdBytes, Charsets.UTF_8)
+
+            parsedMsgId == expectedMessageId
+        } finally {
+            aesKey.fill(0)
+            plaintextBytes?.fill(0)
         }
-
-        if (plaintextBytes.size != BinaryFrameCodec.CIPHERTEXT_SIZE) return false
-
-        val buf = ByteBuffer.wrap(plaintextBytes).order(ByteOrder.BIG_ENDIAN)
-        val magic = ByteArray(ACK_MAGIC.size)
-        buf.get(magic)
-        if (!CryptoUtils.constantTimeEquals(magic, ACK_MAGIC)) return false
-
-        val seq = buf.int
-        if (expectedSeqNum != null && seq != expectedSeqNum) return false
-
-        val ts = buf.long
-        if (ts <= 0) return false
-
-        val msgIdLen = buf.short.toInt() and 0xFFFF
-        if (msgIdLen <= 0 || msgIdLen > 64 || msgIdLen > buf.remaining()) return false
-
-        val msgIdBytes = ByteArray(msgIdLen)
-        buf.get(msgIdBytes)
-        val parsedMsgId = String(msgIdBytes, Charsets.UTF_8)
-
-        return parsedMsgId == expectedMessageId
     }
 }

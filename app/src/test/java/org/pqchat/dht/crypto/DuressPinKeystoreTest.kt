@@ -135,6 +135,81 @@ class DuressPinKeystoreTest {
         assertEquals(PinAuthResult.NO_PIN_SET, settingsManager.verifyPin("1234"))
     }
 
+    @Test
+    fun testPbkdf2PinHashing120kIterationsAndLegacySha256Migration() = runBlocking {
+        settingsManager.setAppLockPin("4321")
+        val storedSaltHex = fakePrefs.getString("app_lock_pin_salt", null)!!
+        val storedHashHex = fakePrefs.getString("app_lock_pin_hash", null)!!
+
+        // Verify PBKDF2WithHmacSHA256 (120,000 iterations) was used instead of single SHA-256
+        val saltBytes = hexToBytes(storedSaltHex)
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = javax.crypto.spec.PBEKeySpec("4321".toCharArray(), saltBytes, 120_000, 256)
+        val expectedPbkdf2Hex = CryptoUtils.toHex(factory.generateSecret(spec).encoded)
+        assertEquals(expectedPbkdf2Hex, storedHashHex)
+
+        // Simulate legacy single SHA-256 PIN entry in SharedPreferences and verify transparent migration
+        val legacySalt = ByteArray(16) { (it + 1).toByte() }
+        val legacyPin = "7788"
+        val legacyDigest = java.security.MessageDigest.getInstance("SHA-256")
+        legacyDigest.update(legacySalt)
+        legacyDigest.update(legacyPin.toByteArray(Charsets.UTF_8))
+        val legacyHashHex = CryptoUtils.toHex(legacyDigest.digest())
+
+        fakePrefs.edit()
+            .putString("app_lock_pin_salt", CryptoUtils.toHex(legacySalt))
+            .putString("app_lock_pin_hash", legacyHashHex)
+            .apply()
+
+        assertEquals(PinAuthResult.NORMAL_UNLOCK, settingsManager.verifyPin(legacyPin))
+        val migratedHashHex = fakePrefs.getString("app_lock_pin_hash", null)
+        assertNotNull(migratedHashHex)
+        assertNotEquals("Legacy SHA-256 hash must be migrated to PBKDF2", legacyHashHex, migratedHashHex)
+        assertEquals(PinAuthResult.NORMAL_UNLOCK, settingsManager.verifyPin(legacyPin))
+    }
+
+    @Test
+    fun testDuressActivationOverwritesPinHashesAndSaltsWithNoise() = runBlocking {
+        settingsManager.setAppLockPin("1234")
+        settingsManager.setDuressPin("9999")
+        fakePrefs.edit().putBoolean("canary_triggered", true).apply()
+
+        val origAppHash = fakePrefs.getString("app_lock_pin_hash", null)
+        val origAppSalt = fakePrefs.getString("app_lock_pin_salt", null)
+        val origDuressHash = fakePrefs.getString("duress_pin_hash", null)
+        val origDuressSalt = fakePrefs.getString("duress_pin_salt", null)
+
+        assertEquals(PinAuthResult.DURESS_TRIGGERED, settingsManager.verifyPin("9999"))
+        settingsManager.setDuressActive(true)
+
+        assertTrue(settingsManager.isDuressActive.value)
+        assertFalse("Persisted duress flag must not remain on disk", fakePrefs.contains("is_duress_active"))
+        assertFalse("Persisted canary flag must not remain on disk", fakePrefs.contains("canary_triggered"))
+
+        val wipedAppHash = fakePrefs.getString("app_lock_pin_hash", null)
+        val wipedAppSalt = fakePrefs.getString("app_lock_pin_salt", null)
+        val wipedDuressHash = fakePrefs.getString("duress_pin_hash", null)
+        val wipedDuressSalt = fakePrefs.getString("duress_pin_salt", null)
+
+        assertNotNull(wipedAppHash)
+        assertNotNull(wipedAppSalt)
+        assertNotNull(wipedDuressHash)
+        assertNotNull(wipedDuressSalt)
+        assertNotEquals(origAppHash, wipedAppHash)
+        assertNotEquals(origAppSalt, wipedAppSalt)
+        assertNotEquals(origDuressHash, wipedDuressHash)
+        assertNotEquals(origDuressSalt, wipedDuressSalt)
+
+        // Original PINs must no longer validate after duress overwrite
+        assertEquals(PinAuthResult.INVALID, settingsManager.verifyPin("1234"))
+        assertEquals(PinAuthResult.INVALID, settingsManager.verifyPin("9999"))
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length / 2
+        return ByteArray(len) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+    }
+
     /**
      * Lightweight in-memory implementation of SharedPreferences for hermetic JVM tests.
      */

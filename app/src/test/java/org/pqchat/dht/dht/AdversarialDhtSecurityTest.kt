@@ -1211,4 +1211,189 @@ class AdversarialDhtSecurityTest {
             assertTrue("Defended Poisson rate lambda=$lam Shannon entropy ratio ($ent) fell below 0.85", ent >= 0.85)
         }
     }
+
+    @Test
+    fun testStrictLeafOnlyIsolationBlocksPublicQueriesAndOutgoingLocalStore() = runBlocking {
+        val prevLoopback = DhtLeafNode.isTestLoopbackMode
+        val prevLocalTestbed = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isTestLoopbackMode = false
+        DhtLeafNode.isLocalTestbedMode = false
+
+        val node = DhtLeafNode(autoBootstrap = false)
+        val probeSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        probeSocket.soTimeout = 250
+
+        try {
+            val nodeSocket = node.initSocket()
+            node.start()
+            val nodeAddr = InetSocketAddress("127.0.0.1", nodeSocket.localPort)
+
+            val seed = CryptoUtils.secureRandomBytes(32)
+            val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+            val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+            val payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+
+            // Even if skipLocalStore = false is passed in production (!testLoopback && !localTestbed),
+            // outgoing frames MUST NOT be stored in localMutableStore.
+            node.putMutable(
+                target = target,
+                v = payload,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = seed,
+                skipLocalStore = false
+            )
+            assertTrue(
+                "Production node must never retain outgoing frames in localMutableStore",
+                node.localMutableStore.isEmpty()
+            )
+
+            // External KRPC Query packets (ping, find_node, get, put) must be silently dropped (ro=1 leaf isolation).
+            val pingBytes = KrpcMessage.createPingQuery(CryptoUtils.secureRandomBytes(20)).toBencoded()
+            val findNodeBytes = KrpcMessage.createFindNodeQuery(
+                myNodeId = CryptoUtils.secureRandomBytes(20),
+                targetId = target
+            ).toBencoded()
+            val getBytes = KrpcMessage.createBep44GetQuery(
+                myNodeId = CryptoUtils.secureRandomBytes(20),
+                targetSha1 = target
+            ).toBencoded()
+
+            for ((label, queryBytes) in listOf("ping" to pingBytes, "find_node" to findNodeBytes, "get" to getBytes)) {
+                probeSocket.send(DatagramPacket(queryBytes, queryBytes.size, nodeAddr))
+                val recvBuf = ByteArray(2048)
+                val recvPacket = DatagramPacket(recvBuf, recvBuf.size)
+                var receivedResponse = false
+                try {
+                    probeSocket.receive(recvPacket)
+                    receivedResponse = true
+                } catch (_: java.net.SocketTimeoutException) {
+                    receivedResponse = false
+                }
+                assertFalse("Production leaf node must NOT respond to external '$label' query", receivedResponse)
+            }
+        } finally {
+            probeSocket.close()
+            node.stop()
+            DhtLeafNode.isTestLoopbackMode = prevLoopback
+            DhtLeafNode.isLocalTestbedMode = prevLocalTestbed
+        }
+    }
+
+    @Test
+    fun testLocalMutableStoreEnforcesLru256Size900AndWriteTokenValidation() = runBlocking {
+        val prevLocalTestbed = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isLocalTestbedMode = true
+
+        val node = DhtLeafNode(autoBootstrap = false)
+        val udpClient = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        udpClient.soTimeout = 1000
+
+        try {
+            val nodeSocket = node.initSocket()
+            node.start()
+            val nodeAddr = InetSocketAddress("127.0.0.1", nodeSocket.localPort)
+
+            val seed = CryptoUtils.secureRandomBytes(32)
+            val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+            val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+            val invalidShortPayload = ByteArray(100) { 0x42 }
+            val validPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+
+            // Direct insertion of non-900B item into localMutableStore must be rejected
+            val shortSig = Ed25519Engine.sign(seed, Bencode.encodeBep44SignData(invalidShortPayload, 1L, null))
+            node.localMutableStore["invalid_short"] = DhtLeafNode.MutableItem(
+                v = invalidShortPayload,
+                seq = 1L,
+                k = keyPair.publicKey,
+                sig = shortSig,
+                salt = null,
+                token = null,
+                responder = null
+            )
+            assertFalse(node.localMutableStore.containsKey("invalid_short"))
+
+            // 1. KRPC 'put' without valid write token must fail with KRPC error 203
+            val badTokenPut = KrpcMessage.createBep44PutQuery(
+                myNodeId = CryptoUtils.secureRandomBytes(20),
+                token = byteArrayOf(0x01, 0x02, 0x03, 0x04),
+                v = validPayload,
+                k = keyPair.publicKey,
+                sig = Ed25519Engine.sign(seed, Bencode.encodeBep44SignData(validPayload, 1L, null)),
+                seq = 1L
+            ).toBencoded()
+            udpClient.send(DatagramPacket(badTokenPut, badTokenPut.size, nodeAddr))
+            val errBuf1 = ByteArray(2048)
+            val errPacket1 = DatagramPacket(errBuf1, errBuf1.size)
+            udpClient.receive(errPacket1)
+            val errMsg1 = KrpcMessage.parse(errPacket1.data.copyOfRange(0, errPacket1.length))
+            assertTrue("Expected KRPC error for invalid token", errMsg1 is KrpcMessage.Error)
+            assertEquals(203, (errMsg1 as KrpcMessage.Error).code)
+
+            // 2. Obtain valid write token via KRPC 'get'
+            val getQuery = KrpcMessage.createBep44GetQuery(CryptoUtils.secureRandomBytes(20), target).toBencoded()
+            udpClient.send(DatagramPacket(getQuery, getQuery.size, nodeAddr))
+            val getBuf = ByteArray(2048)
+            val getPacket = DatagramPacket(getBuf, getBuf.size)
+            udpClient.receive(getPacket)
+            val getResp = KrpcMessage.parse(getPacket.data.copyOfRange(0, getPacket.length)) as KrpcMessage.Response
+            val validToken = getResp.responseData["token"] as? ByteArray
+            assertNotNull("Expected valid write token from local testbed node", validToken)
+
+            // 3. KRPC 'put' with valid token but v.size != 900 must fail with KRPC error 203
+            val wrongSizePut = KrpcMessage.createBep44PutQuery(
+                myNodeId = CryptoUtils.secureRandomBytes(20),
+                token = validToken!!,
+                v = invalidShortPayload,
+                k = keyPair.publicKey,
+                sig = shortSig,
+                seq = 1L
+            ).toBencoded()
+            udpClient.send(DatagramPacket(wrongSizePut, wrongSizePut.size, nodeAddr))
+            val errBuf2 = ByteArray(2048)
+            val errPacket2 = DatagramPacket(errBuf2, errBuf2.size)
+            udpClient.receive(errPacket2)
+            val errMsg2 = KrpcMessage.parse(errPacket2.data.copyOfRange(0, errPacket2.length))
+            assertTrue("Expected KRPC error for wrong v size", errMsg2 is KrpcMessage.Error)
+            assertEquals(203, (errMsg2 as KrpcMessage.Error).code)
+            assertTrue(node.localMutableStore.isEmpty())
+
+            // 4. Valid 900B KRPC 'put' with valid token must succeed
+            val validPut = KrpcMessage.createBep44PutQuery(
+                myNodeId = CryptoUtils.secureRandomBytes(20),
+                token = validToken,
+                v = validPayload,
+                k = keyPair.publicKey,
+                sig = Ed25519Engine.sign(seed, Bencode.encodeBep44SignData(validPayload, 1L, null)),
+                seq = 1L
+            ).toBencoded()
+            udpClient.send(DatagramPacket(validPut, validPut.size, nodeAddr))
+            val okBuf = ByteArray(2048)
+            val okPacket = DatagramPacket(okBuf, okBuf.size)
+            udpClient.receive(okPacket)
+            val okResp = KrpcMessage.parse(okPacket.data.copyOfRange(0, okPacket.length))
+            assertTrue("Expected KRPC response for valid 900B tokenized put", okResp is KrpcMessage.Response)
+            assertTrue(node.localMutableStore.containsKey(CryptoUtils.toHex(target)))
+
+            // 5. LRU eviction enforces hard MAX_LOCAL_STORE_ENTRIES = 256 cap
+            val totalEntries = 300
+            val insertedKeys = ArrayList<String>(totalEntries)
+            for (i in 0 until totalEntries) {
+                val entrySeed = CryptoUtils.secureRandomBytes(32)
+                val kp = Ed25519Engine.generateKeyPairFromSeed(entrySeed)
+                val tHex = CryptoUtils.toHex(Ed25519Engine.computeTarget(kp.publicKey))
+                val v = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+                val sig = Ed25519Engine.sign(entrySeed, Bencode.encodeBep44SignData(v, 1L, null))
+                node.localMutableStore[tHex] = DhtLeafNode.MutableItem(v, 1L, kp.publicKey, sig, null, null, null)
+                insertedKeys.add(tHex)
+            }
+            assertEquals(DhtLeafNode.MAX_LOCAL_STORE_ENTRIES, node.localMutableStore.size)
+            assertFalse("Oldest entry must be evicted by LRU", node.localMutableStore.containsKey(insertedKeys.first()))
+            assertTrue("Newest entry must remain in LRU store", node.localMutableStore.containsKey(insertedKeys.last()))
+        } finally {
+            udpClient.close()
+            node.stop()
+            DhtLeafNode.isLocalTestbedMode = prevLocalTestbed
+        }
+    }
 }

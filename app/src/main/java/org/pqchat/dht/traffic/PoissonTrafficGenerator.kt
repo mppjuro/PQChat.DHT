@@ -93,20 +93,91 @@ class PoissonTrafficGenerator(
             return event
         }
 
-        val outboundFrame = outboundPoissonQueue.poll()
+        val coverProvider: () -> OutboundPoissonFrame? = cover@{
+            val pendingAck = pendingAckQueue.poll()
+            if (pendingAck != null) {
+                val ackSeed: ByteArray
+                val ackTarget: ByteArray
+                val ackPayload: ByteArray
+                try {
+                    ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
+                    ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
+                    ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
+                        ratchetKey = pendingAck.ratchetKey,
+                        messageId = pendingAck.messageId,
+                        seqNum = pendingAck.seqNum
+                    )
+                } finally {
+                    pendingAck.zeroSensitiveMemory()
+                }
+                return@cover OutboundPoissonFrame(
+                    target = ackTarget,
+                    payload = ackPayload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = ackSeed,
+                    skipLocalStore = true,
+                    seqNum = pendingAck.seqNum,
+                    contactId = pendingAck.contactId,
+                    isCoverAck = true,
+                    packetClass = PacketClass.BACKGROUND_COVER
+                )
+            }
+            if (!isFastMode && isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
+                val entry = blindRepublishPool.sampleRandomEntry()
+                if (entry != null) {
+                    return@cover OutboundPoissonFrame(
+                        target = entry.target,
+                        payload = entry.v,
+                        seq = entry.seq,
+                        salt = entry.salt,
+                        sk = ByteArray(0),
+                        skipLocalStore = true,
+                        isBlindRepublish = true,
+                        preSignedPublicKey = entry.publicKey,
+                        preSignedSig = entry.sig,
+                        packetClass = PacketClass.BACKGROUND_COVER
+                    )
+                }
+            }
+            null
+        }
+
+        val outboundFrame = outboundPoissonQueue.poll(coverProvider) ?: coverProvider()
         val event = if (outboundFrame != null) {
             val tStart = System.currentTimeMillis()
-            val ok = dhtLeafNode.putMutable(
-                target = outboundFrame.target,
-                v = outboundFrame.payload,
-                seq = outboundFrame.seq,
-                salt = outboundFrame.salt,
-                sk = outboundFrame.sk,
-                skipLocalStore = outboundFrame.skipLocalStore
-            )
+            val ok = try {
+                if (outboundFrame.isBlindRepublish) {
+                    dhtLeafNode.putMutablePreSigned(
+                        target = outboundFrame.target,
+                        v = outboundFrame.payload,
+                        seq = outboundFrame.seq,
+                        salt = outboundFrame.salt,
+                        pk = outboundFrame.preSignedPublicKey ?: ByteArray(0),
+                        sig = outboundFrame.preSignedSig ?: ByteArray(0),
+                        skipLocalStore = true
+                    )
+                } else {
+                    dhtLeafNode.putMutable(
+                        target = outboundFrame.target,
+                        v = outboundFrame.payload,
+                        seq = outboundFrame.seq,
+                        salt = outboundFrame.salt,
+                        sk = outboundFrame.sk,
+                        skipLocalStore = outboundFrame.skipLocalStore
+                    )
+                }
+            } finally {
+                outboundFrame.sk.fill(0)
+            }
             val isDummy = outboundFrame.isDummyCover
+            val isAck = outboundFrame.isCoverAck
+            val isRepublish = outboundFrame.isBlindRepublish
+            val isFirstSend = !isDummy && !isAck && !isRepublish
             val rttMs = System.currentTimeMillis() - tStart
             val telemetryRole = when {
+                isAck -> org.pqchat.dht.research.PacketRole.COVER_ACK_SENT
+                isRepublish -> org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH
                 isDummy -> org.pqchat.dht.research.PacketRole.COVER_DUMMY_SENT
                 outboundFrame.packetClass == PacketClass.GROUP_MESSAGE -> org.pqchat.dht.research.PacketRole.GROUP_FAN_OUT
                 else -> org.pqchat.dht.research.PacketRole.FIRST_SEND
@@ -115,7 +186,7 @@ class PoissonTrafficGenerator(
                 researchTelemetryProvider?.invoke()?.recordPacketEvent(
                     role = telemetryRole,
                     target = outboundFrame.target,
-                    seqNum = outboundFrame.seqNum.toLong(),
+                    seqNum = if (isRepublish) outboundFrame.seq else outboundFrame.seqNum.toLong(),
                     payloadBytes = outboundFrame.payload.size,
                     rttMs = rttMs,
                     nodesQueried = dhtLeafNode.lastNodesQueried,
@@ -133,95 +204,13 @@ class PoissonTrafficGenerator(
                 timestamp = System.currentTimeMillis(),
                 targetHex = CryptoUtils.toHex(outboundFrame.target),
                 intervalSeconds = delayMs / 1000.0,
-                isAck = false,
-                isBlindRepublish = false,
-                isFirstSend = !isDummy,
+                isAck = isAck,
+                isBlindRepublish = isRepublish,
+                isFirstSend = isFirstSend,
                 payloadSize = outboundFrame.payload.size
             )
         } else {
-            val pendingAck = pendingAckQueue.poll()
-            if (pendingAck != null) {
-                val ackSeed = org.pqchat.dht.protocol.CoverAckProtocol.deriveAckSeed(pendingAck.ratchetKey, pendingAck.messageId)
-                val ackTarget = org.pqchat.dht.protocol.CoverAckProtocol.computeAckTarget(pendingAck.ratchetKey, pendingAck.messageId)
-                val ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(
-                    ratchetKey = pendingAck.ratchetKey,
-                    messageId = pendingAck.messageId,
-                    seqNum = pendingAck.seqNum
-                )
-                val tStart = System.currentTimeMillis()
-                val ok = dhtLeafNode.putMutable(
-                    target = ackTarget,
-                    v = ackPayload,
-                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                    salt = null,
-                    sk = ackSeed
-                )
-                val rttMs = System.currentTimeMillis() - tStart
-                try {
-                    researchTelemetryProvider?.invoke()?.recordPacketEvent(
-                        role = org.pqchat.dht.research.PacketRole.COVER_ACK_SENT,
-                        target = ackTarget,
-                        payloadBytes = ackPayload.size,
-                        rttMs = rttMs,
-                        nodesQueried = dhtLeafNode.lastNodesQueried,
-                        nodesResponded = dhtLeafNode.lastNodesResponded,
-                        lookupHops = dhtLeafNode.lastLookupHops,
-                        success = ok
-                    )
-                } catch (_: Throwable) {}
-                decoyTargetPool.registerPopulatedTarget(ackTarget)
-                CoverEvent(
-                    timestamp = System.currentTimeMillis(),
-                    targetHex = CryptoUtils.toHex(ackTarget),
-                    intervalSeconds = delayMs / 1000.0,
-                    isAck = true,
-                    isBlindRepublish = false,
-                    isFirstSend = false,
-                    payloadSize = ackPayload.size
-                )
-            } else if (!isFastMode && isCrowdsourcedEnabled() && blindRepublishPool.size() > 0) {
-                val entry = blindRepublishPool.sampleRandomEntry()
-                if (entry != null) {
-                    val tStart = System.currentTimeMillis()
-                    val ok = dhtLeafNode.putMutablePreSigned(
-                        target = entry.target,
-                        v = entry.v,
-                        seq = entry.seq,
-                        salt = entry.salt,
-                        pk = entry.publicKey,
-                        sig = entry.sig,
-                        skipLocalStore = false
-                    )
-                    val rttMs = System.currentTimeMillis() - tStart
-                    try {
-                        researchTelemetryProvider?.invoke()?.recordPacketEvent(
-                            role = org.pqchat.dht.research.PacketRole.CROWD_REPUBLISH,
-                            target = entry.target,
-                            seqNum = entry.seq,
-                            payloadBytes = entry.v.size,
-                            rttMs = rttMs,
-                            nodesQueried = dhtLeafNode.lastNodesQueried,
-                            nodesResponded = dhtLeafNode.lastNodesResponded,
-                            lookupHops = dhtLeafNode.lastLookupHops,
-                            success = ok
-                        )
-                    } catch (_: Throwable) {}
-                    decoyTargetPool.registerPopulatedTarget(entry.target)
-                    CoverEvent(
-                        timestamp = System.currentTimeMillis(),
-                        targetHex = CryptoUtils.toHex(entry.target),
-                        intervalSeconds = delayMs / 1000.0,
-                        isAck = false,
-                        isBlindRepublish = true,
-                        isFirstSend = false,
-                        payloadSize = entry.v.size
-                    )
-                } else {
-                    emitDummyCover(delayMs)
-                }
-            } else {
-                emitDummyCover(delayMs)
-            }
+            emitDummyCover(delayMs)
         }
         _eventFlow.emit(event)
         return event
@@ -231,14 +220,18 @@ class PoissonTrafficGenerator(
         val canaryFrame = safetyCanaryProvider?.invoke()
         if (canaryFrame != null) {
             val tStart = System.currentTimeMillis()
-            val ok = dhtLeafNode.putMutable(
-                target = canaryFrame.target,
-                v = canaryFrame.payload,
-                seq = canaryFrame.seq,
-                salt = canaryFrame.salt,
-                sk = canaryFrame.sk,
-                skipLocalStore = canaryFrame.skipLocalStore
-            )
+            val ok = try {
+                dhtLeafNode.putMutable(
+                    target = canaryFrame.target,
+                    v = canaryFrame.payload,
+                    seq = canaryFrame.seq,
+                    salt = canaryFrame.salt,
+                    sk = canaryFrame.sk,
+                    skipLocalStore = canaryFrame.skipLocalStore
+                )
+            } finally {
+                canaryFrame.sk.fill(0)
+            }
             val rttMs = System.currentTimeMillis() - tStart
             try {
                 researchTelemetryProvider?.invoke()?.recordPacketEvent(

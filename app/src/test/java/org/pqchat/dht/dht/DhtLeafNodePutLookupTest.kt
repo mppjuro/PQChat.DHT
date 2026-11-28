@@ -11,6 +11,19 @@ import java.net.InetSocketAddress
 
 class DhtLeafNodePutLookupTest {
 
+    private var prevLocalTestbedMode: Boolean = false
+
+    @org.junit.Before
+    fun setUpLocalTestbed() {
+        prevLocalTestbedMode = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isLocalTestbedMode = true
+    }
+
+    @org.junit.After
+    fun tearDownLocalTestbed() {
+        DhtLeafNode.isLocalTestbedMode = prevLocalTestbedMode
+    }
+
     @Test
     fun testPutMutablePerformsIterativeLookupAndStoresOnClosestPeer() = runBlocking {
         val seed = CryptoUtils.secureRandomBytes(32)

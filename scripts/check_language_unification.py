@@ -18,6 +18,18 @@ import sys
 # Polish diacritics in unicode escape form so that this script contains no raw characters
 POLISH_CHARS_REGEX = re.compile(r'[\u0105\u0107\u0119\u0142\u0144\u00f3\u015b\u017a\u017c\u0104\u0106\u0118\u0141\u0143\u00d3\u015a\u0179\u017b]')
 
+# Common diacritic-free Polish technical and UI terms
+POLISH_ASCII_WORDS_REGEX = re.compile(
+    r'\b('
+    r'sekund|sekunda|sekundy|minuta|minuty|minut|godzina|godziny|godzin|'
+    r'zalecane|ustawienia|wiadomosc|wiadomosci|klucz|klucze|kluczy|'
+    r'szyfrowanie|polaczenie|uzytkownik|haslo|blad|bledy|wyslij|odbierz|'
+    r'potwierdzenie|domyslny|domyslnie|maksymalny|minimalny|skalibrowane|'
+    r'natywny|zapisz|usun|anuluj|zamknij|wyczysc|pokaz|ukryj|odblokuj|zablokuj'
+    r')\b',
+    re.IGNORECASE
+)
+
 IGNORED_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp',
     '.pdf', '.apk', '.bin', '.keystore', '.jks',
@@ -57,6 +69,11 @@ def get_tracked_files():
 
 def is_exempt_line(file_path: str, line: str) -> bool:
     norm_path = file_path.replace('\\', '/')
+    # Exempt this linter's own Polish ASCII keyword pattern definition
+    if norm_path == 'scripts/check_language_unification.py':
+        stripped = line.strip()
+        if stripped.startswith("r'") or stripped.startswith('r"'):
+            return True
     # Exemption for README.md BibTeX citation author name and university
     if norm_path == 'README.md' or norm_path.endswith('/README.md'):
         if '\u0141' in line or '\u0142' in line or '\u00f3' in line or '\u0144' in line:
@@ -65,6 +82,13 @@ def is_exempt_line(file_path: str, line: str) -> bool:
         if 'author = {' in line or 'school = {' in line:
             return True
     return False
+
+
+def find_violations_in_line(line: str) -> list:
+    matches = POLISH_CHARS_REGEX.findall(line)
+    matches.extend(POLISH_ASCII_WORDS_REGEX.findall(line))
+    return matches
+
 
 def check_files():
     files = get_tracked_files()
@@ -82,7 +106,7 @@ def check_files():
                 for line_num, line in enumerate(f, 1):
                     if is_exempt_line(file_path, line):
                         continue
-                    matches = POLISH_CHARS_REGEX.findall(line)
+                    matches = find_violations_in_line(line)
                     if matches:
                         if file_path not in violations:
                             violations[file_path] = []

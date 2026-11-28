@@ -206,7 +206,7 @@ class BlindRepublishPool(
 
     companion object {
         const val DEFAULT_MAX_CAPACITY = 50
-        const val DEFAULT_TTL_MS = 120 * 60 * 1000L // 120 minut (2 godziny)
+        const val DEFAULT_TTL_MS = 120 * 60 * 1000L // 120 minutes (2 hours)
 
         /** Global singleton pool instance */
         val defaultInstance = BlindRepublishPool()

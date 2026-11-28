@@ -422,4 +422,46 @@ class CryptoEngineTest {
         val exactDecoded = BinaryFrameCodec.unpackAeadFrame(key, exactFrame, target, direction)
         assertEquals(rawTimestampMs, exactDecoded.timestampUTC)
     }
+
+    @Test
+    fun testCryptoMemoryHygieneWipesEphemeralKeysInRatchetCoverAckAndHandshake() {
+        // 1. RatchetChain.deriveSlot preserves caller chainKey and returns valid distinct output keys
+        val chainKey = CryptoUtils.secureRandomBytes(64)
+        val slot0 = org.pqchat.dht.protocol.RatchetChain.deriveSlot(chainKey, 0)
+        assertEquals(32, slot0.msgKey.size)
+        assertEquals(32, slot0.edPrivateKeySeed.size)
+        assertEquals(20, slot0.target.size)
+        assertEquals(64, slot0.nextChainKey.size)
+        assertArrayEquals(
+            slot0.target,
+            org.pqchat.dht.protocol.RatchetChain.getNextExpectedTarget(chainKey, 0)
+        )
+
+        // 2. CoverAckProtocol round-trip succeeds cleanly
+        val ratchetKey = CryptoUtils.secureRandomBytes(32)
+        val ackPayload = org.pqchat.dht.protocol.CoverAckProtocol.createAckPayload(ratchetKey, "42", 7)
+        assertTrue(org.pqchat.dht.protocol.CoverAckProtocol.verifyAckPayload(ratchetKey, ackPayload, "42", 7))
+
+        // 3. HandshakeManager round-trip + explicit destruction of session key buffers
+        val aliceInit = org.pqchat.dht.protocol.HandshakeManager.aliceCreateHandshake()
+        val bobRes = org.pqchat.dht.protocol.HandshakeManager.bobProcessQr(aliceInit.qrBytes)
+        val session = org.pqchat.dht.protocol.HandshakeManager.aliceFinalize(
+            skA = aliceInit.skA,
+            pkA = aliceInit.pkA,
+            seedInit = aliceInit.seedInit,
+            frame = bobRes.frame
+        )
+        assertEquals(bobRes.sas, session.sas)
+        assertArrayEquals(bobRes.chainKeyAtoB, session.chainKeyOut)
+        assertArrayEquals(bobRes.chainKeyBtoA, session.chainKeyIn)
+
+        // aliceFinalize wipes aliceInit.skA upon verified key confirmation
+        assertTrue(aliceInit.skA.all { b -> b == 0.toByte() })
+        aliceInit.destroySensitiveKeys()
+        bobRes.destroySensitiveKeys()
+        assertTrue(aliceInit.skA.all { b -> b == 0.toByte() })
+        assertTrue(bobRes.edPrivateKeySeed.all { b -> b == 0.toByte() })
+        assertTrue(bobRes.chainKeyAtoB.all { b -> b == 0.toByte() })
+        assertTrue(bobRes.chainKeyBtoA.all { b -> b == 0.toByte() })
+    }
 }

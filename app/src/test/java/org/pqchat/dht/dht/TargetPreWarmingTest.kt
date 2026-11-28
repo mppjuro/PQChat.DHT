@@ -134,6 +134,8 @@ class TargetPreWarmingTest {
 
     @Test
     fun testGetMutableDirectHitViaPreWarmedRoute() = runBlocking {
+        val prevLocalTestbed = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isLocalTestbedMode = true
         val nodeA = DhtLeafNode(autoBootstrap = false)
         val nodeB = DhtLeafNode(autoBootstrap = false)
 
@@ -148,14 +150,17 @@ class TargetPreWarmingTest {
             val seedB = CryptoUtils.secureRandomBytes(32)
             val keyPairB = Ed25519Engine.generateKeyPairFromSeed(seedB)
             val target = Ed25519Engine.computeTarget(keyPairB.publicKey)
-            val payload = "PreWarmed_Fast_RTT_Message".toByteArray()
+            val rawPayload = "PreWarmed_Fast_RTT_Message".toByteArray()
+            val payload = ByteArray(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+            System.arraycopy(rawPayload, 0, payload, 0, rawPayload.size)
 
             nodeB.putMutable(
                 target = target,
                 v = payload,
                 seq = 1L,
                 salt = null,
-                sk = seedB
+                sk = seedB,
+                skipLocalStore = false
             )
 
             // Verify Node A does NOT have it locally yet
@@ -185,11 +190,14 @@ class TargetPreWarmingTest {
         } finally {
             nodeA.stop()
             nodeB.stop()
+            DhtLeafNode.isLocalTestbedMode = prevLocalTestbed
         }
     }
 
     @Test
     fun testPreWarmTargetDiscoversAndCachesClosestPeers() = runBlocking {
+        val prevLocalTestbed = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isLocalTestbedMode = true
         val node = DhtLeafNode(autoBootstrap = false)
         try {
             node.initSocket()
@@ -215,6 +223,7 @@ class TargetPreWarmingTest {
             assertEquals(warmed.size, cachedRoute!!.size)
         } finally {
             node.stop()
+            DhtLeafNode.isLocalTestbedMode = prevLocalTestbed
         }
     }
 }

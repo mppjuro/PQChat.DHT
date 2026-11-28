@@ -6,13 +6,19 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * Data holder for a pending acknowledgment waiting to be transmitted
  * inside background cover traffic or piggybacked onto an outgoing user message.
  */
-data class PendingAck(
+class PendingAck(
     val contactId: String,
     val messageId: String,
-    val ratchetKey: ByteArray,
+    ratchetKey: ByteArray,
     val seqNum: Int,
     val timestamp: Long = System.currentTimeMillis()
 ) {
+    val ratchetKey: ByteArray = ratchetKey.copyOf()
+
+    fun zeroSensitiveMemory() {
+        ratchetKey.fill(0)
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PendingAck) return false

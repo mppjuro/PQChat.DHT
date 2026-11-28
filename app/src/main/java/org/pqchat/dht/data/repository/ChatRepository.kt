@@ -49,8 +49,10 @@ class ChatRepository(
         get() = researchTelemetryProvider?.invoke()
 
     fun isStrictPoissonShaping(): Boolean =
-        if (isFastTestMode) false
-        else strictPoissonShapingEnabledProvider?.invoke() ?: isStrictPoissonShapingEnabled
+        if (isFastTestMode || org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) false
+        else strictPoissonShapingEnabledProvider?.invoke()
+            ?: settingsManager?.isStrictPoissonShapingEnabled?.value
+            ?: isStrictPoissonShapingEnabled
 
     val canaryQueue = java.util.concurrent.ConcurrentLinkedQueue<org.pqchat.dht.traffic.OutboundPoissonFrame>()
 
@@ -337,8 +339,8 @@ class ChatRepository(
                     payload = ciphertext,
                     seq = org.pqchat.dht.dht.leaf.DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false,
+                    sk = slot.edPrivateKeySeed.copyOf(),
+                    skipLocalStore = true,
                     seqNum = contact.counterOut,
                     contactId = contactId,
                     timestamp = now,
@@ -430,14 +432,19 @@ class ChatRepository(
             val decoyTarget = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
             val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
-            val ok = dhtLeafNode.putMutable(
-                target = decoyTarget,
-                v = dummyPayload,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = dummySeed,
-                skipLocalStore = false
-            )
+            val ok = try {
+                dhtLeafNode.putMutable(
+                    target = decoyTarget,
+                    v = dummyPayload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = dummySeed,
+                    skipLocalStore = true
+                )
+            } finally {
+                dummySeed.fill(0)
+                dummyKeyPair.seed.fill(0)
+            }
             if (ok) {
                 decoyTargetPool.registerPopulatedTarget(decoyTarget)
             }
@@ -558,7 +565,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = signingKey,
-                    skipLocalStore = false
+                    skipLocalStore = true
                 )
             ) {
                 return true
@@ -807,8 +814,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = contact.counterOut,
                         messageId = msgId,
                         contactId = contactId,
@@ -888,7 +895,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = slot.edPrivateKeySeed,
-                            skipLocalStore = isSelf
+                            skipLocalStore = true
                         )
                     } ?: false
                     if (success) break
@@ -934,7 +941,7 @@ class ChatRepository(
                                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                     salt = null,
                                     sk = slot.edPrivateKeySeed,
-                                    skipLocalStore = false
+                                    skipLocalStore = true
                                 )
                                 delay(3000L)
                                 dhtLeafNode.putMutable(
@@ -943,7 +950,7 @@ class ChatRepository(
                                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                     salt = null,
                                     sk = slot.edPrivateKeySeed,
-                                    skipLocalStore = false
+                                    skipLocalStore = true
                                 )
                             }
                         }
@@ -1027,8 +1034,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = contact.counterOut,
                         messageId = -1L,
                         contactId = contactId,
@@ -1047,7 +1054,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false
+                    skipLocalStore = true
                 )
                 if (success) {
                     decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -1167,8 +1174,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = contact.counterOut,
                         messageId = msgId,
                         contactId = contactId,
@@ -1191,7 +1198,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
+                    skipLocalStore = true
                 )
                 if (success) {
                     messageDao.updateStatus(msgId, if (isSelf) "SENT_DHT" else "PENDING_DELIVERY")
@@ -1302,8 +1309,8 @@ class ChatRepository(
                             payload = frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
-                            sk = slot.edPrivateKeySeed,
-                            skipLocalStore = isSelf,
+                            sk = slot.edPrivateKeySeed.copyOf(),
+                            skipLocalStore = true,
                             seqNum = currentCounter - 1,
                             messageId = msgId,
                             contactId = contactId,
@@ -1325,7 +1332,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     if (!ok) allSucceeded = false
                 }
@@ -1471,11 +1478,12 @@ class ChatRepository(
                             payload = c.frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
-                            sk = c.edPrivateKeySeed,
-                            skipLocalStore = isSelf,
+                            sk = c.edPrivateKeySeed.copyOf(),
+                            skipLocalStore = true,
                             seqNum = contact.counterOut,
                             messageId = msgId,
                             contactId = contactId,
+                            packetClass = org.pqchat.dht.traffic.PacketClass.IMAGE_CHUNK,
                             onSent = { success ->
                                 decoyTargetPool.registerPopulatedTarget(c.target)
                                 if (!success) {
@@ -1561,7 +1569,7 @@ class ChatRepository(
                     v = c.frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     sk = c.edPrivateKeySeed,
-                    skipLocalStore = isSelf
+                    skipLocalStore = true
                 )
                 if (!ok) {
                     allSuccess = false
@@ -1669,8 +1677,8 @@ class ChatRepository(
                                 payload = c.frame,
                                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                 salt = null,
-                                sk = c.edPrivateKeySeed,
-                                skipLocalStore = isSelf,
+                                sk = c.edPrivateKeySeed.copyOf(),
+                                skipLocalStore = true,
                                 seqNum = currentContact.counterOut,
                                 messageId = msg.id,
                                 contactId = contactId,
@@ -1716,7 +1724,7 @@ class ChatRepository(
                             v = c.frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             sk = c.edPrivateKeySeed,
-                            skipLocalStore = isSelf
+                            skipLocalStore = true
                         )
                         val rttMs = System.currentTimeMillis() - tStart
                         researchTelemetry?.recordPacketEvent(
@@ -1795,8 +1803,8 @@ class ChatRepository(
                             payload = frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
-                            sk = slot.edPrivateKeySeed,
-                            skipLocalStore = isSelf,
+                            sk = slot.edPrivateKeySeed.copyOf(),
+                            skipLocalStore = true,
                             seqNum = currentContact.counterOut,
                             messageId = msg.id,
                             contactId = contactId,
@@ -1833,7 +1841,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     if (ok) {
                         pendingAckQueue.removeForContact(contactId, currentContact.counterIn)
@@ -1921,8 +1929,8 @@ class ChatRepository(
                     payload = offerFrame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf,
+                    sk = slot.edPrivateKeySeed.copyOf(),
+                    skipLocalStore = true,
                     seqNum = contact.counterOut,
                     contactId = contact.id,
                     packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -1951,7 +1959,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                 } ?: false
                 if (success) break
@@ -1991,7 +1999,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = edSeedCopy,
-                            skipLocalStore = false
+                            skipLocalStore = true
                         )
                     }
                 } catch (_: Exception) {
@@ -2666,8 +2674,8 @@ class ChatRepository(
                                         payload = respFrame,
                                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                         salt = null,
-                                        sk = outSlot.edPrivateKeySeed,
-                                        skipLocalStore = isSelf,
+                                        sk = outSlot.edPrivateKeySeed.copyOf(),
+                                        skipLocalStore = true,
                                         seqNum = currentContact.counterOut,
                                         contactId = contactId,
                                         packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -2691,7 +2699,7 @@ class ChatRepository(
                                             v = respFrame,
                                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                             sk = outSlot.edPrivateKeySeed,
-                                            skipLocalStore = isSelf
+                                            skipLocalStore = true
                                         )
                                     } ?: false
                                     if (sent) break
@@ -2734,7 +2742,7 @@ class ChatRepository(
                                                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                                                 salt = null,
                                                 sk = edSeedCopy,
-                                                skipLocalStore = false
+                                                skipLocalStore = true
                                             )
                                         }
                                     } catch (_: Exception) {
@@ -3446,7 +3454,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                         salt = null,
                         sk = record.slotEdSeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     researchTelemetry?.recordPacketEvent(
                         role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
@@ -3512,7 +3520,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,
-                            skipLocalStore = isSelf
+                            skipLocalStore = true
                         )
                         researchTelemetry?.recordPacketEvent(
                             role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
@@ -3557,7 +3565,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                             salt = null,
                             sk = slotEdSeed,
-                            skipLocalStore = isSelf
+                            skipLocalStore = true
                         )
                         researchTelemetry?.recordPacketEvent(
                             role = org.pqchat.dht.research.PacketRole.TOMBSTONE_SENT,
@@ -3624,13 +3632,30 @@ class ChatRepository(
         }
     }
 
+    val pendingPreWarmQueue = java.util.concurrent.ConcurrentLinkedDeque<ByteArray>()
+
+    fun enqueuePreWarmTarget(target: ByteArray) {
+        if (target.size != 20) return
+        val copy = target.copyOf()
+        pendingPreWarmQueue.removeIf { it.contentEquals(copy) }
+        pendingPreWarmQueue.addLast(copy)
+        while (pendingPreWarmQueue.size > 128) {
+            pendingPreWarmQueue.pollFirst()
+        }
+    }
+
     private fun preWarmNextIncomingTarget(chainKeyIn: ByteArray, counterIn: Int) {
-        if (isFastTestMode) return
-        val nextTarget = RatchetChain.getNextExpectedTarget(chainKeyIn, counterIn)
-        dhtLeafNode.preWarmTargetAsync(nextTarget)
+        if (isFastTestMode || org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode) return
         val nextSlot = RatchetChain.deriveSlot(chainKeyIn, counterIn)
-        val chunk0Target = ChunkingEngine.deriveChunkTarget(nextSlot.edPrivateKeySeed, 0)
-        dhtLeafNode.preWarmTargetAsync(chunk0Target)
+        try {
+            enqueuePreWarmTarget(nextSlot.target)
+            val chunk0Target = ChunkingEngine.deriveChunkTarget(nextSlot.edPrivateKeySeed, 0)
+            enqueuePreWarmTarget(chunk0Target)
+        } finally {
+            nextSlot.msgKey.fill(0)
+            nextSlot.edPrivateKeySeed.fill(0)
+            nextSlot.nextChainKey.fill(0)
+        }
     }
 
     private sealed interface PollTask {
@@ -4304,7 +4329,7 @@ class ChatRepository(
                                 seq = tombSeq,
                                 salt = null,
                                 sk = slot.edPrivateKeySeed,
-                                skipLocalStore = false
+                                skipLocalStore = true
                             )
                         } catch (_: Exception) {}
                     }
@@ -4360,7 +4385,7 @@ class ChatRepository(
                                 seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                                 salt = null,
                                 sk = slotEdSeed,
-                                skipLocalStore = isSelf
+                                skipLocalStore = true
                             )
                         } catch (_: Exception) {}
                     }
@@ -4401,7 +4426,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1,
                         salt = null,
                         sk = record.slotEdSeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                 } catch (_: Exception) {}
                 return true
@@ -4641,14 +4666,18 @@ class ChatRepository(
         var count = 0
         while (true) {
             val frame = outboundPoissonQueue.poll() ?: break
-            val ok = dhtLeafNode.putMutable(
-                target = frame.target,
-                v = frame.payload,
-                seq = frame.seq,
-                salt = frame.salt,
-                sk = frame.sk,
-                skipLocalStore = frame.skipLocalStore
-            )
+            val ok = try {
+                dhtLeafNode.putMutable(
+                    target = frame.target,
+                    v = frame.payload,
+                    seq = frame.seq,
+                    salt = frame.salt,
+                    sk = frame.sk,
+                    skipLocalStore = frame.skipLocalStore
+                )
+            } finally {
+                frame.sk.fill(0)
+            }
             count++
             if (ok) {
                 decoyTargetPool.registerPopulatedTarget(frame.target)
@@ -4671,6 +4700,38 @@ class ChatRepository(
             list.filter { item -> force || (now - item.lastRepublishAt) >= 10_000L }
         }
         if (framesToRepublish.isEmpty()) return@withContext 0
+
+        if (isStrictPoissonShaping()) {
+            val shuffled = if (framesToRepublish.size > 1) {
+                framesToRepublish.shuffled(CryptoUtils.secureRandom)
+            } else {
+                framesToRepublish
+            }
+            val outboundFrames = shuffled.map { item ->
+                org.pqchat.dht.traffic.OutboundPoissonFrame(
+                    target = item.target,
+                    payload = item.frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = item.signingKey.copyOf(),
+                    skipLocalStore = true,
+                    contactId = groupId,
+                    packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
+                    onSent = { ok ->
+                        if (ok) {
+                            item.lastRepublishAt = System.currentTimeMillis()
+                            decoyTargetPool.registerPopulatedTarget(item.target)
+                        }
+                    }
+                )
+            }
+            outboundPoissonQueue.enqueueInterleaved(
+                outboundFrames,
+                dummyFactory = { org.pqchat.dht.traffic.OutboundPoissonQueue.createDummyFrame() }
+            )
+            return@withContext outboundFrames.size
+        }
+
         val republishCount = java.util.concurrent.atomic.AtomicInteger(0)
         coroutineScope {
             framesToRepublish.map { item ->
@@ -5038,27 +5099,88 @@ class ChatRepository(
     }
 
     /**
-     * Pre-warms in the background the next expected incoming targets for all known contacts concurrently.
+     * Executes a constant-budget (N_POLL_TARGETS = 8) pre-warming batch padded with DecoyTargetPool
+     * targets, randomly shuffled and spaced with intra-batch jitter so pre-warming never emits
+     * immediate decryption-correlated bursts or reveals contact counts.
      */
-    suspend fun preWarmAllContactsNextTargets() = coroutineScope {
-        if (isFastTestMode) return@coroutineScope
-        val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
-        contacts.map { contact ->
-            async {
-                val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
-                dhtLeafNode.preWarmTarget(nextTarget)
+    suspend fun executePreWarmBatch(
+        focusContactId: String? = null,
+        budget: Int = pollBatchSize
+    ): Int = withContext(Dispatchers.IO) {
+        if (isFastTestMode || org.pqchat.dht.dht.leaf.DhtLeafNode.isFastTestMode || budget <= 0) {
+            return@withContext 0
+        }
+
+        val selectedTargets = mutableListOf<ByteArray>()
+        fun addUniqueTarget(target: ByteArray) {
+            if (selectedTargets.size < budget && target.size == 20 && selectedTargets.none { it.contentEquals(target) }) {
+                selectedTargets.add(target.copyOf())
             }
-        }.awaitAll()
+        }
+
+        if (focusContactId != null && focusContactId != SELF_CONTACT_ID) {
+            contactDao.getContactById(focusContactId)?.let { focusContact ->
+                addUniqueTarget(RatchetChain.getNextExpectedTarget(focusContact.chainKeyIn, focusContact.counterIn))
+            }
+        }
+
+        while (selectedTargets.size < budget) {
+            val queued = pendingPreWarmQueue.pollFirst() ?: break
+            addUniqueTarget(queued)
+        }
+
+        if (selectedTargets.size < budget) {
+            val contacts = contactDao.getAllContactsFlow().firstOrNull() ?: emptyList()
+            for (contact in contacts) {
+                if (selectedTargets.size >= budget) break
+                if (contact.id == SELF_CONTACT_ID) continue
+                addUniqueTarget(RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn))
+            }
+        }
+
+        val countNeeded = (budget - selectedTargets.size).coerceAtLeast(0)
+        if (countNeeded > 0) {
+            val decoyTargets = decoyTargetPool.getDecoyTargets(countNeeded) {
+                runBlocking { collectExpiringAndPastTargets(focusContactId) }
+            }
+            for (decoy in decoyTargets) {
+                addUniqueTarget(decoy)
+            }
+            while (selectedTargets.size < budget) {
+                addUniqueTarget(CryptoUtils.sha1(CryptoUtils.secureRandomBytes(32)))
+            }
+        }
+
+        val shuffled = selectedTargets.take(budget).shuffled(pollBatchRandom)
+        for (i in shuffled.indices) {
+            try {
+                dhtLeafNode.preWarmTarget(shuffled[i])
+            } catch (_: Exception) {}
+            if (i < shuffled.size - 1 && intraBatchJitterMaxMs > 0L) {
+                val span = (intraBatchJitterMaxMs - intraBatchJitterMinMs).coerceAtLeast(1L)
+                val jitter = intraBatchJitterMinMs + (pollBatchRandom.nextDouble() * span).toLong()
+                if (jitter > 0L) {
+                    delay(jitter)
+                }
+            }
+        }
+        shuffled.size
     }
 
     /**
-     * Pre-warms in the background the next expected incoming target for a specific contact.
+     * Pre-warms in the background the next expected incoming targets within a constant-size
+     * decoy-padded batch.
      */
-    suspend fun preWarmContactNextTarget(contactId: String) = withContext(Dispatchers.IO) {
-        if (isFastTestMode) return@withContext
-        val contact = contactDao.getContactById(contactId) ?: return@withContext
-        val nextTarget = RatchetChain.getNextExpectedTarget(contact.chainKeyIn, contact.counterIn)
-        dhtLeafNode.preWarmTarget(nextTarget)
+    suspend fun preWarmAllContactsNextTargets() {
+        executePreWarmBatch(focusContactId = null, budget = pollBatchSize)
+    }
+
+    /**
+     * Pre-warms in the background the next expected incoming target for a specific contact
+     * within a constant-size decoy-padded batch.
+     */
+    suspend fun preWarmContactNextTarget(contactId: String) {
+        executePreWarmBatch(focusContactId = contactId, budget = pollBatchSize)
     }
 
     /**
@@ -5135,8 +5257,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = contact.counterOut,
                         messageId = msg.id,
                         contactId = msg.contactId,
@@ -5205,7 +5327,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf
+                    skipLocalStore = true
                 )
             } ?: false
 
@@ -5577,7 +5699,7 @@ class ChatRepository(
                 ackRatchetKey = slot.msgKey,
                 seqNum = contact.counterOut,
                 slotTarget = slot.target,
-                slotEdSeed = slot.edPrivateKeySeed,
+                slotEdSeed = slot.edPrivateKeySeed.copyOf(),
                 payload = frame
             )
             onRepublishTaskUpdated?.invoke()
@@ -5596,8 +5718,8 @@ class ChatRepository(
                 payload = frame,
                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf,
+                sk = slot.edPrivateKeySeed.copyOf(),
+                skipLocalStore = true,
                 seqNum = contact.counterOut,
                 contactId = contactId,
                 packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -5626,7 +5748,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                 } ?: false
                 if (success) break
@@ -5662,7 +5784,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = slot.edPrivateKeySeed,
-                            skipLocalStore = false
+                            skipLocalStore = true
                         )
                     } catch (_: Exception) {}
                 }
@@ -5799,7 +5921,7 @@ class ChatRepository(
                     ackRatchetKey = slot.msgKey,
                     seqNum = contact.counterOut,
                     slotTarget = slot.target,
-                    slotEdSeed = slot.edPrivateKeySeed,
+                    slotEdSeed = slot.edPrivateKeySeed.copyOf(),
                     payload = frame
                 )
                 onRepublishTaskUpdated?.invoke()
@@ -5818,8 +5940,8 @@ class ChatRepository(
                     payload = frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = isSelf,
+                    sk = slot.edPrivateKeySeed.copyOf(),
+                    skipLocalStore = true,
                     seqNum = contact.counterOut,
                     contactId = contactId,
                     packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -5848,7 +5970,7 @@ class ChatRepository(
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
                             sk = slot.edPrivateKeySeed,
-                            skipLocalStore = isSelf
+                            skipLocalStore = true
                         )
                     } ?: false
                     if (success) break
@@ -5875,8 +5997,8 @@ class ChatRepository(
                         v = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true
                     )
                 }
             }
@@ -5976,7 +6098,7 @@ class ChatRepository(
                 ackRatchetKey = slot.msgKey,
                 seqNum = contact.counterOut,
                 slotTarget = slot.target,
-                slotEdSeed = slot.edPrivateKeySeed,
+                slotEdSeed = slot.edPrivateKeySeed.copyOf(),
                 payload = frame
             )
             onRepublishTaskUpdated?.invoke()
@@ -5995,8 +6117,8 @@ class ChatRepository(
                 payload = frame,
                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = isSelf,
+                sk = slot.edPrivateKeySeed.copyOf(),
+                skipLocalStore = true,
                 seqNum = contact.counterOut,
                 contactId = contactId,
                 packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -6025,7 +6147,7 @@ class ChatRepository(
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
                         sk = slot.edPrivateKeySeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                 } ?: false
                 if (success) break
@@ -6052,8 +6174,8 @@ class ChatRepository(
                     v = frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false
+                    sk = slot.edPrivateKeySeed.copyOf(),
+                    skipLocalStore = true
                 )
             }
         }
@@ -6075,8 +6197,8 @@ class ChatRepository(
                         payload = task.payload,
                         seq = retransmitSeq,
                         salt = null,
-                        sk = task.slotEdSeed,
-                        skipLocalStore = isSelf,
+                        sk = task.slotEdSeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = task.seqNum,
                         contactId = task.contactId,
                         packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -6095,7 +6217,7 @@ class ChatRepository(
                         seq = retransmitSeq,
                         salt = null,
                         sk = task.slotEdSeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     if (success) {
                         decoyTargetPool.registerPopulatedTarget(task.slotTarget)
@@ -6145,8 +6267,8 @@ class ChatRepository(
                         payload = task.payload,
                         seq = retransmitSeq,
                         salt = null,
-                        sk = task.slotEdSeed,
-                        skipLocalStore = isSelf,
+                        sk = task.slotEdSeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = task.seqNum,
                         contactId = task.contactId,
                         packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -6165,7 +6287,7 @@ class ChatRepository(
                         seq = retransmitSeq,
                         salt = null,
                         sk = task.slotEdSeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     if (success) {
                         decoyTargetPool.registerPopulatedTarget(task.slotTarget)
@@ -6208,8 +6330,8 @@ class ChatRepository(
                         payload = task.payload,
                         seq = retransmitSeq,
                         salt = null,
-                        sk = task.slotEdSeed,
-                        skipLocalStore = isSelf,
+                        sk = task.slotEdSeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = task.seqNum,
                         contactId = task.contactId,
                         packetClass = org.pqchat.dht.traffic.PacketClass.URGENT_CONTROL,
@@ -6228,7 +6350,7 @@ class ChatRepository(
                         seq = retransmitSeq,
                         salt = null,
                         sk = task.slotEdSeed,
-                        skipLocalStore = isSelf
+                        skipLocalStore = true
                     )
                     if (success) {
                         decoyTargetPool.registerPopulatedTarget(task.slotTarget)
@@ -6271,8 +6393,8 @@ class ChatRepository(
                             v = offerFrame.frame,
                             seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                             salt = null,
-                            sk = offerFrame.edSeed,
-                            skipLocalStore = contactId == SELF_CONTACT_ID
+                            sk = offerFrame.edSeed.copyOf(),
+                            skipLocalStore = true
                         )
                         if (ok) retransmittedCount++
                     } catch (_: Exception) {}
@@ -7059,7 +7181,7 @@ class ChatRepository(
                     ackNum = 0,
                     frame = frame
                 )
-                CachedGroupOutboundFrame(slot.target, frame, slot.edPrivateKeySeed, System.currentTimeMillis())
+                CachedGroupOutboundFrame(slot.target, frame, slot.edPrivateKeySeed.copyOf(), System.currentTimeMillis())
             }
             val cachedList = recentGroupOutboundFrames.getOrPut(groupId) { java.util.Collections.synchronizedList(mutableListOf()) }
             synchronized(cachedList) {
@@ -7080,8 +7202,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = currentGroup.myCounterOut,
                         messageId = msgId,
                         contactId = groupId,
@@ -7276,8 +7398,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = currentGroup.myCounterOut,
                         messageId = -1L,
                         contactId = groupId,
@@ -7313,7 +7435,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false
+                    skipLocalStore = true
                 )
                 if (success) {
                     decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -7424,8 +7546,8 @@ class ChatRepository(
                         payload = frame,
                         seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                         salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
                         seqNum = currentGroup.myCounterOut,
                         messageId = msgId,
                         contactId = groupId,
@@ -7466,7 +7588,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
                     sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false
+                    skipLocalStore = true
                 )
                 if (success) {
                     decoyTargetPool.registerPopulatedTarget(slot.target)
@@ -7537,12 +7659,20 @@ class ChatRepository(
 
             var currentCounter = initialCounter
             var currentChainKey = currentGroup.rawMyChainKeyOut
-            var overallSuccess = false
             val segmentDurationMs = (durationMs / totalSegments).coerceAtLeast(1)
 
             val activeMembers = groupMemberDao?.getMembersForGroup(groupId)?.filter {
                 it.memberId != currentGroup.myMemberId && it.isActive
             } ?: emptyList()
+
+            val shuffledMembers = if (activeMembers.size > 1) {
+                activeMembers.shuffled(CryptoUtils.secureRandom)
+            } else {
+                activeMembers
+            }
+
+            val cachedFrames = mutableListOf<CachedGroupOutboundFrame>()
+            val pendingFrames = mutableListOf<Triple<RatchetChain.SlotParameters, ByteArray, Int>>()
 
             for (segIdx in 0 until totalSegments) {
                 val offset = segIdx * BinaryFrameCodec.T9_MAX_VOICE_SIZE
@@ -7555,8 +7685,8 @@ class ChatRepository(
                 }
 
                 val baseSlot = RatchetChain.deriveSlot(currentChainKey, currentCounter)
-                val targetSlots = if (activeMembers.isNotEmpty()) {
-                    activeMembers.map { member ->
+                val targetSlots = if (shuffledMembers.isNotEmpty()) {
+                    shuffledMembers.map { member ->
                         val recipientMemberIdBytes = uuidStringToBytes(member.memberId)
                         RatchetChain.deriveGroupRecipientSlot(
                             chainKey = currentChainKey,
@@ -7584,14 +7714,11 @@ class ChatRepository(
                     obfuscateTimestamp = true
                 )
 
+                val frameCounter = currentCounter
                 currentCounter++
                 currentChainKey = baseSlot.nextChainKey
 
-                for ((idx, slot) in targetSlots.withIndex()) {
-                    if (idx > 0) {
-                        val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
-                        delay(jitterMs)
-                    }
+                for (slot in targetSlots) {
                     val frame = BinaryFrameCodec.packGroupAeadFrame(
                         key = slot.msgKey,
                         plaintext = plaintext,
@@ -7599,18 +7726,16 @@ class ChatRepository(
                         groupId = groupIdBytes,
                         senderMemberId = myMemberIdBytes
                     )
-                    val success = dhtLeafNode.putMutable(
-                        target = slot.target,
-                        v = frame,
-                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                        salt = null,
-                        sk = slot.edPrivateKeySeed,
-                        skipLocalStore = false
-                    )
-                    if (success) {
-                        decoyTargetPool.registerPopulatedTarget(slot.target)
-                        overallSuccess = true
-                    }
+                    cachedFrames.add(CachedGroupOutboundFrame(slot.target, frame, slot.edPrivateKeySeed.copyOf(), System.currentTimeMillis()))
+                    pendingFrames.add(Triple(slot, frame, frameCounter))
+                }
+            }
+
+            val cachedList = recentGroupOutboundFrames.getOrPut(groupId) { java.util.Collections.synchronizedList(mutableListOf()) }
+            synchronized(cachedList) {
+                cachedList.addAll(cachedFrames)
+                while (cachedList.size > 30) {
+                    cachedList.removeAt(0)
                 }
             }
 
@@ -7620,6 +7745,60 @@ class ChatRepository(
                 chainKeyOut = EncryptedBlob(currentChainKey, "groups", groupId, "myChainKeyOut"),
                 lastActive = System.currentTimeMillis()
             )
+
+            if (isStrictPoissonShaping()) {
+                val framesRemaining = java.util.concurrent.atomic.AtomicInteger(pendingFrames.size)
+                val anySuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+                val outboundFrames = pendingFrames.map { (slot, frame, frameCounter) ->
+                    org.pqchat.dht.traffic.OutboundPoissonFrame(
+                        target = slot.target,
+                        payload = frame,
+                        seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                        salt = null,
+                        sk = slot.edPrivateKeySeed.copyOf(),
+                        skipLocalStore = true,
+                        seqNum = frameCounter,
+                        messageId = msgId,
+                        contactId = groupId,
+                        packetClass = org.pqchat.dht.traffic.PacketClass.GROUP_MESSAGE,
+                        onSent = { success ->
+                            if (success) {
+                                anySuccess.set(true)
+                                decoyTargetPool.registerPopulatedTarget(slot.target)
+                            }
+                            if (framesRemaining.decrementAndGet() == 0 && anySuccess.get()) {
+                                messageDao.updateStatus(msgId, "SENT_DHT")
+                            }
+                        }
+                    )
+                }
+                outboundPoissonQueue.enqueueInterleaved(
+                    outboundFrames,
+                    dummyFactory = { org.pqchat.dht.traffic.OutboundPoissonQueue.createDummyFrame() }
+                )
+                return@withLock true
+            }
+
+            var overallSuccess = false
+            for ((idx, entry) in pendingFrames.withIndex()) {
+                val (slot, frame, _) = entry
+                if (idx > 0 && !isFastTestMode) {
+                    val jitterMs = 40L + (CryptoUtils.secureRandomBytes(1)[0].toInt() and 0x7F)
+                    delay(jitterMs)
+                }
+                val success = dhtLeafNode.putMutable(
+                    target = slot.target,
+                    v = frame,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = slot.edPrivateKeySeed,
+                    skipLocalStore = true
+                )
+                if (success) {
+                    decoyTargetPool.registerPopulatedTarget(slot.target)
+                    overallSuccess = true
+                }
+            }
 
             if (overallSuccess) {
                 messageDao.updateStatus(msgId, "SENT_DHT")
@@ -7741,8 +7920,8 @@ class ChatRepository(
                     payload = frame,
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                     salt = null,
-                    sk = slot.edPrivateKeySeed,
-                    skipLocalStore = false,
+                    sk = slot.edPrivateKeySeed.copyOf(),
+                    skipLocalStore = true,
                     seqNum = currentGroup.myCounterOut,
                     contactId = groupId,
                     timestamp = System.currentTimeMillis(),
@@ -7751,7 +7930,10 @@ class ChatRepository(
             }
 
             if (isStrictPoissonShaping()) {
-                outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
+                outboundPoissonQueue.enqueueInterleaved(
+                    outboundFrames,
+                    dummyFactory = { org.pqchat.dht.traffic.OutboundPoissonQueue.createDummyFrame() }
+                )
             } else {
                 repositoryScope.launch {
                     outboundFrames.forEach { frame ->
@@ -7760,7 +7942,8 @@ class ChatRepository(
                             v = frame.payload,
                             seq = frame.seq,
                             salt = frame.salt,
-                            sk = frame.sk
+                            sk = frame.sk,
+                            skipLocalStore = true
                         )
                     }
                 }
@@ -7824,8 +8007,8 @@ class ChatRepository(
                 payload = frame,
                 seq = DhtClient.DEFAULT_MUTABLE_SEQ,
                 salt = null,
-                sk = slot.edPrivateKeySeed,
-                skipLocalStore = false,
+                sk = slot.edPrivateKeySeed.copyOf(),
+                skipLocalStore = true,
                 seqNum = group.myCounterOut,
                 contactId = group.groupId,
                 timestamp = timestampMs,
@@ -7834,7 +8017,10 @@ class ChatRepository(
         }
 
         if (isStrictPoissonShaping()) {
-            outboundFrames.forEach { outboundPoissonQueue.enqueue(it) }
+            outboundPoissonQueue.enqueueInterleaved(
+                outboundFrames,
+                dummyFactory = { org.pqchat.dht.traffic.OutboundPoissonQueue.createDummyFrame() }
+            )
         } else {
             repositoryScope.launch {
                 outboundFrames.forEach { frame ->
@@ -7843,7 +8029,8 @@ class ChatRepository(
                         v = frame.payload,
                         seq = frame.seq,
                         salt = frame.salt,
-                        sk = frame.sk
+                        sk = frame.sk,
+                        skipLocalStore = true
                     )
                 }
             }
@@ -8204,7 +8391,7 @@ class ChatRepository(
                         seq = tombSeq,
                         salt = null,
                         sk = activeSlot.edPrivateKeySeed,
-                        skipLocalStore = false
+                        skipLocalStore = true
                     )
                 } catch (_: Exception) {}
             }
@@ -8411,7 +8598,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
                     salt = null,
                     sk = msg.slotEdSeed.raw,
-                    skipLocalStore = isSelf
+                    skipLocalStore = true
                 )
             } catch (_: Exception) {}
         }
@@ -8427,7 +8614,7 @@ class ChatRepository(
                     seq = DhtClient.DEFAULT_MUTABLE_SEQ + 1L,
                     salt = null,
                     sk = ackSeed,
-                    skipLocalStore = isSelf
+                    skipLocalStore = true
                 )
             } catch (_: Exception) {}
         }

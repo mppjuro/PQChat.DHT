@@ -24,8 +24,40 @@ class AppSettingsManagerTest {
     }
 
     @Test
-    fun `default value of isStrictPoissonShapingEnabled is false`() {
-        assertFalse(settingsManager.isStrictPoissonShapingEnabled.value)
+    fun `default value of isStrictPoissonShapingEnabled is true`() {
+        assertTrue(settingsManager.isStrictPoissonShapingEnabled.value)
+    }
+
+    @Test
+    fun `polling interval options are localized in English without Polish labels`() {
+        val allOptions = SYNC_INTERVAL_OPTIONS +
+            REPUBLISH_TIER1_OPTIONS +
+            REPUBLISH_TIER2_OPTIONS +
+            REPUBLISH_TIER3_OPTIONS +
+            REPUBLISH_TTL_OPTIONS +
+            RESEARCH_PROBE_INTERVAL_OPTIONS
+        assertTrue(allOptions.isNotEmpty())
+        val polishSubstrings = listOf(
+            "sek" + "und",
+            "min" + "ut",
+            "god" + "zin",
+            "zalec" + "ane",
+            "ustaw" + "ienia",
+            "wiado" + "mosc"
+        )
+        for (option in allOptions) {
+            val lower = option.label.lowercase()
+            assertTrue(
+                "Label '${option.label}' must contain English time unit",
+                lower.contains("second") || lower.contains("minute") || lower.contains("hour")
+            )
+            for (forbidden in polishSubstrings) {
+                assertFalse(
+                    "Label '${option.label}' must not contain Polish word '$forbidden'",
+                    Regex("\\b$forbidden\\b").containsMatchIn(lower)
+                )
+            }
+        }
     }
 
     @Test

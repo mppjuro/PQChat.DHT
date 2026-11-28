@@ -92,26 +92,35 @@ class DhtEngineTest {
 
     @Test
     fun testDhtLeafNodeLocalMutableStore() = kotlinx.coroutines.runBlocking {
+        val prevLoopback = org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode
+        org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = true
         val node = org.pqchat.dht.dht.leaf.DhtLeafNode()
-        val seed = CryptoUtils.secureRandomBytes(32)
-        val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
-        val target = Ed25519Engine.computeTarget(keyPair.publicKey)
-        val payload = "Hello BEP 44 DHT Mutable".toByteArray(Charsets.UTF_8)
+        try {
+            val seed = CryptoUtils.secureRandomBytes(32)
+            val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
+            val target = Ed25519Engine.computeTarget(keyPair.publicKey)
+            val msgBytes = "Hello BEP 44 DHT Mutable".toByteArray(Charsets.UTF_8)
+            val payload = ByteArray(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+            System.arraycopy(msgBytes, 0, payload, 0, msgBytes.size)
 
-        val putSuccess = node.putMutable(
-            target = target,
-            v = payload,
-            seq = 1L,
-            sk = seed
-        )
-        assertTrue(putSuccess)
+            val putSuccess = node.putMutable(
+                target = target,
+                v = payload,
+                seq = 1L,
+                sk = seed,
+                skipLocalStore = false
+            )
+            assertTrue(putSuccess)
 
-        val retrieved = node.getMutable(target)
-        assertNotNull(retrieved)
-        assertArrayEquals(payload, retrieved!!.v)
-        assertEquals(1L, retrieved.seq)
-        assertArrayEquals(keyPair.publicKey, retrieved.k)
-        node.stop()
+            val retrieved = node.getMutable(target)
+            assertNotNull(retrieved)
+            assertArrayEquals(payload, retrieved!!.v)
+            assertEquals(1L, retrieved.seq)
+            assertArrayEquals(keyPair.publicKey, retrieved.k)
+        } finally {
+            node.stop()
+            org.pqchat.dht.dht.leaf.DhtLeafNode.isTestLoopbackMode = prevLoopback
+        }
     }
 
     @Test

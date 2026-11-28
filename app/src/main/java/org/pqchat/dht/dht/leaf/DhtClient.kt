@@ -166,7 +166,7 @@ interface DhtClient {
         seq: Long = DEFAULT_MUTABLE_SEQ,
         salt: ByteArray? = null,
         sk: ByteArray,
-        skipLocalStore: Boolean = false
+        skipLocalStore: Boolean = true
     ): Boolean
 
     /**
@@ -180,7 +180,7 @@ interface DhtClient {
         salt: ByteArray? = null,
         pk: ByteArray,
         sig: ByteArray,
-        skipLocalStore: Boolean = false
+        skipLocalStore: Boolean = true
     ): Boolean
 
     /**

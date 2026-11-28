@@ -159,8 +159,14 @@ object HandshakeManager {
      */
     fun computeTarget0(seedInit: ByteArray): ByteArray {
         val edSeed = HkdfSha512.derive(null, seedInit, HS_ED_INFO, 32)
-        val edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
-        return Ed25519Engine.computeTarget(edKeyPair.publicKey)
+        var edKeyPair: Ed25519Engine.KeyPair? = null
+        return try {
+            edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
+            Ed25519Engine.computeTarget(edKeyPair.publicKey)
+        } finally {
+            edSeed.fill(0)
+            edKeyPair?.seed?.fill(0)
+        }
     }
 
     /**
@@ -174,74 +180,94 @@ object HandshakeManager {
         val pkA = qrBytes.copyOfRange(0, HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
         val seedInit = qrBytes.copyOfRange(HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE, QR_DATA_SIZE)
 
-        // 1. Encapsulate hybrid post-quantum + classical shared secret
-        val encResult = HybridKemEngine.encapsulate(pkA)
-        val ssInit = encResult.sharedSecret.copyOf()
-        val ctB = encResult.combinedCiphertext
-        encResult.wipe()
+        var ssInit: ByteArray? = null
+        var kHs: ByteArray? = null
+        var edSeed: ByteArray? = null
+        var prk: ByteArray? = null
+        var masterKey: ByteArray? = null
+        var confirmationTag: ByteArray? = null
+        var plaintext: ByteArray? = null
+        var succeeded = false
 
-        // 2. Compute Target_0
-        val target0 = computeTarget0(seedInit)
+        try {
+            // 1. Encapsulate hybrid post-quantum + classical shared secret
+            val encResult = HybridKemEngine.encapsulate(pkA)
+            ssInit = encResult.sharedSecret.copyOf()
+            val ctB = encResult.combinedCiphertext
+            encResult.wipe()
 
-        // 3. Derive symmetric encryption key and Ed25519 seed for the handshake frame
-        val kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
-        val edSeed = HkdfSha512.derive(null, seedInit, HS_ED_INFO, 32)
+            // 2. Compute Target_0
+            val target0 = computeTarget0(seedInit)
 
-        // 4. Generate salt (24 B per T1_SALT_SIZE) and bind transcript: (pkA, ctB, seedInit, salt)
-        val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
-        val transcript = buildTranscript(pkA, ctB, seedInit, salt)
-        val transcriptHash = CryptoUtils.sha512(transcript)
+            // 3. Derive symmetric encryption key and Ed25519 seed for the handshake frame
+            kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
+            edSeed = HkdfSha512.derive(null, seedInit, HS_ED_INFO, 32)
 
-        // 5. HKDF-Extract using salt and ssInit, then expand with transcriptHash
-        val prk = HkdfSha512.extract(salt, ssInit)
-        val label = "PQChat_MasterKey_Transcript".toByteArray(Charsets.UTF_8)
-        val info = ByteArray(label.size + transcriptHash.size)
-        System.arraycopy(label, 0, info, 0, label.size)
-        System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
-        val masterKey = HkdfSha512.expand(prk, info, 64)
+            // 4. Generate salt (24 B per T1_SALT_SIZE) and bind transcript: (pkA, ctB, seedInit, salt)
+            val salt = CryptoUtils.secureRandomBytes(BinaryFrameCodec.T1_SALT_SIZE)
+            val transcript = buildTranscript(pkA, ctB, seedInit, salt)
+            val transcriptHash = CryptoUtils.sha512(transcript)
 
-        // Zero sensitive ephemeral ssInit
-        ssInit.fill(0)
+            // 5. HKDF-Extract using salt and ssInit, then expand with transcriptHash
+            prk = HkdfSha512.extract(salt, ssInit)
+            val label = "PQChat_MasterKey_Transcript".toByteArray(Charsets.UTF_8)
+            val info = ByteArray(label.size + transcriptHash.size)
+            System.arraycopy(label, 0, info, 0, label.size)
+            System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
+            masterKey = HkdfSha512.expand(prk, info, 64)
 
-        // 6. Compute key confirmation tag
-        val confirmationTag = computeConfirmationTag(masterKey)
+            // 6. Compute key confirmation tag
+            confirmationTag = computeConfirmationTag(masterKey)
 
-        // 7. Build Type 0x01 Handshake Finalize frame with confirmation tag and AAD (target0, 0x01, "BobToAlice")
-        val plaintext = BinaryFrameCodec.encodeHandshakeFinalize(
-            seqNum = 0,
-            ackNum = 0,
-            timestampUTC = System.currentTimeMillis(),
-            hybridCiphertext = ctB,
-            saltParameter = salt,
-            confirmationTag = confirmationTag,
-            obfuscateTimestamp = true
-        )
-        val frame = BinaryFrameCodec.packAeadFrame(
-            key = kHs,
-            plaintext = plaintext,
-            target = target0,
-            direction = "BobToAlice"
-        )
+            // 7. Build Type 0x01 Handshake Finalize frame with confirmation tag and AAD (target0, 0x01, "BobToAlice")
+            plaintext = BinaryFrameCodec.encodeHandshakeFinalize(
+                seqNum = 0,
+                ackNum = 0,
+                timestampUTC = System.currentTimeMillis(),
+                hybridCiphertext = ctB,
+                saltParameter = salt,
+                confirmationTag = confirmationTag,
+                obfuscateTimestamp = true
+            )
+            val frame = BinaryFrameCodec.packAeadFrame(
+                key = kHs,
+                plaintext = plaintext,
+                target = target0,
+                direction = "BobToAlice"
+            )
 
-        // 8. Derive working KDF chains:
-        val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
-        val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
-        val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
-        val sas = computeSas(masterKey, antiGrindCommitment)
-        val fingerprint = computeFingerprint(masterKey)
+            // 8. Derive working KDF chains:
+            val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
+            val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
+            val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
+            val sas = computeSas(masterKey, antiGrindCommitment)
+            val fingerprint = computeFingerprint(masterKey)
 
-        // For Bob:
-        // Outgoing chain: B->A
-        // Incoming chain: A->B
-        return BobHandshakeResult(
-            frame = frame,
-            target0 = target0,
-            edPrivateKeySeed = edSeed,
-            chainKeyAtoB = chainAtoB,
-            chainKeyBtoA = chainBtoA,
-            sas = sas,
-            fingerprint = fingerprint
-        )
+            succeeded = true
+            // For Bob:
+            // Outgoing chain: B->A
+            // Incoming chain: A->B
+            return BobHandshakeResult(
+                frame = frame,
+                target0 = target0,
+                edPrivateKeySeed = edSeed,
+                chainKeyAtoB = chainAtoB,
+                chainKeyBtoA = chainBtoA,
+                sas = sas,
+                fingerprint = fingerprint
+            )
+        } finally {
+            seedInit.fill(0)
+            ssInit?.fill(0)
+            kHs?.fill(0)
+            prk?.fill(0)
+            masterKey?.fill(0)
+            confirmationTag?.fill(0)
+            plaintext?.fill(0)
+            if (!succeeded) {
+                edSeed?.fill(0)
+            }
+        }
     }
 
     /**
@@ -256,78 +282,90 @@ object HandshakeManager {
         seedInit: ByteArray,
         frame: ByteArray
     ): EstablishedSession {
-        val target0 = computeTarget0(seedInit)
-        val kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
-        val frameMsg = BinaryFrameCodec.unpackAeadFrame(
-            key = kHs,
-            frame = frame,
-            target = target0,
-            direction = "BobToAlice"
-        )
+        var kHs: ByteArray? = null
+        var mlKemSk: ByteArray? = null
+        var x25519Sk: ByteArray? = null
+        var ssInit: ByteArray? = null
+        var prk: ByteArray? = null
+        var masterKey: ByteArray? = null
+        var expectedConfirmationTag: ByteArray? = null
 
-        require(frameMsg.msgType == BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE) {
-            "Expected Handshake Finalize message (0x01), got 0x%02X".format(frameMsg.msgType)
+        try {
+            val target0 = computeTarget0(seedInit)
+            kHs = HkdfSha512.derive(null, seedInit, HS_ENC_INFO, 32)
+            val frameMsg = BinaryFrameCodec.unpackAeadFrame(
+                key = kHs,
+                frame = frame,
+                target = target0,
+                direction = "BobToAlice"
+            )
+
+            require(frameMsg.msgType == BinaryFrameCodec.TYPE_HANDSHAKE_FINALIZE) {
+                "Expected Handshake Finalize message (0x01), got 0x%02X".format(frameMsg.msgType)
+            }
+
+            val handshakePayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.HandshakeFinalize
+
+            require(skA.size == 1664) {
+                "Invalid private key parameters for hybrid decapsulation: skA size must be 1664 (got ${skA.size})"
+            }
+            mlKemSk = skA.copyOfRange(0, 1632)
+            x25519Sk = skA.copyOfRange(1632, 1664)
+
+            // Decapsulate SS_init using Alice's hybrid private keys (ML-KEM-512 + X25519)
+            ssInit = HybridKemEngine.decapsulate(
+                mlKemPrivateKey = mlKemSk,
+                x25519PrivateKey = x25519Sk,
+                combinedCiphertext = handshakePayload.hybridCiphertext
+            )
+
+            // Bind transcript: (pkA, ctB, seedInit, salt)
+            val transcript = buildTranscript(pkA, handshakePayload.hybridCiphertext, seedInit, handshakePayload.saltParameter)
+            val transcriptHash = CryptoUtils.sha512(transcript)
+            prk = HkdfSha512.extract(handshakePayload.saltParameter, ssInit)
+            val label = "PQChat_MasterKey_Transcript".toByteArray(Charsets.UTF_8)
+            val info = ByteArray(label.size + transcriptHash.size)
+            System.arraycopy(label, 0, info, 0, label.size)
+            System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
+            masterKey = HkdfSha512.expand(prk, info, 64)
+
+            // Verify Key Confirmation Tag: protects against ML-KEM/Hybrid implicit rejection silent desync
+            expectedConfirmationTag = computeConfirmationTag(masterKey)
+            if (!java.security.MessageDigest.isEqual(handshakePayload.confirmationTag, expectedConfirmationTag)) {
+                // DO NOT wipe skA on failure: allows Alice to keep waiting for legitimate Bob packet
+                throw SecurityException("ML-KEM/Hybrid key confirmation failed: invalid ciphertext or desync detected")
+            }
+
+            // Wipe Alice's ephemeral private keys ONLY after verified key confirmation
+            Arrays.fill(skA, 0.toByte())
+
+            // Derive working chains
+            val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
+            val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
+            val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
+            val sas = computeSas(masterKey, antiGrindCommitment)
+            val fingerprint = computeFingerprint(masterKey)
+
+            // For Alice:
+            // Outgoing chain: A->B
+            // Incoming chain: B->A
+            return EstablishedSession(
+                chainKeyOut = chainAtoB,
+                chainKeyIn = chainBtoA,
+                counterOut = 0,
+                counterIn = 0,
+                sas = sas,
+                fingerprint = fingerprint
+            )
+        } finally {
+            kHs?.fill(0)
+            mlKemSk?.fill(0)
+            x25519Sk?.fill(0)
+            ssInit?.fill(0)
+            prk?.fill(0)
+            masterKey?.fill(0)
+            expectedConfirmationTag?.fill(0)
         }
-
-        val handshakePayload = frameMsg.payload as BinaryFrameCodec.DecodedPayload.HandshakeFinalize
-
-        require(skA.size == 1664) {
-            "Invalid private key parameters for hybrid decapsulation: skA size must be 1664 (got ${skA.size})"
-        }
-        val mlKemSk = skA.copyOfRange(0, 1632)
-        val x25519Sk = skA.copyOfRange(1632, 1664)
-
-        // Decapsulate SS_init using Alice's hybrid private keys (ML-KEM-512 + X25519)
-        val ssInit = HybridKemEngine.decapsulate(
-            mlKemPrivateKey = mlKemSk,
-            x25519PrivateKey = x25519Sk,
-            combinedCiphertext = handshakePayload.hybridCiphertext
-        )
-
-        // Bind transcript: (pkA, ctB, seedInit, salt)
-        val transcript = buildTranscript(pkA, handshakePayload.hybridCiphertext, seedInit, handshakePayload.saltParameter)
-        val transcriptHash = CryptoUtils.sha512(transcript)
-        val prk = HkdfSha512.extract(handshakePayload.saltParameter, ssInit)
-        val label = "PQChat_MasterKey_Transcript".toByteArray(Charsets.UTF_8)
-        val info = ByteArray(label.size + transcriptHash.size)
-        System.arraycopy(label, 0, info, 0, label.size)
-        System.arraycopy(transcriptHash, 0, info, label.size, transcriptHash.size)
-        val masterKey = HkdfSha512.expand(prk, info, 64)
-
-        // Verify Key Confirmation Tag: protects against ML-KEM/Hybrid implicit rejection silent desync
-        val expectedConfirmationTag = computeConfirmationTag(masterKey)
-        if (!java.security.MessageDigest.isEqual(handshakePayload.confirmationTag, expectedConfirmationTag)) {
-            // DO NOT wipe skA on failure: allows Alice to keep waiting for legitimate Bob packet
-            mlKemSk.fill(0)
-            x25519Sk.fill(0)
-            ssInit.fill(0)
-            throw SecurityException("ML-KEM/Hybrid key confirmation failed: invalid ciphertext or desync detected")
-        }
-
-        // Wipe Alice's ephemeral private keys ONLY after verified key confirmation
-        Arrays.fill(skA, 0.toByte())
-        mlKemSk.fill(0)
-        x25519Sk.fill(0)
-        ssInit.fill(0)
-
-        // Derive working chains
-        val chainAtoB = HkdfSha512.expand(masterKey, "AliceToBob".toByteArray(Charsets.UTF_8), 64)
-        val chainBtoA = HkdfSha512.expand(masterKey, "BobToAlice".toByteArray(Charsets.UTF_8), 64)
-        val antiGrindCommitment = computeAntiGrindCommitment(seedInit, transcript)
-        val sas = computeSas(masterKey, antiGrindCommitment)
-        val fingerprint = computeFingerprint(masterKey)
-
-        // For Alice:
-        // Outgoing chain: A->B
-        // Incoming chain: B->A
-        return EstablishedSession(
-            chainKeyOut = chainAtoB,
-            chainKeyIn = chainBtoA,
-            counterOut = 0,
-            counterIn = 0,
-            sas = sas,
-            fingerprint = fingerprint
-        )
     }
 
     fun extractCombinedPublicKey(skA: ByteArray): ByteArray {
@@ -336,18 +374,19 @@ object HandshakeManager {
         }
         val mlKemSk = skA.copyOfRange(0, 1632)
         val x25519Sk = skA.copyOfRange(1632, 1664)
+        return try {
+            val mlKemPk = MLKemEngine.extractPublicKey(mlKemSk)
+            val xKeyGenParams = org.bouncycastle.crypto.params.X25519PrivateKeyParameters(x25519Sk, 0)
+            val x25519Pk = (xKeyGenParams.generatePublicKey() as org.bouncycastle.crypto.params.X25519PublicKeyParameters).encoded
 
-        val mlKemPk = MLKemEngine.extractPublicKey(mlKemSk)
-        val xKeyGenParams = org.bouncycastle.crypto.params.X25519PrivateKeyParameters(x25519Sk, 0)
-        val x25519Pk = (xKeyGenParams.generatePublicKey() as org.bouncycastle.crypto.params.X25519PublicKeyParameters).encoded
-
-        val combinedPk = ByteArray(HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
-        System.arraycopy(mlKemPk, 0, combinedPk, 0, 800)
-        System.arraycopy(x25519Pk, 0, combinedPk, 800, 32)
-
-        mlKemSk.fill(0)
-        x25519Sk.fill(0)
-        return combinedPk
+            val combinedPk = ByteArray(HybridKemEngine.HYBRID_PUBLIC_KEY_SIZE)
+            System.arraycopy(mlKemPk, 0, combinedPk, 0, 800)
+            System.arraycopy(x25519Pk, 0, combinedPk, 800, 32)
+            combinedPk
+        } finally {
+            mlKemSk.fill(0)
+            x25519Sk.fill(0)
+        }
     }
 
     /**

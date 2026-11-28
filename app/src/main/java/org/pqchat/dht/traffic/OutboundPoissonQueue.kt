@@ -42,13 +42,17 @@ data class OutboundPoissonFrame(
     val seq: Long = DhtClient.DEFAULT_MUTABLE_SEQ,
     val salt: ByteArray? = null,
     val sk: ByteArray,
-    val skipLocalStore: Boolean = false,
+    val skipLocalStore: Boolean = true,
     val seqNum: Int = 0,
     val messageId: Long? = null,
     val contactId: String? = null,
     val timestamp: Long = org.pqchat.dht.crypto.BinaryFrameCodec.obfuscateTimestamp(System.currentTimeMillis()),
     val isDummyCover: Boolean = false,
     val packetClass: PacketClass = if (isDummyCover) PacketClass.BACKGROUND_COVER else PacketClass.DIRECT_MESSAGE,
+    val isCoverAck: Boolean = false,
+    val isBlindRepublish: Boolean = false,
+    val preSignedPublicKey: ByteArray? = null,
+    val preSignedSig: ByteArray? = null,
     val onSent: (suspend (success: Boolean) -> Unit)? = null
 ) {
     fun zeroSensitiveMemory() {
@@ -117,19 +121,24 @@ class OutboundPoissonQueue {
 
         fun createDummyFrame(): OutboundPoissonFrame {
             val dummySeed = org.pqchat.dht.crypto.CryptoUtils.secureRandomBytes(32)
-            val dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
-            val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
-            val payload = org.pqchat.dht.crypto.CryptoUtils.secureRandomBytes(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
-            return OutboundPoissonFrame(
-                target = target,
-                payload = payload,
-                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-                salt = null,
-                sk = dummySeed,
-                skipLocalStore = true,
-                isDummyCover = true,
-                packetClass = PacketClass.BACKGROUND_COVER
-            )
+            var dummyKeyPair: org.pqchat.dht.crypto.Ed25519Engine.KeyPair? = null
+            return try {
+                dummyKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(dummySeed)
+                val target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
+                val payload = org.pqchat.dht.crypto.CryptoUtils.secureRandomBytes(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+                OutboundPoissonFrame(
+                    target = target,
+                    payload = payload,
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = dummySeed,
+                    skipLocalStore = true,
+                    isDummyCover = true,
+                    packetClass = PacketClass.BACKGROUND_COVER
+                )
+            } finally {
+                dummyKeyPair?.seed?.fill(0)
+            }
         }
     }
 
@@ -255,6 +264,7 @@ class OutboundPoissonQueue {
                 return null
             }
 
+            var coverQueried = false
             for (step in 0 until WFQ_CYCLE.size) {
                 val slotIdx = (currentScheduleIndex + step) % WFQ_CYCLE.size
                 val targetClass = WFQ_CYCLE[slotIdx]
@@ -263,7 +273,8 @@ class OutboundPoissonQueue {
                 if (q.isNotEmpty()) {
                     currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
                     return q.pollFirst()
-                } else if (targetClass == PacketClass.BACKGROUND_COVER && effectiveCoverProvider != null) {
+                } else if (targetClass == PacketClass.BACKGROUND_COVER && effectiveCoverProvider != null && !coverQueried) {
+                    coverQueried = true
                     val coverFrame = effectiveCoverProvider.invoke()
                     if (coverFrame != null) {
                         currentScheduleIndex = (slotIdx + 1) % WFQ_CYCLE.size
@@ -277,7 +288,7 @@ class OutboundPoissonQueue {
                 val q = classQueues[c]!!
                 if (q.isNotEmpty()) return q.pollFirst()
             }
-            return effectiveCoverProvider?.invoke()
+            return if (!coverQueried) effectiveCoverProvider?.invoke() else null
         }
     }
 

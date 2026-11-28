@@ -53,12 +53,12 @@ class PollingWorker(
         }
     }
 
-    data class RepublishTask(
+    class RepublishTask(
         val messageId: Long,
         val contactId: String,
         val target: ByteArray,
         val payload: ByteArray,
-        val edPrivateKeySeed: ByteArray,
+        edPrivateKeySeed: ByteArray,
         val seq: Long = DhtClient.DEFAULT_MUTABLE_SEQ,
         val initialSentTimestamp: Long = System.currentTimeMillis(),
         var lastRepublishedTimestamp: Long = initialSentTimestamp,
@@ -66,6 +66,8 @@ class PollingWorker(
         val maxRetries: Int = 40,
         var currentAttempts: Int = 0
     ) {
+        val edPrivateKeySeed: ByteArray = edPrivateKeySeed.copyOf()
+
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is RepublishTask) return false

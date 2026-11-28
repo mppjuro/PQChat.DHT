@@ -73,22 +73,27 @@ object RatchetChain {
 
         val info = buildStepInfo(counter)
         val entropy = HkdfSha512.expand(chainKey, info, TOTAL_ENTROPY_SIZE)
+        var edKeyPair: Ed25519Engine.KeyPair? = null
+        return try {
+            val msgKey = entropy.copyOfRange(0, 32)
+            val edSeed = entropy.copyOfRange(32, 64)
+            val nextChainKey = entropy.copyOfRange(64, 128)
 
-        val msgKey = entropy.copyOfRange(0, 32)
-        val edSeed = entropy.copyOfRange(32, 64)
-        val nextChainKey = entropy.copyOfRange(64, 128)
+            edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
+            val target = Ed25519Engine.computeTarget(edKeyPair.publicKey)
 
-        val edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
-        val target = Ed25519Engine.computeTarget(edKeyPair.publicKey)
-
-        return SlotParameters(
-            counter = counter,
-            msgKey = msgKey,
-            edPrivateKeySeed = edSeed,
-            edPublicKey = edKeyPair.publicKey,
-            target = target,
-            nextChainKey = nextChainKey
-        )
+            SlotParameters(
+                counter = counter,
+                msgKey = msgKey,
+                edPrivateKeySeed = edSeed,
+                edPublicKey = edKeyPair.publicKey,
+                target = target,
+                nextChainKey = nextChainKey
+            )
+        } finally {
+            entropy.fill(0)
+            edKeyPair?.seed?.fill(0)
+        }
     }
 
     /**
@@ -132,7 +137,13 @@ object RatchetChain {
      */
     fun getNextExpectedTarget(chainKeyIn: ByteArray, counterIn: Int): ByteArray {
         val slot = deriveSlot(chainKeyIn, counterIn)
-        return slot.target
+        return try {
+            slot.target
+        } finally {
+            slot.msgKey.fill(0)
+            slot.edPrivateKeySeed.fill(0)
+            slot.nextChainKey.fill(0)
+        }
     }
 
     fun deriveSlot(chainKey: org.pqchat.dht.data.db.EncryptedBlob, counter: Int): SlotParameters =
@@ -218,28 +229,35 @@ object RatchetChain {
         // Base step to advance the ratchet chain for the sender
         val baseInfo = buildStepInfo(counter)
         val baseEntropy = HkdfSha512.expand(chainKey, baseInfo, TOTAL_ENTROPY_SIZE)
-        val nextChainKey = baseEntropy.copyOfRange(64, 128)
-        baseEntropy.fill(0)
+        val nextChainKey = try {
+            baseEntropy.copyOfRange(64, 128)
+        } finally {
+            baseEntropy.fill(0)
+        }
 
         // Recipient-specific derivation: context "group_target:" || groupId || counter || memberId
         val recipientInfo = buildGroupTargetInfo(groupId, counter, memberId)
         val recipientEntropy = HkdfSha512.expand(chainKey, recipientInfo, 64)
+        var edKeyPair: Ed25519Engine.KeyPair? = null
+        return try {
+            val msgKey = recipientEntropy.copyOfRange(0, 32)
+            val edSeed = recipientEntropy.copyOfRange(32, 64)
 
-        val msgKey = recipientEntropy.copyOfRange(0, 32)
-        val edSeed = recipientEntropy.copyOfRange(32, 64)
-        recipientEntropy.fill(0)
+            edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
+            val target = Ed25519Engine.computeTarget(edKeyPair.publicKey)
 
-        val edKeyPair = Ed25519Engine.generateKeyPairFromSeed(edSeed)
-        val target = Ed25519Engine.computeTarget(edKeyPair.publicKey)
-
-        return SlotParameters(
-            counter = counter,
-            msgKey = msgKey,
-            edPrivateKeySeed = edSeed,
-            edPublicKey = edKeyPair.publicKey,
-            target = target,
-            nextChainKey = nextChainKey
-        )
+            SlotParameters(
+                counter = counter,
+                msgKey = msgKey,
+                edPrivateKeySeed = edSeed,
+                edPublicKey = edKeyPair.publicKey,
+                target = target,
+                nextChainKey = nextChainKey
+            )
+        } finally {
+            recipientEntropy.fill(0)
+            edKeyPair?.seed?.fill(0)
+        }
     }
 
     fun deriveGroupRecipientSlot(
@@ -342,7 +360,16 @@ object RatchetChain {
         counter: Int,
         groupId: ByteArray,
         memberId: ByteArray
-    ): ByteArray = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId).target
+    ): ByteArray {
+        val slot = deriveGroupRecipientSlot(chainKey, counter, groupId, memberId)
+        return try {
+            slot.target
+        } finally {
+            slot.msgKey.fill(0)
+            slot.edPrivateKeySeed.fill(0)
+            slot.nextChainKey.fill(0)
+        }
+    }
 
     fun deriveGroupMemberTarget(
         chainKey: ByteArray,

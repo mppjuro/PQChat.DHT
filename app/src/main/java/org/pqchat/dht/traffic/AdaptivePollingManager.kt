@@ -70,7 +70,7 @@ class AdaptivePollingManager(
                         salt = entry.salt,
                         pk = entry.publicKey,
                         sig = entry.sig,
-                        skipLocalStore = false
+                        skipLocalStore = true
                     )
                     val rttMs = System.currentTimeMillis() - tStart
                     try {

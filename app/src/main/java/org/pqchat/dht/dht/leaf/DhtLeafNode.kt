@@ -40,6 +40,7 @@ open class DhtLeafNode(
         const val TAG = "PQChat"
         const val DEFAULT_DHT_PORT = 49160
         const val MAX_CACHED_NODES = 40
+        const val MAX_LOCAL_STORE_ENTRIES = 256
         const val MIN_HEALTHY_ROUTING_TABLE_SIZE = 16
         const val DEFAULT_K = 8 // Default replication / closest nodes factor
         const val CGNAT_LTE_K = 16 // Adaptive replication factor under LTE / Restrictive NAT / CGNAT
@@ -453,8 +454,58 @@ open class DhtLeafNode(
     private val _lastOperationMetrics = java.util.concurrent.atomic.AtomicReference(DhtOpMetrics())
     override val lastOperationMetrics: DhtOpMetrics get() = _lastOperationMetrics.get()
 
-    val localMutableStore = ConcurrentHashMap<String, MutableItem>()
-    val storage: ConcurrentHashMap<String, MutableItem> get() = localMutableStore
+    class LocalMutableStore(private val maxCapacity: Int = MAX_LOCAL_STORE_ENTRIES) : MutableMap<String, MutableItem> {
+        private val lock = Any()
+        private val storage = object : LinkedHashMap<String, MutableItem>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MutableItem>?): Boolean {
+                return size > maxCapacity
+            }
+        }
+
+        override val size: Int get() = synchronized(lock) { storage.size }
+        override fun isEmpty(): Boolean = synchronized(lock) { storage.isEmpty() }
+        override fun containsKey(key: String): Boolean = synchronized(lock) { storage.containsKey(key) }
+        override fun containsValue(value: MutableItem): Boolean = synchronized(lock) { storage.containsValue(value) }
+        override fun get(key: String): MutableItem? = synchronized(lock) { storage[key] }
+
+        override fun put(key: String, value: MutableItem): MutableItem? {
+            if (!isTestLoopbackMode && !isLocalTestbedActive()) return null
+            if (value.v.size != BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES) return null
+            return synchronized(lock) { storage.put(key, value) }
+        }
+
+        override fun remove(key: String): MutableItem? = synchronized(lock) { storage.remove(key) }
+
+        override fun putAll(from: Map<out String, MutableItem>) {
+            from.forEach { (k, v) -> put(k, v) }
+        }
+
+        override fun clear() = synchronized(lock) { storage.clear() }
+
+        override val keys: MutableSet<String>
+            get() = synchronized(lock) { storage.keys.toMutableSet() }
+
+        override val values: MutableCollection<MutableItem>
+            get() = synchronized(lock) { storage.values.toMutableList() }
+
+        override val entries: MutableSet<MutableMap.MutableEntry<String, MutableItem>>
+            get() = synchronized(lock) { storage.entries.toMutableSet() }
+    }
+
+    private val localWriteTokenSecret = CryptoUtils.secureRandomBytes(32)
+
+    internal fun generateLocalWriteToken(sender: InetSocketAddress): ByteArray {
+        val senderIpBytes = sender.address?.address ?: sender.hostString.toByteArray(StandardCharsets.UTF_8)
+        return CryptoUtils.hmacSha256(localWriteTokenSecret, senderIpBytes).copyOf(8)
+    }
+
+    internal fun verifyLocalWriteToken(sender: InetSocketAddress, token: ByteArray?): Boolean {
+        if (!isValidDhtToken(token)) return false
+        return CryptoUtils.constantTimeEquals(token!!, generateLocalWriteToken(sender))
+    }
+
+    val localMutableStore = LocalMutableStore(MAX_LOCAL_STORE_ENTRIES)
+    val storage: MutableMap<String, MutableItem> get() = localMutableStore
     val remoteStoredPeers = ConcurrentHashMap<String, CopyOnWriteArrayList<InetSocketAddress>>()
     val targetRouteCache = TargetRouteCache()
 
@@ -906,6 +957,9 @@ open class DhtLeafNode(
                 }
 
                 is KrpcMessage.Query -> {
+                    if (!isTestLoopbackMode && (!isLocalTestbedActive() || !isLoopbackOrLocal(sender))) {
+                        return
+                    }
                     when (msg.method) {
                         "ping" -> {
                             val resp = KrpcMessage.createPingResponse(myNodeId, msg.transactionId)
@@ -934,7 +988,7 @@ open class DhtLeafNode(
                             if (target != null) {
                                 val targetHex = CryptoUtils.toHex(target)
                                 val item = localMutableStore[targetHex]
-                                val token = CryptoUtils.sha1(sender.address.address + myNodeId).copyOf(8)
+                                val token = generateLocalWriteToken(sender)
                                 val respMap = mutableMapOf<String, Any>(
                                     "id" to myNodeId,
                                     "token" to token
@@ -961,7 +1015,7 @@ open class DhtLeafNode(
                         "get_peers" -> {
                             val infoHash = msg.arguments["info_hash"] as? ByteArray
                             if (infoHash != null) {
-                                val token = CryptoUtils.sha1(sender.address.address + myNodeId).copyOf(8)
+                                val token = generateLocalWriteToken(sender)
                                 val closest = findClosestNodes(infoHash, count = 8)
                                 val compactNodes = serializeCompactNodes(closest)
                                 val respMap = mutableMapOf<String, Any>(
@@ -978,12 +1032,26 @@ open class DhtLeafNode(
                         }
 
                         "put" -> {
+                            val token = msg.arguments["token"] as? ByteArray
+                            if (!verifyLocalWriteToken(sender, token)) {
+                                val err = KrpcMessage.Error(msg.transactionId, 203, "Invalid write token")
+                                sendKrpcResponse(err.toBencoded(), sender)
+                                return
+                            }
                             val v = msg.arguments["v"] as? ByteArray
                             val k = msg.arguments["k"] as? ByteArray
                             val sig = msg.arguments["sig"] as? ByteArray
                             val seq = (msg.arguments["seq"] as? Long) ?: 0L
                             val salt = msg.arguments["salt"] as? ByteArray
-                            if (v != null && k != null && sig != null) {
+                            if (v == null || v.size != BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES) {
+                                val err = KrpcMessage.Error(msg.transactionId, 203, "Invalid BEP-44 value size")
+                                sendKrpcResponse(err.toBencoded(), sender)
+                                return
+                            }
+                            if (k != null && k.size == Ed25519Engine.PUBLIC_KEY_SIZE &&
+                                sig != null && sig.size == Ed25519Engine.SIGNATURE_SIZE &&
+                                seq >= 0L
+                            ) {
                                 val signData = Bencode.encodeBep44SignData(v, seq, salt)
                                 if (Ed25519Engine.verify(k, signData, sig)) {
                                     val target =
@@ -1640,7 +1708,7 @@ open class DhtLeafNode(
             }
         }
 
-        if (!skipLocalStore) {
+        if ((isTestLoopbackMode || isLocalTestbedActive()) && !skipLocalStore) {
             val localItem = localMutableStore[targetHex]
             if (localItem != null && (minSeq < 0L || localItem.seq > minSeq)) {
                 val metrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 1, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = null)
@@ -1911,7 +1979,7 @@ open class DhtLeafNode(
         )
 
         if (finalBestItem != null) {
-            if (!skipLocalStore) {
+            if ((isTestLoopbackMode || isLocalTestbedActive()) && !skipLocalStore && finalBestItem.v.size == BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES) {
                 localMutableStore[targetHex] = finalBestItem
             }
             finalBestItem.responder?.let { respAddr ->
@@ -1965,6 +2033,17 @@ open class DhtLeafNode(
         val targetHex = CryptoUtils.toHex(target)
 
         if (isTestLoopbackMode) {
+            if (v.size != BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES) {
+                val failMetrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = "Invalid BEP-44 value size")
+                _lastOperationMetrics.set(failMetrics)
+                return@withContext false
+            }
+            val signData = Bencode.encodeBep44SignData(v, seq, salt)
+            if (!Ed25519Engine.verify(pk, signData, sig)) {
+                val failMetrics = DhtOpMetrics(nodesQueried = 0, nodesResponded = 0, lookupHops = 0, tokensReceived = 0, putNodesAttempted = 0, putNodesSucceeded = 0, dhtError = "Invalid Ed25519 signature")
+                _lastOperationMetrics.set(failMetrics)
+                return@withContext false
+            }
             val localItem = MutableItem(v, seq, pk, sig, salt, null, null)
             val existing = localMutableStore[targetHex]
             if (existing == null || seq >= existing.seq) {
@@ -1984,10 +2063,12 @@ open class DhtLeafNode(
             return@withContext false
         }
 
+        val isLocalMode = isLocalTestbedActive()
+        val allowLocalStore = isLocalMode && !skipLocalStore && v.size == BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES
         // Local tracking counters for this specific operation (avoids concurrent background poll interference)
         val queriesSent = java.util.concurrent.atomic.AtomicInteger(0)
         val responsesReceived = java.util.concurrent.atomic.AtomicInteger(0)
-        val highestNetworkSeq = java.util.concurrent.atomic.AtomicLong(localMutableStore[targetHex]?.seq ?: 0L)
+        val highestNetworkSeq = java.util.concurrent.atomic.AtomicLong(if (allowLocalStore) (localMutableStore[targetHex]?.seq ?: 0L) else 0L)
         var hopsExecuted = 0
         var lastOpError: String? = null
 
@@ -1997,7 +2078,6 @@ open class DhtLeafNode(
         val peersWithoutToken = ConcurrentHashMap<InetSocketAddress, DhtPeer>()
 
         // 1. Initial candidates population
-        val isLocalMode = isLocalTestbedActive()
         val cachedRoute = targetRouteCache[target] ?: emptyList()
         val storedPeers = remoteStoredPeers[targetHex]?.mapNotNull { addr ->
             (cachedRoute + routingTable).firstOrNull { it.address == addr } ?: DhtPeer(target, addr)
@@ -2020,14 +2100,13 @@ open class DhtLeafNode(
         }
 
         val isLiveNetwork = !isLocalMode && candidatePool.values.any { !isLoopbackOrLocal(it.address) }
-        val maxLookupHops = if (isLiveNetwork) 6 else if (isLocalMode) 3 else 5
-        val maxLookupQueries = if (isLiveNetwork) 64 else if (isLocalMode) 24 else 48
+        val maxLookupHops = if (isLiveNetwork) 6 else 5
+        val maxLookupQueries = if (isLiveNetwork) 64 else if (isLocalMode) 32 else 48
         val queryTimeoutMs = if (isLocalMode) 500L else 2500L
 
         // 2. Iterative BEP 44 token-harvesting lookup (sending "q": "get" to harvest tokens and closest nodes simultaneously)
         for (hop in 1..maxLookupHops) {
             if (queriesSent.get() >= maxLookupQueries) break
-            if (isLocalMode && tokenMap.size >= 8 && hop >= 2) break
 
             val unqueried = candidatePool.values
                 .filter { it.address !in queriedAddresses && (candidatePool.size <= 3 || !isBootstrapRouter(it.address)) }
@@ -2052,7 +2131,7 @@ open class DhtLeafNode(
                         break
                     }
                 }
-            } else if (!isLiveNetwork && !isLocalMode && tokenMap.size >= 12 && hop >= 4) {
+            } else if (!isLiveNetwork && tokenMap.size >= (if (isLocalMode) 8 else 12) && hop >= (if (isLocalMode) 2 else 4)) {
                 if (unqueried.isEmpty()) break
                 val closestTokenPeers = tokenMap.keys.mapNotNull { addr ->
                     candidatePool[addr]?.takeIf { it.nodeId.any { b -> b != 0.toByte() } }
@@ -2256,8 +2335,8 @@ open class DhtLeafNode(
             }
         }
 
-        // Store in our node's BEP 44 mutable store ONLY if skipLocalStore is false
-        if (!skipLocalStore) {
+        // Store in our node's BEP 44 mutable store ONLY in local testbed mode when skipLocalStore is false
+        if (allowLocalStore) {
             val localItem = MutableItem(v, seqToPut, pk, sigToPut, salt, null, null)
             val existing = localMutableStore[targetHex]
             if (existing == null || seqToPut >= existing.seq) {
@@ -2283,7 +2362,7 @@ open class DhtLeafNode(
             }
             val rttMs = System.currentTimeMillis() - tStart
             logInfo(TAG, "[PQChat] PUT target=$targetHex tokenMap empty (skipLocalStore=$skipLocalStore, queried=${queriesSent.get()}, responded=${responsesReceived.get()}) rtt=${rttMs}ms err=${finalMetrics.dhtError}")
-            return@withContext !skipLocalStore
+            return@withContext allowLocalStore
         }
 
         // 5. Select closest nodes with verified write token (filter by valid token FIRST, then sort by XOR distance)
@@ -2365,7 +2444,7 @@ open class DhtLeafNode(
         val putOkCount = putAcks.get()
         // Mobile quorum: live network requires at least 1 remote ACK so callers retry/republish on failure;
         // local/testbed mode preserves localMutableStore success when remote peers are absent.
-        val putSuccess = if (skipLocalStore || isLiveNetwork) {
+        val putSuccess = if (!allowLocalStore || isLiveNetwork) {
             putOkCount >= 1
         } else {
             true
@@ -2391,7 +2470,7 @@ open class DhtLeafNode(
             scope.launch { rebootstrap(force = true) }
         }
 
-        if (!putSuccess && skipLocalStore) {
+        if (!putSuccess && !allowLocalStore) {
             targetRouteCache.remove(target)
         }
 
@@ -2418,7 +2497,9 @@ open class DhtLeafNode(
         }
         val signData = Bencode.encodeBep44SignData(v, seq, salt)
         val sig = Ed25519Engine.sign(sk, signData)
-        val pk = Ed25519Engine.generateKeyPairFromSeed(sk).publicKey
+        val kp = Ed25519Engine.generateKeyPairFromSeed(sk)
+        val pk = kp.publicKey
+        kp.seed.fill(0)
         return putMutableInternal(target, v, seq, salt, pk, sig, skipLocalStore, sk = sk)
     }
 
@@ -2430,19 +2511,25 @@ open class DhtLeafNode(
             return null
         }
         val dummySeed = CryptoUtils.secureRandomBytes(32)
-        val dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
-        val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
-        val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+        var dummyKeyPair: Ed25519Engine.KeyPair? = null
+        return try {
+            dummyKeyPair = Ed25519Engine.generateKeyPairFromSeed(dummySeed)
+            val target = Ed25519Engine.computeTarget(dummyKeyPair.publicKey)
+            val dummyPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
 
-        val ok = putMutable(
-            target = target,
-            v = dummyPayload,
-            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
-            salt = null,
-            sk = dummySeed,
-            skipLocalStore = true
-        )
-        return if (ok) target else null
+            val ok = putMutable(
+                target = target,
+                v = dummyPayload,
+                seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                salt = null,
+                sk = dummySeed,
+                skipLocalStore = true
+            )
+            if (ok) target else null
+        } finally {
+            dummySeed.fill(0)
+            dummyKeyPair?.seed?.fill(0)
+        }
     }
 
     /**

@@ -5,6 +5,9 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.pqchat.dht.crypto.CryptoUtils
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 enum class ThemeMode {
     SYSTEM,
@@ -25,35 +28,35 @@ data class SyncIntervalOption(
 )
 
 val SYNC_INTERVAL_OPTIONS = listOf(
-    SyncIntervalOption("5 sekund", 5_000L),
-    SyncIntervalOption("10 sekund", 10_000L),
-    SyncIntervalOption("20 sekund", 20_000L),
-    SyncIntervalOption("30 sekund", 30_000L),
-    SyncIntervalOption("1 minuta", 60_000L),
-    SyncIntervalOption("2 minuty", 120_000L),
-    SyncIntervalOption("3 minuty", 180_000L),
-    SyncIntervalOption("5 minut", 300_000L),
-    SyncIntervalOption("10 minut", 600_000L),
-    SyncIntervalOption("15 minut", 900_000L),
-    SyncIntervalOption("30 minut", 1_800_000L),
-    SyncIntervalOption("1 godzina", 3_600_000L),
-    SyncIntervalOption("2 godziny", 7_200_000L)
+    SyncIntervalOption("5 seconds", 5_000L),
+    SyncIntervalOption("10 seconds", 10_000L),
+    SyncIntervalOption("20 seconds", 20_000L),
+    SyncIntervalOption("30 seconds", 30_000L),
+    SyncIntervalOption("1 minute", 60_000L),
+    SyncIntervalOption("2 minutes", 120_000L),
+    SyncIntervalOption("3 minutes", 180_000L),
+    SyncIntervalOption("5 minutes", 300_000L),
+    SyncIntervalOption("10 minutes", 600_000L),
+    SyncIntervalOption("15 minutes", 900_000L),
+    SyncIntervalOption("30 minutes", 1_800_000L),
+    SyncIntervalOption("1 hour", 3_600_000L),
+    SyncIntervalOption("2 hours", 7_200_000L)
 )
 
 object DefaultIntervals {
-    const val FOREGROUND_CHAT = 10_000L // 10 sekund
-    const val APP_ACTIVE = 60_000L       // 1 minuta
-    const val BACKGROUND_IDLE = 300_000L // 5 minut
-    const val DOZE_SLEEP = 900_000L      // 15 minut
+    const val FOREGROUND_CHAT = 10_000L // 10 seconds
+    const val APP_ACTIVE = 60_000L       // 1 minute
+    const val BACKGROUND_IDLE = 300_000L // 5 minutes
+    const val DOZE_SLEEP = 900_000L      // 15 minutes
 }
 
 object DefaultRepublishConfig {
-    const val TIER1_INTERVAL = 15 * 60 * 1000L       // 15 minut (do 2h)
-    const val TIER1_THRESHOLD = 2 * 60 * 60 * 1000L   // 2 godziny
-    const val TIER2_INTERVAL = 60 * 60 * 1000L       // 1 godzina (do 12h)
-    const val TIER2_THRESHOLD = 12 * 60 * 60 * 1000L  // 12 godzin
-    const val TIER3_INTERVAL = 90 * 60 * 1000L       // 1.5 godziny / 90 minut (skalibrowane pod natywny TTL BEP 44 ~2h)
-    const val MAX_TTL = 48 * 60 * 60 * 1000L         // 48 godzin (maksymalny TTL)
+    const val TIER1_INTERVAL = 15 * 60 * 1000L       // 15 minutes (up to 2h)
+    const val TIER1_THRESHOLD = 2 * 60 * 60 * 1000L   // 2 hours
+    const val TIER2_INTERVAL = 60 * 60 * 1000L       // 1 hour (up to 12h)
+    const val TIER2_THRESHOLD = 12 * 60 * 60 * 1000L  // 12 hours
+    const val TIER3_INTERVAL = 90 * 60 * 1000L       // 1.5 hours / 90 minutes (calibrated for native BEP 44 ~2h TTL)
+    const val MAX_TTL = 48 * 60 * 60 * 1000L         // 48 hours (maximum TTL)
 }
 
 object DefaultImageCompression {
@@ -66,44 +69,44 @@ object DefaultImageCompression {
 }
 
 val REPUBLISH_TIER1_OPTIONS = listOf(
-    SyncIntervalOption("5 minut", 5 * 60 * 1000L),
-    SyncIntervalOption("10 minut", 10 * 60 * 1000L),
-    SyncIntervalOption("15 minut", 15 * 60 * 1000L),
-    SyncIntervalOption("30 minut", 30 * 60 * 1000L),
-    SyncIntervalOption("1 godzina", 60 * 60 * 1000L)
+    SyncIntervalOption("5 minutes", 5 * 60 * 1000L),
+    SyncIntervalOption("10 minutes", 10 * 60 * 1000L),
+    SyncIntervalOption("15 minutes", 15 * 60 * 1000L),
+    SyncIntervalOption("30 minutes", 30 * 60 * 1000L),
+    SyncIntervalOption("1 hour", 60 * 60 * 1000L)
 )
 
 val REPUBLISH_TIER2_OPTIONS = listOf(
-    SyncIntervalOption("30 minut", 30 * 60 * 1000L),
-    SyncIntervalOption("1 godzina", 60 * 60 * 1000L),
-    SyncIntervalOption("2 godziny", 2 * 60 * 60 * 1000L),
-    SyncIntervalOption("3 godziny", 3 * 60 * 60 * 1000L),
-    SyncIntervalOption("4 godziny", 4 * 60 * 60 * 1000L)
+    SyncIntervalOption("30 minutes", 30 * 60 * 1000L),
+    SyncIntervalOption("1 hour", 60 * 60 * 1000L),
+    SyncIntervalOption("2 hours", 2 * 60 * 60 * 1000L),
+    SyncIntervalOption("3 hours", 3 * 60 * 60 * 1000L),
+    SyncIntervalOption("4 hours", 4 * 60 * 60 * 1000L)
 )
 
 val REPUBLISH_TIER3_OPTIONS = listOf(
-    SyncIntervalOption("1 godzina", 60 * 60 * 1000L),
-    SyncIntervalOption("1.5 godziny", 90 * 60 * 1000L),
-    SyncIntervalOption("2 godziny", 2 * 60 * 60 * 1000L),
-    SyncIntervalOption("3 godziny", 3 * 60 * 60 * 1000L),
-    SyncIntervalOption("4 godziny", 4 * 60 * 60 * 1000L),
-    SyncIntervalOption("6 godzin", 6 * 60 * 60 * 1000L)
+    SyncIntervalOption("1 hour", 60 * 60 * 1000L),
+    SyncIntervalOption("1.5 hours", 90 * 60 * 1000L),
+    SyncIntervalOption("2 hours", 2 * 60 * 60 * 1000L),
+    SyncIntervalOption("3 hours", 3 * 60 * 60 * 1000L),
+    SyncIntervalOption("4 hours", 4 * 60 * 60 * 1000L),
+    SyncIntervalOption("6 hours", 6 * 60 * 60 * 1000L)
 )
 
 val REPUBLISH_TTL_OPTIONS = listOf(
-    SyncIntervalOption("12 godzin", 12 * 60 * 60 * 1000L),
-    SyncIntervalOption("24 godziny", 24 * 60 * 60 * 1000L),
-    SyncIntervalOption("36 godzin", 36 * 60 * 60 * 1000L),
-    SyncIntervalOption("48 godzin", 48 * 60 * 60 * 1000L),
-    SyncIntervalOption("72 godziny", 72 * 60 * 60 * 1000L)
+    SyncIntervalOption("12 hours", 12 * 60 * 60 * 1000L),
+    SyncIntervalOption("24 hours", 24 * 60 * 60 * 1000L),
+    SyncIntervalOption("36 hours", 36 * 60 * 60 * 1000L),
+    SyncIntervalOption("48 hours", 48 * 60 * 60 * 1000L),
+    SyncIntervalOption("72 hours", 72 * 60 * 60 * 1000L)
 )
 
 val RESEARCH_PROBE_INTERVAL_OPTIONS = listOf(
-    SyncIntervalOption("5 minut", 5 * 60 * 1000L),
-    SyncIntervalOption("10 minut", 10 * 60 * 1000L),
-    SyncIntervalOption("15 minut (zalecane)", 15 * 60 * 1000L),
-    SyncIntervalOption("30 minut", 30 * 60 * 1000L),
-    SyncIntervalOption("1 godzina", 60 * 60 * 1000L)
+    SyncIntervalOption("5 minutes", 5 * 60 * 1000L),
+    SyncIntervalOption("10 minutes", 10 * 60 * 1000L),
+    SyncIntervalOption("15 minutes (recommended)", 15 * 60 * 1000L),
+    SyncIntervalOption("30 minutes", 30 * 60 * 1000L),
+    SyncIntervalOption("1 hour", 60 * 60 * 1000L)
 )
 
 class AppSettingsManager(
@@ -220,9 +223,9 @@ class AppSettingsManager(
     )
     val statsProbeIntervalMs: StateFlow<Long> = _statsProbeIntervalMs.asStateFlow()
 
-    // Strict Poisson Traffic Shaping (default FALSE, proactive privacy defense against traffic analysis)
+    // Strict Poisson Traffic Shaping (default TRUE, proactive privacy defense against traffic analysis)
     private val _isStrictPoissonShapingEnabled = MutableStateFlow(
-        prefs?.getBoolean(KEY_STRICT_POISSON_SHAPING, false) ?: false
+        prefs?.getBoolean(KEY_STRICT_POISSON_SHAPING, true) ?: true
     )
     val isStrictPoissonShapingEnabled: StateFlow<Boolean> = _isStrictPoissonShapingEnabled.asStateFlow()
 
@@ -336,12 +339,31 @@ class AppSettingsManager(
     }
 
     /**
-     * Hashes a PIN with a salt using SHA-256.
+     * Derives a 256-bit PIN hash using PBKDF2WithHmacSHA256 (120,000 iterations).
      */
     fun hashPin(pin: String, salt: ByteArray): ByteArray {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        digest.update(salt)
-        return digest.digest(pin.toByteArray(Charsets.UTF_8))
+        val chars = pin.toCharArray()
+        val spec = PBEKeySpec(chars, salt, PBKDF2_ITERATIONS, PBKDF2_KEY_LENGTH_BITS)
+        return try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally {
+            chars.fill('\u0000')
+            spec.clearPassword()
+        }
+    }
+
+    /**
+     * Legacy single-round SHA-256 hash retained solely for transparent migration of older PINs.
+     */
+    private fun legacyHashPinSha256(pin: String, salt: ByteArray): ByteArray {
+        val pinBytes = pin.toByteArray(Charsets.UTF_8)
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            digest.update(salt)
+            digest.digest(pinBytes)
+        } finally {
+            pinBytes.fill(0)
+        }
     }
 
     private fun bytesToHex(bytes: ByteArray): String {
@@ -356,11 +378,18 @@ class AppSettingsManager(
     }
 
     private fun hexToBytes(hex: String): ByteArray {
+        if (hex.length % 2 != 0) return ByteArray(0)
         val len = hex.length
         val data = ByteArray(len / 2)
         var i = 0
         while (i < len) {
-            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            val hi = Character.digit(hex[i], 16)
+            val lo = Character.digit(hex[i + 1], 16)
+            if (hi < 0 || lo < 0) {
+                data.fill(0)
+                return ByteArray(0)
+            }
+            data[i / 2] = ((hi shl 4) + lo).toByte()
             i += 2
         }
         return data
@@ -374,12 +403,18 @@ class AppSettingsManager(
             editor?.apply()
             _isAppLockPinSet.value = false
         } else {
-            val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-            val hash = hashPin(pin.trim(), salt)
-            editor?.putString(KEY_APP_LOCK_PIN_SALT, bytesToHex(salt))
-            editor?.putString(KEY_APP_LOCK_PIN_HASH, bytesToHex(hash))
-            editor?.apply()
-            _isAppLockPinSet.value = true
+            val salt = CryptoUtils.secureRandomBytes(16)
+            var hash: ByteArray? = null
+            try {
+                hash = hashPin(pin.trim(), salt)
+                editor?.putString(KEY_APP_LOCK_PIN_SALT, bytesToHex(salt))
+                editor?.putString(KEY_APP_LOCK_PIN_HASH, bytesToHex(hash))
+                editor?.apply()
+                _isAppLockPinSet.value = true
+            } finally {
+                salt.fill(0)
+                hash?.fill(0)
+            }
         }
     }
 
@@ -391,18 +426,37 @@ class AppSettingsManager(
             editor?.apply()
             _isDuressPinSet.value = false
         } else {
-            val salt = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-            val hash = hashPin(pin.trim(), salt)
-            editor?.putString(KEY_DURESS_PIN_SALT, bytesToHex(salt))
-            editor?.putString(KEY_DURESS_PIN_HASH, bytesToHex(hash))
-            editor?.apply()
-            _isDuressPinSet.value = true
+            val salt = CryptoUtils.secureRandomBytes(16)
+            var hash: ByteArray? = null
+            try {
+                hash = hashPin(pin.trim(), salt)
+                editor?.putString(KEY_DURESS_PIN_SALT, bytesToHex(salt))
+                editor?.putString(KEY_DURESS_PIN_HASH, bytesToHex(hash))
+                editor?.apply()
+                _isDuressPinSet.value = true
+            } finally {
+                salt.fill(0)
+                hash?.fill(0)
+            }
         }
     }
 
     fun setDuressActive(active: Boolean) {
-        prefs?.edit()?.putBoolean(KEY_IS_DURESS_ACTIVE, active)?.apply()
-        _isDuressActive.value = active
+        if (active) {
+            // Overwrite PIN hashes and salts with indistinguishable CSPRNG noise and remove explicit duress/canary flags
+            prefs?.edit()
+                ?.putString(KEY_APP_LOCK_PIN_HASH, bytesToHex(CryptoUtils.secureRandomBytes(32)))
+                ?.putString(KEY_APP_LOCK_PIN_SALT, bytesToHex(CryptoUtils.secureRandomBytes(16)))
+                ?.putString(KEY_DURESS_PIN_HASH, bytesToHex(CryptoUtils.secureRandomBytes(32)))
+                ?.putString(KEY_DURESS_PIN_SALT, bytesToHex(CryptoUtils.secureRandomBytes(16)))
+                ?.remove(KEY_IS_DURESS_ACTIVE)
+                ?.remove(KEY_CANARY_TRIGGERED)
+                ?.apply()
+            _isDuressActive.value = true
+        } else {
+            prefs?.edit()?.remove(KEY_IS_DURESS_ACTIVE)?.apply()
+            _isDuressActive.value = false
+        }
     }
 
     fun clearDuressActive() {
@@ -417,9 +471,25 @@ class AppSettingsManager(
         val duressSaltHex = prefs?.getString(KEY_DURESS_PIN_SALT, null)
         if (duressHashHex != null && duressSaltHex != null) {
             val salt = hexToBytes(duressSaltHex)
-            val computedHash = bytesToHex(hashPin(cleanPin, salt))
-            if (computedHash.equals(duressHashHex, ignoreCase = true)) {
-                return PinAuthResult.DURESS_TRIGGERED
+            val storedHash = hexToBytes(duressHashHex)
+            var computedHash: ByteArray? = null
+            var legacyHash: ByteArray? = null
+            try {
+                if (salt.isNotEmpty() && storedHash.isNotEmpty()) {
+                    computedHash = hashPin(cleanPin, salt)
+                    if (CryptoUtils.constantTimeEquals(computedHash, storedHash)) {
+                        return PinAuthResult.DURESS_TRIGGERED
+                    }
+                    legacyHash = legacyHashPinSha256(cleanPin, salt)
+                    if (CryptoUtils.constantTimeEquals(legacyHash, storedHash)) {
+                        return PinAuthResult.DURESS_TRIGGERED
+                    }
+                }
+            } finally {
+                salt.fill(0)
+                storedHash.fill(0)
+                computedHash?.fill(0)
+                legacyHash?.fill(0)
             }
         }
 
@@ -427,9 +497,38 @@ class AppSettingsManager(
         val appLockSaltHex = prefs?.getString(KEY_APP_LOCK_PIN_SALT, null)
         if (appLockHashHex != null && appLockSaltHex != null) {
             val salt = hexToBytes(appLockSaltHex)
-            val computedHash = bytesToHex(hashPin(cleanPin, salt))
-            if (computedHash.equals(appLockHashHex, ignoreCase = true)) {
-                return PinAuthResult.NORMAL_UNLOCK
+            val storedHash = hexToBytes(appLockHashHex)
+            var computedHash: ByteArray? = null
+            var legacyHash: ByteArray? = null
+            try {
+                if (salt.isNotEmpty() && storedHash.isNotEmpty()) {
+                    computedHash = hashPin(cleanPin, salt)
+                    if (CryptoUtils.constantTimeEquals(computedHash, storedHash)) {
+                        return PinAuthResult.NORMAL_UNLOCK
+                    }
+                    legacyHash = legacyHashPinSha256(cleanPin, salt)
+                    if (CryptoUtils.constantTimeEquals(legacyHash, storedHash)) {
+                        // Transparently migrate legacy SHA-256 PIN to 120,000-iteration PBKDF2-HMAC-SHA256
+                        val newSalt = CryptoUtils.secureRandomBytes(16)
+                        var newHash: ByteArray? = null
+                        try {
+                            newHash = hashPin(cleanPin, newSalt)
+                            prefs.edit()
+                                ?.putString(KEY_APP_LOCK_PIN_SALT, bytesToHex(newSalt))
+                                ?.putString(KEY_APP_LOCK_PIN_HASH, bytesToHex(newHash))
+                                ?.apply()
+                        } finally {
+                            newSalt.fill(0)
+                            newHash?.fill(0)
+                        }
+                        return PinAuthResult.NORMAL_UNLOCK
+                    }
+                }
+            } finally {
+                salt.fill(0)
+                storedHash.fill(0)
+                computedHash?.fill(0)
+                legacyHash?.fill(0)
             }
         }
 
@@ -518,6 +617,8 @@ class AppSettingsManager(
     )
 
     companion object {
+        const val PBKDF2_ITERATIONS = 120_000
+        const val PBKDF2_KEY_LENGTH_BITS = 256
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_INTERVAL_FOREGROUND = "interval_foreground"
         private const val KEY_INTERVAL_APP_ACTIVE = "interval_app_active"

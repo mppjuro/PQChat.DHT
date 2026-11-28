@@ -22,6 +22,8 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.sqrt
 
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [34])
 class StrictPoissonTrafficShapingTest {
 
     companion object {
@@ -700,6 +702,283 @@ class StrictPoissonTrafficShapingTest {
         )
     }
 
+    @Test
+    fun testWfqBackgroundCoverSlotNotStarvedDuringHeavyTransfer() = runBlocking {
+        val ackQueue = PendingAckQueue()
+        val outboundQueue = OutboundPoissonQueue()
+        val republishPool = BlindRepublishPool()
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = 1.0 / 60.0,
+            pendingAckQueue = ackQueue,
+            outboundPoissonQueue = outboundQueue,
+            blindRepublishPool = republishPool,
+            random = java.util.Random(77L)
+        )
+
+        // Enqueue heavy foreground transfer (20 IMAGE_CHUNK + 5 DIRECT_MESSAGE frames)
+        for (i in 0 until 20) {
+            outboundQueue.enqueue(
+                OutboundPoissonFrame(
+                    target = CryptoUtils.secureRandomBytes(20),
+                    payload = ByteArray(900) { 0x11 },
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = CryptoUtils.secureRandomBytes(32),
+                    seqNum = i,
+                    contactId = "alice",
+                    packetClass = PacketClass.IMAGE_CHUNK
+                )
+            )
+        }
+        for (i in 0 until 5) {
+            outboundQueue.enqueue(
+                OutboundPoissonFrame(
+                    target = CryptoUtils.secureRandomBytes(20),
+                    payload = ByteArray(900) { 0x22 },
+                    seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+                    salt = null,
+                    sk = CryptoUtils.secureRandomBytes(32),
+                    seqNum = i,
+                    contactId = "alice",
+                    packetClass = PacketClass.DIRECT_MESSAGE
+                )
+            )
+        }
+
+        // Enqueue 1 PendingAck and 1 valid BlindRepublishEntry
+        val origRatchetKey = CryptoUtils.secureRandomBytes(32)
+        val ratchetKeyCopy = origRatchetKey.copyOf()
+        ackQueue.enqueue(PendingAck("alice", "msg-1", ratchetKeyCopy, seqNum = 1))
+
+        val blindSeed = CryptoUtils.secureRandomBytes(32)
+        val blindKp = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(blindSeed)
+        val blindTarget = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(blindKp.publicKey)
+        val blindPayload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+        val blindSig = org.pqchat.dht.crypto.Ed25519Engine.sign(
+            blindSeed,
+            org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(blindPayload, 1L, null)
+        )
+        assertTrue(republishPool.verifyAndAdd(blindTarget, blindKp.publicKey, 1L, blindPayload, blindSig))
+
+        // Process 16 ticks (2 full 8-slot WFQ cycles): BACKGROUND_COVER slots (indices 7 and 15) must service both ACK & blind republish
+        val events = (0 until 16).map { generator.processCoverTrafficTick(delayMs = 500L) }
+        assertTrue("PendingAck must not be starved during heavy transfer", events.any { it.isAck })
+        assertTrue("BlindRepublish must not be starved during heavy transfer", events.any { it.isBlindRepublish })
+        assertFalse("Foreground transfer queue should still have remaining frames", outboundQueue.isEmpty())
+        assertArrayEquals("Caller ratchet key must not be mutated", origRatchetKey, ratchetKeyCopy)
+        generator.close()
+    }
+
+    @Test
+    fun testGroupVoicePollControlAndRepublishUseEnqueueInterleavedWithDummyCover() = runBlocking {
+        val contactDao = FakeContactDao()
+        val messageDao = FakeMessageDao()
+        val chunkDao = FakeChunkDao()
+        val groupDao = FakeGroupDao()
+        val groupMemberDao = FakeGroupMemberDao()
+        val pollDao = FakePollDao()
+        val outboundQueue = OutboundPoissonQueue()
+        val settingsManager = org.pqchat.dht.data.settings.AppSettingsManager()
+
+        val repo = ChatRepository(
+            contactDao = contactDao,
+            messageDao = messageDao,
+            chunkDao = chunkDao,
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            outboundPoissonQueue = outboundQueue,
+            isStrictPoissonShapingEnabled = true,
+            groupDao = groupDao,
+            groupMemberDao = groupMemberDao,
+            pollDao = pollDao,
+            settingsManager = settingsManager
+        )
+
+        val contacts = listOf("bob", "charlie")
+        for (c in contacts) {
+            repo.addContact(
+                ContactEntity(
+                    id = c,
+                    name = c.replaceFirstChar { it.uppercase() },
+                    chainKeyOut = CryptoUtils.secureRandomBytes(64),
+                    chainKeyIn = CryptoUtils.secureRandomBytes(64),
+                    counterOut = 0,
+                    counterIn = 0,
+                    isVerified = true
+                )
+            )
+        }
+
+        val group = repo.createGroup("Privacy Group", contacts)
+        while (outboundQueue.poll() != null) {}
+        fakeDht.putCalls.set(0)
+
+        // 1. sendGroupVoiceNote
+        assertTrue(repo.sendGroupVoiceNote(group.groupId, ShortArray(8000) { 100 }))
+        assertEquals("sendGroupVoiceNote must not bypass queue via direct putMutable", 0, fakeDht.putCalls.get())
+        val voiceFrames = generateSequence { outboundQueue.poll() }.toList()
+        assertTrue("Voice frames must be queued", voiceFrames.any { !it.isDummyCover })
+        assertTrue("Voice frames must be interleaved with dummy cover frames", voiceFrames.any { it.isDummyCover })
+
+        // 2. createGroupPoll, voteGroupPoll, closeGroupPoll
+        val pollId = repo.createGroupPoll(group.groupId, "Consensus?", listOf("Yes", "No"), isMultiChoice = false)
+        assertNotNull(pollId)
+        assertEquals("createGroupPoll must not bypass queue via direct putMutable", 0, fakeDht.putCalls.get())
+        val pollCreateFrames = generateSequence { outboundQueue.poll() }.toList()
+        assertTrue(pollCreateFrames.any { !it.isDummyCover })
+        assertTrue(pollCreateFrames.any { it.isDummyCover })
+
+        assertTrue(repo.voteGroupPoll(group.groupId, pollId!!, 1))
+        assertEquals("voteGroupPoll must not bypass queue via direct putMutable", 0, fakeDht.putCalls.get())
+        val voteFrames = generateSequence { outboundQueue.poll() }.toList()
+        assertTrue(voteFrames.any { !it.isDummyCover })
+        assertTrue(voteFrames.any { it.isDummyCover })
+
+        assertTrue(repo.closeGroupPoll(group.groupId, pollId))
+        assertEquals("closeGroupPoll must not bypass queue via direct putMutable", 0, fakeDht.putCalls.get())
+        val closeFrames = generateSequence { outboundQueue.poll() }.toList()
+        assertTrue(closeFrames.any { !it.isDummyCover })
+        assertTrue(closeFrames.any { it.isDummyCover })
+
+        // 3. republishRecentGroupMessages
+        assertTrue(repo.sendGroupMessage(group.groupId, "Cached message for republish"))
+        while (outboundQueue.poll() != null) {}
+        fakeDht.putCalls.set(0)
+
+        val republishedCount = repo.republishRecentGroupMessages(group.groupId, force = true)
+        assertTrue("Expected at least 1 republished group frame", republishedCount > 0)
+        assertEquals("republishRecentGroupMessages must not bypass queue via direct putMutable", 0, fakeDht.putCalls.get())
+        val repubFrames = generateSequence { outboundQueue.poll() }.toList()
+        assertTrue(repubFrames.any { !it.isDummyCover })
+        assertTrue(repubFrames.any { it.isDummyCover })
+
+        // Verify isFastTestMode disables strict Poisson shaping even when AppSettingsManager defaults to true
+        assertTrue(settingsManager.isStrictPoissonShapingEnabled.value)
+        assertTrue(repo.isStrictPoissonShaping())
+        repo.isFastTestMode = true
+        assertFalse("isFastTestMode must force strict Poisson shaping off", repo.isStrictPoissonShaping())
+        repo.close()
+    }
+
+    @Test
+    fun testPreWarmQueuedWithoutDecryptionBurstAndPaddedToConstantBudget() = runBlocking {
+        val sharedKeyOut = CryptoUtils.secureRandomBytes(64)
+        val sharedKeyIn = CryptoUtils.secureRandomBytes(64)
+
+        val aliceRepo = ChatRepository(
+            contactDao = FakeContactDao(),
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            isStrictPoissonShapingEnabled = false
+        ).apply { enableDecoyGets = false }
+
+        val bobRepo = ChatRepository(
+            contactDao = FakeContactDao(),
+            messageDao = FakeMessageDao(),
+            chunkDao = FakeChunkDao(),
+            pendingRekeyOfferDao = null,
+            skippedKeyDao = null,
+            dhtLeafNode = fakeDht,
+            isStrictPoissonShapingEnabled = false
+        ).apply { enableDecoyGets = false }
+
+        aliceRepo.addContact(
+            ContactEntity(
+                id = "bob",
+                name = "Bob",
+                chainKeyOut = sharedKeyOut.copyOf(),
+                chainKeyIn = sharedKeyIn.copyOf(),
+                counterOut = 0,
+                counterIn = 0,
+                isInitiator = true,
+                isVerified = true
+            )
+        )
+        bobRepo.addContact(
+            ContactEntity(
+                id = "alice",
+                name = "Alice",
+                chainKeyOut = sharedKeyIn.copyOf(),
+                chainKeyIn = sharedKeyOut.copyOf(),
+                counterOut = 0,
+                counterIn = 0,
+                isInitiator = false,
+                isVerified = true
+            )
+        )
+
+        assertTrue(aliceRepo.sendTextMessage("bob", "Hello without burst!"))
+        fakeDht.preWarmedTargets.clear()
+
+        val received = bobRepo.pollContactIncoming("alice")
+        assertTrue("Bob must receive Alice's message", received)
+        assertTrue(
+            "Decryption must enqueue pre-warming rather than launching an immediate preWarmTarget burst",
+            fakeDht.preWarmedTargets.isEmpty()
+        )
+
+        repeat(20) { bobRepo.decoyTargetPool.registerPopulatedTarget(CryptoUtils.secureRandomBytes(20)) }
+        bobRepo.preWarmAllContactsNextTargets()
+        assertEquals(
+            "Pre-warming batch must emit constant N_POLL_TARGETS=8 lookups padded with decoys",
+            8,
+            fakeDht.preWarmedTargets.size
+        )
+
+        aliceRepo.close()
+        bobRepo.close()
+    }
+
+    @Test
+    fun testPoissonTrafficGeneratorZeroesPrivateKeyAfterEmission() = runBlocking {
+        val outboundQueue = OutboundPoissonQueue()
+        val canarySeed = CryptoUtils.secureRandomBytes(32)
+        val canaryKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(canarySeed)
+        val canaryFrame = OutboundPoissonFrame(
+            target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(canaryKeyPair.publicKey),
+            payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES),
+            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+            salt = null,
+            sk = canarySeed,
+            contactId = "canary"
+        )
+
+        val msgSeed = CryptoUtils.secureRandomBytes(32)
+        val msgKeyPair = org.pqchat.dht.crypto.Ed25519Engine.generateKeyPairFromSeed(msgSeed)
+        val msgFrame = OutboundPoissonFrame(
+            target = org.pqchat.dht.crypto.Ed25519Engine.computeTarget(msgKeyPair.publicKey),
+            payload = CryptoUtils.secureRandomBytes(BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES),
+            seq = DhtClient.DEFAULT_MUTABLE_SEQ,
+            salt = null,
+            sk = msgSeed,
+            contactId = "alice",
+            packetClass = PacketClass.DIRECT_MESSAGE
+        )
+        outboundQueue.enqueue(msgFrame)
+
+        val generator = PoissonTrafficGenerator(
+            dhtLeafNode = fakeDht,
+            lambda = 1.0 / 60.0,
+            outboundPoissonQueue = outboundQueue,
+            safetyCanaryProvider = { canaryFrame },
+            random = java.util.Random(99L)
+        )
+
+        // Tick 1 emits msgFrame -> msgSeed must be zeroed
+        generator.processCoverTrafficTick(delayMs = 100L)
+        assertTrue("Emitted message sk must be zeroed in RAM", msgSeed.all { it == 0.toByte() })
+
+        // Tick 2 triggers dummy cover path + canaryFrame -> canarySeed must be zeroed
+        generator.processCoverTrafficTick(delayMs = 100L)
+        assertTrue("Emitted canary sk must be zeroed in RAM", canarySeed.all { it == 0.toByte() })
+        generator.close()
+    }
+
     // --- Minimal In-Memory DAOs for isolation ---
 
     private class FakeContactDao : ContactDao {
@@ -892,6 +1171,42 @@ class StrictPoissonTrafficShapingTest {
         override suspend fun deleteMembersForGroup(groupId: String) {
             members.remove(groupId)
             getFlow(groupId).value = emptyList()
+        }
+    }
+
+    private class FakePollDao : PollDao {
+        private val polls = mutableMapOf<String, PollEntity>()
+        private val votes = mutableMapOf<String, MutableList<PollVoteEntity>>()
+        private val pollFlows = mutableMapOf<String, MutableStateFlow<PollEntity?>>()
+        private val groupPollFlows = mutableMapOf<String, MutableStateFlow<List<PollEntity>>>()
+        private val voteFlows = mutableMapOf<String, MutableStateFlow<List<PollVoteEntity>>>()
+
+        override suspend fun insertOrUpdatePoll(poll: PollEntity) {
+            polls[poll.pollId] = poll
+            pollFlows.getOrPut(poll.pollId) { MutableStateFlow(poll) }.value = poll
+            groupPollFlows.getOrPut(poll.groupId) { MutableStateFlow(emptyList()) }.value =
+                polls.values.filter { it.groupId == poll.groupId }.sortedByDescending { it.createdAt }
+        }
+
+        override suspend fun getPoll(pollId: String): PollEntity? = polls[pollId]
+        override fun getPollFlow(pollId: String): Flow<PollEntity?> = pollFlows.getOrPut(pollId) { MutableStateFlow(polls[pollId]) }
+        override fun getPollsForGroupFlow(groupId: String): Flow<List<PollEntity>> =
+            groupPollFlows.getOrPut(groupId) { MutableStateFlow(polls.values.filter { it.groupId == groupId }) }
+
+        override suspend fun insertOrUpdateVote(vote: PollVoteEntity) {
+            val list = votes.getOrPut(vote.pollId) { mutableListOf() }
+            list.removeAll { it.memberId == vote.memberId }
+            list.add(vote)
+            voteFlows.getOrPut(vote.pollId) { MutableStateFlow(emptyList()) }.value = list.toList()
+        }
+
+        override suspend fun getVotesForPoll(pollId: String): List<PollVoteEntity> = votes[pollId]?.toList() ?: emptyList()
+        override fun getVotesForPollFlow(pollId: String): Flow<List<PollVoteEntity>> =
+            voteFlows.getOrPut(pollId) { MutableStateFlow(votes[pollId]?.toList() ?: emptyList()) }
+
+        override suspend fun closePoll(pollId: String) {
+            val p = polls[pollId] ?: return
+            insertOrUpdatePoll(p.copy(isClosed = true))
         }
     }
 

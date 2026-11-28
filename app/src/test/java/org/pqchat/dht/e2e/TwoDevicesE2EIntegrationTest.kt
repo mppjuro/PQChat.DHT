@@ -67,9 +67,14 @@ class TwoDevicesE2EIntegrationTest {
     private var aliceDhtClient: DhtClient? = null
     private var bobDhtClient: DhtClient? = null
     private val testMasterKey = SecretKeySpec(ByteArray(32) { (it * 13 + 5).toByte() }, "AES")
+    private var prevLocalTestbedMode: Boolean = false
 
     @Before
     fun setUp() {
+        prevLocalTestbedMode = DhtLeafNode.isLocalTestbedMode
+        if (!shouldUseFakeDht()) {
+            DhtLeafNode.isLocalTestbedMode = true
+        }
         KeystoreCrypto.setTestSecretKey(testMasterKey)
         val context = RuntimeEnvironment.getApplication()
         aliceDb = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
@@ -87,6 +92,7 @@ class TwoDevicesE2EIntegrationTest {
         aliceDb?.close()
         bobDb?.close()
         KeystoreCrypto.resetForTesting()
+        DhtLeafNode.isLocalTestbedMode = prevLocalTestbedMode
     }
 
     @Test

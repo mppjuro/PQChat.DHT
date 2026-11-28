@@ -10,6 +10,19 @@ import java.net.InetSocketAddress
 
 class FastTerminationTest {
 
+    private var prevLocalTestbedMode: Boolean = false
+
+    @org.junit.Before
+    fun setUpLocalTestbed() {
+        prevLocalTestbedMode = DhtLeafNode.isLocalTestbedMode
+        DhtLeafNode.isLocalTestbedMode = true
+    }
+
+    @org.junit.After
+    fun tearDownLocalTestbed() {
+        DhtLeafNode.isLocalTestbedMode = prevLocalTestbedMode
+    }
+
     @Test
     fun testFastTerminationReturnsNullUnder600msWhenTop3NodesEmpty() = runBlocking {
         val nodeA = DhtLeafNode()
@@ -92,7 +105,9 @@ class FastTerminationTest {
             val seed = CryptoUtils.secureRandomBytes(32)
             val keyPair = Ed25519Engine.generateKeyPairFromSeed(seed)
             val target = Ed25519Engine.computeTarget(keyPair.publicKey)
-            val payload = "Hello Fast Termination with Item".toByteArray(Charsets.UTF_8)
+            val raw = "Hello Fast Termination with Item".toByteArray(Charsets.UTF_8)
+            val payload = ByteArray(org.pqchat.dht.crypto.BinaryFrameCodec.MAX_FRAME_PAYLOAD_BYTES)
+            System.arraycopy(raw, 0, payload, 0, raw.size)
             val signData = org.pqchat.dht.dht.bencode.Bencode.encodeBep44SignData(payload, 1L, null)
             val sig = Ed25519Engine.sign(seed, signData)
 
