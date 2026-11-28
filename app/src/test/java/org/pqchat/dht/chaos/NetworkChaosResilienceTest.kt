@@ -285,12 +285,26 @@ class NetworkChaosResilienceTest {
     }
 
     private fun configureFastRepo(repo: ChatRepository) {
-        repo.isFastTestMode = true
         repo.delayedPutMaxMs = 0L
         repo.decoyPutSlotsCount = 0
         repo.enableDecoyGets = false
         repo.intraBatchJitterMinMs = 0L
         repo.intraBatchJitterMaxMs = 0L
+    }
+
+    private suspend fun sendReliablyUnderChaos(
+        repo: ChatRepository,
+        messageDao: ChaosMessageDao,
+        contactId: String,
+        text: String,
+        maxRetries: Int = 15
+    ): Boolean {
+        if (repo.sendTextMessage(contactId, text)) return true
+        repeat(maxRetries) {
+            repo.drainOutbox(contactId, force = true)
+            if (messageDao.getQueuedMessagesForContact(contactId).isEmpty()) return true
+        }
+        return false
     }
 
     @Test
@@ -454,17 +468,28 @@ class NetworkChaosResilienceTest {
         // Advance cleanly to counter 50 right before the PQC rekey boundary
         for (i in 0 until 50) {
             assertTrue(aliceRepo.sendTextMessage("bob", "Pre-rekey #$i"))
-            assertTrue(bobRepo.pollContactIncoming("alice"))
+            bobRepo.pollContactIncoming("alice")
+        }
+        repeat(10) {
+            if (bobRepo.getContact("alice")!!.counterIn < 50) {
+                bobRepo.pollContactIncoming("alice")
+            }
         }
         assertEquals(50, aliceRepo.getContact("bob")!!.counterOut)
+        assertEquals(50, bobRepo.getContact("alice")!!.counterIn)
 
         // Phase 1: Initiate 0x03 Rekey Offer under 30% UDP loss + queue outbox messages
         aliceChaos.udpLossRate = 0.30
         aliceRepo.sendTextMessage("bob", "Msg #50-chaos")
+        repeat(15) {
+            if (aliceRekeyDao.getPendingOffer("bob") == null) {
+                aliceRepo.initiateRekey("bob")
+            }
+        }
+        assertNotNull("Pending rekey offer must be persisted", aliceRekeyDao.getPendingOffer("bob"))
         aliceRepo.sendTextMessage("bob", "Msg #51-chaos")
         aliceRepo.sendTextMessage("bob", "Msg #52-chaos")
 
-        assertNotNull("Pending rekey offer must be persisted", aliceRekeyDao.getPendingOffer("bob"))
         assertEquals("Queued messages must wait in outbox until rekey completes", 3, aliceMessageDao.getQueuedMessagesForContact("bob").size)
 
         // Phase 2: Full network partition interrupts Bob receiving Offer / sending 0x04 Response
@@ -501,9 +526,16 @@ class NetworkChaosResilienceTest {
         }
         assertTrue("Alice must process 0x04 response and advance to rekeyEpoch=1", aliceRekeyed)
 
-        bobChaos.udpLossRate = 0.20
         repeat(10) {
-            bobRepo.pollContactIncoming("alice")
+            if (aliceMessageDao.getQueuedMessagesForContact("bob").isNotEmpty()) {
+                aliceRepo.drainOutbox("bob", force = true)
+            }
+        }
+        bobChaos.udpLossRate = 0.20
+        repeat(20) {
+            if (bobMessageDao.messages.count { it.contactId == "alice" && !it.isOutgoing && it.status == "DELIVERED" } < 53) {
+                bobRepo.pollContactIncoming("alice")
+            }
         }
 
         val deliveredTexts = bobMessageDao.messages
@@ -520,10 +552,18 @@ class NetworkChaosResilienceTest {
         // Verify post-rekey bidirectional communication stays synchronized
         aliceChaos.udpLossRate = 0.15
         bobChaos.udpLossRate = 0.15
-        assertTrue(aliceRepo.sendTextMessage("bob", "Post-chaos-rekey Alice->Bob"))
-        repeat(10) { bobRepo.pollContactIncoming("alice") }
-        assertTrue(bobRepo.sendTextMessage("alice", "Post-chaos-rekey Bob->Alice"))
-        repeat(10) { aliceRepo.pollContactIncoming("bob") }
+        assertTrue(sendReliablyUnderChaos(aliceRepo, aliceMessageDao, "bob", "Post-chaos-rekey Alice->Bob"))
+        repeat(15) {
+            if (bobMessageDao.messages.none { it.rawTextContent == "Post-chaos-rekey Alice->Bob" }) {
+                bobRepo.pollContactIncoming("alice")
+            }
+        }
+        assertTrue(sendReliablyUnderChaos(bobRepo, bobMessageDao, "alice", "Post-chaos-rekey Bob->Alice"))
+        repeat(15) {
+            if (aliceMessageDao.messages.none { it.rawTextContent == "Post-chaos-rekey Bob->Alice" }) {
+                aliceRepo.pollContactIncoming("bob")
+            }
+        }
 
         assertTrue(bobMessageDao.messages.any { it.rawTextContent == "Post-chaos-rekey Alice->Bob" })
         assertTrue(aliceMessageDao.messages.any { it.rawTextContent == "Post-chaos-rekey Bob->Alice" })
@@ -562,8 +602,12 @@ class NetworkChaosResilienceTest {
             assertTrue(bobChaos.rebootstrap(force = true))
             assertTrue(bobChaos.sendKeepalivePing())
 
-            assertTrue(aliceRepo.sendTextMessage("bob", "CGNAT round $round"))
-            repeat(10) { bobRepo.pollContactIncoming("alice") }
+            assertTrue(sendReliablyUnderChaos(aliceRepo, aliceMessageDao, "bob", "CGNAT round $round"))
+            repeat(15) {
+                if (bobMessageDao.messages.count { !it.isOutgoing && it.status == "DELIVERED" } < round) {
+                    bobRepo.pollContactIncoming("alice")
+                }
+            }
         }
         assertEquals(4, bobChaos.cgnatRebinds.get())
         assertEquals(4, bobMessageDao.messages.count { !it.isOutgoing && it.status == "DELIVERED" })

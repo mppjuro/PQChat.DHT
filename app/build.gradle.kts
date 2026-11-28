@@ -106,10 +106,13 @@ android {
                 }
                 it.systemProperty("junit.jupiter.execution.timeout.default", "5m")
                 it.systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
-                it.systemProperty(
-                    "jazzer.instrument",
+                val isJazzerFuzzMode = System.getenv("JAZZER_FUZZ") == "1" || System.getProperty("jazzer.fuzz") == "true"
+                val jazzerInstrumentPackages = System.getProperty("jazzer.instrument") ?: if (isJazzerFuzzMode) {
                     "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**,org.pqchat.dht.crypto.**,org.pqchat.dht.media.**,org.pqchat.dht.protocol.**"
-                )
+                } else {
+                    "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+                }
+                it.systemProperty("jazzer.instrument", jazzerInstrumentPackages)
                 it.testLogging {
                     events("passed", "skipped", "failed", "standardOut", "standardError")
                     showExceptions = true
@@ -140,10 +143,13 @@ tasks.withType<Test>().configureEach {
     }
     systemProperty("junit.jupiter.execution.timeout.default", "5m")
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
-    systemProperty(
-        "jazzer.instrument",
+    val isJazzerFuzzMode = System.getenv("JAZZER_FUZZ") == "1" || System.getProperty("jazzer.fuzz") == "true"
+    val jazzerInstrumentPackages = System.getProperty("jazzer.instrument") ?: if (isJazzerFuzzMode) {
         "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**,org.pqchat.dht.crypto.**,org.pqchat.dht.media.**,org.pqchat.dht.protocol.**"
-    )
+    } else {
+        "org.pqchat.dht.dht.bencode.**,org.pqchat.dht.dht.krpc.**,org.pqchat.dht.dht.fuzz.**"
+    }
+    systemProperty("jazzer.instrument", jazzerInstrumentPackages)
     testLogging {
         events("passed", "skipped", "failed", "standardOut", "standardError")
         showExceptions = true

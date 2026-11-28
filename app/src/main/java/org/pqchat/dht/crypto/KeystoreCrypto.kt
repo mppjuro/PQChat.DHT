@@ -60,7 +60,7 @@ object KeystoreCrypto {
 
     private fun isJUnitPresent(): Boolean {
         val loader = KeystoreCrypto::class.java.classLoader
-        return try {
+        val classFound = try {
             Class.forName("org.junit.Test", false, loader)
             true
         } catch (_: Throwable) {
@@ -70,6 +70,17 @@ object KeystoreCrypto {
             } catch (_: Throwable) {
                 false
             }
+        }
+        if (classFound) return true
+
+        // Fallback to resource lookup so bytecode instrumentation (e.g. Jazzer ReflectiveCall hooks)
+        // on Class.forName inside isolated classloaders cannot falsely mask active JUnit test runners.
+        return try {
+            val resourceLoader = loader ?: ClassLoader.getSystemClassLoader() ?: return false
+            resourceLoader.getResource("org/junit/Test.class") != null ||
+                resourceLoader.getResource("org/junit/jupiter/api/Test.class") != null
+        } catch (_: Throwable) {
+            false
         }
     }
 
